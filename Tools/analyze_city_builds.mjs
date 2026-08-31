@@ -24,7 +24,7 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 // Standard-Standorte: Freebuff-Worktree und gebauter Worktree.
 const DEFAULT_CSV_PATHS = [
 	path.join(REPO_ROOT, 'WiesbadenReal', 'Saved', 'BuildHistory', 'CityBuilds.csv'),
-	'C:\\Users\\ssonn\\aivideo\\WiesbadenReal\\Saved\\BuildHistory\\CityBuilds.csv',
+	'C:\\freebuff\\WiesbadenReal_Sicherung\\WiesbadenReal\\Saved\\BuildHistory\\CityBuilds.csv',
 ];
 
 // --- RFC-4180-Zeilenparser ---------------------------------------------------

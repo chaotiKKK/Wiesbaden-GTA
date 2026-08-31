@@ -23,8 +23,8 @@ import os
 import sys
 from mathutils import Vector
 
-FBX = "C:/Users/ssonn/aivideo/WiesbadenReal/Data/Raw/Beetle/SM_VWBeetle1969_Body.fbx"
-TEXDIR = "C:/Users/ssonn/Downloads/vw-beetle-1969/textures"
+FBX = "C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/Data/Raw/Beetle/SM_VWBeetle1969_Body.fbx"
+TEXDIR = "C:/freebuff/WiesbadenReal_Sicherung/Quellen/vw-beetle-1969/textures"
 TILES = ["1001", "1002", "1003", "1004"]
 BAKE_SIZE = 2048
 
@@ -513,7 +513,7 @@ def apply_decals(body, slot_offset, bake_jobs, roundel_path):
 
 def main():
     out_dir = os.path.abspath(arg_value(
-        "--out", "C:/Users/ssonn/aivideo/WiesbadenReal/Data/Raw/Beetle/Herbie"))
+        "--out", "C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/Data/Raw/Beetle/Herbie"))
     os.makedirs(out_dir, exist_ok=True)
 
     roundel_path = os.path.join(out_dir, "T_Herbie_53.png")

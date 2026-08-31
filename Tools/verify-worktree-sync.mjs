@@ -36,7 +36,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 
 // Gebauter Worktree (Claude-Original, Build-Kandidat) - per --built ueberschreibbar.
-const DEFAULT_BUILT = 'C:\\Users\\ssonn\\aivideo\\WiesbadenReal';
+const DEFAULT_BUILT = 'C:\\freebuff\\WiesbadenReal_Sicherung\\WiesbadenReal';
 
 // Bereiche: lokale Quellen (relativ zum Freebuff-Repo) -> Ziel-Ordner im gebauten Worktree.
 const DOMAINS = [

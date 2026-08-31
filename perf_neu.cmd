@@ -5,7 +5,7 @@ REM
 REM Die alte Grundlinie ist WERTLOS: Saemtliche Fassaden- und das
 REM Figurenmaterial uebersetzten damals nicht (Abtasttyp-Fehler) - gemessen
 REM wurde das graue Standardmaterial, nicht die Stadt.
-set PROJ=C:\Users\ssonn\aivideo\WiesbadenReal\WiesbadenReal.uproject
-set LOG=C:\Users\ssonn\aivideo\WiesbadenReal\perf_neu.log
-"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis3 -game -windowed -ResX=1600 -ResY=900 -WbAutoDrive -WbShot=430 -WbQuitAfter=500 -stdout -unattended -nop4 > "%LOG%" 2>&1
+set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
+set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\perf_neu.log
+"C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis3 -game -windowed -ResX=1600 -ResY=900 -WbAutoDrive -WbShot=430 -WbQuitAfter=500 -stdout -unattended -nop4 > "%LOG%" 2>&1
 exit /b %ERRORLEVEL%

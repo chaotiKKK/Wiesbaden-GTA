@@ -18,5 +18,5 @@ REM Aufteilung auf Spiel- und Renderer-Strang nach
 REM   Saved\Logs\WiesbadenReal.log
 REM
 REM Steuerung: F1 blendet die Tastenbelegung ein.
-set PROJ=C:\Users\ssonn\aivideo\WiesbadenReal\WiesbadenReal.uproject
-start "" "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis3 -game -windowed -ResX=1600 -ResY=900 -nop4
+set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
+start "" "C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis3 -game -windowed -ResX=1600 -ResY=900 -nop4

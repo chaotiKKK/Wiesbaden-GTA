@@ -6,7 +6,7 @@ REM spart den Grossteil der Bauzeit) und vergleicht dann ALLE 22.227
 REM Kreuzungen mit der Gelaendehoehe an derselben Stelle.
 REM
 REM Ergebnis: hoehen_report.json
-set PROJ=C:\Users\ssonn\aivideo\WiesbadenReal\WiesbadenReal.uproject
-set LOG=C:\Users\ssonn\aivideo\WiesbadenReal\check_hoehen.log
-"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" -ExecCmds="py C:\Users\ssonn\aivideo\WiesbadenReal\Tools\check_heights.py" -unattended -nosplash -nop4 > "%LOG%" 2>&1
+set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
+set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\check_hoehen.log
+"C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" -ExecCmds="py C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Tools\check_heights.py" -unattended -nosplash -nop4 > "%LOG%" 2>&1
 exit /b %ERRORLEVEL%
