@@ -1,0 +1,234 @@
+// Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/Pawn.h"
+#include "InputCoreTypes.h"
+
+#include "Vehicles/WiesbadenCarAudioComponent.h"
+#include "Vehicles/WiesbadenCarLightsComponent.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
+#include "Vehicles/WiesbadenVehiclePhysics.h"
+
+#include "WiesbadenCar.generated.h"
+
+class APlayerController;
+class USceneComponent;
+class UBoxComponent;
+class UStaticMeshComponent;
+
+/**
+ * Fahrbarer PKW-Pawn mit Platzhalter-Geometrie (Engine-Basis-Shapes).
+ *
+ * Die Laengs-/Querdynamik (Motor, Automatik-Getriebe, Radkraefte, Lenkung)
+ * kommt aus dem reinen Modul FWiesbadenVehiclePhysics; der Pawn integriert nur
+ * Geschwindigkeit -> Position und Gierrate -> Ausrichtung plus Bodenkontakt.
+ * Die Kamera (Follow/Orbit/Cockpit) kommt aus UWiesbadenVehicleCameraComponent.
+ *
+ * Steuerung (zero-config, Tasten werden gepollt, keine Input-Assets noetig):
+ *  - W/S = Gas/Bremse, A/D = Lenken, Space = Handbremse
+ *  - R = Rueckwaertsgang (Flanke), C = Kamera umschalten, Pfeiltasten = Orbit
+ */
+UCLASS()
+class WIESBADENREAL_API AWiesbadenCar : public APawn
+{
+	GENERATED_BODY()
+
+public:
+	AWiesbadenCar();
+
+	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
+	virtual void PossessedBy(AController* NewController) override;
+	virtual void UnPossessed() override;
+
+	/** Umschalten der Kamera (Forward an die Fahrzeug-Kamera-Komponente). */
+	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Fahrzeug")
+	void CycleCameraMode();
+
+	/** Aktueller Kameramodus (Forward an die Fahrzeug-Kamera-Komponente). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug")
+	EWiesbadenVehicleCameraMode GetCameraMode() const;
+
+	/** Absolutgeschwindigkeit in km/h (Tacho). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug")
+	float GetSpeedKmh() const;
+
+	/** Aktueller Gang (1..N; -1 = Rueckwaerts). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug")
+	int32 GetGear() const;
+
+	/** Aktuelle Motordrehzahl (U/min). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug")
+	float GetEngineRpm() const;
+
+	/** Lichtanlage des Fahrzeugs - fuer die HUD-Kontrollleuchten. */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug|Licht")
+	UWiesbadenCarLightsComponent* GetLights() const { return Lights; }
+
+	/** Fahrzeug-Physik-Modul (Motor, Getriebe, Radkraefte, Lenkung). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik")
+	FWiesbadenVehiclePhysics VehiclePhysics;
+
+	/** Minimaler Abstand des Fahrzeugs zum Boden (weiche Federung per Raycast). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
+	float GroundClearanceCm = 35.0f;
+
+	/** Glattung der Steuereingaenge (hoeher = direkter). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.1"))
+	float ControlResponse = 6.0f;
+
+	/** Totzone der Gamepad-Sticks (Anteil des Vollausschlags). */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Steuerung", meta = (ClampMin = "0.0", ClampMax = "0.5"))
+	float GamepadDeadzone = 0.15f;
+
+	/**
+	 * Kruemmung der Lenk-Kennlinie am Stick (0 = linear, 1 = stark).
+	 *
+	 * Am Fahrzeug schwaecher als am Hubschrauber: Lenken soll direkt bleiben,
+	 * aber kleine Korrekturen bei hoher Geschwindigkeit brauchen Feingefuehl.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Steuerung", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float GamepadSteerExpo = 0.35f;
+
+	/**
+	 * Wie schnell sich das Fahrzeug an die Neigung des Untergrunds anlegt
+	 * (hoeher = straffer). Ohne diese Ausrichtung blieb der Wagen an jeder
+	 * Steigung exakt waagerecht stehen, waehrend der Boden unter ihm kippte.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.1"))
+	float GroundAlignResponse = 7.0f;
+
+	/** Wie schnell die Federung der Bodenhoehe folgt (hoeher = haerter). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.1"))
+	float SuspensionResponse = 16.0f;
+
+	/** Flughoehe ueber dem Gebaeude beim Ueberflug, in cm. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Ueberflug", meta = (ClampMin = "100.0"))
+	float FlyOverClearanceCm = 1000.0f;
+
+	/** Steigrate beim Aufstieg in cm/s. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Ueberflug", meta = (ClampMin = "100.0"))
+	float FlyOverClimbRateCmPerS = 2600.0f;
+
+	/** Sinkrate nach dem Gebaeude in cm/s. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Ueberflug", meta = (ClampMin = "100.0"))
+	float FlyOverDescendRateCmPerS = 1400.0f;
+
+	/** Mindesthoehe eines Hindernisses ueber dem Wagen, damit geflogen wird (cm). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Ueberflug", meta = (ClampMin = "0.0"))
+	float FlyOverMinObstacleCm = 250.0f;
+
+protected:
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	USceneComponent* SceneRoot = nullptr;
+
+	/**
+	 * Kollisionskoerper in echten Fahrzeugmassen.
+	 *
+	 * Hier stand zuvor eine Kugel mit 220 cm Radius - 4,4 m Durchmesser fuer
+	 * einen Kaefer, der 4,08 m lang und 1,55 m breit ist. Das Fahrzeug stiess
+	 * damit rund anderthalb Meter vor jeder Wand an, passte durch keine Luecke,
+	 * die es optisch haette passieren muessen, und rollte an Kanten auf der
+	 * Kugelrundung auf.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	UBoxComponent* CollisionBox = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	UStaticMeshComponent* BodyMesh = nullptr;
+
+	/** Vorderraeder (lenken um die Z-Achse, drehen um die Y-Achse = Pitch). */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	UStaticMeshComponent* FrontLeftWheel = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	UStaticMeshComponent* FrontRightWheel = nullptr;
+
+	/** Hinterraeder (drehen nur um die X-Achse). */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	UStaticMeshComponent* RearLeftWheel = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	UStaticMeshComponent* RearRightWheel = nullptr;
+
+	/** Generische Fahrzeug-Kamera (Follow/Orbit/Cockpit). */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	UWiesbadenVehicleCameraComponent* VehicleCamera = nullptr;
+
+	/** Lichtanlage: Fahrlicht, Bremslicht, Rueckfahrlicht, Blinker. */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	UWiesbadenCarLightsComponent* Lights = nullptr;
+
+	/** Motorklang, synthetisiert aus Drehzahl und Last. */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	UWiesbadenCarAudioComponent* EngineAudio = nullptr;
+
+private:
+	void ReadInput(float DeltaSeconds);
+	void ApplyVehiclePhysics(float DeltaSeconds);
+	void UpdateWheels(float DeltaSeconds);
+
+	/** Tastenflanken fuer Fahrlicht, Blinker und Warnblinkanlage auswerten. */
+	void ReadLightInput();
+
+	/** Licht- und Klangzustand aus dem Ergebnis der Fahrphysik nachfuehren. */
+	void UpdateLightsAndAudio(const FWiesbadenVehiclePhysicsOutput& Output);
+
+	/**
+	 * Prueft die Kollisionsbox entlang einer Bewegung.
+	 *
+	 * Nicht ueber AddActorWorldOffset(bSweep=true): das prueft die
+	 * WURZELKOMPONENTE, und die ist hier ein formloser USceneComponent. Der
+	 * Sweep traf deshalb nie etwas, und das Fahrzeug fuhr durch Haeuser.
+	 *
+	 * @return True, wenn etwas im Weg ist (OutHit gefuellt).
+	 */
+	bool SweepVehicle(const FVector& Delta, FHitResult& OutHit) const;
+
+	bool IsKeyDown(const FKey& Key);
+
+	/** Analogwert einer Achse (Gamepad-Stick oder Trigger), 0 ohne Controller. */
+	float GetAnalogAxis(const FKey& Key);
+	APlayerController* GetCarController();
+
+	// Geglaettete Steuereingaenge.
+	float ThrottleInput = 0.0f;
+	float BrakeInput = 0.0f;
+	float SteeringInput = 0.0f;
+
+	bool bReverseRequested = false;
+	bool bReverseToggleHeld = false;
+
+	/** Akkumulierte Rad-Drehung um die Querachse (Grad, auf 360 normalisiert). */
+	float WheelRotationPitch = 0.0f;
+
+	/** True, solange der Wagen ueber ein Gebaeude hinwegfliegt. */
+	bool bFlyingOverBuilding = false;
+
+	/** Strassenhoehe beim Abheben - unterscheidet Dach von Strasse. */
+	float FlyOverStreetZ = 0.0f;
+
+	/** Zielhoehe des laufenden Ueberflugs (Weltkoordinate). */
+	float FlyOverTargetZ = 0.0f;
+
+	/** In DIESEM Bild eine Hauswand voraus erkannt (Anflugphase). */
+	bool bWallAheadThisFrame = false;
+
+	// Halte-Flanken der Licht- und Blinkertasten. Gleiche Technik wie beim
+	// Rueckwaertsgang: die Eingabe wird gepollt statt ueber Events gebunden,
+	// damit das Fahrzeug ohne Input-Assets funktioniert.
+	bool bHeadlightKeyHeld = false;
+	bool bIndicatorLeftKeyHeld = false;
+	bool bIndicatorRightKeyHeld = false;
+	bool bHazardKeyHeld = false;
+
+	// Dieselben Flanken fuer das Gamepad. Eigene Variablen, nicht die
+	// obigen mitbenutzt: sonst loeschte ein Tastendruck die Flanke des
+	// Gamepads und umgekehrt - beide Geraete sollen unabhaengig gehen.
+	bool bHeadlightPadHeld = false;
+	bool bIndicatorLeftPadHeld = false;
+	bool bIndicatorRightPadHeld = false;
+	bool bHazardPadHeld = false;
+};

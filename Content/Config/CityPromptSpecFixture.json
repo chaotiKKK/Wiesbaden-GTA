@@ -1,0 +1,1212 @@
+{
+	"Version": 1,
+	"Note": "Gemeinsame Prompt->Spec-Erwartungen: konsumiert vom C++-Test (Tests/CityPromptTest.cpp, CityPrompt.SpecFixture) und vom Node-Port (Tools/verify_cityprompt.mjs). Aenderungen an den Parser-Regeln muessen hier UND in beiden Konsumenten gruen laufen. Weather: 0=Clear 1=Cloudy 2=Rain 3=Thunderstorm 4=Fog 5=Snow.",
+	"Cases": [
+		{
+			"Name": "Parsing: Dichte + Gruenderzeit + Marktkirche + wolkig",
+			"Prompt": "dichte Gruenderzeit-Innenstadt mit Marktkirche, wolkig",
+			"Expect": {
+				"DisplayName": "Gruenderzeit-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": { "0": 1.0 },
+				"DetectedLandmarks": ["Marktkirche"],
+				"Weather": 1,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 2
+			}
+		},
+		{
+			"Name": "Parsing: Locker + Backstein + Fachwerk + klar",
+			"Prompt": "lockere Vorstadt mit Backstein und Fachwerk, klarer Sonnenschein",
+			"Expect": {
+				"DisplayName": "Backstein-Vorort",
+				"BuildingDensity": 0.3,
+				"FacadeVariantWeights": { "1": 1.0, "5": 1.0 },
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 2
+			}
+		},
+		{
+			"Name": "Parsing: Englisch dense modern office + Gewitter",
+			"Prompt": "dense modern office district, thunderstorm",
+			"Expect": {
+				"DisplayName": "Moderne-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": { "3": 2.0 },
+				"DetectedLandmarks": [],
+				"Weather": 3,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 2
+			}
+		},
+		{
+			"Name": "Parsing: Umlaut gruener Vorort -> locker",
+			"Prompt": "gr\u00FCner Vorort",
+			"Expect": {
+				"DisplayName": "Standard-Vorort",
+				"BuildingDensity": 0.3,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Parsing: Flektion dichte -> 0.85",
+			"Prompt": "dichte Bebauung am Stadtrand",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Parsing: Plural vororte -> 0.3",
+			"Prompt": "Vororte am Stadtrand",
+			"Expect": {
+				"DisplayName": "Standard-Vorort",
+				"BuildingDensity": 0.3,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Parsing: Leerer Prompt -> Defaults",
+			"Prompt": "",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Zeit: Abend -> 19",
+			"Prompt": "dichte Innenstadt am Abend",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": 19.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Zeit: Morgens -> 8",
+			"Prompt": "lockere Vorstadt morgens",
+			"Expect": {
+				"DisplayName": "Standard-Vorort",
+				"BuildingDensity": 0.3,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": 8.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Zeit: Nachts -> 0",
+			"Prompt": "dichte Innenstadt nachts",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": 0.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Zeit: Englisch night -> 0 + quiet 0.3",
+			"Prompt": "quiet suburb at night",
+			"Expect": {
+				"DisplayName": "Standard-Vorort",
+				"BuildingDensity": 0.3,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": 0.0,
+				"TrafficDensity": 0.3,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Verkehr: Viel -> 0.85",
+			"Prompt": "dichte Innenstadt mit viel verkehr",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.85,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Verkehr: Wenig -> 0.25",
+			"Prompt": "ruhige Vorstadt, wenig verkehr",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.25,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Verkehr: Stau -> 0.95",
+			"Prompt": "Innenstadt mit Stau",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.95,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Verkehr: Ruhig -> 0.3",
+			"Prompt": "ruhige Vorstadt",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.3,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Verkehr: Leere -> 0.2 + Nachmittag 16",
+			"Prompt": "leere Strassen am Nachmittag",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": 16.0,
+				"TrafficDensity": 0.2,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Hoehen: Hohe -> 1.4",
+			"Prompt": "dichte Innenstadt mit hohen Gebaeuden",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.4,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Hoehen: Niedrige -> 0.6",
+			"Prompt": "niedrige Vorstadt",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 0.6,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Hoehen: Hochhaeuser -> 2.0",
+			"Prompt": "Innenstadt mit Hochhaeusern",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 2.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Hoehen: Wolkenkratzer -> 2.0",
+			"Prompt": "Wolkenkratzer-Viertel",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 2.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Flektion: ruhiger -> 0.3",
+			"Prompt": "ruhiger Verkehr",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.3,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Flektion: leerer -> 0.2",
+			"Prompt": "leerer Platz",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.2,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Flektion: belebter -> 0.8",
+			"Prompt": "belebter Platz",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.8,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Flektion: hoher -> 1.4 + Zentrum dicht",
+			"Prompt": "hoher Turm im Zentrum",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.4,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Flektion: niedriges -> 0.6",
+			"Prompt": "niedriges Haus am Rand",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 0.6,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Flektion: Vormittag -> 10",
+			"Prompt": "ruhiger Vormittag",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": 10.0,
+				"TrafficDensity": 0.3,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Flektion: Spaeter Abend -> 21",
+			"Prompt": "spaeter Abend",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": 21.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: nebliger -> Fog + Morgen 8",
+			"Prompt": "nebliger Morgen",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 4,
+				"TimeOfDayHours": 8.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: neblige -> Fog",
+			"Prompt": "neblige Strasse",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 4,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: foggy -> Fog + Morning 8",
+			"Prompt": "foggy morning",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 4,
+				"TimeOfDayHours": 8.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: schneit -> Snow",
+			"Prompt": "es schneit",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 5,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: schneien -> Snow + Abend 19",
+			"Prompt": "schneien am Abend",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 5,
+				"TimeOfDayHours": 19.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: verschneit -> Snow",
+			"Prompt": "verschneite Landschaft",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 5,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: snowy -> Snow",
+			"Prompt": "snowy day",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 5,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: regnerisch -> Rain",
+			"Prompt": "regnerischer Tag",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 2,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: regnet -> Rain",
+			"Prompt": "es regnet",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 2,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: rainy -> Rain",
+			"Prompt": "rainy day",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 2,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: Sturm -> Rain",
+			"Prompt": "Sturm an der Kueste",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 2,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: stormy -> Rain",
+			"Prompt": "stormy weather",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 2,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: wolkige -> Cloudy",
+			"Prompt": "wolkige Aussicht",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 1,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: bewoelkte -> Cloudy",
+			"Prompt": "bewoelkter Himmel",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 1,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Wetter: trueb -> Cloudy",
+			"Prompt": "trueber Himmel",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 1,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Fassade: moderner -> Glas (3)",
+			"Prompt": "moderner Buerokomplex",
+			"Expect": {
+				"DisplayName": "Moderne-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": { "3": 1.0 },
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 1
+			}
+		},
+		{
+			"Name": "Fassade: Backsteinfassaden -> (1)",
+			"Prompt": "Backsteinfassaden am Ring",
+			"Expect": {
+				"DisplayName": "Backstein-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": { "1": 1.0 },
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 1
+			}
+		},
+		{
+			"Name": "Fassade: Glasfassade -> (3) + Zentrum dicht",
+			"Prompt": "Glasfassade im Zentrum",
+			"Expect": {
+				"DisplayName": "Moderne-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": { "3": 1.0 },
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 1
+			}
+		},
+		{
+			"Name": "Fassade: Betonbauten -> (4)",
+			"Prompt": "Betonbauten am Fluss",
+			"Expect": {
+				"DisplayName": "Industrie-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": { "4": 1.0 },
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 1
+			}
+		},
+		{
+			"Name": "Fassade: Putzfassade -> (0)",
+			"Prompt": "Putzfassade in der Altstadt",
+			"Expect": {
+				"DisplayName": "Gruenderzeit-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": { "0": 1.0 },
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 1
+			}
+		},
+		{
+			"Name": "Fassade: Sandsteinfassaden -> (2) + Kurhaus",
+			"Prompt": "Sandsteinfassaden am Kurhaus",
+			"Expect": {
+				"DisplayName": "Sandstein-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": { "2": 1.0 },
+				"DetectedLandmarks": ["Kurhaus"],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 2
+			}
+		},
+		{
+			"Name": "Fassade: Fachwerkfassaden -> (5)",
+			"Prompt": "Fachwerkfassaden in der Vorstadt",
+			"Expect": {
+				"DisplayName": "Fachwerk-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": { "5": 1.0 },
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 1
+			}
+		},
+		{
+			"Name": "Fassade: Buerohaeuser -> (3)",
+			"Prompt": "B\u00FCroh\u00E4user am Bahnhof",
+			"Expect": {
+				"DisplayName": "Moderne-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": { "3": 1.0 },
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 1
+			}
+		},
+		{
+			"Name": "Gleichstand: Backstein und Fachwerk -> kleinere Variante",
+			"Prompt": "Backstein und Fachwerk",
+			"Expect": {
+				"DisplayName": "Backstein-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": { "1": 1.0, "5": 1.0 },
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 2
+			}
+		},
+		{
+			"Name": "Kombination: alle Regeln zusammen",
+			"Prompt": "dichte Gruenderzeit-Innenstadt mit Marktkirche, wolkig, abends, viel verkehr, hohe Gebaeude",
+			"Expect": {
+				"DisplayName": "Gruenderzeit-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": { "0": 1.0 },
+				"DetectedLandmarks": ["Marktkirche"],
+				"Weather": 1,
+				"TimeOfDayHours": 19.0,
+				"TrafficDensity": 0.85,
+				"BuildingHeightScale": 1.4,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 2
+			}
+		},
+		{
+			"Name": "Terrain: tile faktor 3.5",
+			"Prompt": "dichte Innenstadt, tile faktor 3.5",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 3.5,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Terrain: tile ratio 2.5",
+			"Prompt": "dense city center, tile ratio 2.5",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.5,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Terrain: crop faktor 3,0 (Komma)",
+			"Prompt": "Innenstadt, crop faktor 3,0",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 3.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Terrain: tile faktor: 3.5 (Doppelpunkt)",
+			"Prompt": "Innenstadt, tile faktor: 3.5",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 3.5,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Span: min 5 max 2000",
+			"Prompt": "Innenstadt, hoehenspanne 5..2000",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 5.0,
+				"TerrainMaxHeightSpanMeters": 2000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Span Doppelpunkt: min 5 max 2000",
+			"Prompt": "Innenstadt, hoehenspanne: 5..2000",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 5.0,
+				"TerrainMaxHeightSpanMeters": 2000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Span englisch: min 2 max 1500",
+			"Prompt": "dense district, height span 2 to 1500",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 2.0,
+				"TerrainMaxHeightSpanMeters": 1500.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "hoehen min/max: min 10 max 4000",
+			"Prompt": "Vorstadt, hoehen min 10 max 4000",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 10.0,
+				"TerrainMaxHeightSpanMeters": 4000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Umgekehrte Span: min 5 max 2000",
+			"Prompt": "Innenstadt, hoehenspanne 2000..5",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 5.0,
+				"TerrainMaxHeightSpanMeters": 2000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Umgekehrte Span Doppelpunkt: min 5 max 2000",
+			"Prompt": "Innenstadt, hoehenspanne: 2000..5",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 5.0,
+				"TerrainMaxHeightSpanMeters": 2000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Umgekehrte Span englisch: min 2 max 1500",
+			"Prompt": "dense district, height span 1500 to 2",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 2.0,
+				"TerrainMaxHeightSpanMeters": 1500.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Umgekehrtes min/max: min 10 max 4000",
+			"Prompt": "Vorstadt, hoehen min 4000 max 10",
+			"Expect": {
+				"DisplayName": "Standard-Stadt",
+				"BuildingDensity": 0.5,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 10.0,
+				"TerrainMaxHeightSpanMeters": 4000.0,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Komma + Swap: min 5.5 max 2000.5",
+			"Prompt": "Innenstadt, hoehenspanne 2000,5..5,5",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 5.5,
+				"TerrainMaxHeightSpanMeters": 2000.5,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Komma normal: min 5.5 max 2000.5",
+			"Prompt": "Innenstadt, hoehenspanne 5,5..2000,5",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 5.5,
+				"TerrainMaxHeightSpanMeters": 2000.5,
+				"MatchedKeywordCount": 0
+			}
+		},
+		{
+			"Name": "Defaults ohne Erwaehnung (dichte Innenstadt)",
+			"Prompt": "dichte Innenstadt",
+			"Expect": {
+				"DisplayName": "Standard-Innenstadt",
+				"BuildingDensity": 0.85,
+				"FacadeVariantWeights": {},
+				"DetectedLandmarks": [],
+				"Weather": 0,
+				"TimeOfDayHours": -1.0,
+				"TrafficDensity": 0.5,
+				"BuildingHeightScale": 1.0,
+				"TerrainMaxTileToOsmRatio": 2.0,
+				"TerrainMinHeightSpanMeters": 1.0,
+				"TerrainMaxHeightSpanMeters": 3000.0,
+				"MatchedKeywordCount": 0
+			}
+		}
+	]
+}

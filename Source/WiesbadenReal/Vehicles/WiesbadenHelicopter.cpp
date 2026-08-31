@@ -1,0 +1,805 @@
+// Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
+
+#include "Vehicles/WiesbadenHelicopter.h"
+
+#include "WiesbadenReal.h"
+
+#include "Components/SceneComponent.h"
+#include "Components/SphereComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/EngineTypes.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "InputCoreTypes.h"
+#include "UObject/ConstructorHelpers.h"
+
+AWiesbadenHelicopter::AWiesbadenHelicopter()
+{
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = true;
+
+	// Beim Platzieren im Level sofort vom lokalen Spieler uebernehmen.
+	AutoPossessPlayer = EAutoReceiveInput::Player0;
+	AutoPossessAI = EAutoPossessAI::Disabled;
+
+	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
+	SetRootComponent(SceneRoot);
+
+	CollisionSphere = CreateDefaultSubobject<USphereComponent>(TEXT("CollisionSphere"));
+	CollisionSphere->SetupAttachment(SceneRoot);
+	CollisionSphere->InitSphereRadius(160.0f);
+	CollisionSphere->SetRelativeLocation(FVector(0.0f, 0.0f, 130.0f));
+	CollisionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	CollisionSphere->SetCollisionResponseToAllChannels(ECR_Block);
+
+	// Platzhalter-Mesh: der Engine-Basis-Cube (100x100x100 cm), je Bauteil skaliert.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube"));
+	UStaticMesh* Cube = CubeMesh.Object;
+
+	// Echte Modelle. Vorher bestand der Helikopter aus Engine-Wuerfeln - ein
+	// schwarzer Kasten mit Brettern als Rotor.
+	//
+	// Die Zahlen unten sind an den Assets GEMESSEN (Bounds im Editor), nicht
+	// geschaetzt:
+	//   Rumpf        48,9 x 100,7 x 17,1 cm, Mittelpunkt (0,7 | -9,9 | 8,6)
+	//   Rotor oben   77,8 x  87,0 x  7,0 cm, Mittelpunkt (-6,7 | 26,6 | 0)
+	//   Rotor unten  89,0 x  88,0 x 10,0 cm, Mittelpunkt (0,4 | 11,8 | 0)
+	//
+	// Daraus folgt die Ausrichtung:
+	//
+	// Die Laengsachse des Rumpfes liegt auf Y, Unreals Vorwaertsachse ist X -
+	// daher die Gierdrehung um -90 Grad, die Modell-+Y auf Welt-+X abbildet.
+	// Welches Y-Ende die Nase ist, wurde an den Vertices ausgezaehlt: Die
+	// Y-Spanne laeuft von -60,0 bis +40,6 cm, der Pivot sitzt also nicht mittig,
+	// sondern dort, wo beim Ka-52 der Rotormast steht. Im aeusseren Fuenftel
+	// des langen Endes (-Y) misst der Querschnitt 21,4 x 32,9 cm, am kurzen
+	// Ende (+Y) nur 13,1 x 28,5 cm - hinten sitzen also Leitwerk und
+	// Hoehenflosse, vorn die schmale Kanzel. Nase = +Y.
+	//
+	// Lage der Rotor-Drehachse im Modell.
+	//
+	// Weder der Ursprung noch der Bounding-Box-Mittelpunkt taugen dafuer:
+	//  - Der Ursprung ist der gemeinsame Szenen-Nullpunkt des Exports, nicht
+	//    die Nabe. Rotoren, die um ihn kreisen, wandern sichtbar aus.
+	//  - Die Bounding Box ist bei einem GEPARKTEN Rotor irrefuehrend, weil die
+	//    Blaetter ungleich stehen; ihr Mittelpunkt liegt irgendwo dazwischen.
+	//
+	// Der MEDIAN der Vertex-Koordinaten trifft dagegen die Nabe, weil dort die
+	// dichteste Geometrie sitzt. Gemessen ergibt er fuer beide Rotoren
+	// unabhaengig voneinander praktisch denselben Punkt - oberer Rotor
+	// (-0,4 | 34,0), unterer (-0,1 | 32,6) - was fuer ein Koaxialpaar auch so
+	// sein MUSS und die Messung gegenseitig bestaetigt.
+	const FVector2D RotorHubInModelCm(0.0f, 33.0f);
+
+	// Wo sitzt der Mast AM RUMPF?
+	//
+	// Das ist eine andere Frage als die vorige, und ich habe sie zunaechst
+	// verwechselt: Die Rotoren tragen ihren eigenen lokalen Ursprung, sie sind
+	// NICHT gemeinsam mit dem Rumpf in einer Szene platziert worden. Setzt man
+	// die Naben auf den Rotor-Median, landen sie nach der Gierdrehung dicht an
+	// der Rumpfspitze statt in der Mitte.
+	//
+	// Am Rumpfmodell gemessen: Die oberste Geometrie ueber 94 Prozent der
+	// Bauhoehe reicht von y = -60 (Leitwerk, die hoechste Struktur ueberhaupt)
+	// bis y = +8. Klammert man das Leitwerk aus, liegt der Schwerpunkt der
+	// hohen Aufbauten bei etwa (1 | -5) - dort sitzt der Mast.
+	const FVector2D MastInBodyModelCm(1.0f, -5.0f);
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> HeliBodyMesh(
+		TEXT("/Game/Assets/Landmarks/HeliBody/StaticMeshes/SM_HeliBody.SM_HeliBody"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> HeliRotorUpperMesh(
+		TEXT("/Game/Assets/Landmarks/HeliRotorUpper/StaticMeshes/SM_HeliRotorUpper.SM_HeliRotorUpper"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> HeliRotorLowerMesh(
+		TEXT("/Game/Assets/Landmarks/HeliRotorLower/StaticMeshes/SM_HeliRotorLower.SM_HeliRotorLower"));
+
+	UStaticMesh* HeliBody = HeliBodyMesh.Succeeded() ? HeliBodyMesh.Object : nullptr;
+	UStaticMesh* HeliRotorUpper = HeliRotorUpperMesh.Succeeded() ? HeliRotorUpperMesh.Object : nullptr;
+	UStaticMesh* HeliRotorLower = HeliRotorLowerMesh.Succeeded() ? HeliRotorLowerMesh.Object : nullptr;
+
+	// Massstab: Das Modell ist ein Kamov Ka-52 - Koaxialrotor, keine
+	// Heckrotor. Genau die Bauart, die RotorPhysics bereits abbildet
+	// (bCoaxialRotors, siehe BeginPlay).
+	//
+	// Der Massstab folgt aus drei UNABHAENGIGEN Massen des echten Ka-52, die
+	// gegen die gemessenen Bounds gerechnet gut zusammenpassen:
+	//   Rumpflaenge  14,2 m / 1,007 m = 14,1
+	//   Stummelfluegel-Spannweite 7,3 m / 0,489 m = 14,9
+	//   Rotordurchmesser 14,5 m / 0,88 m = 16,5
+	// Die ersten beiden stuetzen sich gegenseitig; der dritte faellt hoeher
+	// aus, weil die Blaetter im Modell etwas kuerzer geraten sind. Gewaehlt
+	// wird 14,5 - damit stimmen Rumpf und Spannweite, und die Rotorscheibe
+	// misst 12,8 m statt 14,5 m.
+	constexpr float ModelBodyLengthCm = 100.7f;
+	constexpr float TargetBodyLengthCm = 1460.0f;
+	const float ModelScale = TargetBodyLengthCm / ModelBodyLengthCm;
+
+	// Hoehenlage: Der Rumpf sitzt auf Kufenhoehe, die Rotoren auf dem Mast
+	// darueber. Die Werte richten sich nach der Bauhoehe des Ka-52 von 4,9 m.
+	constexpr float FuselageHeightCm = 0.0f;   // Modell-Ursprung liegt an der Rumpfunterseite (Bounds z 0..17,1)
+
+	// Rotorhoehen ueber der Kufenebene.
+	//
+	// Der Rumpf ist im Modell 16,45 cm hoch, skaliert also rund 238 cm. Mit den
+	// vorherigen 430 und 380 cm schwebte das Rotorpaar anderthalb Meter ueber
+	// dem Dach. Der Rotorkopf eines Ka-52 sitzt auf einem kurzen Mast dicht
+	// darueber; die Bauhoehe von 4,9 m wird von den Blattspitzen erreicht,
+	// nicht vom Mastfuss.
+	constexpr float UpperRotorHeightCm = 345.0f;
+	constexpr float LowerRotorHeightCm = 300.0f;
+
+	// Gierdrehung, die Modell-+Y auf Welt-+X legt.
+	const FRotator ModelYaw(0.0f, -90.0f, 0.0f);
+
+
+	// Rumpf.
+	FuselageMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("FuselageMesh"));
+	FuselageMesh->SetupAttachment(SceneRoot);
+
+	if (HeliBody)
+	{
+		FuselageMesh->SetStaticMesh(HeliBody);
+		FuselageMesh->SetRelativeRotation(ModelYaw);
+		FuselageMesh->SetRelativeScale3D(FVector(ModelScale));
+		FuselageMesh->SetRelativeLocation(FVector(0.0f, 0.0f, FuselageHeightCm));
+	}
+	else if (Cube)
+	{
+		// Rueckfall: Wuerfel 320 x 120 x 70 cm.
+		FuselageMesh->SetStaticMesh(Cube);
+		FuselageMesh->SetRelativeLocation(FVector(0.0f, 0.0f, 130.0f));
+		FuselageMesh->SetRelativeScale3D(FVector(3.2f, 1.2f, 0.7f));
+	}
+
+	// Heckausleger und Flosse gehoeren beim echten Modell zum Rumpf und werden
+	// nur im Wuerfel-Rueckfall als eigene Bauteile gebraucht.
+	TailBoomMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("TailBoomMesh"));
+	TailBoomMesh->SetupAttachment(SceneRoot);
+	TailBoomMesh->SetRelativeLocation(FVector(-240.0f, 0.0f, 150.0f));
+	TailBoomMesh->SetRelativeScale3D(FVector(1.6f, 0.16f, 0.16f));
+
+	TailFinMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("TailFinMesh"));
+	TailFinMesh->SetupAttachment(SceneRoot);
+	TailFinMesh->SetRelativeLocation(FVector(-300.0f, 0.0f, 180.0f));
+	TailFinMesh->SetRelativeScale3D(FVector(0.2f, 0.04f, 0.5f));
+
+	if (HeliBody)
+	{
+		TailBoomMesh->SetVisibility(false);
+		TailFinMesh->SetVisibility(false);
+	}
+	else if (Cube)
+	{
+		TailBoomMesh->SetStaticMesh(Cube);
+		TailFinMesh->SetStaticMesh(Cube);
+	}
+
+	// Hauptrotor: Nabe auf dem Mast (leicht vor dem Schwerpunkt, ueber dem Rumpf).
+	MainRotorHub = CreateDefaultSubobject<USceneComponent>(TEXT("MainRotorHub"));
+	MainRotorHub->SetupAttachment(SceneRoot);
+	// Zwei verschiedene Groessen, sauber getrennt:
+	//  MastOffset   - wo die Nabe AM RUMPF sitzt (Position der Nabenkomponente)
+	//  RotorSelfHub - wo im ROTORMESH dessen eigene Drehachse liegt
+	// Die Nabe kommt an den Mast; das Mesh wird um seinen Eigenversatz
+	// zurueckgeschoben, damit die Scheibe genau dort kreist.
+	const FVector MastOffset =
+		ModelYaw.RotateVector(FVector(MastInBodyModelCm.X, MastInBodyModelCm.Y, 0.0f)) * ModelScale;
+	const FVector RotorSelfHub =
+		ModelYaw.RotateVector(FVector(RotorHubInModelCm.X, RotorHubInModelCm.Y, 0.0f)) * ModelScale;
+
+	MainRotorHub->SetRelativeLocation(
+		FVector(MastOffset.X, MastOffset.Y, UpperRotorHeightCm));
+
+	MainRotorBlade = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("MainRotorBlade"));
+	MainRotorBlade->SetupAttachment(MainRotorHub);
+	if (HeliRotorUpper)
+	{
+		MainRotorBlade->SetStaticMesh(HeliRotorUpper);
+		MainRotorBlade->SetRelativeScale3D(FVector(ModelScale));
+		MainRotorBlade->SetRelativeRotation(ModelYaw);
+		// Um den Nabenversatz zurueckschieben: die Scheibe bleibt dort, wo sie
+		// hingehoert, dreht sich aber jetzt um ihre eigene Nabe.
+		//
+		// Der Versatz muss GEDREHT abgezogen werden, in denselben Achsen wie
+		// die Geometrie. Zog man den ungedrehten Modellvektor ab, verschob sich
+		// die Scheibe um die Differenz beider Richtungen - im Bild sass sie
+		// dann weit neben dem Rumpf.
+		MainRotorBlade->SetRelativeLocation(-RotorSelfHub);
+	}
+	else if (Cube)
+	{
+		MainRotorBlade->SetStaticMesh(Cube);
+		MainRotorBlade->SetRelativeScale3D(FVector(7.0f, 0.2f, 0.05f));
+	}
+
+	// Unterer Hauptrotor des Koaxial-Paars: knapp unter dem oberen, dreht
+	// gegenlaeufig (Ka-52-Stil). Kaempferisch kompakt, kein sichtbarer Mast.
+	LowerRotorHub = CreateDefaultSubobject<USceneComponent>(TEXT("LowerRotorHub"));
+	LowerRotorHub->SetupAttachment(SceneRoot);
+	LowerRotorHub->SetRelativeLocation(
+		FVector(MastOffset.X, MastOffset.Y, LowerRotorHeightCm));
+
+	LowerRotorBlade = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LowerRotorBlade"));
+	LowerRotorBlade->SetupAttachment(LowerRotorHub);
+	if (HeliRotorLower)
+	{
+		LowerRotorBlade->SetStaticMesh(HeliRotorLower);
+		LowerRotorBlade->SetRelativeScale3D(FVector(ModelScale));
+		LowerRotorBlade->SetRelativeRotation(ModelYaw);
+		LowerRotorBlade->SetRelativeLocation(-RotorSelfHub);
+	}
+	else if (Cube)
+	{
+		LowerRotorBlade->SetStaticMesh(Cube);
+		LowerRotorBlade->SetRelativeScale3D(FVector(7.0f, 0.2f, 0.05f));
+	}
+
+	// Heckrotor: Nabe am Ende des Heckauslegers, dreht um die Y-Achse.
+	TailRotorHub = CreateDefaultSubobject<USceneComponent>(TEXT("TailRotorHub"));
+	TailRotorHub->SetupAttachment(SceneRoot);
+	TailRotorHub->SetRelativeLocation(FVector(-320.0f, 0.0f, 150.0f));
+
+	TailRotorBlade = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("TailRotorBlade"));
+	TailRotorBlade->SetupAttachment(TailRotorHub);
+	TailRotorBlade->SetRelativeScale3D(FVector(0.7f, 0.05f, 0.15f));
+
+	if (HeliBody)
+	{
+		// Ein Ka-52 HAT keinen Heckrotor - das gegenlaeufige Rotorpaar hebt
+		// das Reaktionsmoment auf, gesteuert wird die Gierachse ueber
+		// differentielle Blattverstellung. Die Physik bildet das bereits so ab
+		// (bCoaxialRotors: Force.Y = 0, kein Heckrotorschub); sichtbar war der
+		// Heckrotor trotzdem, weil er aus der Wuerfel-Notloesung stammte.
+		TailRotorBlade->SetVisibility(false);
+	}
+	else if (Cube)
+	{
+		TailRotorBlade->SetStaticMesh(Cube);
+	}
+
+	// Kamera: generische Fahrzeug-Kamera-Komponente (erzeugt ihr Rig in BeginPlay).
+	// Fest im Follow-Modus: die Kamera haengt direkt hinter der Flugmaschine
+	// (kein Umschalten auf Orbit/Cockpit, keine Orbit-Schwenkung).
+	VehicleCamera = CreateDefaultSubobject<UWiesbadenVehicleCameraComponent>(TEXT("VehicleCamera"));
+	VehicleCamera->SetupAttachment(SceneRoot);
+	VehicleCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 130.0f));
+	VehicleCamera->bLockFollowMode = true;
+
+	// Ruhiger Horizont und Positions-Nachlauf: der Rumpf neigt sich IM Bild,
+	// nicht das Bild mit ihm, und die Kamera federt Beschleunigungen weich
+	// ab. Vorher uebertrug sich jeder zyklische Ausschlag ungefiltert auf
+	// die Kamera - das wirkte hektisch und machte das Zielen von Blicken
+	// unnoetig schwer.
+	VehicleCamera->bLevelHorizon = true;
+	VehicleCamera->PositionLagSpeed = 9.0f;
+	VehicleCamera->FollowArmLength = 1500.0f;
+	VehicleCamera->FollowPitchOffset = -10.0f;
+
+	// Flugsound: prozeduraler Rotor-/Motor-Klang (Asset-Slots liegen bereit).
+	HelicopterAudio = CreateDefaultSubobject<UWiesbadenHelicopterAudioComponent>(TEXT("HelicopterAudio"));
+	HelicopterAudio->SetupAttachment(SceneRoot);
+	HelicopterAudio->SetRelativeLocation(FVector(0.0f, 0.0f, 130.0f));
+
+	// Kampfhelikopter-Konfiguration (Ka-52-Stil, Referenz: Mi-35/28/Ka-52/Mi-8):
+	// koaxiale, gegenlaeufige Rotoren (flink, kein Heckrotor-Moment) und ein
+	// schwerer, tiefer Rotorschlag (Blade Slap) statt zivilem Surren.
+	RotorPhysics.bCoaxialRotors = true;
+	RotorPhysics.CoaxialYawAuthority = 1600.0f;
+	RotorPhysics.MaxForwardSpeedMetersPerS = 85.0f;
+	RotorPhysics.CyclicPitchMomentAuthority = 1500.0f;
+	RotorPhysics.CyclicRollMomentAuthority = 1500.0f;
+	RotorPhysics.RotorAngularDamping = 1400.0f;
+
+	HelicopterAudio->BladeCount = 3;
+	HelicopterAudio->BladeSlapDepth = 0.55f;
+	HelicopterAudio->RotorCutoffBaseHz = 110.0f;
+
+	if (!Cube)
+	{
+		UE_LOG(LogWbVehicles, Warning,
+			TEXT("Basis-Cube (/Engine/BasicShapes/Cube) nicht gefunden - Platzhalter-Meshes bleiben unsichtbar."));
+	}
+}
+
+void AWiesbadenHelicopter::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	// Ohne Pilot wird nicht geflogen.
+	//
+	// Der abgestellte Helikopter durchlief bisher dieselbe Flugsimulation wie
+	// der geflogene. Mit laufendem Triebwerk und dem Ruhewert von 50 %
+	// Kollektiv erzeugte der Rotor Auftrieb, und er stieg unbemannt davon -
+	// gemessen 126 m ueber Grund. Die Spawn-Meldung stimmte jedes Mal, zu
+	// finden war er trotzdem nie.
+	if (!Controller)
+	{
+		ParkOnGround();
+		UpdateRotors(DeltaSeconds);
+		UpdateAudio(DeltaSeconds);
+		return;
+	}
+
+	ReadInput(DeltaSeconds);
+	ApplyFlightPhysics(DeltaSeconds);
+	UpdateRotors(DeltaSeconds);
+	UpdateAudio(DeltaSeconds);
+}
+
+void AWiesbadenHelicopter::ParkOnGround()
+{
+	bEngineRunning = false;
+	Velocity = FVector::ZeroVector;
+	AngularVelocity = FVector::ZeroVector;
+
+	CollectiveInput = 0.0f;
+	CyclicPitchInput = 0.0f;
+	CyclicRollInput = 0.0f;
+	YawInput = 0.0f;
+
+	// Waagerecht ausrichten - ein geparkter Helikopter steht nicht schraeg.
+	const FRotator Current = GetActorRotation();
+	SetActorRotation(FRotator(0.0f, Current.Yaw, 0.0f));
+
+	UWorld* HeliWorld = GetWorld();
+	if (!HeliWorld)
+	{
+		return;
+	}
+
+	// Auf den Boden setzen. Der Trace startet ueber dem Rumpf, damit er nicht
+	// innerhalb eines Kollisionskoerpers beginnt.
+	FHitResult Hit;
+	const FVector Start = GetActorLocation() + FVector(0.0f, 0.0f, 500.0f);
+	const FVector End = Start - FVector(0.0f, 0.0f, 100000.0f);
+
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbHeliPark), true);
+	Params.AddIgnoredActor(this);
+
+	if (!HeliWorld->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params))
+	{
+		// Boden noch nicht gestreamt: stehen bleiben, nicht fallen.
+		return;
+	}
+
+	const FVector Location = GetActorLocation();
+	SetActorLocation(
+		FVector(Location.X, Location.Y, Hit.Location.Z + MinGroundClearanceCm),
+		/*bSweep=*/false);
+}
+
+void AWiesbadenHelicopter::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+
+	if (APlayerController* PC = Cast<APlayerController>(NewController))
+	{
+		PC->SetViewTarget(this);
+	}
+
+	// Triebwerk laeuft nur mit Pilot an Bord.
+	bEngineRunning = true;
+
+	UE_LOG(LogWbVehicles, Log, TEXT("Helikopter %s wurde vom Spieler uebernommen."), *GetName());
+}
+
+void AWiesbadenHelicopter::UnPossessed()
+{
+	Super::UnPossessed();
+
+	bEngineRunning = false;
+
+	UE_LOG(LogWbVehicles, Log, TEXT("Helikopter %s wurde freigegeben."), *GetName());
+}
+
+void AWiesbadenHelicopter::CycleCameraMode()
+{
+	if (VehicleCamera)
+	{
+		VehicleCamera->CycleCameraMode();
+	}
+}
+
+EWiesbadenVehicleCameraMode AWiesbadenHelicopter::GetCameraMode() const
+{
+	return VehicleCamera ? VehicleCamera->GetCameraMode() : EWiesbadenVehicleCameraMode::Follow;
+}
+
+float AWiesbadenHelicopter::GetMainRotorRpm() const
+{
+	return RotorPhysics.MainRotorRpm;
+}
+
+float AWiesbadenHelicopter::ApplyStickShaping(float RawAxis, float Deadzone, float Expo)
+{
+	const float Clamped = FMath::Clamp(RawAxis, -1.0f, 1.0f);
+	const float Magnitude = FMath::Abs(Clamped);
+	const float Dead = FMath::Clamp(Deadzone, 0.0f, 0.9f);
+
+	if (Magnitude <= Dead)
+	{
+		return 0.0f;
+	}
+
+	// Nach der Totzone auf den vollen Bereich strecken - sonst waere der
+	// Vollausschlag nicht mehr erreichbar und der Stick fuehlte sich kurz an.
+	const float Rescaled = (Magnitude - Dead) / (1.0f - Dead);
+
+	// Expo: Mischung aus linear und kubisch. Kleine Ausschlaege werden fein
+	// aufgeloest, der Vollausschlag bleibt bei 1. Ohne das ist ein
+	// Hubschrauber kaum auf der Stelle zu halten.
+	const float ExpoAmount = FMath::Clamp(Expo, 0.0f, 1.0f);
+	const float Shaped = FMath::Lerp(Rescaled, Rescaled * Rescaled * Rescaled, ExpoAmount);
+
+	return Shaped * FMath::Sign(Clamped);
+}
+
+float AWiesbadenHelicopter::AdvanceControlAxis(
+	float Current, float Target, float RiseRate, float ReturnRate, float DeltaSeconds)
+{
+	Target = FMath::Clamp(Target, -1.0f, 1.0f);
+
+	// Ruecklauf ist die Bewegung zur Mitte. Die Pruefung muss ausdruecklich
+	// ausschliessen, dass die Achse schon mittig steht: FMath::Sign(0) ist 0
+	// und weicht damit von jedem Ziel ab - genau dieser Fehler liess bei der
+	// Fahrzeuglenkung das Einlenken aus der Mitte mit der schnelleren
+	// Ruecklaufrate laufen.
+	const bool bReturning = Current != 0.0f
+		&& (FMath::Abs(Target) < FMath::Abs(Current) || Target * Current < 0.0f);
+
+	const float Rate = FMath::Max(bReturning ? ReturnRate : RiseRate, 0.01f);
+	const float Step = Rate * FMath::Max(DeltaSeconds, 0.0f);
+
+	return FMath::Clamp(FMath::FInterpConstantTo(Current, Target, 1.0f, Step), -1.0f, 1.0f);
+}
+
+float AWiesbadenHelicopter::ComputeAutoLevel(
+	float AttitudeDegrees, float CommandedInput, float Strength, float MaxAuthority)
+{
+	// Wirksamkeit sinkt mit der Eingabe, verschwindet aber NICHT.
+	//
+	// Vorher galt Freedom = 1 - |Eingabe|: bei Vollausschlag blieb null
+	// Stabilisierung. Genau dann braucht man sie aber - der Hubschrauber
+	// kippte beim Steuern weg und war "kaum zu navigieren". Ein Rest von
+	// 30 Prozent haelt die Lage beherrschbar, ohne den bewusst schraegen
+	// Flug zu verhindern.
+	constexpr float MinFreedom = 0.30f;
+	const float Freedom = FMath::Max(
+		MinFreedom, 1.0f - FMath::Clamp(FMath::Abs(CommandedInput), 0.0f, 1.0f));
+
+	const float Correction = -AttitudeDegrees * FMath::Max(Strength, 0.0f);
+	const float Authority = FMath::Clamp(MaxAuthority, 0.0f, 1.0f);
+
+	return FMath::Clamp(Correction, -Authority, Authority) * Freedom;
+}
+
+float AWiesbadenHelicopter::GetAnalogAxis(const FKey& Key)
+{
+	const APlayerController* PC = GetHeliController();
+	return PC ? PC->GetInputAnalogKeyState(Key) : 0.0f;
+}
+
+void AWiesbadenHelicopter::ReadInput(float DeltaSeconds)
+{
+	// Tastatur UND Gamepad, analog wo moeglich.
+	//
+	// Hier wurden zuvor nur Tasten gepollt: jede Eingabe war +1, -1 oder 0.
+	// Ein Hubschrauber laesst sich so nicht dosieren - das Kollektiv sprang
+	// zwischen Steigen und Sinken, ohne Zwischenwerte. Der Gamepad-Stick
+	// liefert eine echte Analogachse, die Tastatur wird als Vollausschlag
+	// behandelt und ueber die Anstiegsrate weich gemacht.
+	//
+	// Belegung (uebliche Hubschrauber-Belegung):
+	//
+	//   Tastatur                    Gamepad
+	//   W / S    Nicken             Linker Stick hoch/runter
+	//   A / D    Rollen             Linker Stick links/rechts
+	//   Q / E    Gieren             Rechter Stick links/rechts
+	//   Leer     Kollektiv hoch     Rechter Trigger
+	//   Strg     Kollektiv runter   Linker Trigger
+	//   G        Triebwerk          Y
+
+	// -- Kollektiv --------------------------------------------------------
+	float TargetCollective = 0.0f;
+	if (IsKeyDown(EKeys::SpaceBar) || IsKeyDown(EKeys::LeftShift))
+	{
+		TargetCollective += 1.0f;
+	}
+	if (IsKeyDown(EKeys::LeftControl))
+	{
+		TargetCollective -= 1.0f;
+	}
+
+	// Trigger sind einseitige Achsen von 0 bis 1; die Differenz ergibt eine
+	// beidseitige Achse mit feiner Aufloesung in beide Richtungen.
+	const float TriggerUp = GetAnalogAxis(EKeys::Gamepad_RightTriggerAxis);
+	const float TriggerDown = GetAnalogAxis(EKeys::Gamepad_LeftTriggerAxis);
+	const float TriggerCollective = ApplyStickShaping(TriggerUp - TriggerDown, StickDeadzone, StickExpo);
+	if (FMath::Abs(TriggerCollective) > FMath::Abs(TargetCollective))
+	{
+		TargetCollective = TriggerCollective;
+	}
+
+	// -- Zyklisch (Nicken/Rollen) ------------------------------------------
+	float TargetPitch = 0.0f;
+	if (IsKeyDown(EKeys::W)) { TargetPitch += 1.0f; }
+	if (IsKeyDown(EKeys::S)) { TargetPitch -= 1.0f; }
+
+	float TargetRoll = 0.0f;
+	if (IsKeyDown(EKeys::D)) { TargetRoll += 1.0f; }
+	if (IsKeyDown(EKeys::A)) { TargetRoll -= 1.0f; }
+
+	const float StickPitch = ApplyStickShaping(
+		GetAnalogAxis(EKeys::Gamepad_LeftY), StickDeadzone, StickExpo);
+	const float StickRoll = ApplyStickShaping(
+		GetAnalogAxis(EKeys::Gamepad_LeftX), StickDeadzone, StickExpo);
+
+	// Der groessere Betrag gewinnt - so stoert eine ruhende Eingabequelle die
+	// andere nicht, und beide bleiben jederzeit benutzbar.
+	if (FMath::Abs(StickPitch) > FMath::Abs(TargetPitch)) { TargetPitch = StickPitch; }
+	if (FMath::Abs(StickRoll) > FMath::Abs(TargetRoll)) { TargetRoll = StickRoll; }
+
+	// -- Gieren ------------------------------------------------------------
+	float TargetYaw = 0.0f;
+	if (IsKeyDown(EKeys::E)) { TargetYaw += 1.0f; }
+	if (IsKeyDown(EKeys::Q)) { TargetYaw -= 1.0f; }
+
+	const float StickYaw = ApplyStickShaping(
+		GetAnalogAxis(EKeys::Gamepad_RightX), StickDeadzone, StickExpo);
+	if (FMath::Abs(StickYaw) > FMath::Abs(TargetYaw)) { TargetYaw = StickYaw; }
+
+	// -- Selbststabilisierung ----------------------------------------------
+	//
+	// Ohne sie bleibt die Lage stehen, sobald man loslaesst: einmal schraeg,
+	// immer schraeg, bis man von Hand gegensteuert. Das ist der Hauptgrund,
+	// aus dem sich eine Hubschraubersteuerung unbeherrschbar anfuehlt.
+	const FRotator Attitude = GetActorRotation();
+	TargetPitch += ComputeAutoLevel(Attitude.Pitch, TargetPitch, AutoLevelStrength, AutoLevelMaxAuthority);
+	TargetRoll += ComputeAutoLevel(Attitude.Roll, TargetRoll, AutoLevelStrength, AutoLevelMaxAuthority);
+
+	TargetPitch = FMath::Clamp(TargetPitch, -1.0f, 1.0f);
+	TargetRoll = FMath::Clamp(TargetRoll, -1.0f, 1.0f);
+
+	// -- Nachfuehren mit getrennten Raten je Achse -------------------------
+	//
+	// Zuvor lag EINE exponentielle Glaettung ueber allen vier Achsen. Ein
+	// Hubschrauber ist darauf aber verschieden traege: Das Kollektiv haengt an
+	// der Blattverstellung und braucht am laengsten, das Gierpedal spricht am
+	// schnellsten an.
+	CollectiveInput = AdvanceControlAxis(
+		CollectiveInput, TargetCollective, CollectiveRiseRate, CollectiveReturnRate, DeltaSeconds);
+	CyclicPitchInput = AdvanceControlAxis(
+		CyclicPitchInput, TargetPitch, CyclicRiseRate, CyclicReturnRate, DeltaSeconds);
+	CyclicRollInput = AdvanceControlAxis(
+		CyclicRollInput, TargetRoll, CyclicRiseRate, CyclicReturnRate, DeltaSeconds);
+	YawInput = AdvanceControlAxis(
+		YawInput, TargetYaw, YawRiseRate, YawReturnRate, DeltaSeconds);
+
+	// Triebwerk an/aus (Flanke auf G oder Y am Gamepad) - erlaubt Autorotationstests.
+	const bool bEnginePressed = IsKeyDown(EKeys::G) || IsKeyDown(EKeys::Gamepad_FaceButton_Top);
+	if (bEnginePressed && !bEngineToggleHeld)
+	{
+		bEngineRunning = !bEngineRunning;
+		UE_LOG(LogWbVehicles, Log, TEXT("Triebwerk %s."), bEngineRunning ? TEXT("an") : TEXT("aus"));
+	}
+	bEngineToggleHeld = bEnginePressed;
+}
+
+void AWiesbadenHelicopter::ApplyFlightPhysics(float DeltaSeconds)
+{
+	// Eingaben aus den geglaetteten Steuerwerten.
+	FWiesbadenRotorPhysicsInput RotorInput;
+	RotorInput.Collective = FMath::Clamp(0.5f + 0.5f * CollectiveInput, 0.0f, 1.0f);
+	RotorInput.CyclicPitch = CyclicPitchInput;
+	RotorInput.CyclicRoll = CyclicRollInput;
+	RotorInput.YawPedal = YawInput;
+	RotorInput.bEngineRunning = bEngineRunning;
+
+	// Lokale Geschwindigkeiten fuer das Modul (Autorotation + Daempfung).
+	const FVector LocalVelocity = GetActorTransform().InverseTransformVectorNoScale(Velocity);
+
+	FWiesbadenRotorPhysicsOutput RotorOut;
+	RotorPhysics.Tick(RotorInput, DeltaSeconds, LocalVelocity, AngularVelocity, RotorOut);
+
+	// Kraft (N) -> Beschleunigung (cm/s^2): 1 N/kg = 100 cm/s^2.
+	const float InvMass = 1.0f / FMath::Max(RotorPhysics.MassKg, 1.0f);
+	const FVector WorldAccel = GetActorTransform().TransformVectorNoScale(RotorOut.Force * (InvMass * 100.0f));
+
+	// Schwerkraft + Rumpf-Luftwiderstand (Fahrzeug-Ebene).
+	Velocity += WorldAccel * DeltaSeconds;
+	Velocity += FVector(0.0f, 0.0f, -GravityCmPerS2) * DeltaSeconds;
+	Velocity -= Velocity * LinearDrag * DeltaSeconds;
+
+	// Schwebehilfe: bei neutralem Kollektiv die Vertikalgeschwindigkeit
+	// abklingen lassen. Der Faktor blendet mit dem Hebelausschlag aus -
+	// wer bewusst steigt oder sinkt, bekommt keine Gegenwehr.
+	if (bEngineRunning && HoverAssistStrength > 0.0f)
+	{
+		const float Neutral = 1.0f - FMath::Clamp(FMath::Abs(CollectiveInput) * 4.0f, 0.0f, 1.0f);
+		if (Neutral > 0.0f)
+		{
+			Velocity.Z = FMath::FInterpTo(
+				Velocity.Z, 0.0f, DeltaSeconds, HoverAssistStrength * Neutral);
+		}
+	}
+
+	// Driftdaempfung: das Gegenstueck zur Schwebehilfe fuer die WAAGERECHTE.
+	//
+	// Die Schwebehilfe oben haelt die Hoehe, aber nichts hielt die Position.
+	// Wer zum Beschleunigen nach vorn kippt, rutscht anschliessend weiter -
+	// der Luftwiderstand allein bremst kaum. Zum Anhalten musste man exakt
+	// gegensteuern und den Ausschlag im richtigen Moment zuruecknehmen; das
+	// gelingt am Stick praktisch nie, und genau daran lag "kann kaum
+	// navigieren".
+	//
+	// Wie die Schwebehilfe eine DAEMPFUNG, keine Sollwertregelung: sie zieht
+	// die Geschwindigkeit gegen null, nicht die Position auf einen Punkt.
+	// Damit arbeitet sie nie gegen den Piloten.
+	if (bEngineRunning && DriftAssistStrength > 0.0f)
+	{
+		const float Cyclic = FMath::Max(
+			FMath::Abs(CyclicPitchInput), FMath::Abs(CyclicRollInput));
+		const float Neutral = 1.0f - FMath::Clamp(Cyclic * 4.0f, 0.0f, 1.0f);
+		if (Neutral > 0.0f)
+		{
+			Velocity.X = FMath::FInterpTo(
+				Velocity.X, 0.0f, DeltaSeconds, DriftAssistStrength * Neutral);
+			Velocity.Y = FMath::FInterpTo(
+				Velocity.Y, 0.0f, DeltaSeconds, DriftAssistStrength * Neutral);
+		}
+	}
+
+	// Hoechstgeschwindigkeit begrenzen.
+	const float SpeedSq = Velocity.SizeSquared();
+	const float MaxSq = MaxSpeedCmPerS * MaxSpeedCmPerS;
+	if (SpeedSq > MaxSq)
+	{
+		Velocity *= MaxSpeedCmPerS / FMath::Sqrt(SpeedSq);
+	}
+
+	// Weiche Boden-Kollision.
+	ApplyGroundConstraint(DeltaSeconds);
+
+	// Position integrieren.
+	AddActorWorldOffset(Velocity * DeltaSeconds, true);
+
+	// Drehmoment (N*m) -> Winkelbeschleunigung (rad/s^2) pro Achse.
+	const float InvRoll = 1.0f / FMath::Max(MomentOfInertiaKgM2.X, 0.01f);
+	const float InvPitch = 1.0f / FMath::Max(MomentOfInertiaKgM2.Y, 0.01f);
+	const float InvYaw = 1.0f / FMath::Max(MomentOfInertiaKgM2.Z, 0.01f);
+	const FVector AngAccel(
+		RotorOut.Torque.X * InvRoll,
+		RotorOut.Torque.Y * InvPitch,
+		RotorOut.Torque.Z * InvYaw);
+	AngularVelocity += AngAccel * DeltaSeconds;
+
+	// Ratendaempfung: ohne Knueppelausschlag klingt die Drehbewegung ab.
+	// Je Achse mit dem eigenen Kommando ausgeblendet, damit ein bewusster
+	// Ausschlag nie gegen die Hilfe arbeitet.
+	if (bEngineRunning && RateAssistStrength > 0.0f)
+	{
+		const float RollNeutral = 1.0f - FMath::Clamp(FMath::Abs(CyclicRollInput) * 2.0f, 0.0f, 1.0f);
+		const float PitchNeutral = 1.0f - FMath::Clamp(FMath::Abs(CyclicPitchInput) * 2.0f, 0.0f, 1.0f);
+		const float YawNeutral = 1.0f - FMath::Clamp(FMath::Abs(YawInput) * 2.0f, 0.0f, 1.0f);
+		AngularVelocity.X = FMath::FInterpTo(
+			AngularVelocity.X, 0.0f, DeltaSeconds, RateAssistStrength * RollNeutral);
+		AngularVelocity.Y = FMath::FInterpTo(
+			AngularVelocity.Y, 0.0f, DeltaSeconds, RateAssistStrength * PitchNeutral);
+		AngularVelocity.Z = FMath::FInterpTo(
+			AngularVelocity.Z, 0.0f, DeltaSeconds, RateAssistStrength * 0.6f * YawNeutral);
+	}
+
+	// Rotation anwenden: FRotator(Pitch, Yaw, Roll) aus (Roll, Pitch, Yaw)-Achsen.
+	const FRotator DeltaRot(
+		FMath::RadiansToDegrees(AngularVelocity.Y) * DeltaSeconds, // Pitch
+		FMath::RadiansToDegrees(AngularVelocity.Z) * DeltaSeconds, // Yaw
+		FMath::RadiansToDegrees(AngularVelocity.X) * DeltaSeconds);// Roll
+	AddActorLocalRotation(DeltaRot);
+}
+
+void AWiesbadenHelicopter::ApplyGroundConstraint(float DeltaSeconds)
+{
+	// Einfacher Down-Raycast; verhindert Durchsinken, ohne Physik-Simulation.
+	if (!GetWorld())
+	{
+		return;
+	}
+
+	FHitResult Hit;
+	const FVector Start = GetActorLocation();
+	const FVector End = Start - FVector(0.0f, 0.0f, 100000.0f);
+
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbHeliGround), true);
+	Params.AddIgnoredActor(this);
+
+	bGrounded = false;
+	if (GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params))
+	{
+		const float Altitude = Hit.Distance;
+		if (Altitude < MinGroundClearanceCm)
+		{
+			// Unterhalb der Mindestflughoehe: anheben und Sinken daempfen.
+			AddActorWorldOffset(FVector(0.0f, 0.0f, MinGroundClearanceCm - Altitude), true);
+			if (Velocity.Z < 0.0f)
+			{
+				Velocity.Z = FMath::Max(0.0f, Velocity.Z * 0.25f);
+			}
+			bGrounded = true;
+		}
+		return;
+	}
+
+	// KEIN Treffer nach unten. Das hiess hier bisher stillschweigend "freier
+	// Himmel" - und genau daran ist der Helikopter jedes Mal verschwunden:
+	//
+	// Er wird in Frame 0 abgesetzt, bevor World Partition Gelaende und Strassen
+	// gestreamt hat. Der Abwaertstrace fand nichts, die Schwerkraft lief
+	// trotzdem weiter, und als der Boden Sekunden spaeter da war, lag der
+	// Helikopter bereits darunter und fiel mit hoher Geschwindigkeit. Von dort
+	// trifft ein Abwaertstrace erst recht nichts mehr - er war endgueltig weg.
+	// Im Log stand jedes Mal "Helikopter abgesetzt", im Spiel war er nie zu
+	// finden.
+	//
+	// Kein Treffer bedeutet daher: Boden UNBEKANNT, nicht Boden ABWESEND.
+	FHitResult UpHit;
+	if (GetWorld()->LineTraceSingleByChannel(
+		UpHit, Start, Start + FVector(0.0f, 0.0f, 100000.0f), ECC_WorldStatic, Params))
+	{
+		// Wir stecken unter der Welt - zurueck auf die Oberflaeche setzen.
+		SetActorLocation(UpHit.Location + FVector(0.0f, 0.0f, MinGroundClearanceCm), false);
+		Velocity.Z = 0.0f;
+		bGrounded = true;
+		return;
+	}
+
+	// Weder ueber noch unter uns Geometrie: der Untergrund ist noch nicht
+	// geladen. Solange nicht sinken, sonst faellt der Helikopter waehrend des
+	// Streamings aus der Welt.
+	Velocity.Z = FMath::Max(Velocity.Z, 0.0f);
+}
+
+void AWiesbadenHelicopter::UpdateRotors(float DeltaSeconds)
+{
+	// Rotor-Naben visuell drehen; die Drehzahl kommt aus dem Physik-Modul.
+	// U/min -> deg/s: * 360 / 60 = * 6.
+	const float MainDegPerSec = RotorPhysics.MainRotorRpm * 6.0f;
+	const float TailDegPerSec = RotorPhysics.TailRotorRpm * 6.0f;
+
+	if (MainRotorHub)
+	{
+		MainRotorHub->AddLocalRotation(FRotator(0.0f, MainDegPerSec * DeltaSeconds, 0.0f));
+	}
+	if (LowerRotorHub)
+	{
+		// Gegenlaeufiger unterer Rotor des Koaxial-Paars.
+		LowerRotorHub->AddLocalRotation(FRotator(0.0f, -MainDegPerSec * DeltaSeconds, 0.0f));
+	}
+	if (TailRotorHub)
+	{
+		TailRotorHub->AddLocalRotation(FRotator(TailDegPerSec * DeltaSeconds, 0.0f, 0.0f));
+	}
+}
+
+void AWiesbadenHelicopter::UpdateAudio(float DeltaSeconds)
+{
+	if (!HelicopterAudio)
+	{
+		return;
+	}
+
+	// Collective-Wert des Physik-Moduls (0..1) als Blattlast weitergeben.
+	const float Collective = FMath::Clamp(0.5f + 0.5f * CollectiveInput, 0.0f, 1.0f);
+	HelicopterAudio->SetRotorState(RotorPhysics.MainRotorRpm, Collective);
+	HelicopterAudio->SetEngineState(RotorPhysics.EngineRpm, bEngineRunning);
+	HelicopterAudio->SetForwardSpeed(Velocity.Size() / 100.0f);
+}
+
+APlayerController* AWiesbadenHelicopter::GetHeliController()
+{
+	return Cast<APlayerController>(GetController());
+}
+
+bool AWiesbadenHelicopter::IsKeyDown(const FKey& Key)
+{
+	const APlayerController* PC = GetHeliController();
+	return PC && PC->IsInputKeyDown(Key);
+}

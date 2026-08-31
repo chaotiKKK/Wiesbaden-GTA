@@ -1,0 +1,402 @@
+{
+  "formatVersion": 1,
+  "description": "Spezifikation der fuenf Niagara-Wetter-Assets (World/WiesbadenWeatherFX). Die Datei ist die editorfaehige Blaupause: Jedes NS_-Asset muss die gelisteten User-Parameter EXPONIEREN (nur User-Namespace ist aus C++/Blueprint setzbar - SetVariableFloat/SetVariableLinearColor). Die C++-Seite (UWiesbadenWeatherFXComponent::ValidateSystem) prueft zur Laufzeit, ob zugewiesene Systeme diesen Vertrag erfuellen, und warnt bei fehlenden Parametern. Jedes Asset spezifiziert zusaetzlich explizite Fixed Bounds (bounds-Feld) - ohne sie culled die Engine grosse raeumliche Effekte (Wolken-Schale, Nebel, Regenbox) weg.",
+  "assets": [
+    {
+      "id": "NS_WeatherRain",
+      "displayName": "Regen",
+      "build": "Niagara System mit einem CPU-Emitter 'Rain', Modul-Reihenfolge: EmitterSpawn->SpawnRate; ParticleUpdate->AddVelocity->GravityForce; Render->Sprite BOUNDS: Fixed-Bounds am System setzen (siehe bounds-Feld), da CPUSim-Emitter ohne explizite Bounds bei Distanz-Culling verschwinden koennen.",
+      "emitters": [
+        {
+          "name": "Rain",
+          "simTarget": "CPUSim",
+          "spawnStage": [
+            {
+              "module": "SpawnRate",
+              "source": "User.RainSpawnRate",
+              "unit": "Partikel/s"
+            }
+          ],
+          "updateStage": [
+            {
+              "module": "AddVelocity",
+              "value": "Vector(0, 0, -1400) cm/s"
+            },
+            {
+              "module": "GravityForce",
+              "value": "Vector(0, 0, -980) cm/s^2"
+            }
+          ],
+          "renderer": "SpriteRenderer, Material mit RainSpawnRate-Skalierung der Streifenlaenge"
+        }
+      ],
+      "userParameters": [
+        {
+          "name": "RainSpawnRate",
+          "type": "Float",
+          "default": 0,
+          "min": 0,
+          "max": 2000,
+          "description": "Partikel/s; 0 deaktiviert den Effekt"
+        },
+        {
+          "name": "WindSpeed",
+          "type": "Float",
+          "default": 3,
+          "min": 0,
+          "max": 30,
+          "description": "m/s, schief-waagrechter Fall"
+        },
+        {
+          "name": "SunLightColor",
+          "type": "LinearColor",
+          "default": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "description": "Farbtemperatur des Umgebungslichts"
+        }
+      ],
+      "bounds": {
+        "type": "Fixed",
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "extent": [
+          20000,
+          20000,
+          10000
+        ],
+        "note": "Wolkenbox ueber der Stadt: Fallhoehe ~100 m, horizontale Ausdehnung deckt den CityActor-Bereich ab"
+      },
+      "path": "/Game/Niagara/NS_WeatherRain.NS_WeatherRain"
+    },
+    {
+      "id": "NS_WeatherSnow",
+      "displayName": "Schnee",
+      "build": "Niagara System mit einem CPU-Emitter 'Snow', Modul-Reihenfolge: EmitterSpawn->SpawnRate; ParticleUpdate->AddVelocity->GravityForce (langsamer als Regen); Render->Sprite BOUNDS: Fixed-Bounds am System setzen (siehe bounds-Feld), da CPUSim-Emitter ohne explizite Bounds bei Distanz-Culling verschwinden koennen.",
+      "emitters": [
+        {
+          "name": "Snow",
+          "simTarget": "CPUSim",
+          "spawnStage": [
+            {
+              "module": "SpawnRate",
+              "source": "User.SnowSpawnRate",
+              "unit": "Partikel/s"
+            }
+          ],
+          "updateStage": [
+            {
+              "module": "AddVelocity",
+              "value": "Vector(0, 0, -250) cm/s"
+            },
+            {
+              "module": "GravityForce",
+              "value": "Vector(0, 0, -60) cm/s^2"
+            },
+            {
+              "module": "Drag",
+              "value": "0.6"
+            }
+          ],
+          "renderer": "SpriteRenderer, weisse runde Partikel"
+        }
+      ],
+      "userParameters": [
+        {
+          "name": "SnowSpawnRate",
+          "type": "Float",
+          "default": 0,
+          "min": 0,
+          "max": 1200,
+          "description": "Partikel/s; 0 deaktiviert den Effekt"
+        },
+        {
+          "name": "WindSpeed",
+          "type": "Float",
+          "default": 3,
+          "min": 0,
+          "max": 30,
+          "description": "m/s, horizontaler Drift"
+        },
+        {
+          "name": "SunLightColor",
+          "type": "LinearColor",
+          "default": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "description": "Farbtemperatur"
+        }
+      ],
+      "bounds": {
+        "type": "Fixed",
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "extent": [
+          20000,
+          20000,
+          10000
+        ],
+        "note": "wie Regen, langsamere Fallgeschwindigkeit"
+      },
+      "path": "/Game/Niagara/NS_WeatherSnow.NS_WeatherSnow"
+    },
+    {
+      "id": "NS_WeatherFog",
+      "displayName": "Nebel",
+      "build": "Niagara System mit einem CPU-Emitter 'FogPatch' (grosser weicher Sprite-Klotz), EmitterUpdate->Color (Set Particle Color, Alpha an User.FogDensity gebunden - Modul /Niagara/Modules/Update/Color/Color); Render->Sprite mit dichtem Radial-Gradient-Material BOUNDS: Fixed-Bounds am System setzen (siehe bounds-Feld), da CPUSim-Emitter ohne explizite Bounds bei Distanz-Culling verschwinden koennen.",
+      "emitters": [
+        {
+          "name": "FogPatch",
+          "simTarget": "CPUSim",
+          "spawnStage": [
+            {
+              "module": "SpawnBurst_Instantaneous",
+              "count": 1,
+              "note": "ein statischer Patch (Count 1, SpawnTime 0)"
+            }
+          ],
+          "updateStage": [
+            {
+              "module": "Color",
+              "source": "User.FogDensity",
+              "range": "0..1",
+              "note": "Alpha-Kanal = Opacity (realer Modulname statt SetOpacity)"
+            }
+          ],
+          "renderer": "SpriteRenderer, Gross, weiche Kante, Additive oder Alpha-Blend"
+        }
+      ],
+      "userParameters": [
+        {
+          "name": "FogDensity",
+          "type": "Float",
+          "default": 0,
+          "min": 0,
+          "max": 1,
+          "description": "0..1 Opacity des Nebel-Patches"
+        },
+        {
+          "name": "WindSpeed",
+          "type": "Float",
+          "default": 3,
+          "min": 0,
+          "max": 30,
+          "description": "m/s, langsamer Drift"
+        },
+        {
+          "name": "SunLightColor",
+          "type": "LinearColor",
+          "default": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "description": "Farbtemperatur des Nebels"
+        }
+      ],
+      "bounds": {
+        "type": "Fixed",
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "extent": [
+          30000,
+          30000,
+          3000
+        ],
+        "note": "flacher Nebelteppich, grossflaechig gegen Distance-Culling"
+      },
+      "path": "/Game/Niagara/NS_WeatherFog.NS_WeatherFog"
+    },
+    {
+      "id": "NS_WeatherClouds",
+      "displayName": "Wolken",
+      "build": "Niagara System mit einem CPU-Emitter 'CloudLayer' (Himmelsschale), EmitterUpdate->Color (Set Particle Color, Alpha an User.CloudOpacity gebunden - Modul /Niagara/Modules/Update/Color/Color); Render->Sprite auf einer Kugel/Halbschale ueber der Stadt BOUNDS: Fixed-Bounds am System setzen (siehe bounds-Feld), da CPUSim-Emitter ohne explizite Bounds bei Distanz-Culling verschwinden koennen.",
+      "emitters": [
+        {
+          "name": "CloudLayer",
+          "simTarget": "CPUSim",
+          "spawnStage": [
+            {
+              "module": "SpawnBurst_Instantaneous",
+              "count": 1,
+              "note": "eine flache Wolken-Schale (Count 1, SpawnTime 0)"
+            }
+          ],
+          "updateStage": [
+            {
+              "module": "Color",
+              "source": "User.CloudOpacity",
+              "range": "0..1",
+              "note": "Alpha-Kanal = Opacity (realer Modulname statt SetOpacity)"
+            }
+          ],
+          "renderer": "SpriteRenderer oder MeshRenderer, grosse flache Quads, Alpha-Blend"
+        }
+      ],
+      "userParameters": [
+        {
+          "name": "CloudOpacity",
+          "type": "Float",
+          "default": 0.15,
+          "min": 0,
+          "max": 1,
+          "description": "0..1 Bedeckungsgrad"
+        },
+        {
+          "name": "WindSpeed",
+          "type": "Float",
+          "default": 3,
+          "min": 0,
+          "max": 30,
+          "description": "m/s, horizontale Drift"
+        },
+        {
+          "name": "SunLightColor",
+          "type": "LinearColor",
+          "default": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "description": "Lichtfarbe der Wolken"
+        }
+      ],
+      "bounds": {
+        "type": "Fixed",
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "extent": [
+          60000,
+          60000,
+          20000
+        ],
+        "note": "Himmelsschale ueber Stadt + Umland - OHNE Fixed Bounds wird das System bei Distanz-Culling weggeculled"
+      },
+      "path": "/Game/Niagara/NS_WeatherClouds.NS_WeatherClouds"
+    },
+    {
+      "id": "NS_WeatherStorm",
+      "displayName": "Gewitter",
+      "build": "Niagara System mit zwei CPU-Emittern: 'Lightning' (ein Blitz pro Loop: Emitter-Lifetime = User.LightningInterval, SpawnBurst_Instantaneous bei Loop-Start (SpawnTime 0, Count 1); 0 = kein Loop/kein Blitz) und 'RainHeavy' (Regen mit hoher Rate); Render->BeamRenderer oder RibbonRenderer fuer den Blitz BOUNDS: Fixed-Bounds am System setzen (siehe bounds-Feld), da CPUSim-Emitter ohne explizite Bounds bei Distanz-Culling verschwinden koennen.",
+      "emitters": [
+        {
+          "name": "Lightning",
+          "simTarget": "CPUSim",
+          "spawnStage": [
+            {
+              "module": "SpawnBurst_Instantaneous",
+              "source": "User.LightningInterval",
+              "unit": "Emitter-Loop-Dauer in Sekunden; 0 = nie",
+              "note": "realer Modulname statt SpawnBurstInterval: Einzelschuss pro Loop"
+            }
+          ],
+          "updateStage": [
+            {
+              "module": "ParticleState",
+              "value": "Lifetime 0.15 s",
+              "note": "realer Modulname statt SetLifeTime: /Niagara/Modules/Update/Lifetime/ParticleState; UpdateAge ergaenzen"
+            },
+            {
+              "module": "RibbonWidth",
+              "value": "2..6 cm"
+            }
+          ],
+          "renderer": "RibbonRenderer oder Beam, helles Cyan-Weiss, Additive"
+        },
+        {
+          "name": "RainHeavy",
+          "simTarget": "CPUSim",
+          "spawnStage": [
+            {
+              "module": "SpawnRate",
+              "source": "User.RainSpawnRate",
+              "unit": "Partikel/s (FX-Seite setzt ~1200)"
+            }
+          ],
+          "renderer": "SpriteRenderer wie NS_WeatherRain"
+        }
+      ],
+      "userParameters": [
+        {
+          "name": "LightningInterval",
+          "type": "Float",
+          "default": 0,
+          "min": 0,
+          "max": 30,
+          "description": "Sekunden zwischen Blitzen; 0 = keine Blitze"
+        },
+        {
+          "name": "RainSpawnRate",
+          "type": "Float",
+          "default": 0,
+          "min": 0,
+          "max": 2000,
+          "description": "Partikel/s des schweren Regens"
+        },
+        {
+          "name": "WindSpeed",
+          "type": "Float",
+          "default": 3,
+          "min": 0,
+          "max": 30,
+          "description": "m/s"
+        },
+        {
+          "name": "SunLightColor",
+          "type": "LinearColor",
+          "default": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "description": "Daemmerungs-Farbe"
+        }
+      ],
+      "bounds": {
+        "type": "Fixed",
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "extent": [
+          20000,
+          20000,
+          12000
+        ],
+        "note": "Regenbox + Blitz-Beam (Ribbon bis ~120 m)"
+      },
+      "path": "/Game/Niagara/NS_WeatherStorm.NS_WeatherStorm"
+    }
+  ],
+  "requiredUserParameters": [
+    "RainSpawnRate",
+    "SnowSpawnRate",
+    "FogDensity",
+    "CloudOpacity",
+    "LightningInterval",
+    "WindSpeed",
+    "SunLightColor"
+  ]
+}

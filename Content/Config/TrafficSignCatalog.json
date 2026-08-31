@@ -1,0 +1,49 @@
+{
+	"signs": [
+		{ "id": "101", "name": "Gefahrstelle", "category": "Gefahrzeichen" },
+		{ "id": "102", "name": "Kreuzung oder Einmuendung mit Vorfahrt von rechts", "category": "Gefahrzeichen" },
+		{ "id": "103-10", "name": "Kurve (links)", "category": "Gefahrzeichen" },
+		{ "id": "103-20", "name": "Kurve (rechts)", "category": "Gefahrzeichen" },
+		{ "id": "105-10", "name": "Doppelkurve (zunaechst links)", "category": "Gefahrzeichen" },
+		{ "id": "105-20", "name": "Doppelkurve (zunaechst rechts)", "category": "Gefahrzeichen" },
+		{ "id": "108-10", "name": "Gefaelle", "category": "Gefahrzeichen", "aliases": ["108"] },
+		{ "id": "112", "name": "Unebene Fahrbahn", "category": "Gefahrzeichen" },
+		{ "id": "123", "name": "Arbeitsstelle", "category": "Gefahrzeichen" },
+		{ "id": "131", "name": "Lichtzeichenanlage", "category": "Gefahrzeichen" },
+		{ "id": "136-10", "name": "Kinder", "category": "Gefahrzeichen", "aliases": ["136"] },
+		{ "id": "138-10", "name": "Radverkehr", "category": "Gefahrzeichen", "aliases": ["138"] },
+		{ "id": "142-10", "name": "Wildwechsel", "category": "Gefahrzeichen", "aliases": ["142"] },
+
+		{ "id": "205", "name": "Vorfahrt gewaehren", "category": "Vorschriftzeichen" },
+		{ "id": "206", "name": "Halt. Vorfahrt gewaehren.", "category": "Vorschriftzeichen" },
+		{ "id": "208", "name": "Vorrang des Gegenverkehrs", "category": "Vorschriftzeichen" },
+		{ "id": "209-20", "name": "Vorgeschriebene Fahrtrichtung rechts", "category": "Vorschriftzeichen" },
+		{ "id": "209-30", "name": "Vorgeschriebene Fahrtrichtung geradeaus", "category": "Vorschriftzeichen" },
+		{ "id": "215", "name": "Kreisverkehr", "category": "Vorschriftzeichen" },
+		{ "id": "220-20", "name": "Einbahnstrasse", "category": "Vorschriftzeichen", "aliases": ["220"] },
+		{ "id": "237", "name": "Radweg", "category": "Vorschriftzeichen" },
+		{ "id": "240", "name": "Gemeinsamer Geh- und Radweg", "category": "Vorschriftzeichen" },
+		{ "id": "241-30", "name": "Getrennter Rad- und Gehweg", "category": "Vorschriftzeichen", "aliases": ["241"] },
+		{ "id": "250", "name": "Verbot fuer Fahrzeuge aller Art", "category": "Vorschriftzeichen" },
+		{ "id": "267", "name": "Verbot der Einfahrt", "category": "Vorschriftzeichen" },
+		{ "id": "276", "name": "Ueberholverbot fuer Kraftfahrzeuge aller Art", "category": "Vorschriftzeichen" },
+		{ "id": "274", "name": "Zulaessige Hoechstgeschwindigkeit", "category": "Vorschriftzeichen", "speedLimit": true },
+		{ "id": "278", "name": "Ende der zulaessigen Hoechstgeschwindigkeit", "category": "Vorschriftzeichen", "speedLimit": true },
+
+		{ "id": "301", "name": "Vorfahrt", "category": "Richtzeichen" },
+		{ "id": "306", "name": "Vorfahrtstrasse", "category": "Richtzeichen" },
+		{ "id": "308", "name": "Vorrang vor dem Gegenverkehr", "category": "Richtzeichen" },
+		{ "id": "314", "name": "Parken", "category": "Richtzeichen" },
+		{ "id": "325.1", "name": "Verkehrsberuhigter Bereich", "category": "Richtzeichen", "aliases": ["325"] },
+		{ "id": "330.2", "name": "Ende der Autobahn", "category": "Richtzeichen" },
+		{ "id": "350-10", "name": "Fussgaengerueberweg", "category": "Richtzeichen" },
+		{ "id": "357", "name": "Sackgasse", "category": "Richtzeichen" },
+		{ "id": "330.1", "name": "Autobahn", "category": "Richtzeichen", "aliases": ["330", "360-50"] },
+
+		{ "id": "1000-32", "name": "Radverkehr kreuzt von rechts und links", "category": "Zusatzzeichen" },
+		{ "id": "1020-30", "name": "Anlieger frei", "category": "Zusatzzeichen" },
+
+		{ "id": "600", "name": "Absperrpfosten", "category": "Verkehrseinrichtung", "noTexture": true },
+		{ "id": "620-40", "name": "Leitpfosten", "category": "Verkehrseinrichtung", "aliases": ["605"] }
+	]
+}

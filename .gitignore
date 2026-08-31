@@ -1,0 +1,42 @@
+# === Unreal Engine generierte Verzeichnisse (werden beim Build neu erzeugt) ===
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+.vs/
+*.sln
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+
+# === Freebuff-App-Datenbank (gitignored) ===
+.freebuff/
+
+# === Rohdaten (offline beschafft, sehr gross, nicht regenerierbar aus Code) ===
+# OSM/DEM/ALKIS liegen in Data/Raw und sind zu gross fuer Git.
+Data/Raw/
+
+# === Gebackene World-Partition-Karte (26 GB, regenerierbar via rebuild_stadt.cmd) ===
+Content/__ExternalActors__/
+Content/__ExternalObjects__/
+
+# === Logs und Fehlerdateien ===
+*.log
+*.err
+
+# === Diagnose-/Report-Ausgaben (Werkzeug-Ausgaben, keine Quellen) ===
+*_report.json
+bend_report.json
+heli_bounds.json
+heli_nose.json
+rotor_axis.json
+mast_report.json
+beetle_slots.json
+
+# === Betriebssystem-Kram ===
+Thumbs.db
+desktop.ini
+.DS_Store

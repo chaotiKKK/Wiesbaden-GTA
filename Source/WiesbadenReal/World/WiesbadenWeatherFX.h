@@ -1,0 +1,256 @@
+// Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
+
+#pragma once
+
+#include "CoreMinimal.h"
+
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
+#include "World/WiesbadenWeatherSystem.h"
+
+#include "WiesbadenWeatherFX.generated.h"
+
+class AWiesbadenCityActor;
+class UDirectionalLightComponent;
+
+/**
+ * Effekt-Typen der Wetter-FX (Reihenfolge = WeatherFXCatalog.json).
+ * Jeder Typ hat einen festen Vertrag an User-Parametern (siehe
+ * GetRequiredUserParameters) - die Assets muessen genau diese exponieren.
+ */
+UENUM(BlueprintType)
+enum class EWiesbadenWeatherFXType : uint8
+{
+	/** Regen (NS_WeatherRain). */
+	Rain,
+	/** Schnee (NS_WeatherSnow). */
+	Snow,
+	/** Nebel (NS_WeatherFog). */
+	Fog,
+	/** Wolken (NS_WeatherClouds). */
+	Clouds,
+	/** Gewitter (NS_WeatherStorm). */
+	Storm
+};
+
+/**
+ * Abgeleitete FX-Parameter aus einem FWiesbadenWeatherState (datenrein,
+ * deterministisch, testbar). Die Niagara-Effekte werden ausschliesslich ueber
+ * diese Werte getrieben - die Ableitung ist Logik, das Spawnen/Setzen duenne
+ * Verdrahtung.
+ *
+ * NIAGARA-VERTRAG (siehe Skill unreal-niagara): Nur User-Namespace-Parameter
+ * sind von C++/Blueprint setzbar. Die Effekt-Assets muessen genau diese
+ * User-Parameter exponiert haben:
+ *   User.RainSpawnRate   (Float, Partikel/s)      - Regen-Effekt
+ *   User.SnowSpawnRate   (Float, Partikel/s)      - Schnee-Effekt
+ *   User.FogDensity      (Float, 0..1)            - Nebel-Effekt (Opacity)
+ *   User.CloudOpacity    (Float, 0..1)            - Wolken-Effekt
+ *   User.LightningInterval (Float, Sekunden; 0 = aus) - Gewitter-Effekt
+ *   User.WindSpeed       (Float, m/s)             - alle Partikel
+ *   User.SunLightColor   (LinearColor)            - Lichtfarbe der Sonne
+ */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FWiesbadenWeatherFXParams
+{
+	GENERATED_BODY()
+
+	/** Regen-Partikel pro Sekunde (0 = Effekt aus). */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|FX")
+	float RainSpawnRate = 0.0f;
+
+	/** Schnee-Partikel pro Sekunde (0 = Effekt aus). */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|FX")
+	float SnowSpawnRate = 0.0f;
+
+	/** Nebeldichte 0..1 (Steuert Fog-Effekt-Intensitaet). */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|FX")
+	float FogDensity = 0.0f;
+
+	/** Bewoelkung 0..1 (Steuert Wolken-Effekt-Intensitaet). */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|FX")
+	float CloudOpacity = 0.0f;
+
+	/** Blitz-Intervall in Sekunden; 0 = keine Blitze (nur Gewitter). */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|FX")
+	float LightningInterval = 0.0f;
+
+	/** Windgeschwindigkeit in m/s (3..27, aus Bewoelkung/Gewitter). */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|FX")
+	float WindSpeed = 3.0f;
+
+	/** Sonnenlicht-Farbe (warm am Morgen/Abend, kuehl-blaulich nachts). */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|FX")
+	FLinearColor SunLightColor = FLinearColor::White;
+
+	/**
+	 * Sonnen-Intensitaet (0 nachts .. ~3.14 am klaren Mittag, Lux-Skala):
+	 * folgt dem Sonnenstand und wird von Bewoelkung gedaempft. Treibt die
+	 * DirectionalLight im Level (SetIntensity).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|FX")
+	float SunIntensity = 0.0f;
+
+	/** Umgebungslicht 0.35 (Nacht) .. 1.0 (Mittag) - direkte Weitergabe. */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|FX")
+	float AmbientLightMultiplier = 1.0f;
+
+	/** Leitet die FX-Parameter aus einem Wetter-Zustand ab (deterministisch). */
+	static FWiesbadenWeatherFXParams FromWeatherState(const FWiesbadenWeatherState& State);
+
+	/**
+	 * Maximale Sonnen-Intensitaet in LUX, erreicht bei klarem Zenitstand.
+	 *
+	 * Bewusst als Accessor: der Wert wurde zuvor im Test wortwoertlich
+	 * wiederholt und lief bei einer Aenderung der Implementierung auseinander.
+	 *
+	 * In UE5 wird die Intensitaet einer DirectionalLight in Lux angegeben; eine
+	 * neu platzierte Sonne hat 10 lx. Frueher stand hier 3.14f - der
+	 * einheitenlose UE4-Altwert (Pi), mit dem die Stadt praktisch schwarz blieb.
+	 */
+	static float GetMaxSunIntensityLux();
+
+	/** Anteil der Tagesstaerke, der nachts als Mondlicht stehen bleibt. */
+	static float GetNightSunFloor();
+
+	/**
+	 * Gibt die geforderten User-Parameter-Namen fuer einen Effekt-Typ zurueck
+	 * (Vertrag aus WeatherFXCatalog.json, praefixfrei wie ApplyParams sie setzt).
+	 */
+	static TArray<FString> GetRequiredUserParameters(EWiesbadenWeatherFXType Type);
+
+	/**
+	 * Liefert die fehlenden Parameter-Namen (sortiert fuer Determinsmus) - die
+	 * datenreine Kernlogik der Vertrags-Validierung. Available ist die Menge
+	 * der exponierten User-Parameter des Systems (praefixfrei).
+	 */
+	static TArray<FString> FindMissingParameters(const TArray<FString>& Required,
+		const TSet<FString>& Available);
+
+	/** True, wenn irgendein Niederschlags-Effekt aktiv ist (Regen oder Schnee). */
+	bool HasPrecipitation() const { return RainSpawnRate > 0.01f || SnowSpawnRate > 0.01f; }
+};
+
+/**
+ * Treibt Niagara-Wetter-Effekte (Regen, Schnee, Nebel, Wolken, Gewitter) aus
+ * der datenreinen FWiesbadenWeatherSystem des City-Subsystems.
+ *
+ * VERFAHREN (nach unreal-niagara): Jeder Effekt ist ein NS_-Asset mit
+ * exponierten User-Parametern. Pro Tick wird der FWiesbadenWeatherState vom
+ * City-Subsystem geholt, FWiesbadenWeatherFXParams::FromWeatherState abgeleitet
+ * und die aktiven Effekte gespawnt/gesteuert:
+ *   - Regen/Schnee: nur aktiv, wenn die SpawnRate > 0 (kein Dauer-Spawn),
+ *   - Nebel/Wolken: Opacity ueber User.FogDensity/CloudOpacity,
+ *   - Gewitter: User.LightningInterval (0 = kein Blitz),
+ *   - alle: User.WindSpeed + User.SunLightColor (Farbtemperatur).
+ * Die Komponente haengt am AWiesbadenCityActor (eine pro Stadt).
+ */
+UCLASS(ClassGroup = "Wiesbaden", meta = (BlueprintSpawnableComponent))
+class WIESBADENREAL_API UWiesbadenWeatherFXComponent : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	UWiesbadenWeatherFXComponent();
+
+	/** Wetter-Zustand holen (vom City-Subsystem) und Effekte anwenden. */
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType,
+		FActorComponentTickFunction* ThisTickFunction) override;
+
+	// -- Effekt-Assets (User-Parameter siehe FWiesbadenWeatherFXParams) --------
+
+	/**
+	 * Kanonischer Content-Pfad eines Effekt-Typs (datenrein, fuer Tests).
+	 * In BeginPlay werden nicht manuell zugewiesene Effekte aus diesem Pfad
+	 * geladen - sobald die NS_-Assets nach WeatherFXCatalog.json nach
+	 * Content/Niagara gebaut sind, braucht die Komponente keine
+	 * Details-Panel-Konfiguration (Zuweisung automatisch).
+	 */
+	static FString GetDefaultAssetPath(EWiesbadenWeatherFXType Type);
+
+	/**
+	 * True, wenn eine Fixed-Bounds-Box nutzbar ist (gueltig UND mit Ausdehnung).
+	 * Eine nie gesetzte UPROPERTY-FBox ist (0,0,0)-(0,0,0): IsValid() ist wahr,
+	 * aber die Extent ist 0 - der Katalog verlangt explizite Fixed Bounds.
+	 * Datenrein, testbar.
+	 */
+	static bool HasUsableFixedBounds(const FBox& Bounds);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather|FX|Assets")
+	TObjectPtr<UNiagaraSystem> RainSystem = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather|FX|Assets")
+	TObjectPtr<UNiagaraSystem> SnowSystem = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather|FX|Assets")
+	TObjectPtr<UNiagaraSystem> FogSystem = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather|FX|Assets")
+	TObjectPtr<UNiagaraSystem> CloudSystem = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather|FX|Assets")
+	TObjectPtr<UNiagaraSystem> StormSystem = nullptr;
+
+	// -- Sonnenlicht (DirectionalLight im Level) --------------------------------
+
+	/**
+	 * DirectionalLight der Szene, die mit Farbtemperatur + Intensitaet der
+	 * Wetter-FX getrieben wird. Wenn leer, wird in BeginPlay automatisch die
+	 * erste ADirectionalLight des Levels gefunden (keine Konfiguration noetig).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather|FX|Light")
+	TObjectPtr<UDirectionalLightComponent> SunLight = nullptr;
+
+protected:
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+private:
+	/** Wendet die FX-Parameter auf einen gespawnten Effekt an (nur User-Params). */
+	static void ApplyParams(UNiagaraComponent* FX, const FWiesbadenWeatherFXParams& Params);
+
+	/** Holt den aktuellen Wetter-Zustand vom City-Subsystem (oder nullptr). */
+	const FWiesbadenWeatherState* GetWeatherState() const;
+
+	/** Findet die erste DirectionalLight des Levels (Fallback in BeginPlay). */
+	UDirectionalLightComponent* FindSunLight() const;
+
+	/** Laedt nicht manuell zugewiesene Effekt-Systeme aus den Default-Pfaden. */
+	void LoadDefaultSystems();
+
+	/**
+	 * Warnt EINMALIG pro System, wenn es laut Katalog Fixed Bounds braucht,
+	 * aber keine nutzbaren gesetzt hat (sonst Culling-Risiko).
+	 */
+	void WarnMissingFixedBounds(const UNiagaraSystem* System, const FString& EffectName);
+
+	/**
+	 * Prueft ein zugewiesenes System gegen den Parameter-Vertrag des Effekt-Typs
+	 * (WeatherFXCatalog.json) und warnt bei fehlenden User-Parametern - kein
+	 * stummer Vertragsbruch, kein Absturz.
+	 */
+	void ValidateSystem(UNiagaraSystem* System, EWiesbadenWeatherFXType Type,
+		const FString& EffectName) const;
+
+	// Gespawnte Effekte (GC-verfolgt). Wiederverwendet ueber die Lebenszeit.
+	UPROPERTY(Transient)
+	TObjectPtr<UNiagaraComponent> RainFX = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UNiagaraComponent> SnowFX = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UNiagaraComponent> FogFX = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UNiagaraComponent> CloudFX = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UNiagaraComponent> StormFX = nullptr;
+
+	/** Zuletzt angewendete Parameter (Vergleich fuer Effekt-Aktiv/Inaktiv). */
+	FWiesbadenWeatherFXParams LastAppliedParams;
+
+	/** Bereits gewarnte Systeme (Pfad-Name) - Warnung nur einmalig je System. */
+	TSet<FString> FixedBoundsWarningsLogged;
+};
