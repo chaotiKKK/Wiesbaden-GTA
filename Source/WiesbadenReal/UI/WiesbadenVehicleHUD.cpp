@@ -7,6 +7,7 @@
 #include "CanvasItem.h"
 #include "Core/WiesbadenDevActions.h"
 #include "Engine/Canvas.h"
+#include "TextureResource.h"
 #include "Engine/Engine.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -31,6 +32,17 @@ namespace
 	const FLinearColor TellTaleOff(0.20f, 0.21f, 0.23f, 0.7f);
 	const FLinearColor IndicatorOn(0.20f, 0.85f, 0.30f, 1.0f);
 	const FLinearColor HeadlightOn(0.35f, 0.75f, 0.95f, 1.0f);
+
+	// Instrumenten-Gehaeuse und kuenstlicher Horizont.
+	const FLinearColor BezelDark(0.06f, 0.07f, 0.085f, 1.0f);
+	const FLinearColor BezelRim(0.42f, 0.46f, 0.52f, 1.0f);
+	const FLinearColor DialFace(0.09f, 0.10f, 0.12f, 1.0f);
+	const FLinearColor GaugeWarn(0.90f, 0.62f, 0.15f, 1.0f);
+	const FLinearColor HorizonSky(0.22f, 0.52f, 0.82f, 1.0f);
+	const FLinearColor HorizonGround(0.42f, 0.30f, 0.16f, 1.0f);
+	const FLinearColor HorizonLine(0.96f, 0.97f, 1.0f, 1.0f);
+	const FLinearColor AircraftMark(0.98f, 0.82f, 0.18f, 1.0f);
+	const FLinearColor PanelEdge(0.34f, 0.58f, 0.68f, 0.95f);
 
 	/** Ab hier faerbt sich das Drehzahlband rot. */
 	constexpr float RedlineFraction = 0.82f;
@@ -252,126 +264,284 @@ void AWiesbadenVehicleHUD::DrawTellTales(const AWiesbadenCar& Car, float X, floa
 		X + 24.0f, Y + 22.0f, GEngine->GetSmallFont(), 1.0f);
 }
 
+void AWiesbadenVehicleHUD::DrawFilledTri(const FVector2D& A, const FVector2D& B,
+	const FVector2D& C, const FLinearColor& Color)
+{
+	if (!Canvas)
+	{
+		return;
+	}
+	FCanvasTriangleItem Tri(A, B, C, GWhiteTexture);
+	Tri.SetColor(Color);
+	Canvas->DrawItem(Tri);
+}
+
+void AWiesbadenVehicleHUD::DrawFilledPoly(const TArray<FVector2D>& Points,
+	const FLinearColor& Color)
+{
+	for (int32 i = 1; i + 1 < Points.Num(); ++i)
+	{
+		DrawFilledTri(Points[0], Points[i], Points[i + 1], Color);
+	}
+}
+
+// Gefuellte Scheibe als Vieleck-Faecher (lokal, kein Header noetig).
+static void MakeDiscPoints(float CX, float CY, float R, int32 Segments, TArray<FVector2D>& Out)
+{
+	Out.Reset(Segments);
+	for (int32 i = 0; i < Segments; ++i)
+	{
+		const float A = (2.0f * PI * i) / Segments;
+		Out.Add(FVector2D(CX + R * FMath::Cos(A), CY + R * FMath::Sin(A)));
+	}
+}
+
 void AWiesbadenVehicleHUD::DrawRoundGauge(float CX, float CY, float R,
 	float Value, float MinV, float MaxV, float Sweep,
 	const FString& Caption, const FString& Reading)
 {
+	// Gehaeuse: dunkle Scheibe mit hellem Rand, dann das Ziffernblatt.
+	TArray<FVector2D> Disc;
+	MakeDiscPoints(CX, CY, R + 5.0f, 40, Disc);
+	DrawFilledPoly(Disc, BezelDark);
+	MakeDiscPoints(CX, CY, R, 40, Disc);
+	DrawFilledPoly(Disc, DialFace);
+	DrawArc(CX, CY, R + 5.0f, -180.0f, 180.0f, BezelRim, 2.0f);
+
 	const float Start = -Sweep * 0.5f;
+	DrawArc(CX, CY, R - 2.0f, Start, Sweep * 0.5f, DialScale, 1.5f);
 
-	DrawRect(DialBackground, CX - R - 6.0f, CY - R - 6.0f, (R + 6.0f) * 2.0f, (R + 6.0f) * 2.0f);
-	DrawArc(CX, CY, R, Start, Sweep * 0.5f, DialScale, 2.0f);
-
-	// Fuenf Teilstriche ueber den Skalenbogen.
-	for (int32 i = 0; i <= 4; ++i)
+	// Teilstriche: 20 kleine, jeder fuenfte gross und beschriftet.
+	for (int32 i = 0; i <= 20; ++i)
 	{
-		const float Deg = Start + Sweep * (static_cast<float>(i) / 4.0f);
-		const float Rad = FMath::DegreesToRadians(Deg);
+		const float Frac = static_cast<float>(i) / 20.0f;
+		const float Rad = FMath::DegreesToRadians(Start + Sweep * Frac);
 		const float S = FMath::Sin(Rad);
 		const float C = FMath::Cos(Rad);
-		DrawLine(CX + (R - 10.0f) * S, CY - (R - 10.0f) * C,
-			CX + R * S, CY - R * C, DialScale, 1.5f);
+		const bool bMajor = (i % 5) == 0;
+		const float Inner = R - (bMajor ? 12.0f : 6.0f);
+		DrawLine(CX + Inner * S, CY - Inner * C, CX + (R - 2.0f) * S, CY - (R - 2.0f) * C,
+			bMajor ? DialText : DialScale, bMajor ? 2.0f : 1.0f);
+		if (bMajor)
+		{
+			const float V = MinV + (MaxV - MinV) * Frac;
+			const float LabelR = R - 24.0f;
+			DrawText(FString::Printf(TEXT("%.0f"), V), DialScale,
+				CX + LabelR * S - 7.0f, CY - LabelR * C - 6.0f, GEngine->GetSmallFont(), 0.8f);
+		}
 	}
 
-	// Zeiger.
+	// Zeiger als schmales Dreieck vom Nabenzentrum zur Spitze, mit kurzem
+	// Gegengewicht - liest sich sauberer als eine einzelne Linie.
 	const float Span = MaxV - MinV;
-	const float Frac = Span > KINDA_SMALL_NUMBER
+	const float ValFrac = Span > KINDA_SMALL_NUMBER
 		? FMath::Clamp((Value - MinV) / Span, 0.0f, 1.0f) : 0.0f;
-	const float NeedleRad = FMath::DegreesToRadians(Start + Frac * Sweep);
-	DrawLine(CX, CY,
-		CX + (R - 12.0f) * FMath::Sin(NeedleRad),
-		CY - (R - 12.0f) * FMath::Cos(NeedleRad),
-		NeedleColor, 3.0f);
+	const float NRad = FMath::DegreesToRadians(Start + ValFrac * Sweep);
+	const FVector2D Dir(FMath::Sin(NRad), -FMath::Cos(NRad));
+	const FVector2D Perp(-Dir.Y, Dir.X);
+	const FVector2D Hub(CX, CY);
+	const FVector2D Tip = Hub + Dir * (R - 10.0f);
+	DrawFilledTri(Hub + Perp * 3.5f, Hub - Perp * 3.5f, Tip, NeedleColor);
+	DrawFilledTri(Hub + Perp * 3.0f, Hub - Perp * 3.0f, Hub - Dir * (R * 0.28f), NeedleColor);
 
-	DrawText(Reading, DialText, CX - 20.0f, CY + R * 0.30f, GEngine->GetSmallFont(), 1.0f);
-	DrawText(Caption, DialScale, CX - R * 0.55f, CY + R + 5.0f, GEngine->GetSmallFont(), 1.0f);
+	// Nabe.
+	TArray<FVector2D> HubDisc;
+	MakeDiscPoints(CX, CY, 5.0f, 16, HubDisc);
+	DrawFilledPoly(HubDisc, BezelRim);
+
+	DrawText(Reading, DialText, CX - Reading.Len() * 3.6f, CY + R * 0.34f,
+		GEngine->GetSmallFont(), 1.0f);
+	DrawText(Caption, DialScale, CX - Caption.Len() * 2.7f, CY + R + 6.0f,
+		GEngine->GetSmallFont(), 0.85f);
+}
+
+void AWiesbadenVehicleHUD::DrawPanelBackdrop(float X, float Y, float W, float H,
+	float TopInset, const FLinearColor& Fill, float Alpha)
+{
+	// Trapez: Oberkante um TopInset schmaler -> die Tafel kippt nach hinten.
+	const FVector2D TL(X + TopInset, Y);
+	const FVector2D TR(X + W - TopInset, Y);
+	const FVector2D BR(X + W, Y + H);
+	const FVector2D BL(X, Y + H);
+
+	FLinearColor Top = Fill; Top.A = Alpha;
+	FLinearColor Bottom = Fill * 0.45f; Bottom.A = Alpha;
+	// Zwei Dreiecke mit leichtem Verlauf (oben heller als unten) durch zwei
+	// getrennte Fuellungen entlang der Diagonale.
+	DrawFilledTri(TL, TR, BR, Top);
+	DrawFilledTri(TL, BR, BL, Bottom);
+
+	// Helle Armaturenbrett-Oberkante als Lichtkante.
+	DrawLine(TL.X, TL.Y, TR.X, TR.Y, PanelEdge, 2.5f);
+	DrawLine(TL.X, TL.Y, BL.X, BL.Y, FLinearColor(0.16f, 0.18f, 0.22f, Alpha), 1.5f);
+	DrawLine(TR.X, TR.Y, BR.X, BR.Y, FLinearColor(0.16f, 0.18f, 0.22f, Alpha), 1.5f);
+}
+
+void AWiesbadenVehicleHUD::DrawAttitudeIndicator(float CX, float CY, float R,
+	float PitchDeg, float RollDeg)
+{
+	const float RollRad = FMath::DegreesToRadians(RollDeg);
+	// Instrument-Achsen (Bildschirm, y nach unten): Up bei roll=0 = (0,-1).
+	const FVector2D Up(FMath::Sin(RollRad), -FMath::Cos(RollRad));
+	const FVector2D Right(FMath::Cos(RollRad), FMath::Sin(RollRad));
+
+	// Horizontpunkt: Nase hoch (pitch>0) schiebt den Horizont nach unten.
+	constexpr float PixPerDeg = 1.7f;
+	const FVector2D Centre(CX, CY);
+	const FVector2D Hpt = Centre - Up * (PitchDeg * PixPerDeg);
+
+	// Gehaeuse.
+	TArray<FVector2D> Bezel;
+	MakeDiscPoints(CX, CY, R + 5.0f, 44, Bezel);
+	DrawFilledPoly(Bezel, BezelDark);
+
+	// Scheibe (Boden fuellen), dann Himmel als abgeschnittenes Vieleck darueber.
+	TArray<FVector2D> Disc;
+	MakeDiscPoints(CX, CY, R, 44, Disc);
+	DrawFilledPoly(Disc, HorizonGround);
+
+	// Himmel = Teil der Scheibe oberhalb des Horizonts. Sutherland-Hodgman
+	// gegen die Halbebene (P-Hpt).Up >= 0.
+	TArray<FVector2D> Sky;
+	const int32 N = Disc.Num();
+	for (int32 i = 0; i < N; ++i)
+	{
+		const FVector2D P = Disc[i];
+		const FVector2D Q = Disc[(i + 1) % N];
+		const float dp = FVector2D::DotProduct(P - Hpt, Up);
+		const float dq = FVector2D::DotProduct(Q - Hpt, Up);
+		if (dp >= 0.0f) { Sky.Add(P); }
+		if ((dp >= 0.0f) != (dq >= 0.0f))
+		{
+			const float T = dp / (dp - dq);
+			Sky.Add(P + (Q - P) * T);
+		}
+	}
+	if (Sky.Num() >= 3) { DrawFilledPoly(Sky, HorizonSky); }
+
+	// Horizontlinie ueber die Scheibe.
+	const float ChordDp = FVector2D::DotProduct(Centre - Hpt, Up);
+	const float Half = FMath::Sqrt(FMath::Max(R * R - ChordDp * ChordDp, 0.0f));
+	const FVector2D HmidOnLine = Centre - Up * ChordDp;
+	DrawLine((HmidOnLine - Right * Half).X, (HmidOnLine - Right * Half).Y,
+		(HmidOnLine + Right * Half).X, (HmidOnLine + Right * Half).Y, HorizonLine, 2.0f);
+
+	// Nickleiter: kurze Striche bei +-10 und +-20 Grad.
+	for (int32 P = -20; P <= 20; P += 10)
+	{
+		if (P == 0) { continue; }
+		const FVector2D Mid = Hpt + Up * (P * PixPerDeg);
+		const float Len = (FMath::Abs(P) == 10) ? 14.0f : 22.0f;
+		if (FVector2D::Distance(Mid, Centre) > R - 6.0f) { continue; }
+		DrawLine((Mid - Right * Len).X, (Mid - Right * Len).Y,
+			(Mid + Right * Len).X, (Mid + Right * Len).Y, HorizonLine * 0.8f, 1.2f);
+	}
+
+	// Rand.
+	DrawArc(CX, CY, R + 5.0f, -180.0f, 180.0f, BezelRim, 2.5f);
+
+	// Bank-Skala oben (feste Striche bei 0, +-30, +-60 Grad).
+	for (int32 B = -60; B <= 60; B += 30)
+	{
+		const float A = FMath::DegreesToRadians(B) - PI * 0.5f; // 0 Grad = oben
+		const FVector2D O(CX + FMath::Cos(A) * (R + 4.0f), CY + FMath::Sin(A) * (R + 4.0f));
+		const FVector2D I(CX + FMath::Cos(A) * (R - 4.0f), CY + FMath::Sin(A) * (R - 4.0f));
+		DrawLine(O.X, O.Y, I.X, I.Y, BezelRim, (B == 0) ? 2.5f : 1.5f);
+	}
+
+	// Festes Flugzeugsymbol: Nabenpunkt + zwei Fluegel + Bank-Zeiger oben.
+	DrawLine(CX - R * 0.55f, CY, CX - R * 0.16f, CY, AircraftMark, 3.0f);
+	DrawLine(CX + R * 0.16f, CY, CX + R * 0.55f, CY, AircraftMark, 3.0f);
+	DrawLine(CX - R * 0.16f, CY, CX, CY + 8.0f, AircraftMark, 3.0f);
+	DrawLine(CX + R * 0.16f, CY, CX, CY + 8.0f, AircraftMark, 3.0f);
+	TArray<FVector2D> Dot;
+	MakeDiscPoints(CX, CY, 2.5f, 10, Dot);
+	DrawFilledPoly(Dot, AircraftMark);
+	// Bank-Zeiger (dreht mit): kleines Dreieck am oberen Rand.
+	const FVector2D PtA = Centre + Up * (R - 2.0f);
+	DrawFilledTri(PtA, PtA - Up * 10.0f + Right * 5.0f, PtA - Up * 10.0f - Right * 5.0f, AircraftMark);
 }
 
 void AWiesbadenVehicleHUD::DrawHeliInstruments(const AWiesbadenHelicopter& Heli,
 	bool bCockpit, float Width, float Height)
 {
-	constexpr float PanelW = 580.0f;
-	constexpr float PanelH = 156.0f;
+	constexpr float PanelW = 700.0f;
+	constexpr float PanelH = 176.0f;
 	const float PanelX = Width * 0.5f - PanelW * 0.5f;
-	const float PanelY = Height - PanelH - 22.0f;
+	const float PanelY = Height - PanelH - 18.0f;
 
-	// Armaturenbrett-Band. In der Cockpit-Ansicht kraeftiger (es ist DAS
-	// Cockpit); in Follow/Orbit dezenter, damit es die Stadt nicht zudeckt.
-	DrawRect(FLinearColor(0.02f, 0.02f, 0.028f, bCockpit ? 0.85f : 0.52f),
-		PanelX, PanelY, PanelW, PanelH);
-	DrawLine(PanelX, PanelY, PanelX + PanelW, PanelY,
-		FLinearColor(0.30f, 0.55f, 0.65f, 0.9f), 2.0f);
+	// Perspektivisches Armaturenbrett. In der Cockpit-Ansicht deckend, in
+	// Follow/Orbit halbtransparent, damit die Stadt nicht zugedeckt wird.
+	DrawPanelBackdrop(PanelX, PanelY, PanelW, PanelH, 36.0f,
+		FLinearColor(0.05f, 0.055f, 0.07f, 1.0f), bCockpit ? 0.92f : 0.55f);
 
-	// Hoehenmesser (links).
-	const float Alt = Heli.GetAltitudeMeters();
-	DrawRoundGauge(PanelX + 74.0f, PanelY + 62.0f, 50.0f,
-		FMath::Clamp(Alt, 0.0f, 300.0f), 0.0f, 300.0f, 250.0f,
-		TEXT("HOEHE m"), FString::Printf(TEXT("%.0f"), Alt));
+	// -- Variometer (senkrechte Skala ganz links) ---------------------------
+	const float Vs = Heli.GetVerticalSpeedMs();
+	const float VarioX = PanelX + 30.0f;
+	const float VarioMidY = PanelY + 78.0f;
+	constexpr float VarioHalf = 46.0f;
+	DrawRect(DialFace, VarioX, VarioMidY - VarioHalf, 20.0f, VarioHalf * 2.0f);
+	DrawLine(VarioX - 3.0f, VarioMidY, VarioX + 23.0f, VarioMidY, DialText, 1.8f);
+	const float VsBar = VarioHalf * FMath::Clamp(FMath::Abs(Vs) / 8.0f, 0.0f, 1.0f);
+	if (Vs >= 0.0f) { DrawRect(RpmSafe, VarioX, VarioMidY - VsBar, 20.0f, VsBar); }
+	else            { DrawRect(RpmRed,  VarioX, VarioMidY, 20.0f, VsBar); }
+	DrawText(TEXT("VARIO"), DialScale, VarioX - 6.0f, PanelY + 12.0f, GEngine->GetSmallFont(), 0.85f);
+	DrawText(FString::Printf(TEXT("%+.1f"), Vs), DialText,
+		VarioX - 8.0f, VarioMidY + VarioHalf + 4.0f, GEngine->GetSmallFont(), 0.9f);
 
-	// Fahrtmesser (daneben).
+	// -- Fahrtmesser (links) -------------------------------------------------
 	const float Spd = Heli.GetAirspeedKmh();
-	DrawRoundGauge(PanelX + 192.0f, PanelY + 62.0f, 50.0f,
+	DrawRoundGauge(PanelX + 150.0f, PanelY + 72.0f, 46.0f,
 		FMath::Clamp(Spd, 0.0f, 300.0f), 0.0f, 300.0f, 250.0f,
 		TEXT("FAHRT km/h"), FString::Printf(TEXT("%.0f"), Spd));
 
-	// Variometer (senkrechter Balken, Mitte). Null in der Mitte, gruen steigt,
-	// rot sinkt.
-	const float Vs = Heli.GetVerticalSpeedMs();
-	const float VarioX = PanelX + 286.0f;
-	const float VarioMidY = PanelY + 60.0f;
-	constexpr float VarioHalf = 42.0f;
-	DrawRect(DialBackground, VarioX, VarioMidY - VarioHalf, 18.0f, VarioHalf * 2.0f);
-	DrawLine(VarioX, VarioMidY, VarioX + 18.0f, VarioMidY, DialScale, 1.5f);
-	const float VsNorm = FMath::Clamp(Vs / 8.0f, -1.0f, 1.0f);
-	const float VsBar = VarioHalf * FMath::Abs(VsNorm);
-	if (Vs >= 0.0f)
-	{
-		DrawRect(RpmSafe, VarioX, VarioMidY - VsBar, 18.0f, VsBar);
-	}
-	else
-	{
-		DrawRect(RpmRed, VarioX, VarioMidY, 18.0f, VsBar);
-	}
-	DrawText(TEXT("VARIO"), DialScale, VarioX - 6.0f, PanelY + 8.0f, GEngine->GetSmallFont(), 1.0f);
-	DrawText(FString::Printf(TEXT("%+.1f"), Vs), DialText,
-		VarioX - 8.0f, VarioMidY + VarioHalf + 6.0f, GEngine->GetSmallFont(), 1.0f);
+	// -- Kuenstlicher Horizont (Mitte, Hauptinstrument) ----------------------
+	const FRotator Att = Heli.GetActorRotation();
+	DrawAttitudeIndicator(PanelX + 350.0f, PanelY + 74.0f, 58.0f,
+		Att.Pitch, Att.Roll);
+	DrawText(TEXT("FLUGLAGE"), DialScale, PanelX + 322.0f, PanelY + 6.0f, GEngine->GetSmallFont(), 0.8f);
 
-	// Kurs (gross, rechts der Mitte).
-	DrawText(TEXT("KURS"), DialScale, PanelX + 330.0f, PanelY + 14.0f, GEngine->GetSmallFont(), 1.0f);
-	DrawText(FormatHeading(Heli.GetHeadingDegrees()), DialText,
-		PanelX + 330.0f, PanelY + 30.0f, GEngine->GetMediumFont(), 1.3f);
+	// -- Hoehenmesser (rechts) -----------------------------------------------
+	const float Alt = Heli.GetAltitudeMeters();
+	DrawRoundGauge(PanelX + 540.0f, PanelY + 72.0f, 46.0f,
+		FMath::Clamp(Alt, 0.0f, 300.0f), 0.0f, 300.0f, 250.0f,
+		TEXT("HOEHE m"), FString::Printf(TEXT("%.0f"), Alt));
 
-	// Kollektiv und Rotordrehzahl (rechts, waagerechte Balken).
-	const float BarX = PanelX + 330.0f;
-	constexpr float BarW = 150.0f;
-	constexpr float BarH = 12.0f;
+	// -- Kurs (unter dem Horizont) -------------------------------------------
+	DrawText(FString::Printf(TEXT("KURS  %s"), *FormatHeading(Heli.GetHeadingDegrees())),
+		DialText, PanelX + 306.0f, PanelY + 146.0f, GEngine->GetMediumFont(), 1.1f);
+
+	// -- Kollektiv / Rotor / Triebwerk (rechte Spalte) -----------------------
+	const float BarX = PanelX + 616.0f;
+	constexpr float BarW = 64.0f;
+	constexpr float BarH = 10.0f;
+
+	DrawText(TEXT("MOT"), Heli.IsEngineRunning() ? IndicatorOn : TellTaleOff,
+		BarX, PanelY + 16.0f, GEngine->GetMediumFont(), 1.0f);
 
 	const float Coll = Heli.GetCollective();
-	DrawText(TEXT("KOLLEKTIV"), DialScale, BarX, PanelY + 74.0f, GEngine->GetSmallFont(), 1.0f);
-	DrawRect(DialBackground, BarX, PanelY + 90.0f, BarW, BarH);
-	DrawRect(RpmSafe, BarX, PanelY + 90.0f, BarW * Coll, BarH);
+	DrawText(TEXT("KOLLEKTIV"), DialScale, BarX, PanelY + 54.0f, GEngine->GetSmallFont(), 0.8f);
+	DrawRect(DialFace, BarX, PanelY + 70.0f, BarW, BarH);
+	DrawRect(RpmSafe, BarX, PanelY + 70.0f, BarW * Coll, BarH);
 
 	const float Rpm = Heli.GetMainRotorRpm();
 	const float RpmFrac = FMath::Clamp(Rpm / 300.0f, 0.0f, 1.0f);
-	DrawText(TEXT("ROTOR"), DialScale, BarX, PanelY + 108.0f, GEngine->GetSmallFont(), 1.0f);
-	DrawRect(DialBackground, BarX, PanelY + 124.0f, BarW, BarH);
-	DrawRect(RpmFrac < 0.5f ? RpmRed : RpmSafe, BarX, PanelY + 124.0f, BarW * RpmFrac, BarH);
-	DrawText(FString::Printf(TEXT("%.0f U/min"), Rpm), DialText,
-		BarX + BarW + 8.0f, PanelY + 120.0f, GEngine->GetSmallFont(), 1.0f);
-
-	// Triebwerk-Kontrollleuchte.
-	DrawText(TEXT("MOT"), Heli.IsEngineRunning() ? IndicatorOn : TellTaleOff,
-		BarX + BarW + 8.0f, PanelY + 88.0f, GEngine->GetMediumFont(), 1.0f);
+	DrawText(TEXT("ROTOR"), DialScale, BarX, PanelY + 92.0f, GEngine->GetSmallFont(), 0.8f);
+	DrawRect(DialFace, BarX, PanelY + 108.0f, BarW, BarH);
+	DrawRect(RpmFrac < 0.5f ? RpmRed : RpmSafe, BarX, PanelY + 108.0f, BarW * RpmFrac, BarH);
+	DrawText(FString::Printf(TEXT("%.0f U/min"), Rpm), DialScale,
+		BarX, PanelY + 124.0f, GEngine->GetSmallFont(), 0.8f);
 }
 
 void AWiesbadenVehicleHUD::DrawCarCockpitDash(float Width, float Height)
 {
-	// Armaturenbrett-Band unten. Der Wagen selbst ist fuer den Fahrer
-	// ausgeblendet (kein Innenraum modelliert) - dieses Band gibt der
-	// Ich-Perspektive den Rahmen eines Cockpits.
-	const float DashH = Height * 0.20f;
-	DrawRect(FLinearColor(0.015f, 0.015f, 0.02f, 0.92f), 0.0f, Height - DashH, Width, DashH);
-	DrawLine(0.0f, Height - DashH, Width, Height - DashH,
-		FLinearColor(0.12f, 0.13f, 0.16f, 1.0f), 3.0f);
+	// Perspektivisches Armaturenbrett unten. Der Wagen selbst ist fuer den
+	// Fahrer ausgeblendet (kein Innenraum modelliert) - dieses Band gibt der
+	// Ich-Perspektive den Rahmen eines Cockpits. Als Trapez (Oberkante zur
+	// Mitte eingezogen) kippt es glaubhaft nach hinten weg.
+	const float DashH = Height * 0.22f;
+	DrawPanelBackdrop(0.0f, Height - DashH, Width, DashH, Width * 0.14f,
+		FLinearColor(0.02f, 0.02f, 0.028f, 1.0f), 0.94f);
 }
 
 void AWiesbadenVehicleHUD::DrawHUD()

@@ -119,6 +119,29 @@ private:
 		float Value, float MinValue, float MaxValue, float SweepDegrees,
 		const FString& Caption, const FString& Reading);
 
+	/** Gefuelltes Dreieck (fuer perspektivische Flaechen und den Horizont). */
+	void DrawFilledTri(const FVector2D& A, const FVector2D& B, const FVector2D& C,
+		const FLinearColor& Color);
+
+	/** Gefuelltes konvexes Vieleck als Dreiecksfaecher. */
+	void DrawFilledPoly(const TArray<FVector2D>& Points, const FLinearColor& Color);
+
+	/**
+	 * Perspektivisches Armaturenbrett: Trapez (oben schmaler als unten) mit
+	 * heller Oberkante - laesst die Tafel nach hinten kippen statt flach zu
+	 * wirken.
+	 */
+	void DrawPanelBackdrop(float X, float Y, float W, float H, float TopInset,
+		const FLinearColor& Fill, float Alpha);
+
+	/**
+	 * Kuenstlicher Horizont (Fluglage) fuer den Helikopter: Himmel/Boden um die
+	 * Rollachse gedreht und um die Nicklage verschoben, mit festem
+	 * Flugzeugsymbol und Bank-Skala.
+	 */
+	void DrawAttitudeIndicator(float CenterX, float CenterY, float Radius,
+		float PitchDeg, float RollDeg);
+
 	/**
 	 * Tastenlegende links unten.
 	 *
