@@ -310,6 +310,17 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	RotorPhysics.CyclicRollMomentAuthority = 1500.0f;
 	RotorPhysics.RotorAngularDamping = 1400.0f;
 
+	// Flachere Kollektiv-Kennlinie fuer moderate Steig-/Sinkraten.
+	//
+	// Der Schwebepitch stellt sich zur Laufzeit selbst auf ~4 Grad ein
+	// (ComputeHoverPitchDeg, lift = weight). Die Modul-Defaults 2..14 Grad
+	// liessen den Rotor bei vollem Hebel das ~4-fache Gewicht erzeugen (~3 g,
+	// >20 m/s Steigen). Mit 3..6 Grad liegt der volle Ausschlag nur noch knapp
+	// ueber/unter dem Schwebepunkt: rund +10 / -8 m/s - kontrollierbar, und der
+	// Hebel wirkt wie ein getrimmter Kollektiv (Mitte haelt die Hoehe).
+	RotorPhysics.MaxCollectivePitchDeg = 6.0f;
+	RotorPhysics.MinCollectivePitchDeg = 3.0f;
+
 	HelicopterAudio->BladeCount = 3;
 	HelicopterAudio->BladeSlapDepth = 0.55f;
 	HelicopterAudio->RotorCutoffBaseHz = 110.0f;
@@ -683,20 +694,25 @@ void AWiesbadenHelicopter::ReadInput(float DeltaSeconds)
 		const float Frac = Elapsed / Total;
 		const int32 SecBefore = FMath::CeilToInt(ScriptedFlightSeconds);
 
-		if (Frac < 0.35f)
+		if (Frac < 0.28f)          // Steigen
 		{
-			CollectiveInput = 0.45f;
+			CollectiveInput = 0.6f;
 			CyclicPitchInput = 0.0f;
 		}
-		else if (Frac < 0.70f)
+		else if (Frac < 0.50f)     // Schweben (Hebel neutral -> Hoehe halten)
 		{
 			CollectiveInput = 0.0f;
-			CyclicPitchInput = 0.6f;   // Nase runter -> Vorwaertsflug
+			CyclicPitchInput = 0.0f;
 		}
-		else
+		else if (Frac < 0.75f)     // Marsch (Nase runter -> Vorwaertsflug)
 		{
-			CollectiveInput = -0.45f;
-			CyclicPitchInput = 0.3f;
+			CollectiveInput = 0.0f;
+			CyclicPitchInput = 0.6f;
+		}
+		else                        // Sinken
+		{
+			CollectiveInput = -0.6f;
+			CyclicPitchInput = 0.2f;
 		}
 
 		ScriptedFlightSeconds = FMath::Max(0.0f, ScriptedFlightSeconds - DeltaSeconds);
