@@ -9,6 +9,7 @@
 #include "GameFramework/Pawn.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
+#include "Vehicles/WiesbadenVehicleTestHarness.h"
 #include "World/WiesbadenCitySubsystem.h"
 
 void AWiesbadenPlayerController::WbTeleport(int32 Ziel)
@@ -113,6 +114,23 @@ void AWiesbadenPlayerController::WbNudge(int32 NickGrad, int32 RollGrad)
 		NickGrad, RollGrad, Vorher.Pitch, Vorher.Roll, Nachher.Pitch, Nachher.Roll);
 }
 
+// Test-Harness auf dem besessenen Helikopter holen oder anlegen.
+//
+// Die Harness-Komponente existiert im normalen Spiel nicht - sie wird erst hier,
+// beim ersten Dev-Befehl, auf dem Pawn erzeugt. So bleibt die Fahrzeugklasse frei
+// von Test-Code.
+static UWiesbadenVehicleTestHarness* GetOrAddHarness(AWiesbadenHelicopter* Heli)
+{
+	UWiesbadenVehicleTestHarness* Harness =
+		Heli->FindComponentByClass<UWiesbadenVehicleTestHarness>();
+	if (!Harness)
+	{
+		Harness = NewObject<UWiesbadenVehicleTestHarness>(Heli);
+		Harness->RegisterComponent();
+	}
+	return Harness;
+}
+
 void AWiesbadenPlayerController::WbHeliYaw(int32 Sekunden)
 {
 	AWiesbadenHelicopter* Heli = Cast<AWiesbadenHelicopter>(GetPawn());
@@ -121,7 +139,7 @@ void AWiesbadenPlayerController::WbHeliYaw(int32 Sekunden)
 		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbHeliYaw erkannt, aber kein Helikopter besessen (erst WbHeli)."));
 		return;
 	}
-	Heli->StartYawDemo(static_cast<float>(Sekunden));
+	GetOrAddHarness(Heli)->StartYawProbe(static_cast<float>(Sekunden));
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeliYaw - Gierprobe fuer %d s gestartet."), Sekunden);
 }
 
@@ -133,6 +151,6 @@ void AWiesbadenPlayerController::WbHeliFly(int32 Sekunden)
 		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbHeliFly erkannt, aber kein Helikopter besessen (erst WbHeli)."));
 		return;
 	}
-	Heli->StartFlightDemo(static_cast<float>(Sekunden));
+	GetOrAddHarness(Heli)->StartFlightProfile(static_cast<float>(Sekunden));
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeliFly - Flugprofil fuer %d s gestartet."), Sekunden);
 }

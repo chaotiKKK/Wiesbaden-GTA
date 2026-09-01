@@ -18,6 +18,22 @@ class USphereComponent;
 class UStaticMeshComponent;
 
 /**
+ * Geglaettete Steuerwerte fuer die externe Steuerung des Hubschraubers.
+ *
+ * Ein Treiber (KI, Zwischensequenz, Replay, Test-Harness) reicht hierueber die
+ * fertigen Steuerwerte (-1..1) ein; der Hubschrauber wendet sie ueber die echte
+ * Rotorphysik an. So bleibt die Flugsimulation frei von Treiber-/Test-Code.
+ */
+struct FWiesbadenHeliControl
+{
+	float Collective = 0.0f;   // -1..1 (steigen/sinken)
+	float Pitch = 0.0f;        // -1..1 (Nase runter = +)
+	float Roll = 0.0f;         // -1..1 (rechts = +)
+	float Yaw = 0.0f;          // -1..1 (rechts = +)
+	bool bEngine = true;
+};
+
+/**
  * Fliegbarer Helikopter-Pawn mit Platzhalter-Geometrie (Engine-Basis-Shapes).
  *
  * Die Rotor-Physik (Lift, Collective, Zyklik, Heckrotor, Autorotation) kommt
@@ -86,25 +102,26 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
 	bool IsEngineRunning() const { return bEngineRunning; }
 
-	/**
-	 * Skript-Gierprobe (Dev): fuer die naechsten Sekunden Gierpedal + etwas
-	 * Kollektiv setzen, ohne Tastatur. Fuer den Nachweis der Gierfunktion im
-	 * echten Fenster (WbHeliYaw). Wirkt ueber die echte Rotorphysik.
-	 */
-	void StartYawDemo(float Seconds) { ScriptedYawSeconds = FMath::Max(0.0f, Seconds); bEngineRunning = true; }
+	/** Momentane Gierrate in Grad/s (Telemetrie fuer KI/Test/Anzeige). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
+	float GetYawRateDegPerSec() const;
 
-	/**
-	 * Skript-Flugprofil (Dev, WbHeliFly): abheben, beschleunigen, sinken - ohne
-	 * Tastatur. Steigen (Kollektiv) -> Marschflug (Nase runter) -> Sinken, damit
-	 * Hoehenmesser, Variometer und Fahrtmesser sichtbar reagieren. Wirkt ueber
-	 * die echte Rotorphysik (setzt die geglaetteten Steuerwerte).
-	 */
-	void StartFlightDemo(float Seconds)
+	// -- Externe Steuerung ------------------------------------------------
+	// Sauberer Eingang, ueber den ein anderer Treiber (KI, Zwischensequenz,
+	// Replay, Test-Harness) den Hubschrauber steuert - ueber die ECHTE
+	// Rotorphysik, nicht per direkter Transformation. Solange aktiv,
+	// ueberschreibt er Tastatur/Gamepad. So bleibt die Flugsimulation frei von
+	// Test-/Skript-Code (die Choreografie liegt in UWiesbadenVehicleTestHarness).
+
+	/** Geglaettete Steuerwerte setzen (aktiviert die externe Steuerung). */
+	void SetExternalControl(const FWiesbadenHeliControl& Control)
 	{
-		ScriptedFlightSeconds = FMath::Max(0.0f, Seconds);
-		ScriptedFlightTotal = ScriptedFlightSeconds;
-		bEngineRunning = true;
+		ExternalControl = Control;
+		bExternalControlActive = true;
 	}
+
+	/** Externe Steuerung abschalten - der Rumpf hoert wieder auf Tastatur/Gamepad. */
+	void ClearExternalControl() { bExternalControlActive = false; }
 
 	/** Triebwerk laeuft; sonst arbeitet der Rotor nur ueber Autorotation. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Heli|Physik")
@@ -359,10 +376,7 @@ private:
 	bool bEngineToggleHeld = false;
 	bool bGrounded = false;
 
-	/** Restzeit der Skript-Gierprobe in Sekunden (0 = aus). Siehe StartYawDemo. */
-	float ScriptedYawSeconds = 0.0f;
-
-	/** Restzeit und Gesamtdauer des Skript-Flugprofils (0 = aus). Siehe StartFlightDemo. */
-	float ScriptedFlightSeconds = 0.0f;
-	float ScriptedFlightTotal = 0.0f;
+	/** Externe Steuerung (KI/Zwischensequenz/Test), siehe SetExternalControl. */
+	FWiesbadenHeliControl ExternalControl;
+	bool bExternalControlActive = false;
 };

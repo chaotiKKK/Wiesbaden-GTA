@@ -488,6 +488,11 @@ float AWiesbadenHelicopter::GetCollective() const
 	return FMath::Clamp(0.5f + 0.5f * CollectiveInput, 0.0f, 1.0f);
 }
 
+float AWiesbadenHelicopter::GetYawRateDegPerSec() const
+{
+	return FMath::RadiansToDegrees(AngularVelocity.Z);
+}
+
 float AWiesbadenHelicopter::ApplyStickShaping(float RawAxis, float Deadzone, float Expo)
 {
 	const float Clamped = FMath::Clamp(RawAxis, -1.0f, 1.0f);
@@ -662,74 +667,17 @@ void AWiesbadenHelicopter::ReadInput(float DeltaSeconds)
 	}
 	bEngineToggleHeld = bEnginePressed;
 
-	// Skript-Gierprobe (Dev, WbHeliYaw): stetiges Gierpedal rechts und etwas
-	// Kollektiv, damit der Rumpf frei ueber Grund giert. Ueberschreibt die
-	// geglaetteten Eingaben NACH den normalen Achsen, wirkt aber ueber die echte
-	// Rotorphysik (Coaxial-Giermoment) - keine direkte Rotation. So laesst sich
-	// die Gierfunktion ohne Tastatureingabe im echten Fenster nachweisen.
-	if (ScriptedYawSeconds > 0.0f)
+	// Externe Steuerung (KI/Zwischensequenz/Test-Harness): ueberschreibt die
+	// geglaetteten Steuerwerte, wirkt aber ueber die echte Rotorphysik. Die
+	// Choreografie (Gierprobe, Flugprofil) liegt bewusst NICHT hier, sondern in
+	// UWiesbadenVehicleTestHarness - die Flugsimulation bleibt frei davon.
+	if (bExternalControlActive)
 	{
-		const int32 SecBefore = FMath::CeilToInt(ScriptedYawSeconds);
-		bEngineRunning = true;
-		YawInput = 0.45f;   // gemaessigt, damit der Kurswechsel ablesbar bleibt
-		CollectiveInput = FMath::Max(CollectiveInput, 0.55f);
-		ScriptedYawSeconds = FMath::Max(0.0f, ScriptedYawSeconds - DeltaSeconds);
-		if (FMath::CeilToInt(ScriptedYawSeconds) != SecBefore)
-		{
-			UE_LOG(LogWbVehicles, Log, TEXT("WbDev Gierprobe t=%.0f: Kurs %.0f Grad (Gierrate %.1f Grad/s)."),
-				ScriptedYawSeconds, GetHeadingDegrees(), FMath::RadiansToDegrees(AngularVelocity.Z));
-		}
-		if (ScriptedYawSeconds <= 0.0f)
-		{
-			UE_LOG(LogWbVehicles, Log, TEXT("WbDev HeliYaw fertig."));
-		}
-	}
-
-	// Skript-Flugprofil (Dev, WbHeliFly): drei Phasen ueber die echte
-	// Rotorphysik, damit die Cockpit-Instrumente nachweisbar mitlaufen.
-	//   Steigen  (0-35 %): Kollektiv hoch  -> Hoehe steigt, Vario positiv
-	//   Marsch  (35-70 %): Nase runter     -> Fahrt steigt, Vario ~0
-	//   Sinken  (70-100 %): Kollektiv runter-> Hoehe faellt, Vario negativ
-	if (ScriptedFlightSeconds > 0.0f)
-	{
-		bEngineRunning = true;
-		const float Total = FMath::Max(ScriptedFlightTotal, 0.01f);
-		const float Elapsed = Total - ScriptedFlightSeconds;
-		const float Frac = Elapsed / Total;
-		const int32 SecBefore = FMath::CeilToInt(ScriptedFlightSeconds);
-
-		if (Frac < 0.28f)          // Steigen
-		{
-			CollectiveInput = 0.6f;
-			CyclicPitchInput = 0.0f;
-		}
-		else if (Frac < 0.50f)     // Schweben (Hebel neutral -> Hoehe halten)
-		{
-			CollectiveInput = 0.0f;
-			CyclicPitchInput = 0.0f;
-		}
-		else if (Frac < 0.75f)     // Marsch (Nase runter -> Vorwaertsflug)
-		{
-			CollectiveInput = 0.0f;
-			CyclicPitchInput = 0.6f;
-		}
-		else                        // Sinken
-		{
-			CollectiveInput = -0.6f;
-			CyclicPitchInput = 0.2f;
-		}
-
-		ScriptedFlightSeconds = FMath::Max(0.0f, ScriptedFlightSeconds - DeltaSeconds);
-		if (FMath::CeilToInt(ScriptedFlightSeconds) != SecBefore)
-		{
-			UE_LOG(LogWbVehicles, Log,
-				TEXT("WbDev Flug t=%.0f: Hoehe %.0f m, Vario %+.1f m/s, Fahrt %.0f km/h."),
-				Elapsed, GetAltitudeMeters(), GetVerticalSpeedMs(), GetAirspeedKmh());
-		}
-		if (ScriptedFlightSeconds <= 0.0f)
-		{
-			UE_LOG(LogWbVehicles, Log, TEXT("WbDev HeliFly fertig."));
-		}
+		bEngineRunning = ExternalControl.bEngine;
+		CollectiveInput = FMath::Clamp(ExternalControl.Collective, -1.0f, 1.0f);
+		CyclicPitchInput = FMath::Clamp(ExternalControl.Pitch, -1.0f, 1.0f);
+		CyclicRollInput = FMath::Clamp(ExternalControl.Roll, -1.0f, 1.0f);
+		YawInput = FMath::Clamp(ExternalControl.Yaw, -1.0f, 1.0f);
 	}
 }
 
