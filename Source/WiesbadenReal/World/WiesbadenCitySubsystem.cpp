@@ -1284,6 +1284,43 @@ void UWiesbadenCitySubsystem::LogGeometryBalance() const
 	UE_LOG(LogWbStreaming, Log,
 		TEXT("Stadt-Geometrie: %d Chunk-Actors geladen, %d Strassen- und %d Gebaeude-Abschnitte."),
 		ChunkCount, RoadSections, BuildingSections);
+
+	// Last-Inventar des Spiel-Strangs.
+	//
+	// Die Bildzeit-Diagnose zeigt: die Last liegt auf dem Spiel-Strang (~110 ms),
+	// NICHT auf GPU (~16 ms) - Nanite/LODs braeuchten hier gar nichts. Der Spiel-
+	// Strang bezahlt pro Bild fuer die VERWALTETE (nicht die sichtbare) Menge:
+	// Primitive-Komponenten (Sichtbarkeit/Bounds), Foliage-Instanzen (HISM-Cluster-
+	// Cull je Bild) und Kollisionskoerper (Physik-Szene). Diese Zaehlung macht die
+	// Aufteilung sichtbar, damit die naechste Optimierung das Richtige trifft
+	// (z. B. World-Partition-Ladebereich verkleinern statt an der Grafik zu drehen).
+	int32 PrimComps = 0, MovablePrims = 0, CollisionPrims = 0;
+	int32 FoliageComps = 0, FoliageInstances = 0;
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		TArray<UPrimitiveComponent*> Prims;
+		It->GetComponents(Prims);
+		for (const UPrimitiveComponent* P : Prims)
+		{
+			if (!P || !P->IsRegistered())
+			{
+				continue;
+			}
+			++PrimComps;
+			if (P->Mobility == EComponentMobility::Movable) { ++MovablePrims; }
+			if (P->IsCollisionEnabled()) { ++CollisionPrims; }
+			if (const UInstancedStaticMeshComponent* Ism = Cast<UInstancedStaticMeshComponent>(P))
+			{
+				++FoliageComps;
+				FoliageInstances += Ism->GetInstanceCount();
+			}
+		}
+	}
+
+	UE_LOG(LogWbStreaming, Log,
+		TEXT("Last-Inventar (Spiel-Strang): %d Primitive-Komponenten (%d beweglich, %d mit Kollision), ")
+		TEXT("%d Instanz-Komponenten mit %d Instanzen gesamt. Kosten haengen an DIESEN Zahlen, nicht an der Sichtweite."),
+		PrimComps, MovablePrims, CollisionPrims, FoliageComps, FoliageInstances);
 }
 
 void UWiesbadenCitySubsystem::LogMaterialBalance() const
