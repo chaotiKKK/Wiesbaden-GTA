@@ -30,8 +30,9 @@ class UStaticMeshComponent;
  *  - Space/Shift = Collective hoch (steigen), Ctrl = Collective runter (sinken)
  *  - G = Triebwerk an/aus (Autorotation testbar)
  *
- * Die Kamera ist fest im Follow-Modus direkt hinter der Flugmaschine
- * (bLockFollowMode an der Fahrzeug-Kamera; C/Pfeiltasten sind deaktiviert).
+ * Kamera: Umsehen per Maus/Gamepad-Rechtsstick (Freilook im Follow-Modus),
+ * Umschalten Follow -> Orbit -> Cockpit per C. Der Horizont bleibt ruhig
+ * (bLevelHorizon), der Rumpf neigt sich im Bild statt das Bild mitzukippen.
  */
 UCLASS()
 class WIESBADENREAL_API AWiesbadenHelicopter : public APawn

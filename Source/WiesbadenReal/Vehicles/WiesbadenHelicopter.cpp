@@ -257,12 +257,14 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	}
 
 	// Kamera: generische Fahrzeug-Kamera-Komponente (erzeugt ihr Rig in BeginPlay).
-	// Fest im Follow-Modus: die Kamera haengt direkt hinter der Flugmaschine
-	// (kein Umschalten auf Orbit/Cockpit, keine Orbit-Schwenkung).
+	// Umsehen ist jetzt auch im Heli erlaubt (Freilook im Follow-Modus per
+	// Maus/Rechtsstick, Umschalten auf Orbit/Cockpit per C). Frueher war die
+	// Kamera hier fest verriegelt (bLockFollowMode) - man konnte sich im Flug
+	// nicht umsehen; der ruhige Horizont (unten) bleibt davon unberuehrt.
 	VehicleCamera = CreateDefaultSubobject<UWiesbadenVehicleCameraComponent>(TEXT("VehicleCamera"));
 	VehicleCamera->SetupAttachment(SceneRoot);
 	VehicleCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 130.0f));
-	VehicleCamera->bLockFollowMode = true;
+	VehicleCamera->bLockFollowMode = false;
 
 	// Ruhiger Horizont und Positions-Nachlauf: der Rumpf neigt sich IM Bild,
 	// nicht das Bild mit ihm, und die Kamera federt Beschleunigungen weich
@@ -283,7 +285,15 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	// koaxiale, gegenlaeufige Rotoren (flink, kein Heckrotor-Moment) und ein
 	// schwerer, tiefer Rotorschlag (Blade Slap) statt zivilem Surren.
 	RotorPhysics.bCoaxialRotors = true;
-	RotorPhysics.CoaxialYawAuthority = 1600.0f;
+	// Gier-Autoritaet: der Heli drehte sich praktisch NICHT (Beschwerde "Heli
+	// dreht nicht"). Ursache: hier stand 1600 - dieselbe Groessenordnung wie
+	// die Nick-/Roll-Autoritaeten unten (~1500). Die YAW-Formel ist aber direkt
+	// (Torque.Z = Pedal * CoaxialYawAuthority * LiftNormalized), waehrend
+	// Nick/Roll anders skalieren. Bei Traegheit 40000 kg m^2 ergab 1600 nur
+	// 0,04 rad/s^2 - unmerklich. Der RotorPhysics-Default fuer diese direkte
+	// Formel ist 95000; 60000 gibt ~1,5 rad/s^2, also flinkes, aber
+	// kontrollierbares Gieren (Ka-52-Charakter). Bei Bedarf feinjustieren.
+	RotorPhysics.CoaxialYawAuthority = 60000.0f;
 	RotorPhysics.MaxForwardSpeedMetersPerS = 85.0f;
 	RotorPhysics.CyclicPitchMomentAuthority = 1500.0f;
 	RotorPhysics.CyclicRollMomentAuthority = 1500.0f;

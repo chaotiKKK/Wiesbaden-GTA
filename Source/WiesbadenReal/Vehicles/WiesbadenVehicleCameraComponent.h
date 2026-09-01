@@ -100,6 +100,26 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "0.05"))
 	float MouseSensitivity = 2.2f;
 
+	/**
+	 * Schwenkgeschwindigkeit des Gamepad-Rechtssticks (deg/s).
+	 *
+	 * Umsehen mit dem rechten Stick war bisher gar nicht verdrahtet - am
+	 * Gamepad liess sich die Kamera ueberhaupt nicht drehen.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "0.0"))
+	float GamepadLookRate = 130.0f;
+
+	/**
+	 * Wie schnell die Follow-Kamera ohne Eingabe hinter das Fahrzeug
+	 * zurueckschwenkt (Freilook). 0 = bleibt stehen, wo man losgelassen hat.
+	 *
+	 * Umsehen greift jetzt AUCH im Follow-Modus (Maus/Rechtsstick), nicht erst
+	 * nach Umschalten auf Orbit - so wie es die Steuerungshilfe verspricht
+	 * ("Maus - Umsehen"). Ohne Eingabe kehrt der Blick sanft nach hinten zurueck.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "0.0"))
+	float FollowRecenterSpeed = 3.0f;
+
 	/** Glattung der Kamera-Bewegung. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "0.01"))
 	float CameraResponse = 4.0f;

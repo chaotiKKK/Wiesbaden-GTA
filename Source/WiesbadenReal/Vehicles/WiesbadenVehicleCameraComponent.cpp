@@ -160,24 +160,64 @@ void UWiesbadenVehicleCameraComponent::HandleInput(float DeltaTime)
 	}
 	bCameraToggleHeld = bPressed;
 
-	// Orbit schwenken (nur im Orbit-Modus).
-	if (CameraMode == EWiesbadenVehicleCameraMode::Orbit && PC)
+	if (!PC)
 	{
-		// MAUS zuerst: Umschauen gehoert auf die Maus, nicht auf Pfeiltasten.
-		// Ohne sie musste man die Kamera Grad fuer Grad ertasten.
-		float MouseX = 0.0f;
-		float MouseY = 0.0f;
-		PC->GetInputMouseDelta(MouseX, MouseY);
-		OrbitOffset.Yaw += MouseX * MouseSensitivity;
-		OrbitOffset.Pitch += MouseY * MouseSensitivity;
+		return;
+	}
 
-		// Pfeiltasten bleiben als Ersatz erhalten.
+	// Cockpit: fester Blick nach vorn, kein Umsehen-Offset.
+	if (CameraMode == EWiesbadenVehicleCameraMode::Cockpit)
+	{
+		return;
+	}
+
+	// Umsehen greift jetzt in Follow UND Orbit. Vorher nur Orbit - deshalb
+	// schien die Kamera "kaputt": im Standard-Follow bewirkte Maus/Stick nichts,
+	// obwohl die Steuerungshilfe "Maus - Umsehen" verspricht.
+	float LookYaw = 0.0f;
+	float LookPitch = 0.0f;
+	bool bLooked = false;
+
+	// Maus (Frame-Delta, framerate-unabhaengig).
+	float MouseX = 0.0f;
+	float MouseY = 0.0f;
+	PC->GetInputMouseDelta(MouseX, MouseY);
+	if (MouseX != 0.0f || MouseY != 0.0f)
+	{
+		LookYaw += MouseX * MouseSensitivity;
+		LookPitch += MouseY * MouseSensitivity;
+		bLooked = true;
+	}
+
+	// Gamepad rechter Stick (analog, mit kleiner Totzone gegen Drift).
+	const float StickX = PC->GetInputAnalogKeyState(EKeys::Gamepad_RightX);
+	const float StickY = PC->GetInputAnalogKeyState(EKeys::Gamepad_RightY);
+	if (FMath::Abs(StickX) > 0.15f || FMath::Abs(StickY) > 0.15f)
+	{
+		LookYaw += StickX * GamepadLookRate * DeltaTime;
+		LookPitch += StickY * GamepadLookRate * DeltaTime;
+		bLooked = true;
+	}
+
+	// Pfeiltasten: nur im Orbit-Modus, weil sie im Fahrzeug lenken/gasgeben.
+	if (CameraMode == EWiesbadenVehicleCameraMode::Orbit)
+	{
 		const float Turn = OrbitTurnRate * DeltaTime;
-		if (PC->IsInputKeyDown(EKeys::Left))  { OrbitOffset.Yaw -= Turn; }
-		if (PC->IsInputKeyDown(EKeys::Right)) { OrbitOffset.Yaw += Turn; }
-		if (PC->IsInputKeyDown(EKeys::Up))    { OrbitOffset.Pitch += Turn; }
-		if (PC->IsInputKeyDown(EKeys::Down))  { OrbitOffset.Pitch -= Turn; }
-		OrbitOffset.Pitch = FMath::Clamp(OrbitOffset.Pitch, -80.0f, 80.0f);
+		if (PC->IsInputKeyDown(EKeys::Left))  { LookYaw -= Turn; bLooked = true; }
+		if (PC->IsInputKeyDown(EKeys::Right)) { LookYaw += Turn; bLooked = true; }
+		if (PC->IsInputKeyDown(EKeys::Up))    { LookPitch += Turn; bLooked = true; }
+		if (PC->IsInputKeyDown(EKeys::Down))  { LookPitch -= Turn; bLooked = true; }
+	}
+
+	OrbitOffset.Yaw = FRotator::NormalizeAxis(OrbitOffset.Yaw + LookYaw);
+	OrbitOffset.Pitch = FMath::Clamp(OrbitOffset.Pitch + LookPitch, -80.0f, 80.0f);
+
+	// Follow-Freilook: ohne Eingabe sanft hinter das Fahrzeug zuruecklaufen.
+	// Im Orbit-Modus bleibt der Blick stehen, wo man ihn geparkt hat.
+	if (CameraMode == EWiesbadenVehicleCameraMode::Follow && !bLooked && FollowRecenterSpeed > 0.0f)
+	{
+		OrbitOffset.Yaw = FMath::FInterpTo(OrbitOffset.Yaw, 0.0f, DeltaTime, FollowRecenterSpeed);
+		OrbitOffset.Pitch = FMath::FInterpTo(OrbitOffset.Pitch, 0.0f, DeltaTime, FollowRecenterSpeed);
 	}
 }
 
@@ -194,7 +234,9 @@ void UWiesbadenVehicleCameraComponent::UpdateBoom(float DeltaTime)
 		return;
 	}
 
-	FRotator Desired = FRotator(FollowPitchOffset, 0.0f, 0.0f);
+	// Follow: Basis-Neigung plus Freilook-Offset (Yaw/Pitch aus Maus/Stick).
+	// Orbit: reiner Umsehen-Offset.
+	FRotator Desired = FRotator(FollowPitchOffset + OrbitOffset.Pitch, OrbitOffset.Yaw, 0.0f);
 	if (CameraMode == EWiesbadenVehicleCameraMode::Orbit)
 	{
 		Desired = FRotator(OrbitOffset.Pitch, OrbitOffset.Yaw, 0.0f);
