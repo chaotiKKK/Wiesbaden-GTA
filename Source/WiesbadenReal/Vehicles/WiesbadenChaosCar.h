@@ -63,6 +63,20 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Fahrzeug")
 	void CycleCameraMode();
 
+	/**
+	 * Steht das Chassis auf den Raedern statt auf dem Bauch?
+	 *
+	 * Datenreine Regressionspruefung fuer die Kaefer-Kollision: Das Chassis-Mesh
+	 * reicht (Z in [0,154] cm) unter die Reifenachsen (Radius 34.3 cm), sodass
+	 * die Chassis-Kollision zuerst aufsetzt und der Wagen auf dem Bauch haengt.
+	 * "Auf den Raedern" heisst: die Unterkante der Chassis-Kollision liegt nicht
+	 * unter dem tiefsten Radaufstandspunkt (minus einer kleinen Toleranz).
+	 *
+	 * Keine Welt, kein Pawn - damit unter Automation belegbar, dass ein Fix am
+	 * PhysicsAsset wirkt (VehicleRestTest).
+	 */
+	static bool RestsOnWheels(double ChassisBottomZcm, double WheelContactZcm, double MarginCm);
+
 protected:
 	virtual void BeginPlay() override;
 

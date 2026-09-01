@@ -459,6 +459,14 @@ void AWiesbadenChaosCar::CycleCameraMode()
 	}
 }
 
+bool AWiesbadenChaosCar::RestsOnWheels(double ChassisBottomZcm, double WheelContactZcm, double MarginCm)
+{
+	// Auf den Raedern, wenn die Chassis-Unterkante NICHT tiefer sitzt als der
+	// Radaufstandspunkt (abzueglich Toleranz). Sitzt sie tiefer, kommt das
+	// Chassis zuerst auf und der Wagen haengt auf dem Bauch.
+	return ChassisBottomZcm >= WheelContactZcm - MarginCm;
+}
+
 bool AWiesbadenChaosCar::IsKeyDown(const FKey& Key) const
 {
 	const APlayerController* PC = Cast<APlayerController>(GetController());
