@@ -472,6 +472,8 @@ void AWiesbadenVehicleHUD::GetPauseMenuEntries(TArray<FString>& OutEntries)
 	// die Stadt - der Weg zur Platter Strasse dauert im Spiel Minuten.
 	OutEntries.Add(TEXT("Entwickler: zurueck zur Platter Strasse 146"));
 	OutEntries.Add(TEXT("Entwickler: zur Nerobergbahn"));
+	OutEntries.Add(TEXT("Entwickler: zum Garten Nerotal 48"));
+	OutEntries.Add(TEXT("Entwickler: Fahrzeug aufrichten"));
 	OutEntries.Add(TEXT("Entwickler: Verkehr an/aus"));
 	OutEntries.Add(TEXT("Spiel beenden"));
 }
@@ -559,21 +561,23 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 
 	case 2:
 	case 3:
+	case 4:
 	{
 		// Zuruecksetzen an einen festen Ort.
 		//
-		// Die Platter Strasse 146 ist der Spielerstart; die Nerobergbahn
-		// liegt rund 250 m davon entfernt und war bislang nur durch Hinfahren
-		// erreichbar.
-		const FVector Target = (Index == 2)
-			? FVector(-121474.0, -119312.0, 11347.0)
-			: FVector(-104083.0, -137317.0, 8800.0);
+		// Die Platter Strasse 146 ist der Spielerstart; Nerobergbahn und der
+		// Garten Nerotal 48 liegen mehrere hundert Meter entfernt und waren
+		// bislang nur durch Hinfahren erreichbar. Zielhoehen aus dem Protokoll,
+		// bewusst grob (der Wagen faellt die letzten Zentimeter selbst).
+		FVector Target;
+		if (Index == 2)      { Target = FVector(-121474.0, -119312.0, 11347.0); } // Platter Strasse 146
+		else if (Index == 3) { Target = FVector(-104083.0, -137317.0, 8800.0); }  // Nerobergbahn
+		else                 { Target = FVector(-71366.0, -124226.0, 8530.0); }   // Garten Nerotal 48
 
 		if (APawn* Pawn = PC->GetPawn())
 		{
-			// Erst hoch genug ansetzen und dann fallen lassen: die Zielhoehe
-			// stammt aus dem Protokoll und muss nicht auf den Zentimeter
-			// stimmen. Ein Punkt IM Boden liesse den Wagen steckenbleiben.
+			// Erst hoch genug ansetzen und dann fallen lassen: ein Punkt IM
+			// Boden liesse den Wagen steckenbleiben.
 			Pawn->SetActorLocation(Target + FVector(0.0, 0.0, 300.0),
 				/*bSweep=*/false, nullptr, ETeleportType::TeleportPhysics);
 		}
@@ -581,7 +585,24 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 		break;
 	}
 
-	case 4:
+	case 5:
+	{
+		// Fahrzeug aufrichten: Nick/Roll auf 0, leicht anheben und auf die
+		// Raeder fallen lassen. Direkte Nothilfe gegen umgekippte oder an der
+		// Geometrie verhakte Fahrzeuge - bis die Chassis-Kollision sauber ist.
+		if (APawn* Pawn = PC->GetPawn())
+		{
+			const FRotator Rot = Pawn->GetActorRotation();
+			Pawn->SetActorLocationAndRotation(
+				Pawn->GetActorLocation() + FVector(0.0, 0.0, 150.0),
+				FRotator(0.0, Rot.Yaw, 0.0),
+				/*bSweep=*/false, nullptr, ETeleportType::TeleportPhysics);
+		}
+		Unpause();
+		break;
+	}
+
+	case 6:
 		if (UWiesbadenCitySubsystem* City = HudWorld->GetSubsystem<UWiesbadenCitySubsystem>())
 		{
 			// Verkehr aus: die schnellste Art zu pruefen, ob ein Ruckler vom
@@ -592,7 +613,7 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 		Unpause();
 		break;
 
-	case 5:
+	case 7:
 		FPlatformMisc::RequestExit(false);
 		break;
 
