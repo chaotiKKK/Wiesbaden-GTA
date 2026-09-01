@@ -59,20 +59,19 @@ if mat is None:
 vertex = expr(mat, unreal.MaterialExpressionVertexColor, -400, 0)
 MEL.connect_material_property(vertex, "RGB", MP.MP_BASE_COLOR)
 
-# Rauheit aus der Helligkeit: dunkle Flaechen (Schotter, Erde, Rinde) sind
-# stumpf, helle (Sandstein, Beckenrand) etwas glatter. Das kostet nichts und
-# nimmt der Geometrie den Plastikglanz einer festen Rauheit.
-lum = expr(mat, unreal.MaterialExpressionDotProduct, -250, 140)
-weights = expr(mat, unreal.MaterialExpressionConstant3Vector, -400, 200)
-weights.set_editor_property("constant", unreal.LinearColor(0.30, 0.59, 0.11, 1.0))
-MEL.connect_material_expressions(vertex, "RGB", lum, "A")
-MEL.connect_material_expressions(weights, "", lum, "B")
-
-rough = expr(mat, unreal.MaterialExpressionLinearInterpolate, -100, 140)
-MEL.connect_material_expressions(constant(mat, 0.95, -250, 60), "", rough, "A")
-MEL.connect_material_expressions(constant(mat, 0.62, -250, 100), "", rough, "B")
-MEL.connect_material_expressions(lum, "", rough, "Alpha")
-MEL.connect_material_property(rough, "", MP.MP_ROUGHNESS)
+# Matte Oberflaeche mit konstanter Rauheit.
+#
+# Frueher wurde die Rauheit aus der Helligkeit abgeleitet (dunkle Flaechen
+# stumpfer, helle glatter) - ueber einen DotProduct-Knoten. Der liess sich per
+# Python-API in UE 5.8 NICHT korrekt verdrahten: Input A blieb offen, die
+# Kompilierung brach mit "Missing DotProduct input A" ab, das GANZE Material
+# fiel auf das Default-Material zurueck und der Garten war grau (im Spiel-Log
+# als "Failed to compile Material ... Default Material will be used").
+#
+# Eine konstante, matte Rauheit kompiliert zuverlaessig; der optische Verlust
+# ist gering, weil Stein, Holz und Blattwerk ohnehin alle matt sind. Die
+# Vertexfarben (der eigentliche Zweck) bleiben unveraendert.
+MEL.connect_material_property(constant(mat, 0.85, -250, 140), "", MP.MP_ROUGHNESS)
 
 MEL.recompile_material(mat)
 EAL.save_loaded_asset(mat)

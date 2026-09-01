@@ -657,12 +657,12 @@ def make_wall(textures, name="M_WbBuildingWall"):
         col = tex_sample(mat, color_tex, -2600, -200, uv)
         col_out = "RGB"
     else:
-        col = c3(mat, 0.32, 0.30, 0.27, -2600, -200)
+        col = c3(mat, 0.42, 0.385, 0.335, -2600, -200)
         col_out = ""
 
     wall, rough_expr, metal_expr = add_facade_windows(mat, col, wall_out=col_out)
 
-    socket = c3(mat, 0.150, 0.142, 0.130, -600, 250)
+    socket = c3(mat, 0.190, 0.172, 0.150, -600, 250)
     base = lerp(mat, socket, wall, socket_mask(mat, vc, -400, 400), -100, 0)
     MEL.connect_material_property(base, "", MP.MP_BASE_COLOR)
     MEL.connect_material_property(rough_expr, "", MP.MP_ROUGHNESS)
@@ -876,14 +876,14 @@ def make_facade_variants(textures):
     # 1 Backstein - Wiesbadener Klinker, roetlich-braun.
     if "Backstein" not in out:
         out["Backstein"] = make_facade(
-            "M_WbFacade_Backstein", (0.160, 0.062, 0.045), (0.260, 0.110, 0.075),
-            roughness=0.88, noise_scale=6.0, socket=(0.045, 0.020, 0.014))
+            "M_WbFacade_Backstein", (0.205, 0.085, 0.060), (0.330, 0.150, 0.100),
+            roughness=0.88, noise_scale=6.0, socket=(0.085, 0.040, 0.028))
 
     # 2 Sandstein - heller Gruenderzeit-Ton, praegt die Innenstadt.
     if "Sandstein" not in out:
         out["Sandstein"] = make_facade(
-            "M_WbFacade_Sandstein", (0.300, 0.250, 0.180), (0.420, 0.360, 0.260),
-            roughness=0.80, noise_scale=3.0, socket=(0.100, 0.082, 0.060))
+            "M_WbFacade_Sandstein", (0.365, 0.305, 0.220), (0.510, 0.435, 0.315),
+            roughness=0.80, noise_scale=3.0, socket=(0.155, 0.128, 0.092))
 
     # 3 Glas - Buerofassade: metallisch und glatt, damit sie den Himmel
     # spiegelt und sich klar vom Wohnbestand abhebt.
@@ -898,13 +898,13 @@ def make_facade_variants(textures):
     # 4 Beton - Nachkriegsbau, kuehles Grau.
     if "Beton" not in out:
         out["Beton"] = make_facade(
-            "M_WbFacade_Beton", (0.200, 0.200, 0.195), (0.300, 0.300, 0.290),
-            roughness=0.85, noise_scale=2.0, socket=(0.070, 0.070, 0.068))
+            "M_WbFacade_Beton", (0.255, 0.238, 0.205), (0.380, 0.352, 0.305),
+            roughness=0.85, noise_scale=2.0, socket=(0.125, 0.113, 0.098))
 
     # 5 Fachwerk - helles Gefach mit dunklem Balkenanteil im Rauschen.
     out["Fachwerk"] = make_facade(
-        "M_WbFacade_Fachwerk", (0.090, 0.058, 0.038), (0.480, 0.440, 0.360),
-        roughness=0.90, noise_scale=12.0, socket=(0.060, 0.045, 0.032))
+        "M_WbFacade_Fachwerk", (0.115, 0.075, 0.050), (0.520, 0.475, 0.390),
+        roughness=0.90, noise_scale=12.0, socket=(0.090, 0.068, 0.048))
 
     return out
 
