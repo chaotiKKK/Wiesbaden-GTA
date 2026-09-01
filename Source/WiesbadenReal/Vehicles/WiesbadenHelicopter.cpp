@@ -679,6 +679,10 @@ void AWiesbadenHelicopter::ReadInput(float DeltaSeconds)
 			UE_LOG(LogWbVehicles, Log, TEXT("WbDev Gierprobe t=%.0f: Kurs %.0f Grad (Gierrate %.1f Grad/s)."),
 				ScriptedYawSeconds, GetHeadingDegrees(), FMath::RadiansToDegrees(AngularVelocity.Z));
 		}
+		if (ScriptedYawSeconds <= 0.0f)
+		{
+			UE_LOG(LogWbVehicles, Log, TEXT("WbDev HeliYaw fertig."));
+		}
 	}
 
 	// Skript-Flugprofil (Dev, WbHeliFly): drei Phasen ueber die echte
@@ -721,6 +725,10 @@ void AWiesbadenHelicopter::ReadInput(float DeltaSeconds)
 			UE_LOG(LogWbVehicles, Log,
 				TEXT("WbDev Flug t=%.0f: Hoehe %.0f m, Vario %+.1f m/s, Fahrt %.0f km/h."),
 				Elapsed, GetAltitudeMeters(), GetVerticalSpeedMs(), GetAirspeedKmh());
+		}
+		if (ScriptedFlightSeconds <= 0.0f)
+		{
+			UE_LOG(LogWbVehicles, Log, TEXT("WbDev HeliFly fertig."));
 		}
 	}
 }
