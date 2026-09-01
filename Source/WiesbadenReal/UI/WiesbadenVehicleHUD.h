@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/HUD.h"
+#include "UI/WiesbadenMinimap.h"
 #include "WiesbadenVehicleHUD.generated.h"
 
 class AWiesbadenCar;
@@ -220,6 +221,32 @@ private:
 	const struct FRoadNetwork* FindRoadNetwork();
 
 	const struct FRoadNetwork* CachedRoadNetwork = nullptr;
+
+	/**
+	 * Zwischengespeicherte Minikarten-Linien.
+	 *
+	 * FWiesbadenMinimap::BuildLines laeuft in ZWEI Durchgaengen ueber alle
+	 * ~125.000 Strassensegmente. Das je Bild zu tun, ist der teuerste Posten
+	 * des HUD auf dem Spiel-Thread. Da die Karte fahrzeug-zentriert ist und der
+	 * Spieler sich je Bild nur um wenige Zentimeter bewegt, wird sie NUR nach
+	 * spuerbarer Bewegung (Ort/Yaw) oder nach kurzer Zeit neu gebaut und sonst
+	 * unveraendert weitergezeichnet - der Versatz bleibt bei 250 m Umkreis unter
+	 * einem Pixel.
+	 */
+	TArray<FMinimapLine> CachedMinimapLines;
+	FVector CachedMinimapCentre = FVector(FLT_MAX, FLT_MAX, 0.0f);
+	double CachedMinimapYaw = 0.0;
+	float MinimapCacheAge = 1000.0f;
+
+	/**
+	 * Zu-Fuss-Hinweis: naechste Fahrzeug-/Bahn-Entfernung. Der Suchlauf
+	 * (GetAllActorsOfClass ueber alle Actors, dreimal) ist teuer und wird nur
+	 * ein paar Mal je Sekunde erneuert, nicht je Bild - ein Naeherungshinweis
+	 * braucht keine Bild-genaue Entfernung.
+	 */
+	float FootPromptScanAge = 1000.0f;
+	double CachedFootVehicleCm = -1.0;
+	double CachedFootFunicularCm = -1.0;
 
 	/**
 	 * Zuletzt bestimmter Strassenname und wann er bestimmt wurde.

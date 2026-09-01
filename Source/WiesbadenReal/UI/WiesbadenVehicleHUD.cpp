@@ -720,16 +720,26 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 		return Best;
 	};
 
-	TArray<AActor*> Cars;
-	TArray<AActor*> Helicopters;
-	TArray<AActor*> Funiculars;
-	UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenCar::StaticClass(), Cars);
-	UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenHelicopter::StaticClass(), Helicopters);
-	UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenNerobergbahn::StaticClass(), Funiculars);
-	Cars.Append(Helicopters);
+	// Der Actor-Suchlauf (dreimal ueber ALLE Actors der Stadt) ist teuer -
+	// darum nur wenige Male je Sekunde, nicht je Bild. Die Entfernung eines
+	// Naeherungshinweises darf ein Drittel Sekunde alt sein.
+	FootPromptScanAge += HudWorld->GetDeltaSeconds();
+	if (FootPromptScanAge > 0.3f)
+	{
+		TArray<AActor*> Cars;
+		TArray<AActor*> Helicopters;
+		TArray<AActor*> Funiculars;
+		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenCar::StaticClass(), Cars);
+		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenHelicopter::StaticClass(), Helicopters);
+		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenNerobergbahn::StaticClass(), Funiculars);
+		Cars.Append(Helicopters);
+		CachedFootVehicleCm = NearestOf(Cars);
+		CachedFootFunicularCm = NearestOf(Funiculars);
+		FootPromptScanAge = 0.0f;
+	}
 
 	const FString Prompt = BuildFootPrompt(
-		NearestOf(Cars), NearestOf(Funiculars),
+		CachedFootVehicleCm, CachedFootFunicularCm,
 		FootVehicleReachCm, FootFunicularReachCm);
 
 	if (Prompt.IsEmpty())
@@ -1060,11 +1070,26 @@ void AWiesbadenVehicleHUD::DrawMinimap(float CenterX, float CenterY, float Diame
 	FMinimapSettings Settings;
 	Settings.DiameterPx = Diameter;
 
-	TArray<FMinimapLine> Lines;
-	FWiesbadenMinimap::BuildLines(
-		*Network, MapCentre, MapYaw, FVector2D(CenterX, CenterY), Settings, Lines);
+	// Neuaufbau nur bei spuerbarer Bewegung oder nach kurzer Zeit - nicht je
+	// Bild. BuildLines laeuft sonst zweimal ueber ~125.000 Segmente pro Bild
+	// (der teuerste Posten des HUD). Bei 250 m Umkreis sind 4 m Versatz ein
+	// Drittel Pixel, also unsichtbar.
+	const UWorld* HudWorld = GetWorld();
+	MinimapCacheAge += HudWorld ? HudWorld->GetDeltaSeconds() : 0.016f;
+	const double MovedCm = FVector2D::Distance(
+		FVector2D(MapCentre.X, MapCentre.Y),
+		FVector2D(CachedMinimapCentre.X, CachedMinimapCentre.Y));
+	const double YawDelta = FMath::Abs(FMath::FindDeltaAngleDegrees(MapYaw, CachedMinimapYaw));
+	if (MinimapCacheAge > 0.4f || MovedCm > 400.0 || YawDelta > 4.0)
+	{
+		FWiesbadenMinimap::BuildLines(
+			*Network, MapCentre, MapYaw, FVector2D(CenterX, CenterY), Settings, CachedMinimapLines);
+		CachedMinimapCentre = MapCentre;
+		CachedMinimapYaw = MapYaw;
+		MinimapCacheAge = 0.0f;
+	}
 
-	for (const FMinimapLine& Line : Lines)
+	for (const FMinimapLine& Line : CachedMinimapLines)
 	{
 		// Ausserhalb des Kreises abschneiden - ohne das ragen die Linien in
 		// das uebrige Bild hinein.
