@@ -5,6 +5,7 @@
 #include "WiesbadenReal.h"
 
 #include "CanvasItem.h"
+#include "Core/WiesbadenDevActions.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "GameFramework/PlayerController.h"
@@ -563,22 +564,13 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 	case 3:
 	case 4:
 	{
-		// Zuruecksetzen an einen festen Ort.
-		//
-		// Die Platter Strasse 146 ist der Spielerstart; Nerobergbahn und der
-		// Garten Nerotal 48 liegen mehrere hundert Meter entfernt und waren
-		// bislang nur durch Hinfahren erreichbar. Zielhoehen aus dem Protokoll,
-		// bewusst grob (der Wagen faellt die letzten Zentimeter selbst).
-		FVector Target;
-		if (Index == 2)      { Target = FVector(-121474.0, -119312.0, 11347.0); } // Platter Strasse 146
-		else if (Index == 3) { Target = FVector(-104083.0, -137317.0, 8800.0); }  // Nerobergbahn
-		else                 { Target = FVector(-71366.0, -124226.0, 8530.0); }   // Garten Nerotal 48
-
+		// Zuruecksetzen an einen festen Ort. Die Zielpunkte und Fallhoehe leben
+		// datenrein in FWiesbadenDevActions - dieselbe Logik nutzt der
+		// Konsolenbefehl WbTeleport (DRY, unter Automation getestet).
+		const EWiesbadenDevTeleport Target = static_cast<EWiesbadenDevTeleport>(Index - 2);
 		if (APawn* Pawn = PC->GetPawn())
 		{
-			// Erst hoch genug ansetzen und dann fallen lassen: ein Punkt IM
-			// Boden liesse den Wagen steckenbleiben.
-			Pawn->SetActorLocation(Target + FVector(0.0, 0.0, 300.0),
+			Pawn->SetActorLocation(FWiesbadenDevActions::TeleportSpawnCm(Target),
 				/*bSweep=*/false, nullptr, ETeleportType::TeleportPhysics);
 		}
 		Unpause();
@@ -590,12 +582,11 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 		// Fahrzeug aufrichten: Nick/Roll auf 0, leicht anheben und auf die
 		// Raeder fallen lassen. Direkte Nothilfe gegen umgekippte oder an der
 		// Geometrie verhakte Fahrzeuge - bis die Chassis-Kollision sauber ist.
+		// Logik geteilt mit WbResetVehicle (FWiesbadenDevActions::UprightTransform).
 		if (APawn* Pawn = PC->GetPawn())
 		{
-			const FRotator Rot = Pawn->GetActorRotation();
-			Pawn->SetActorLocationAndRotation(
-				Pawn->GetActorLocation() + FVector(0.0, 0.0, 150.0),
-				FRotator(0.0, Rot.Yaw, 0.0),
+			const FTransform Auf = FWiesbadenDevActions::UprightTransform(Pawn->GetActorTransform());
+			Pawn->SetActorLocationAndRotation(Auf.GetLocation(), Auf.Rotator(),
 				/*bSweep=*/false, nullptr, ETeleportType::TeleportPhysics);
 		}
 		Unpause();
