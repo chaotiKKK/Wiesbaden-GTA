@@ -142,6 +142,31 @@ for name in SETTINGS:
     except Exception as exc:
         log("Einstellung %s nicht setzbar: %s" % (name, exc))
 
+# -- Datenpfade auf DIESE Arbeitskopie ziehen -------------------------------
+#
+# Der Quell-WorldBuilder in der Karte traegt noch die absoluten Pfade des
+# alten Rechners (C:/Users/ssonn/aivideo/...). Auf diesem Rechner zeigen sie
+# ins Leere: build_city() scheitert nach 0,1 s mit "Datei nicht gefunden", das
+# Strassennetz bleibt leer und die Hoehenpruefung misst gegen nichts. Hier
+# werden die Datenpfade auf die Dateien dieser Arbeitskopie gesetzt - relativ
+# zum Projektverzeichnis, damit die Pruefung rechnerunabhaengig laeuft.
+proj = unreal.Paths.project_dir()  # absolut, endet mit '/'
+path_overrides = {
+    "osm_file_path": proj + "Data/Raw/OSM/wiesbaden.osm.json",
+    "alkis_file_path": proj + "Data/Raw/ALKIS/wiesbaden.alkis.json",
+    "dem_file_path": proj + "Data/Raw/DEM/N50E008.hgt",
+    "road_type_config_path": proj + "Content/Config/WiesbadenRoadTypes.json",
+}
+for name, value in path_overrides.items():
+    if os.path.isfile(value):
+        try:
+            builder.set_editor_property(name, value)
+            log("Pfad %s -> %s" % (name, value))
+        except Exception as exc:
+            log("Pfad %s nicht setzbar: %s" % (name, exc))
+    else:
+        log("Pfad %s: lokale Datei fehlt (%s) - Quellwert bleibt." % (name, value))
+
 # Nur das Noetige bauen. Gebaeude, Ausstattung und Regionen-Assets kosten den
 # Grossteil der Bauzeit und aendern an der Hoehenfrage nichts.
 builder.set_editor_property("generate_roads", True)
