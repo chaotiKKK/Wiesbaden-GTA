@@ -58,4 +58,8 @@ public:
 	// Startet die Skript-Gierprobe am besessenen Helikopter fuer <Sekunden>.
 	UFUNCTION(Exec)
 	void WbHeliYaw(int32 Sekunden);
+
+	// Startet das Skript-Flugprofil (Steigen/Marsch/Sinken) fuer <Sekunden>.
+	UFUNCTION(Exec)
+	void WbHeliFly(int32 Sekunden);
 };

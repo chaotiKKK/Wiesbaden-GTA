@@ -124,3 +124,15 @@ void AWiesbadenPlayerController::WbHeliYaw(int32 Sekunden)
 	Heli->StartYawDemo(static_cast<float>(Sekunden));
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeliYaw - Gierprobe fuer %d s gestartet."), Sekunden);
 }
+
+void AWiesbadenPlayerController::WbHeliFly(int32 Sekunden)
+{
+	AWiesbadenHelicopter* Heli = Cast<AWiesbadenHelicopter>(GetPawn());
+	if (!Heli)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbHeliFly erkannt, aber kein Helikopter besessen (erst WbHeli)."));
+		return;
+	}
+	Heli->StartFlightDemo(static_cast<float>(Sekunden));
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeliFly - Flugprofil fuer %d s gestartet."), Sekunden);
+}

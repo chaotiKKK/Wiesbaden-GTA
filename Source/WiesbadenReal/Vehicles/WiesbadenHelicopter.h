@@ -93,6 +93,19 @@ public:
 	 */
 	void StartYawDemo(float Seconds) { ScriptedYawSeconds = FMath::Max(0.0f, Seconds); bEngineRunning = true; }
 
+	/**
+	 * Skript-Flugprofil (Dev, WbHeliFly): abheben, beschleunigen, sinken - ohne
+	 * Tastatur. Steigen (Kollektiv) -> Marschflug (Nase runter) -> Sinken, damit
+	 * Hoehenmesser, Variometer und Fahrtmesser sichtbar reagieren. Wirkt ueber
+	 * die echte Rotorphysik (setzt die geglaetteten Steuerwerte).
+	 */
+	void StartFlightDemo(float Seconds)
+	{
+		ScriptedFlightSeconds = FMath::Max(0.0f, Seconds);
+		ScriptedFlightTotal = ScriptedFlightSeconds;
+		bEngineRunning = true;
+	}
+
 	/** Triebwerk laeuft; sonst arbeitet der Rotor nur ueber Autorotation. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Heli|Physik")
 	bool bEngineRunning = false;
@@ -348,4 +361,8 @@ private:
 
 	/** Restzeit der Skript-Gierprobe in Sekunden (0 = aus). Siehe StartYawDemo. */
 	float ScriptedYawSeconds = 0.0f;
+
+	/** Restzeit und Gesamtdauer des Skript-Flugprofils (0 = aus). Siehe StartFlightDemo. */
+	float ScriptedFlightSeconds = 0.0f;
+	float ScriptedFlightTotal = 0.0f;
 };

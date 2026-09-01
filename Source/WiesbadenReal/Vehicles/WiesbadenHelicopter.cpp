@@ -669,6 +669,44 @@ void AWiesbadenHelicopter::ReadInput(float DeltaSeconds)
 				ScriptedYawSeconds, GetHeadingDegrees(), FMath::RadiansToDegrees(AngularVelocity.Z));
 		}
 	}
+
+	// Skript-Flugprofil (Dev, WbHeliFly): drei Phasen ueber die echte
+	// Rotorphysik, damit die Cockpit-Instrumente nachweisbar mitlaufen.
+	//   Steigen  (0-35 %): Kollektiv hoch  -> Hoehe steigt, Vario positiv
+	//   Marsch  (35-70 %): Nase runter     -> Fahrt steigt, Vario ~0
+	//   Sinken  (70-100 %): Kollektiv runter-> Hoehe faellt, Vario negativ
+	if (ScriptedFlightSeconds > 0.0f)
+	{
+		bEngineRunning = true;
+		const float Total = FMath::Max(ScriptedFlightTotal, 0.01f);
+		const float Elapsed = Total - ScriptedFlightSeconds;
+		const float Frac = Elapsed / Total;
+		const int32 SecBefore = FMath::CeilToInt(ScriptedFlightSeconds);
+
+		if (Frac < 0.35f)
+		{
+			CollectiveInput = 0.45f;
+			CyclicPitchInput = 0.0f;
+		}
+		else if (Frac < 0.70f)
+		{
+			CollectiveInput = 0.0f;
+			CyclicPitchInput = 0.6f;   // Nase runter -> Vorwaertsflug
+		}
+		else
+		{
+			CollectiveInput = -0.45f;
+			CyclicPitchInput = 0.3f;
+		}
+
+		ScriptedFlightSeconds = FMath::Max(0.0f, ScriptedFlightSeconds - DeltaSeconds);
+		if (FMath::CeilToInt(ScriptedFlightSeconds) != SecBefore)
+		{
+			UE_LOG(LogWbVehicles, Log,
+				TEXT("WbDev Flug t=%.0f: Hoehe %.0f m, Vario %+.1f m/s, Fahrt %.0f km/h."),
+				Elapsed, GetAltitudeMeters(), GetVerticalSpeedMs(), GetAirspeedKmh());
+		}
+	}
 }
 
 void AWiesbadenHelicopter::ApplyFlightPhysics(float DeltaSeconds)
