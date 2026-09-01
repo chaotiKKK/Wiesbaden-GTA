@@ -29,7 +29,7 @@
 namespace
 {
 	/** Schreibt Text in eine temporaere Datei unter Saved/. Leerer Pfad bei Fehler. */
-	FString WriteTempText(const TCHAR* Extension, const FString& Text)
+	FString WritePipelineTempText(const TCHAR* Extension, const FString& Text)
 	{
 		const FString Dir = FPaths::ProjectSavedDir();
 		IFileManager::Get().MakeDirectory(*Dir, /*Tree=*/true);
@@ -166,8 +166,8 @@ namespace
 		WiesbadenCityPipeline::FBuildInput& OutInput,
 		WiesbadenCityPipeline::FBuildTools& OutTools)
 	{
-		const FString OsmPath = WriteTempText(TEXT("osm"), MinimalOsmXml());
-		const FString DemPath = WriteTempText(TEXT("asc"), MinimalDemAscii());
+		const FString OsmPath = WritePipelineTempText(TEXT("osm"), MinimalOsmXml());
+		const FString DemPath = WritePipelineTempText(TEXT("asc"), MinimalDemAscii());
 		if (!Test.TestTrue(TEXT("Temp-OSM geschrieben"), !OsmPath.IsEmpty())
 			|| !Test.TestTrue(TEXT("Temp-DEM geschrieben"), !DemPath.IsEmpty()))
 		{

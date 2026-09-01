@@ -9,6 +9,20 @@ public class WiesbadenReal : ModuleRules
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		CppStandard = CppStandardVersion.Cpp20;
 
+		// Unity-Build AUS: Jede .cpp wird als eigene Uebersetzungseinheit gebaut.
+		//
+		// Der Grund ist eine Falle des Unity-Builds: Er fasst mehrere .cpp zu
+		// einer Uebersetzungseinheit zusammen, wodurch anonyme Namespaces
+		// verschiedener Dateien VERSCHMELZEN. Gleichnamige dateilokale Helfer
+		// (z. B. NextNoise, SamplesPerPush, BytesPerSample, MakeLane, Dt) - in
+		// Standard-C++ voellig legal, weil jede Datei ihre eigene Einheit ist -
+		// kollidieren dann als Doppel-Definitionen. Welche Dateien zusammen
+		// gebuendelt werden, haengt an der Datei-Reihenfolge; das Hinzufuegen
+		// neuer Quellen verschiebt die Grenzen und deckt latente Kollisionen auf.
+		// Ohne Unity gibt es diese Klasse von Fehlern gar nicht erst, und
+		// inkrementelle Einzeldatei-Builds sind schneller.
+		bUseUnity = false;
+
 		// Seit BuildSettingsVersion V2+ ist der Modul-Root nicht mehr automatisch
 		// im Include-Pfad (nur Public/Private/Classes-Unterordner). Das Projekt
 		// includiert konsistent mit Unterordner-Praefix ("GIS/...", "World/..."),

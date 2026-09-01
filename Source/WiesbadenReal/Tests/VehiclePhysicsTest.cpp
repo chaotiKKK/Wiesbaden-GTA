@@ -6,15 +6,15 @@
 
 namespace
 {
-	constexpr float Dt = 0.01f;
+	constexpr float VehicleDt = 0.01f;
 
 	/** Simuliert das Fahrzeug mit konstanten Eingaben fuer Seconds Sekunden. */
 	void Simulate(FWiesbadenVehiclePhysics& Vehicle, const FWiesbadenVehiclePhysicsInput& In, float Seconds)
 	{
 		FWiesbadenVehiclePhysicsOutput Out;
-		for (float T = 0.0f; T < Seconds; T += Dt)
+		for (float T = 0.0f; T < Seconds; T += VehicleDt)
 		{
-			Vehicle.Tick(In, Dt, Out);
+			Vehicle.Tick(In, VehicleDt, Out);
 		}
 	}
 
@@ -22,9 +22,9 @@ namespace
 	void SimulateTo(FWiesbadenVehiclePhysics& Vehicle, const FWiesbadenVehiclePhysicsInput& In,
 		float Seconds, FWiesbadenVehiclePhysicsOutput& Out)
 	{
-		for (float T = 0.0f; T < Seconds; T += Dt)
+		for (float T = 0.0f; T < Seconds; T += VehicleDt)
 		{
-			Vehicle.Tick(In, Dt, Out);
+			Vehicle.Tick(In, VehicleDt, Out);
 		}
 	}
 }
@@ -40,7 +40,7 @@ bool FVehiclePhysicsStandstillTest::RunTest(const FString& Parameters)
 
 	FWiesbadenVehiclePhysicsInput In;
 	FWiesbadenVehiclePhysicsOutput Out;
-	Vehicle.Tick(In, Dt, Out);
+	Vehicle.Tick(In, VehicleDt, Out);
 
 	TestEqual(TEXT("Ohne Gas steht das Fahrzeug"), Out.ForwardSpeedMetersPerS, 0.0f);
 	TestEqual(TEXT("Gang 1 im Stand"), Out.Gear, 1);
@@ -49,7 +49,7 @@ bool FVehiclePhysicsStandstillTest::RunTest(const FString& Parameters)
 
 	// Selbst mit voller Lenkung dreht sich ein stehendes Fahrzeug nicht.
 	In.Steering = 1.0f;
-	Vehicle.Tick(In, Dt, Out);
+	Vehicle.Tick(In, VehicleDt, Out);
 	TestEqual(TEXT("Lenken im Stand erzeugt keine Gierrate"), Out.YawRateRadPerS, 0.0f);
 
 	return true;
@@ -81,9 +81,9 @@ bool FVehiclePhysicsAccelerationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Automatik schaltet in den hoechsten Gang"), Out.Gear >= 4);
 
 	// Konvergenz: in den letzten 5 Sekunden aendert sich die Geschwindigkeit kaum.
-	Vehicle.Tick(In, Dt, Out);
+	Vehicle.Tick(In, VehicleDt, Out);
 	const float SpeedAfter = Out.ForwardSpeedMetersPerS;
-	Vehicle.Tick(In, Dt, Out);
+	Vehicle.Tick(In, VehicleDt, Out);
 	TestTrue(TEXT("Geschwindigkeit ist stabil am Limit"),
 		FMath::Abs(Out.ForwardSpeedMetersPerS - SpeedAfter) < 0.2f);
 
@@ -138,12 +138,12 @@ bool FVehiclePhysicsSteeringTest::RunTest(const FString& Parameters)
 	FWiesbadenVehiclePhysicsOutput Out;
 	In.Steering = 1.0f;
 	Simulate(Vehicle, In, 0.5f);
-	Vehicle.Tick(In, Dt, Out);
+	Vehicle.Tick(In, VehicleDt, Out);
 	TestTrue(TEXT("Lenken rechts erzeugt positive Gierrate"), Out.YawRateRadPerS > 0.05f);
 
 	In.Steering = -1.0f;
 	Simulate(Vehicle, In, 0.5f);
-	Vehicle.Tick(In, Dt, Out);
+	Vehicle.Tick(In, VehicleDt, Out);
 	TestTrue(TEXT("Lenken links erzeugt negative Gierrate"), Out.YawRateRadPerS < -0.05f);
 
 	// Bei hoher Geschwindigkeit bleibt die Gierrate begrenzt (Untersteuern).
@@ -197,7 +197,7 @@ bool FVehiclePhysicsTractionTest::RunTest(const FString& Parameters)
 	const float MaxAccel = Vehicle.MuTraction * Vehicle.GravityMetersPerS2;
 	for (int32 Step = 0; Step < 3000; ++Step)
 	{
-		Vehicle.Tick(In, Dt, Out);
+		Vehicle.Tick(In, VehicleDt, Out);
 		// Die Beschleunigung darf das Traktionslimit nie ueberschreiten
 		// (Luft-/Rollwiderstand druecken sie nur nach unten).
 		if (!TestTrue(TEXT("Beschleunigung unter Traktionslimit"),
@@ -318,11 +318,11 @@ bool FVehicleFrictionCircleTest::RunTest(const FString& Parameters)
 
 	FWiesbadenVehiclePhysicsOutput RollOut;
 	FWiesbadenVehiclePhysicsOutput BrakeOut;
-	Rolling.Tick(Steer, Dt, RollOut);
+	Rolling.Tick(Steer, VehicleDt, RollOut);
 
 	FWiesbadenVehiclePhysicsInput SteerAndBrake = Steer;
 	SteerAndBrake.Brake = 1.0f;
-	Braking.Tick(SteerAndBrake, Dt, BrakeOut);
+	Braking.Tick(SteerAndBrake, VehicleDt, BrakeOut);
 
 	TestTrue(
 		FString::Printf(TEXT("Unter Vollbremsung weniger Gierrate (%.3f statt %.3f rad/s)"),

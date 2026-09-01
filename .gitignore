@@ -40,3 +40,13 @@ beetle_slots.json
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# === Agent-Skills (lokal installiert / gespiegelt, reproduzierbar via npx skills) ===
+.agents/
+.claude/
+skills-lock.json
+
+# === Scratch-Runner (Build-/Material-/Test-Wrapper, temporaer, hartkodierte Pfade) ===
+Tools/bau_neuerpc.cmd
+Tools/mat_neuerpc.bat
+_run_tests_neuerpc.bat

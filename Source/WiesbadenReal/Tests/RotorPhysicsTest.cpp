@@ -6,7 +6,7 @@
 
 namespace
 {
-	constexpr float Dt = 0.01f;
+	constexpr float RotorDt = 0.01f;
 	const FVector ZeroVelocity(0.0f, 0.0f, 0.0f);
 
 	/** Spult den Rotor mit laufendem Triebwerk und halbem Collective hoch. */
@@ -17,9 +17,9 @@ namespace
 		In.bEngineRunning = true;
 
 		FWiesbadenRotorPhysicsOutput Out;
-		for (float T = 0.0f; T < Seconds; T += Dt)
+		for (float T = 0.0f; T < Seconds; T += RotorDt)
 		{
-			Rotor.Tick(In, Dt, ZeroVelocity, ZeroVelocity, Out);
+			Rotor.Tick(In, RotorDt, ZeroVelocity, ZeroVelocity, Out);
 		}
 	}
 }
@@ -39,7 +39,7 @@ bool FRotorPhysicsHoverTest::RunTest(const FString& Parameters)
 	In.bEngineRunning = true;
 
 	FWiesbadenRotorPhysicsOutput Out;
-	Rotor.Tick(In, Dt, ZeroVelocity, ZeroVelocity, Out);
+	Rotor.Tick(In, RotorDt, ZeroVelocity, ZeroVelocity, Out);
 
 	const float Weight = Rotor.MassKg * Rotor.GravityMetersPerS2;
 	// Drehzahlband AUS DEN EINSTELLUNGEN ableiten, nicht als Zahl wiederholen.
@@ -79,9 +79,9 @@ bool FRotorPhysicsAutorotationTest::RunTest(const FString& Parameters)
 
 		const FVector Descent(0.0f, 0.0f, -800.0f); // -8 m/s
 		FWiesbadenRotorPhysicsOutput Out;
-		for (float T = 0.0f; T < 10.0f; T += Dt)
+		for (float T = 0.0f; T < 10.0f; T += RotorDt)
 		{
-			Rotor.Tick(In, Dt, Descent, ZeroVelocity, Out);
+			Rotor.Tick(In, RotorDt, Descent, ZeroVelocity, Out);
 		}
 
 		// Ebenfalls aus der Solldrehzahl abgeleitet: Autorotation haelt die
@@ -103,9 +103,9 @@ bool FRotorPhysicsAutorotationTest::RunTest(const FString& Parameters)
 		In.bEngineRunning = false;
 
 		FWiesbadenRotorPhysicsOutput Out;
-		for (float T = 0.0f; T < 10.0f; T += Dt)
+		for (float T = 0.0f; T < 10.0f; T += RotorDt)
 		{
-			Rotor.Tick(In, Dt, ZeroVelocity, ZeroVelocity, Out);
+			Rotor.Tick(In, RotorDt, ZeroVelocity, ZeroVelocity, Out);
 		}
 
 		TestTrue(TEXT("Ohne Sinkflug klingt die Drehzahl ab"), Rotor.MainRotorRpm < 150.0f);
@@ -131,7 +131,7 @@ bool FRotorPhysicsControlAuthorityTest::RunTest(const FString& Parameters)
 		FWiesbadenRotorPhysicsInput In;
 		In.Collective = 0.5f;
 		In.CyclicPitch = 1.0f;
-		Rotor.Tick(In, Dt, ZeroVelocity, ZeroVelocity, Out);
+		Rotor.Tick(In, RotorDt, ZeroVelocity, ZeroVelocity, Out);
 		TestTrue(TEXT("Zyklik vor -> Vorwaertskraft"), Out.Force.X > 0.0f);
 		TestTrue(TEXT("Zyklik vor -> Nase runter (Pitch < 0)"), Out.Torque.Y < 0.0f);
 	}
@@ -142,7 +142,7 @@ bool FRotorPhysicsControlAuthorityTest::RunTest(const FString& Parameters)
 		FWiesbadenRotorPhysicsInput In;
 		In.Collective = 0.5f;
 		In.CyclicRoll = 1.0f;
-		Rotor.Tick(In, Dt, ZeroVelocity, ZeroVelocity, Out);
+		Rotor.Tick(In, RotorDt, ZeroVelocity, ZeroVelocity, Out);
 		TestTrue(TEXT("Zyklik rechts -> Kraft rechts"), Out.Force.Y > 0.0f);
 		TestTrue(TEXT("Zyklik rechts -> Roll rechts (Roll > 0)"), Out.Torque.X > 0.0f);
 	}
@@ -153,12 +153,12 @@ bool FRotorPhysicsControlAuthorityTest::RunTest(const FString& Parameters)
 		FWiesbadenRotorPhysicsInput In;
 		In.Collective = 0.5f;
 		In.YawPedal = 1.0f;
-		Rotor.Tick(In, Dt, ZeroVelocity, ZeroVelocity, Out);
+		Rotor.Tick(In, RotorDt, ZeroVelocity, ZeroVelocity, Out);
 		TestTrue(TEXT("Pedal rechts -> Yaw rechts (Z > 0)"), Out.Torque.Z > 0.0f);
 
 		Rotor = Spooled;
 		In.YawPedal = -1.0f;
-		Rotor.Tick(In, Dt, ZeroVelocity, ZeroVelocity, Out);
+		Rotor.Tick(In, RotorDt, ZeroVelocity, ZeroVelocity, Out);
 		TestTrue(TEXT("Pedal links -> Yaw links (Z < 0)"), Out.Torque.Z < 0.0f);
 	}
 
@@ -183,7 +183,7 @@ bool FRotorPhysicsCoaxialTest::RunTest(const FString& Parameters)
 	In.bEngineRunning = true;
 
 	FWiesbadenRotorPhysicsOutput Out;
-	Rotor.Tick(In, Dt, ZeroVelocity, ZeroVelocity, Out);
+	Rotor.Tick(In, RotorDt, ZeroVelocity, ZeroVelocity, Out);
 
 	const float Weight = Rotor.MassKg * Rotor.GravityMetersPerS2;
 
@@ -220,7 +220,7 @@ bool FRotorPhysicsCoaxialTest::RunTest(const FString& Parameters)
 
 	// Pedal erzeugt direktes Yaw-Moment (differentielle Blattverstellung).
 	In.YawPedal = 1.0f;
-	Rotor.Tick(In, Dt, ZeroVelocity, ZeroVelocity, Out);
+	Rotor.Tick(In, RotorDt, ZeroVelocity, ZeroVelocity, Out);
 	TestTrue(TEXT("Koaxial: Pedal rechts -> Yaw rechts (Z > 0)"), Out.Torque.Z > 0.0f);
 
 	return true;
@@ -242,7 +242,7 @@ bool FRotorPhysicsBladeStallTest::RunTest(const FString& Parameters)
 	In.bEngineRunning = true;
 
 	FWiesbadenRotorPhysicsOutput Hover;
-	Rotor.Tick(In, Dt, ZeroVelocity, ZeroVelocity, Hover);
+	Rotor.Tick(In, RotorDt, ZeroVelocity, ZeroVelocity, Hover);
 
 	// Pruefgeschwindigkeiten AUS DEN EINSTELLUNGEN ableiten.
 	//
@@ -258,7 +258,7 @@ bool FRotorPhysicsBladeStallTest::RunTest(const FString& Parameters)
 
 	const FVector FastForward(ProbeSpeed * 100.0f, 0.0f, 0.0f);
 	FWiesbadenRotorPhysicsOutput Forward;
-	Rotor.Tick(In, Dt, FastForward, ZeroVelocity, Forward);
+	Rotor.Tick(In, RotorDt, FastForward, ZeroVelocity, Forward);
 	TestTrue(
 		FString::Printf(TEXT("Blattspitzenverlust senkt den Auftrieb (bei %.0f m/s)"), ProbeSpeed),
 		Forward.Force.Z < Hover.Force.Z * 0.95f);
@@ -266,7 +266,7 @@ bool FRotorPhysicsBladeStallTest::RunTest(const FString& Parameters)
 	// Am Limit bleibt nur ~45 % des Schwebeflug-Auftriebs.
 	const FVector AtLimit(MaxSpeed * 100.0f, 0.0f, 0.0f);
 	FWiesbadenRotorPhysicsOutput Limited;
-	Rotor.Tick(In, Dt, AtLimit, ZeroVelocity, Limited);
+	Rotor.Tick(In, RotorDt, AtLimit, ZeroVelocity, Limited);
 	TestTrue(TEXT("Am Limit bleibt ~45 Prozent Auftrieb"),
 		FMath::IsNearlyEqual(Limited.Force.Z, Hover.Force.Z * 0.45f, Hover.Force.Z * 0.05f));
 

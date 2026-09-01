@@ -18,9 +18,9 @@ namespace
 	 * auch dann an der richtigen Stelle liegen, wenn die Stadt gerade erst
 	 * streamt und der Gebaeudegenerator noch nichts geliefert hat.
 	 */
-	struct FLatLon { double Lat; double Lon; };
+	struct FGartenLatLon { double Lat; double Lon; };
 
-	const FLatLon HOUSE_FOOTPRINT[] = {
+	const FGartenLatLon HOUSE_FOOTPRINT[] = {
 		{ 50.0936212, 8.2302861 },
 		{ 50.0936349, 8.2302820 },
 		{ 50.0936461, 8.2302592 },
@@ -178,7 +178,7 @@ bool AWiesbadenNerotal48::ResolvePlacement()
 
 	TArray<FVector2D> Footprint;
 	Footprint.Reserve(UE_ARRAY_COUNT(HOUSE_FOOTPRINT));
-	for (const FLatLon& Node : HOUSE_FOOTPRINT)
+	for (const FGartenLatLon& Node : HOUSE_FOOTPRINT)
 	{
 		FGeoCoordinate Coord;
 		Coord.Latitude = Node.Lat;

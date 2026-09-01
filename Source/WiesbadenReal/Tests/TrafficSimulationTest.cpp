@@ -7,7 +7,7 @@
 
 namespace
 {
-	FRoadLane MakeLane(int32 Id, const TArray<FVector>& Line, double SpeedKmh = 50.0)
+	FRoadLane MakeSimLane(int32 Id, const TArray<FVector>& Line, double SpeedKmh = 50.0)
 	{
 		FRoadLane Lane;
 		Lane.LaneId = Id;
@@ -27,9 +27,9 @@ namespace
 	FRoadNetwork MakeNetwork()
 	{
 		FRoadNetwork Network;
-		Network.Lanes.Add(MakeLane(0, { FVector(0.0, 0.0, 0.0), FVector(10000.0, 0.0, 0.0) }));
-		Network.Lanes.Add(MakeLane(1, { FVector(10500.0, 0.0, 0.0), FVector(20500.0, 0.0, 0.0) }));
-		Network.Lanes.Add(MakeLane(2, { FVector(0.0, 5000.0, 0.0), FVector(10000.0, 5000.0, 0.0) }));
+		Network.Lanes.Add(MakeSimLane(0, { FVector(0.0, 0.0, 0.0), FVector(10000.0, 0.0, 0.0) }));
+		Network.Lanes.Add(MakeSimLane(1, { FVector(10500.0, 0.0, 0.0), FVector(20500.0, 0.0, 0.0) }));
+		Network.Lanes.Add(MakeSimLane(2, { FVector(0.0, 5000.0, 0.0), FVector(10000.0, 5000.0, 0.0) }));
 
 		FLaneConnection Connection;
 		Connection.FromLaneId = 0;
@@ -300,7 +300,7 @@ bool FTrafficGraphFollowTest::RunTest(const FString& Parameters)
 		FRoadNetwork DeadEnd = MakeNetwork();
 		DeadEnd.Lanes.Reset();
 		DeadEnd.Connections.Reset();
-		DeadEnd.Lanes.Add(MakeLane(0, { FVector(0.0, 5000.0, 0.0), FVector(10000.0, 5000.0, 0.0) }));
+		DeadEnd.Lanes.Add(MakeSimLane(0, { FVector(0.0, 5000.0, 0.0), FVector(10000.0, 5000.0, 0.0) }));
 
 		FWiesbadenTrafficSimulation Sim;
 		FWiesbadenTrafficSettings Settings = MakeSettings(1.0f);
@@ -325,7 +325,7 @@ bool FTrafficHeadwayTest::RunTest(const FString& Parameters)
 {
 	// Eine lange Spur (500 m) ohne Verbindungen; Fahrzeuge von Hand gesetzt.
 	FRoadNetwork LongNetwork;
-	LongNetwork.Lanes.Add(MakeLane(0, { FVector(0.0, 0.0, 0.0), FVector(50000.0, 0.0, 0.0) }));
+	LongNetwork.Lanes.Add(MakeSimLane(0, { FVector(0.0, 0.0, 0.0), FVector(50000.0, 0.0, 0.0) }));
 	FRoadSegment Segment;
 	Segment.SegmentId = 0;
 	Segment.HighwayType = EOSMHighwayType::Residential;
@@ -408,12 +408,12 @@ bool FTrafficOvertakeTest::RunTest(const FString& Parameters)
 	// Zwei parallele Spuren desselben Abschnitts, gleiche Fahrtrichtung.
 	FRoadNetwork Network;
 
-	FRoadLane Right = MakeLane(0, { FVector(0.0, 0.0, 0.0), FVector(50000.0, 0.0, 0.0) });
+	FRoadLane Right = MakeSimLane(0, { FVector(0.0, 0.0, 0.0), FVector(50000.0, 0.0, 0.0) });
 	Right.SegmentId = 7;
 	Right.LaneIndexFromLeft = 1;
 	Network.Lanes.Add(Right);
 
-	FRoadLane Left = MakeLane(1, { FVector(0.0, 350.0, 0.0), FVector(50000.0, 350.0, 0.0) });
+	FRoadLane Left = MakeSimLane(1, { FVector(0.0, 350.0, 0.0), FVector(50000.0, 350.0, 0.0) });
 	Left.SegmentId = 7;
 	Left.LaneIndexFromLeft = 0;
 	Network.Lanes.Add(Left);
@@ -512,12 +512,12 @@ bool FTrafficLaneChangeExclusivityTest::RunTest(const FString& Parameters)
 {
 	FRoadNetwork Network;
 
-	FRoadLane Right = MakeLane(0, { FVector(0.0, 0.0, 0.0), FVector(50000.0, 0.0, 0.0) });
+	FRoadLane Right = MakeSimLane(0, { FVector(0.0, 0.0, 0.0), FVector(50000.0, 0.0, 0.0) });
 	Right.SegmentId = 7;
 	Right.LaneIndexFromLeft = 1;
 	Network.Lanes.Add(Right);
 
-	FRoadLane Left = MakeLane(1, { FVector(0.0, 350.0, 0.0), FVector(50000.0, 350.0, 0.0) });
+	FRoadLane Left = MakeSimLane(1, { FVector(0.0, 350.0, 0.0), FVector(50000.0, 350.0, 0.0) });
 	Left.SegmentId = 7;
 	Left.LaneIndexFromLeft = 0;
 	Network.Lanes.Add(Left);
@@ -674,7 +674,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficAccelerationLimitTest,
 bool FTrafficAccelerationLimitTest::RunTest(const FString& Parameters)
 {
 	FRoadNetwork Network;
-	Network.Lanes.Add(MakeLane(0, { FVector(0.0, 0.0, 0.0), FVector(100000.0, 0.0, 0.0) }));
+	Network.Lanes.Add(MakeSimLane(0, { FVector(0.0, 0.0, 0.0), FVector(100000.0, 0.0, 0.0) }));
 	FRoadSegment Segment;
 	Segment.SegmentId = 0;
 	Segment.HighwayType = EOSMHighwayType::Residential;

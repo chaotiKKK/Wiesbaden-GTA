@@ -22,9 +22,9 @@ namespace
 	// Streckenpunkte aus OpenStreetMap (way 39223618/39223619 und Nachbarn),
 	// Tal -> Berg, bereits entlang der Fahrtrichtung sortiert. Zwei Gleise,
 	// wie beim Vorbild rund 4 m auseinander.
-	struct FLatLon { double Lat; double Lon; };
+	struct FBahnLatLon { double Lat; double Lon; };
 
-	const FLatLon TRACK_A[] = {
+	const FBahnLatLon TRACK_A[] = {
 		{ 50.0947441, 8.2254544 },
 		{ 50.0948482, 8.2255669 },
 		{ 50.0951863, 8.2259325 },
@@ -46,7 +46,7 @@ namespace
 		{ 50.0978479, 8.2291301 },
 	};
 
-	const FLatLon TRACK_B[] = {
+	const FBahnLatLon TRACK_B[] = {
 		{ 50.0947712, 8.2254836 },
 		{ 50.0948430, 8.2255784 },
 		{ 50.0951811, 8.2259440 },
@@ -217,7 +217,7 @@ void AWiesbadenNerobergbahn::BuildTracks()
 	UGeoCoordinateConverter* Converter = NewObject<UGeoCoordinateConverter>(this);
 	Converter->InitializeWithWiesbadenOrigin();
 
-	auto Build = [&](const FLatLon* Data, int32 Count, FTrack& Out)
+	auto Build = [&](const FBahnLatLon* Data, int32 Count, FTrack& Out)
 	{
 		Out.Points.Reset();
 		FVector Previous = FVector::ZeroVector;
