@@ -5,6 +5,7 @@
 #include "WiesbadenReal.h"
 
 #include "EngineUtils.h"
+#include "Core/WiesbadenPlayerController.h"
 #include "GIS/WiesbadenWorldBuilder.h"
 #include "GameFramework/PlayerController.h"
 #include "Vehicles/WiesbadenCar.h"
@@ -34,6 +35,13 @@ AWiesbadenGameMode::AWiesbadenGameMode()
 	// statt per Blueprint: das HUD zeichnet rein per Canvas und braucht damit
 	// kein Asset - im gebackenen Spiel ist es sofort da.
 	HUDClass = AWiesbadenVehicleHUD::StaticClass();
+
+	// Eigener PlayerController - nur wegen der Dev-Konsolenbefehle
+	// (WbTeleport/WbResetVehicle/WbTraffic). Der PlayerController ist der
+	// ExecActor in ULocalPlayer::Exec und damit der einzige zuverlaessig per
+	// -ExecCmds ansprechbare Ort fuer skriptbare Dev-Befehle; ein
+	// GameInstanceSubsystem wird von dieser Kette nicht erreicht.
+	PlayerControllerClass = AWiesbadenPlayerController::StaticClass();
 }
 
 void AWiesbadenGameMode::BeginPlay()
