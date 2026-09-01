@@ -143,18 +143,36 @@ UHierarchicalInstancedStaticMeshComponent* URegionAssetSpawnerComponent::MakeIns
 		return nullptr;
 	}
 
+	// Bereits vorhandene, gleichnamige Komponente WIEDERVERWENDEN statt sie mit
+	// NewObject zu ueberschreiben.
+	//
+	// Grund: Die Objekte werden ueber NewObject (ohne RF_Transient) angelegt und
+	// deshalb in die gebackene Karte serialisiert. Beim Oeffnen laedt jede Zelle
+	// ihre Komponenten mit, und BeginPlay baut sie hier erneut auf. NewObject mit
+	// schon belegtem Namen zwingt den Spiel-Thread, auf die Render-Aufraeumung
+	// des alten Objekts zu warten ("Gamethread hitch waiting for resource
+	// cleanup") - bei 1.393 Zellen x 12 Komponenten rund 15.000 Mal, fast alles
+	// beim Laden. Die bestehende Komponente wiederzuverwenden vermeidet das ganz
+	// und funktioniert mit der bereits gebackenen Karte ohne Neubau.
 	UHierarchicalInstancedStaticMeshComponent* Component =
-		NewObject<UHierarchicalInstancedStaticMeshComponent>(Owner, Name);
+		Cast<UHierarchicalInstancedStaticMeshComponent>(StaticFindObjectFast(
+			UHierarchicalInstancedStaticMeshComponent::StaticClass(), Owner, Name));
+
 	if (!Component)
 	{
-		return nullptr;
+		Component = NewObject<UHierarchicalInstancedStaticMeshComponent>(Owner, Name);
+		if (!Component)
+		{
+			return nullptr;
+		}
+		Component->SetupAttachment(this);
+		Component->RegisterComponent();
+		Owner->AddInstanceComponent(Component);
 	}
 
+	Component->ClearInstances();
 	Component->SetStaticMesh(Mesh);
 	Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	Component->SetupAttachment(this);
-	Component->RegisterComponent();
-	Owner->AddInstanceComponent(Component);
 	return Component;
 }
 
