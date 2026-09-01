@@ -67,6 +67,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Kamera")
 	EWiesbadenVehicleCameraMode GetCameraMode() const { return CameraMode; }
 
+	/** Kameramodus direkt setzen (fuer Dev-Befehle/Skripte). */
+	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Kamera")
+	void SetCameraMode(EWiesbadenVehicleCameraMode Mode) { CameraMode = Mode; ApplyCameraMode(); }
+
 	/** Taste zum Umschalten der Kamera. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera")
 	FKey ToggleKey = EKeys::C;
@@ -139,9 +143,26 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "0.0"))
 	float PositionLagSpeed = 0.0f;
 
-	/** Position des Cockpit-Sockets relativ zum Fahrzeug (cm). */
+	/** Position des Cockpit-Sockets relativ zur Kamera-Komponente (cm). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera")
 	FVector CockpitOffset = FVector(95.0f, 0.0f, 140.0f);
+
+	/**
+	 * Meshes, die in der Cockpit-Ansicht fuer den Fahrer unsichtbar werden.
+	 *
+	 * Die Fahrzeuge haben keinen modellierten Innenraum - saesse die Kamera in
+	 * der geschlossenen Karosserie, blickte man auf die schwarzen Rueckseiten
+	 * der Aussenhaut. Statt einen Innenraum zu modellieren, wird die eigene
+	 * Huelle fuer den Fahrer ausgeblendet (bOwnerNoSee, nur seine Sicht): freier
+	 * Blick nach vorn, das Cockpit liefert die Instrumententafel im HUD.
+	 * Umgeschaltet in ApplyCameraMode, nicht je Bild.
+	 */
+	UPROPERTY(Transient)
+	TArray<UPrimitiveComponent*> CockpitHiddenMeshes;
+
+	/** Ein Mesh registrieren, das in der Cockpit-Ansicht verborgen wird. */
+	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Kamera")
+	void AddCockpitHiddenMesh(UPrimitiveComponent* Mesh);
 
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Kamera")

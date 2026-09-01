@@ -89,6 +89,21 @@ bool FVehicleHUDTest::RunTest(const FString& Parameters)
 			FString(TEXT("FERN")));
 	}
 
+	// -- Steuerkurs (Helikopter-Cockpit) -------------------------------------
+	{
+		TestEqual(TEXT("Nord"), AWiesbadenVehicleHUD::FormatHeading(0.0f), FString(TEXT("N 000")));
+		TestEqual(TEXT("Ost"), AWiesbadenVehicleHUD::FormatHeading(90.0f), FString(TEXT("O 090")));
+		TestEqual(TEXT("Sued"), AWiesbadenVehicleHUD::FormatHeading(180.0f), FString(TEXT("S 180")));
+		TestEqual(TEXT("West"), AWiesbadenVehicleHUD::FormatHeading(270.0f), FString(TEXT("W 270")));
+		TestEqual(TEXT("Nordost"), AWiesbadenVehicleHUD::FormatHeading(45.0f), FString(TEXT("NO 045")));
+		// Ueberlauf: 360 -> 0 = Nord, negativ wird normalisiert.
+		TestEqual(TEXT("360 = Nord"), AWiesbadenVehicleHUD::FormatHeading(360.0f), FString(TEXT("N 000")));
+		TestEqual(TEXT("-90 = West"), AWiesbadenVehicleHUD::FormatHeading(-90.0f), FString(TEXT("W 270")));
+		// Sektor rundet: 22 Grad zaehlt noch als Nord, 23 als Nordost.
+		TestEqual(TEXT("22 Grad -> N"), AWiesbadenVehicleHUD::FormatHeading(22.0f), FString(TEXT("N 022")));
+		TestEqual(TEXT("23 Grad -> NO"), AWiesbadenVehicleHUD::FormatHeading(23.0f), FString(TEXT("NO 023")));
+	}
+
 	return true;
 }
 

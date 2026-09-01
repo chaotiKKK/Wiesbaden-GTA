@@ -145,6 +145,13 @@ AWiesbadenCar::AWiesbadenCar()
 	VehicleCamera->SetupAttachment(SceneRoot);
 	VehicleCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 110.0f));
 
+	// Fahrerauge: leicht vor der Mitte, links (Linkslenker), Augenhoehe ~118 cm
+	// ueber dem Boden. Der Versatz ist relativ zur Kamera-Komponente (0,0,110),
+	// die Augenhoehe ergibt sich also aus 110 + 8. Ohne diese Anpassung sass die
+	// Cockpit-Kamera durch den Standardversatz 2,5 m ueber dem Kaefer.
+	VehicleCamera->CockpitOffset = FVector(18.0f, -32.0f, 8.0f);
+	VehicleCamera->AddCockpitHiddenMesh(BodyMesh);
+
 	// Lichtanlage und Motorklang. Beide bauen ihre Unterobjekte erst in
 	// BeginPlay auf - im Konstruktor gibt es weder eine Welt noch ein
 	// Audiogeraet, an das sie sich haengen koennten.

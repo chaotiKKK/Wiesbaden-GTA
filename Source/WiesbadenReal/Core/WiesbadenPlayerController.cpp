@@ -5,7 +5,10 @@
 #include "WiesbadenReal.h"
 #include "Core/WiesbadenDevActions.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
+#include "Vehicles/WiesbadenHelicopter.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "World/WiesbadenCitySubsystem.h"
 
 void AWiesbadenPlayerController::WbTeleport(int32 Ziel)
@@ -60,4 +63,36 @@ void AWiesbadenPlayerController::WbTraffic(int32 An)
 	UE_LOG(LogWbCore, Log,
 		TEXT("WbDev: WbTraffic %d ausgefuehrt: Dichte %.2f -> %.2f."),
 		An, Vorher, Nachher);
+}
+
+void AWiesbadenPlayerController::WbCam(int32 Modus)
+{
+	APawn* ControlledPawn = GetPawn();
+	UWiesbadenVehicleCameraComponent* Cam = ControlledPawn
+		? ControlledPawn->FindComponentByClass<UWiesbadenVehicleCameraComponent>() : nullptr;
+	if (!Cam)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbCam %d erkannt, aber kein Fahrzeug mit Kamera."), Modus);
+		return;
+	}
+	const EWiesbadenVehicleCameraMode Mode =
+		static_cast<EWiesbadenVehicleCameraMode>(FMath::Clamp(Modus, 0, 2));
+	Cam->SetCameraMode(Mode);
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbCam %d gesetzt (0=Follow,1=Orbit,2=Cockpit)."), Modus);
+}
+
+void AWiesbadenPlayerController::WbHeli()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+	for (TActorIterator<AWiesbadenHelicopter> It(World); It; ++It)
+	{
+		Possess(*It);
+		UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeli - Helikopter %s uebernommen."), *It->GetName());
+		return;
+	}
+	UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbHeli - kein Helikopter in der Welt."));
 }

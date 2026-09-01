@@ -5,6 +5,7 @@
 #include "WiesbadenReal.h"
 
 #include "Camera/CameraComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/EngineTypes.h"
 #include "Engine/World.h"
@@ -133,12 +134,34 @@ void UWiesbadenVehicleCameraComponent::ApplyCameraMode()
 		CockpitCamera->SetActive(bCockpit);
 	}
 
+	// Eigene Aussenhaut in der Cockpit-Ansicht fuer den Fahrer ausblenden -
+	// sonst blickt man in der Ich-Perspektive auf die Rueckseiten der
+	// geschlossenen Karosserie. Nur die Sicht des Besitzers, nicht die anderer.
+	for (UPrimitiveComponent* Mesh : CockpitHiddenMeshes)
+	{
+		if (Mesh)
+		{
+			Mesh->SetOwnerNoSee(bCockpit);
+		}
+	}
+
 	if (CameraMode == EWiesbadenVehicleCameraMode::Follow)
 	{
 		OrbitOffset = FRotator::ZeroRotator;
 	}
 
 	UE_LOG(LogWbVehicles, Log, TEXT("Fahrzeug-Kameramodus: %d"), static_cast<int32>(CameraMode));
+}
+
+void UWiesbadenVehicleCameraComponent::AddCockpitHiddenMesh(UPrimitiveComponent* Mesh)
+{
+	if (Mesh)
+	{
+		CockpitHiddenMeshes.AddUnique(Mesh);
+		// Sofort auf den aktuellen Modus bringen (Registrierung passiert im
+		// Konstruktor/BeginPlay, ApplyCameraMode kann schon gelaufen sein).
+		Mesh->SetOwnerNoSee(CameraMode == EWiesbadenVehicleCameraMode::Cockpit);
+	}
 }
 
 void UWiesbadenVehicleCameraComponent::HandleInput(float DeltaTime)

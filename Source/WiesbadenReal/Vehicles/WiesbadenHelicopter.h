@@ -58,6 +58,34 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli")
 	float GetMainRotorRpm() const;
 
+	// -- Cockpit-Instrumente ----------------------------------------------
+	// Telemetrie fuer die Cockpit-Anzeige (WiesbadenVehicleHUD). Bewusst als
+	// einfache Abfragen aus dem bereits gefuehrten Flugzustand.
+
+	/** Waagerechte Fluggeschwindigkeit in km/h. */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
+	float GetAirspeedKmh() const;
+
+	/** Steig-/Sinkrate in m/s (positiv = steigen). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
+	float GetVerticalSpeedMs() const;
+
+	/** Hoehe ueber Grund in Metern (Strahl nach unten; Fallback: Welthoehe). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
+	float GetAltitudeMeters() const;
+
+	/** Steuerkurs 0..360 Grad (aus dem Gier-Winkel des Rumpfes). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
+	float GetHeadingDegrees() const;
+
+	/** Kollektiv-Blattverstellung, 0..1 (Hebelstellung). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
+	float GetCollective() const;
+
+	/** Triebwerk laeuft? */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
+	bool IsEngineRunning() const { return bEngineRunning; }
+
 	/** Triebwerk laeuft; sonst arbeitet der Rotor nur ueber Autorotation. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Heli|Physik")
 	bool bEngineRunning = false;

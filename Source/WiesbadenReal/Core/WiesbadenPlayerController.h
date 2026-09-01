@@ -41,4 +41,12 @@ public:
 	// Verkehr an (1) oder aus (0).
 	UFUNCTION(Exec)
 	void WbTraffic(int32 An);
+
+	// Kameramodus des besessenen Fahrzeugs: 0=Follow, 1=Orbit, 2=Cockpit.
+	UFUNCTION(Exec)
+	void WbCam(int32 Modus);
+
+	// Uebernimmt den naechsten Helikopter der Welt (Dev-Hilfe zum Testen).
+	UFUNCTION(Exec)
+	void WbHeli();
 };

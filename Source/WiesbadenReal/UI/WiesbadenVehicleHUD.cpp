@@ -85,6 +85,21 @@ FString AWiesbadenVehicleHUD::FormatGear(int32 Gear)
 	return FString::FromInt(Gear);
 }
 
+FString AWiesbadenVehicleHUD::FormatHeading(float Degrees)
+{
+	float D = FMath::Fmod(Degrees, 360.0f);
+	if (D < 0.0f)
+	{
+		D += 360.0f;
+	}
+	// Acht-Punkt-Rose (deutsch): N NO O SO S SW W NW. Runden auf 45-Grad-Sektor.
+	static const TCHAR* Dirs[] = {
+		TEXT("N"), TEXT("NO"), TEXT("O"), TEXT("SO"),
+		TEXT("S"), TEXT("SW"), TEXT("W"), TEXT("NW") };
+	const int32 Sector = FMath::RoundToInt(D / 45.0f) % 8;
+	return FString::Printf(TEXT("%s %03d"), Dirs[Sector], FMath::RoundToInt(D) % 360);
+}
+
 FString AWiesbadenVehicleHUD::FormatHeadlightMode(uint8 Mode)
 {
 	switch (static_cast<EWiesbadenHeadlightMode>(Mode))
@@ -100,6 +115,12 @@ AWiesbadenCar* AWiesbadenVehicleHUD::GetPlayerCar() const
 {
 	const APlayerController* PC = GetOwningPlayerController();
 	return PC ? Cast<AWiesbadenCar>(PC->GetPawn()) : nullptr;
+}
+
+AWiesbadenHelicopter* AWiesbadenVehicleHUD::GetPlayerHelicopter() const
+{
+	const APlayerController* PC = GetOwningPlayerController();
+	return PC ? Cast<AWiesbadenHelicopter>(PC->GetPawn()) : nullptr;
 }
 
 void AWiesbadenVehicleHUD::DrawArc(float CenterX, float CenterY, float Radius,
@@ -231,6 +252,128 @@ void AWiesbadenVehicleHUD::DrawTellTales(const AWiesbadenCar& Car, float X, floa
 		X + 24.0f, Y + 22.0f, GEngine->GetSmallFont(), 1.0f);
 }
 
+void AWiesbadenVehicleHUD::DrawRoundGauge(float CX, float CY, float R,
+	float Value, float MinV, float MaxV, float Sweep,
+	const FString& Caption, const FString& Reading)
+{
+	const float Start = -Sweep * 0.5f;
+
+	DrawRect(DialBackground, CX - R - 6.0f, CY - R - 6.0f, (R + 6.0f) * 2.0f, (R + 6.0f) * 2.0f);
+	DrawArc(CX, CY, R, Start, Sweep * 0.5f, DialScale, 2.0f);
+
+	// Fuenf Teilstriche ueber den Skalenbogen.
+	for (int32 i = 0; i <= 4; ++i)
+	{
+		const float Deg = Start + Sweep * (static_cast<float>(i) / 4.0f);
+		const float Rad = FMath::DegreesToRadians(Deg);
+		const float S = FMath::Sin(Rad);
+		const float C = FMath::Cos(Rad);
+		DrawLine(CX + (R - 10.0f) * S, CY - (R - 10.0f) * C,
+			CX + R * S, CY - R * C, DialScale, 1.5f);
+	}
+
+	// Zeiger.
+	const float Span = MaxV - MinV;
+	const float Frac = Span > KINDA_SMALL_NUMBER
+		? FMath::Clamp((Value - MinV) / Span, 0.0f, 1.0f) : 0.0f;
+	const float NeedleRad = FMath::DegreesToRadians(Start + Frac * Sweep);
+	DrawLine(CX, CY,
+		CX + (R - 12.0f) * FMath::Sin(NeedleRad),
+		CY - (R - 12.0f) * FMath::Cos(NeedleRad),
+		NeedleColor, 3.0f);
+
+	DrawText(Reading, DialText, CX - 20.0f, CY + R * 0.30f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(Caption, DialScale, CX - R * 0.55f, CY + R + 5.0f, GEngine->GetSmallFont(), 1.0f);
+}
+
+void AWiesbadenVehicleHUD::DrawHeliInstruments(const AWiesbadenHelicopter& Heli,
+	bool bCockpit, float Width, float Height)
+{
+	constexpr float PanelW = 580.0f;
+	constexpr float PanelH = 156.0f;
+	const float PanelX = Width * 0.5f - PanelW * 0.5f;
+	const float PanelY = Height - PanelH - 22.0f;
+
+	// Armaturenbrett-Band. In der Cockpit-Ansicht kraeftiger (es ist DAS
+	// Cockpit); in Follow/Orbit dezenter, damit es die Stadt nicht zudeckt.
+	DrawRect(FLinearColor(0.02f, 0.02f, 0.028f, bCockpit ? 0.85f : 0.52f),
+		PanelX, PanelY, PanelW, PanelH);
+	DrawLine(PanelX, PanelY, PanelX + PanelW, PanelY,
+		FLinearColor(0.30f, 0.55f, 0.65f, 0.9f), 2.0f);
+
+	// Hoehenmesser (links).
+	const float Alt = Heli.GetAltitudeMeters();
+	DrawRoundGauge(PanelX + 74.0f, PanelY + 62.0f, 50.0f,
+		FMath::Clamp(Alt, 0.0f, 300.0f), 0.0f, 300.0f, 250.0f,
+		TEXT("HOEHE m"), FString::Printf(TEXT("%.0f"), Alt));
+
+	// Fahrtmesser (daneben).
+	const float Spd = Heli.GetAirspeedKmh();
+	DrawRoundGauge(PanelX + 192.0f, PanelY + 62.0f, 50.0f,
+		FMath::Clamp(Spd, 0.0f, 300.0f), 0.0f, 300.0f, 250.0f,
+		TEXT("FAHRT km/h"), FString::Printf(TEXT("%.0f"), Spd));
+
+	// Variometer (senkrechter Balken, Mitte). Null in der Mitte, gruen steigt,
+	// rot sinkt.
+	const float Vs = Heli.GetVerticalSpeedMs();
+	const float VarioX = PanelX + 286.0f;
+	const float VarioMidY = PanelY + 60.0f;
+	constexpr float VarioHalf = 42.0f;
+	DrawRect(DialBackground, VarioX, VarioMidY - VarioHalf, 18.0f, VarioHalf * 2.0f);
+	DrawLine(VarioX, VarioMidY, VarioX + 18.0f, VarioMidY, DialScale, 1.5f);
+	const float VsNorm = FMath::Clamp(Vs / 8.0f, -1.0f, 1.0f);
+	const float VsBar = VarioHalf * FMath::Abs(VsNorm);
+	if (Vs >= 0.0f)
+	{
+		DrawRect(RpmSafe, VarioX, VarioMidY - VsBar, 18.0f, VsBar);
+	}
+	else
+	{
+		DrawRect(RpmRed, VarioX, VarioMidY, 18.0f, VsBar);
+	}
+	DrawText(TEXT("VARIO"), DialScale, VarioX - 6.0f, PanelY + 8.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(FString::Printf(TEXT("%+.1f"), Vs), DialText,
+		VarioX - 8.0f, VarioMidY + VarioHalf + 6.0f, GEngine->GetSmallFont(), 1.0f);
+
+	// Kurs (gross, rechts der Mitte).
+	DrawText(TEXT("KURS"), DialScale, PanelX + 330.0f, PanelY + 14.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(FormatHeading(Heli.GetHeadingDegrees()), DialText,
+		PanelX + 330.0f, PanelY + 30.0f, GEngine->GetMediumFont(), 1.3f);
+
+	// Kollektiv und Rotordrehzahl (rechts, waagerechte Balken).
+	const float BarX = PanelX + 330.0f;
+	constexpr float BarW = 150.0f;
+	constexpr float BarH = 12.0f;
+
+	const float Coll = Heli.GetCollective();
+	DrawText(TEXT("KOLLEKTIV"), DialScale, BarX, PanelY + 74.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawRect(DialBackground, BarX, PanelY + 90.0f, BarW, BarH);
+	DrawRect(RpmSafe, BarX, PanelY + 90.0f, BarW * Coll, BarH);
+
+	const float Rpm = Heli.GetMainRotorRpm();
+	const float RpmFrac = FMath::Clamp(Rpm / 300.0f, 0.0f, 1.0f);
+	DrawText(TEXT("ROTOR"), DialScale, BarX, PanelY + 108.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawRect(DialBackground, BarX, PanelY + 124.0f, BarW, BarH);
+	DrawRect(RpmFrac < 0.5f ? RpmRed : RpmSafe, BarX, PanelY + 124.0f, BarW * RpmFrac, BarH);
+	DrawText(FString::Printf(TEXT("%.0f U/min"), Rpm), DialText,
+		BarX + BarW + 8.0f, PanelY + 120.0f, GEngine->GetSmallFont(), 1.0f);
+
+	// Triebwerk-Kontrollleuchte.
+	DrawText(TEXT("MOT"), Heli.IsEngineRunning() ? IndicatorOn : TellTaleOff,
+		BarX + BarW + 8.0f, PanelY + 88.0f, GEngine->GetMediumFont(), 1.0f);
+}
+
+void AWiesbadenVehicleHUD::DrawCarCockpitDash(float Width, float Height)
+{
+	// Armaturenbrett-Band unten. Der Wagen selbst ist fuer den Fahrer
+	// ausgeblendet (kein Innenraum modelliert) - dieses Band gibt der
+	// Ich-Perspektive den Rahmen eines Cockpits.
+	const float DashH = Height * 0.20f;
+	DrawRect(FLinearColor(0.015f, 0.015f, 0.02f, 0.92f), 0.0f, Height - DashH, Width, DashH);
+	DrawLine(0.0f, Height - DashH, Width, Height - DashH,
+		FLinearColor(0.12f, 0.13f, 0.16f, 1.0f), 3.0f);
+}
+
 void AWiesbadenVehicleHUD::DrawHUD()
 {
 	Super::DrawHUD();
@@ -275,13 +418,15 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	}
 
 	const AWiesbadenCar* Car = GetPlayerCar();
+	const AWiesbadenHelicopter* Heli = Car ? nullptr : GetPlayerHelicopter();
+	const bool bInVehicle = (Car != nullptr) || (Heli != nullptr);
 
 	// Legende zeichnen, solange sie eingeschaltet ist. Nach
 	// ControlLegendSeconds blendet sie von selbst aus; F1 holt sie zurueck.
 	// Sie erscheint AUCH zu Fuss - dort gab es bisher gar keine Anzeige.
 	if (bShowControlLegend && ElapsedSeconds <= ControlLegendSeconds)
 	{
-		DrawControlLegend(Car != nullptr, 40.0f, Height - 210.0f);
+		DrawControlLegend(bInVehicle, 40.0f, Height - 210.0f);
 	}
 	else
 	{
@@ -311,11 +456,30 @@ void AWiesbadenVehicleHUD::DrawHUD()
 
 	DrawStreetName(Width * 0.5f, 28.0f);
 
+	// -- Helikopter: eigene Cockpit-Instrumententafel -----------------------
+	if (Heli)
+	{
+		const bool bCockpit =
+			Heli->GetCameraMode() == EWiesbadenVehicleCameraMode::Cockpit;
+		DrawHeliInstruments(*Heli, bCockpit, Width, Height);
+		return;
+	}
+
 	if (!Car)
 	{
 		// Zu Fuss: statt Tacho der Hinweis, was hier gerade moeglich ist.
 		DrawFootPrompt(Width * 0.5f, Height - 120.0f);
 		return;
+	}
+
+	// Cockpit-Ansicht des Kaefers: Armaturenbrett-Band unterlegen (der Wagen
+	// selbst ist fuer den Fahrer ausgeblendet). ZUERST, damit Tacho und
+	// Drehzahl darauf liegen.
+	const bool bCarCockpit =
+		Car->GetCameraMode() == EWiesbadenVehicleCameraMode::Cockpit;
+	if (bCarCockpit)
+	{
+		DrawCarCockpitDash(Width, Height);
 	}
 
 	const float Radius = FMath::Clamp(Height * 0.16f, 60.0f, 130.0f);

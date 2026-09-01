@@ -276,6 +276,15 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	VehicleCamera->FollowArmLength = 1500.0f;
 	VehicleCamera->FollowPitchOffset = -10.0f;
 
+	// Pilotensitz vorn im Rumpf, Blick nach vorn. Versatz relativ zur
+	// Kamera-Komponente (0,0,130) -> Augpunkt ~ (120, 0, 165). Rumpf und
+	// Heck werden in der Cockpit-Ansicht ausgeblendet (kein Innenraum
+	// modelliert); die Rotoren ueber dem Kopf bleiben sichtbar.
+	VehicleCamera->CockpitOffset = FVector(120.0f, 0.0f, 35.0f);
+	VehicleCamera->AddCockpitHiddenMesh(FuselageMesh);
+	VehicleCamera->AddCockpitHiddenMesh(TailBoomMesh);
+	VehicleCamera->AddCockpitHiddenMesh(TailFinMesh);
+
 	// Flugsound: prozeduraler Rotor-/Motor-Klang (Asset-Slots liegen bereit).
 	HelicopterAudio = CreateDefaultSubobject<UWiesbadenHelicopterAudioComponent>(TEXT("HelicopterAudio"));
 	HelicopterAudio->SetupAttachment(SceneRoot);
@@ -417,6 +426,53 @@ EWiesbadenVehicleCameraMode AWiesbadenHelicopter::GetCameraMode() const
 float AWiesbadenHelicopter::GetMainRotorRpm() const
 {
 	return RotorPhysics.MainRotorRpm;
+}
+
+float AWiesbadenHelicopter::GetAirspeedKmh() const
+{
+	// Nur die waagerechte Komponente: das Steigen zaehlt der Variometer, nicht
+	// der Fahrtmesser.
+	return FVector(Velocity.X, Velocity.Y, 0.0f).Size() * 0.036f;
+}
+
+float AWiesbadenHelicopter::GetVerticalSpeedMs() const
+{
+	return Velocity.Z * 0.01f;
+}
+
+float AWiesbadenHelicopter::GetAltitudeMeters() const
+{
+	const FVector Location = GetActorLocation();
+	if (const UWorld* HeliWorld = GetWorld())
+	{
+		FHitResult Hit;
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(WbHeliAltitude), false, this);
+		Params.AddIgnoredActor(this);
+		if (HeliWorld->LineTraceSingleByChannel(
+				Hit, Location, Location - FVector(0.0f, 0.0f, 100000.0f),
+				ECC_WorldStatic, Params))
+		{
+			return (Location.Z - Hit.Location.Z) * 0.01f;
+		}
+	}
+	// Kein Bodentreffer (ueber Wasser, ausserhalb Kollision): Welthoehe.
+	return Location.Z * 0.01f;
+}
+
+float AWiesbadenHelicopter::GetHeadingDegrees() const
+{
+	float Yaw = FMath::Fmod(GetActorRotation().Yaw, 360.0f);
+	if (Yaw < 0.0f)
+	{
+		Yaw += 360.0f;
+	}
+	return Yaw;
+}
+
+float AWiesbadenHelicopter::GetCollective() const
+{
+	// Gleiche Abbildung wie in UpdateRotors: Hebel -1..1 -> Blattstellung 0..1.
+	return FMath::Clamp(0.5f + 0.5f * CollectiveInput, 0.0f, 1.0f);
 }
 
 float AWiesbadenHelicopter::ApplyStickShaping(float RawAxis, float Deadzone, float Expo)

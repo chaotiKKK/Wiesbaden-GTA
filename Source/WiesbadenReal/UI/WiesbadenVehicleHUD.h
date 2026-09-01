@@ -7,6 +7,7 @@
 #include "WiesbadenVehicleHUD.generated.h"
 
 class AWiesbadenCar;
+class AWiesbadenHelicopter;
 
 /**
  * Fahrzeug-HUD: Tacho, Drehzahl, Gang und Kontrollleuchten.
@@ -44,6 +45,13 @@ public:
 
 	/** Gangstufe als Text: "R" rueckwaerts, "N" Leerlauf, sonst die Zahl. */
 	static FString FormatGear(int32 Gear);
+
+	/**
+	 * Steuerkurs als Himmelsrichtung + Grad, z. B. "N 000" oder "SW 225".
+	 * Datenrein und statisch, damit die Zuordnung ohne Welt pruefbar ist
+	 * (Test Vehicles.HUD.Heading).
+	 */
+	static FString FormatHeading(float Degrees);
 
 	/** Kuerzel der Lichtstufe fuer die Kontrollleuchte. */
 	static FString FormatHeadlightMode(uint8 Mode);
@@ -86,6 +94,30 @@ protected:
 private:
 	/** Liefert das aktuell gesteuerte Fahrzeug oder nullptr. */
 	AWiesbadenCar* GetPlayerCar() const;
+
+	/** Liefert den aktuell gesteuerten Helikopter oder nullptr. */
+	AWiesbadenHelicopter* GetPlayerHelicopter() const;
+
+	/**
+	 * Cockpit-Instrumententafel des Helikopters (Hoehe, Fahrt, Variometer,
+	 * Kurs, Kollektiv, Rotordrehzahl, Triebwerk). Wird beim Fliegen gezeichnet;
+	 * in der Cockpit-Ansicht bildet sie zusammen mit der ausgeblendeten
+	 * Aussenhaut die Innensicht.
+	 */
+	void DrawHeliInstruments(const AWiesbadenHelicopter& Heli, bool bCockpit,
+		float Width, float Height);
+
+	/**
+	 * Cockpit-Rahmen des Kaefers: dunkles Armaturenbrett-Band unten, damit die
+	 * Ich-Perspektive nach Innenraum aussieht (der Wagen selbst ist fuer den
+	 * Fahrer ausgeblendet). Nur in der Cockpit-Ansicht.
+	 */
+	void DrawCarCockpitDash(float Width, float Height);
+
+	/** Rundinstrument mit Zeiger (Hoehenmesser/Variometer-Stil). */
+	void DrawRoundGauge(float CenterX, float CenterY, float Radius,
+		float Value, float MinValue, float MaxValue, float SweepDegrees,
+		const FString& Caption, const FString& Reading);
 
 	/**
 	 * Tastenlegende links unten.

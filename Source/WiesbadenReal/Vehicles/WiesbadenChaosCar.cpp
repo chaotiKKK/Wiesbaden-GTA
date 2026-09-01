@@ -149,6 +149,11 @@ AWiesbadenChaosCar::AWiesbadenChaosCar()
 	// unten gegen Reifen und Bodenblech.
 	VehicleCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 110.0f));
 
+	// Fahrerauge (Ich-Perspektive) wie beim AWiesbadenCar; die eigene Karosserie
+	// wird dabei fuer den Fahrer ausgeblendet (kein modellierter Innenraum).
+	VehicleCamera->CockpitOffset = FVector(18.0f, -32.0f, 8.0f);
+	VehicleCamera->AddCockpitHiddenMesh(GetMesh());
+
 	Lights = CreateDefaultSubobject<UWiesbadenCarLightsComponent>(TEXT("Lights"));
 	Lights->SetupAttachment(Body);
 
