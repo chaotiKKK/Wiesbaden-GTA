@@ -8,6 +8,7 @@
 #include "WiesbadenVehicleTestHarness.generated.h"
 
 class AWiesbadenHelicopter;
+class AWiesbadenCar;
 
 /**
  * Dev-Test-Harness: fuehrt ein Fahrzeug ueber seinen NORMALEN Steuereingang
@@ -35,11 +36,20 @@ public:
 	/** Flugprofil: Steigen -> Schweben -> Marsch -> Sinken ueber <Seconds> Sekunden. */
 	void StartFlightProfile(float Seconds);
 
+	/** Fahrprofil: Vollgas geradeaus, dann Lenk-Sweep ueber <Seconds> Sekunden (Fahrzeug). */
+	void StartDriveProfile(float Seconds);
+
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType,
 		FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
 	AWiesbadenHelicopter* Heli() const;
+	AWiesbadenCar* Car() const;
+
+	// Ein Harness lebt auf EINEM Pawn: Gier-/Flugprofil treiben einen Helikopter,
+	// das Fahrprofil ein Fahrzeug. Beide Zweige pruefen ihren Owner-Typ selbst.
+	void TickHeliProfiles(float DeltaTime);
+	void TickDriveProfile(float DeltaTime);
 
 	// Gier- und Flugprofil laufen UNABHAENGIG (und ggf. gleichzeitig), wie im
 	// urspruenglichen Entwurf: verschiedene Achsen, ein gemeinsamer Steuerbefehl
@@ -51,4 +61,11 @@ private:
 	float FlyElapsed = 0.0f;
 	float FlyDuration = 0.0f;   // 0 = inaktiv
 	int32 FlyLastSecond = -1;
+
+	// Fahrprofil (Fahrzeug): Startkurs merken, damit die Kursaenderung wrap-sicher
+	// (ueber +-180 Grad) gemessen wird - so beweist der Rauchtest die Lenkung.
+	float DriveElapsed = 0.0f;
+	float DriveDuration = 0.0f;   // 0 = inaktiv
+	int32 DriveLastSecond = -1;
+	float DriveStartYaw = 0.0f;
 };

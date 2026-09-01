@@ -62,4 +62,9 @@ public:
 	// Startet das Skript-Flugprofil (Steigen/Marsch/Sinken) fuer <Sekunden>.
 	UFUNCTION(Exec)
 	void WbHeliFly(int32 Sekunden);
+
+	// Startet das Skript-Fahrprofil (Vollgas + Lenk-Sweep) am besessenen Fahrzeug
+	// fuer <Sekunden> - weist Fahrphysik und Lenkung ohne Tastatur nach.
+	UFUNCTION(Exec)
+	void WbDrive(int32 Sekunden);
 };

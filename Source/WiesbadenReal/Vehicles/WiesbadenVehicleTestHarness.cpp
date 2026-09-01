@@ -3,6 +3,7 @@
 #include "Vehicles/WiesbadenVehicleTestHarness.h"
 
 #include "WiesbadenReal.h"
+#include "Vehicles/WiesbadenCar.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 
 UWiesbadenVehicleTestHarness::UWiesbadenVehicleTestHarness()
@@ -13,6 +14,11 @@ UWiesbadenVehicleTestHarness::UWiesbadenVehicleTestHarness()
 AWiesbadenHelicopter* UWiesbadenVehicleTestHarness::Heli() const
 {
 	return Cast<AWiesbadenHelicopter>(GetOwner());
+}
+
+AWiesbadenCar* UWiesbadenVehicleTestHarness::Car() const
+{
+	return Cast<AWiesbadenCar>(GetOwner());
 }
 
 void UWiesbadenVehicleTestHarness::StartYawProbe(float Seconds)
@@ -29,11 +35,26 @@ void UWiesbadenVehicleTestHarness::StartFlightProfile(float Seconds)
 	FlyLastSecond = -1;
 }
 
+void UWiesbadenVehicleTestHarness::StartDriveProfile(float Seconds)
+{
+	DriveDuration = FMath::Max(Seconds, 0.1f);
+	DriveElapsed = 0.0f;
+	DriveLastSecond = -1;
+	// Startkurs merken: die Kursaenderung wird wrap-sicher dagegen gemessen.
+	DriveStartYaw = Car() ? Car()->GetActorRotation().Yaw : 0.0f;
+}
+
 void UWiesbadenVehicleTestHarness::TickComponent(float DeltaTime, ELevelTick TickType,
 	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
+	TickHeliProfiles(DeltaTime);
+	TickDriveProfile(DeltaTime);
+}
+
+void UWiesbadenVehicleTestHarness::TickHeliProfiles(float DeltaTime)
+{
 	const bool bYaw = (YawDuration > 0.0f && YawElapsed < YawDuration);
 	const bool bFly = (FlyDuration > 0.0f && FlyElapsed < FlyDuration);
 	if (!bYaw && !bFly)
@@ -110,5 +131,49 @@ void UWiesbadenVehicleTestHarness::TickComponent(float DeltaTime, ELevelTick Tic
 	if (YawElapsed >= YawDuration && FlyElapsed >= FlyDuration)
 	{
 		H->ClearExternalControl();
+	}
+}
+
+void UWiesbadenVehicleTestHarness::TickDriveProfile(float DeltaTime)
+{
+	if (!(DriveDuration > 0.0f && DriveElapsed < DriveDuration))
+	{
+		return;
+	}
+	AWiesbadenCar* C = Car();
+	if (!C)
+	{
+		DriveDuration = 0.0f;
+		return;
+	}
+
+	// Fahrprofil in zwei Phasen ueber die echte Fahrphysik:
+	//   Beschleunigen (0-45 %): Vollgas geradeaus -> Tempo steigt
+	//   Lenken (45-100 %): Vollgas + Lenk-Sweep rechts, dann links -> Kurs aendert sich
+	// So weist der Rauchtest BEIDES nach - Laengsdynamik und Lenkung - ohne Tastatur.
+	DriveElapsed += DeltaTime;
+	const float Frac = DriveElapsed / DriveDuration;
+
+	FWiesbadenCarControl Control;
+	Control.Throttle = 1.0f;
+	if (Frac < 0.45f)      { Control.Steering = 0.0f; }
+	else if (Frac < 0.72f) { Control.Steering = 0.6f; }
+	else                   { Control.Steering = -0.6f; }
+	C->SetExternalControl(Control);
+
+	const int32 Second = FMath::CeilToInt(DriveElapsed);
+	if (Second != DriveLastSecond)
+	{
+		DriveLastSecond = Second;
+		// Kursaenderung wrap-sicher gegen den Startkurs (FindDeltaAngle: -180..180).
+		const float HeadingDelta = FMath::FindDeltaAngleDegrees(DriveStartYaw, C->GetActorRotation().Yaw);
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbDev Fahrt t=%.0f: Tempo %.0f km/h, Kursaenderung %+.0f Grad, Gang %d."),
+			DriveElapsed, C->GetSpeedKmh(), HeadingDelta, C->GetGear());
+	}
+	if (DriveElapsed >= DriveDuration)
+	{
+		UE_LOG(LogWbVehicles, Log, TEXT("WbDev Fahren fertig."));
+		C->ClearExternalControl();
 	}
 }

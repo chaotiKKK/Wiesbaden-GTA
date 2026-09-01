@@ -387,6 +387,20 @@ float AWiesbadenCar::GetAnalogAxis(const FKey& Key)
 
 void AWiesbadenCar::ReadInput(float DeltaSeconds)
 {
+	const float Response = FMath::Clamp(ControlResponse, 0.1f, 100.0f);
+
+	// Externe Steuerung (KI/Test/Replay) hat Vorrang und umgeht die Tastenabfrage:
+	// fertige Werte werden nur geglaettet wie eine echte Eingabe, dann uebernimmt
+	// die normale Fahrphysik. So bleibt diese Klasse frei von Test-/Treiberlogik.
+	if (bExternalControlActive)
+	{
+		bReverseRequested = ExternalControl.bReverse;
+		ThrottleInput = FMath::FInterpTo(ThrottleInput, FMath::Clamp(ExternalControl.Throttle, 0.0f, 1.0f), DeltaSeconds, Response);
+		BrakeInput = FMath::FInterpTo(BrakeInput, FMath::Clamp(ExternalControl.Brake, 0.0f, 1.0f), DeltaSeconds, Response);
+		SteeringInput = FMath::FInterpTo(SteeringInput, FMath::Clamp(ExternalControl.Steering, -1.0f, 1.0f), DeltaSeconds, Response);
+		return;
+	}
+
 	// Zieleingaben aus gepollten Tasten (zero-config, keine Input-Assets noetig).
 	// Pfeiltasten laufen ueberall parallel zu WASD mit.
 	//
@@ -458,7 +472,6 @@ void AWiesbadenCar::ReadInput(float DeltaSeconds)
 		bReverseRequested = true;
 	}
 
-	const float Response = FMath::Clamp(ControlResponse, 0.1f, 100.0f);
 	ThrottleInput = FMath::FInterpTo(ThrottleInput, TargetThrottle, DeltaSeconds, Response);
 	BrakeInput = FMath::FInterpTo(BrakeInput, TargetBrake, DeltaSeconds, Response);
 	SteeringInput = FMath::FInterpTo(SteeringInput, TargetSteering, DeltaSeconds, Response);
@@ -480,9 +493,11 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 	Input.Brake = BrakeInput;
 	Input.Steering = SteeringInput;
 	// Handbremse auf B, nicht mehr auf A: A ist jetzt die Hupe, und die
-	// braucht man oefter und schneller als die Handbremse.
-	Input.bHandbrake = IsKeyDown(EKeys::SpaceBar)
-		|| IsKeyDown(EKeys::Gamepad_FaceButton_Right);
+	// braucht man oefter und schneller als die Handbremse. Bei externer
+	// Steuerung kommt die Handbremse aus dem Steuerwert, nicht von der Taste.
+	Input.bHandbrake = bExternalControlActive
+		? ExternalControl.bHandbrake
+		: (IsKeyDown(EKeys::SpaceBar) || IsKeyDown(EKeys::Gamepad_FaceButton_Right));
 	Input.bReverseRequested = bReverseRequested;
 
 	FWiesbadenVehiclePhysicsOutput Output;

@@ -1,11 +1,12 @@
 # Rauchtest WiesbadenReal - startet die Stadt im echten Fenster, feuert die
-# Dev-Befehle bzw. den Fahr-Selbsttest und wertet aus dem Log Bestanden/
+# Dev-Befehle bzw. das Fahrprofil und wertet aus dem Log Bestanden/
 # Durchgefallen.
 #
 # Zwei kurze Sitzungen, weil sich Fahrzeug und Heli die Besitzung teilen:
-#   1) Fahrzeug: ChaosCar-Vollgas-Selbsttest (-WbCarTest) + Teleport + Aufrichten,
+#   1) Fahrzeug: Fahrprofil (WbDrive - Vollgas + Lenk-Sweep ueber den Test-
+#      Harness) weist Laengsdynamik UND Lenkung des Standard-Kaefers nach,
 #      dazu die Material-Bilanz der Stadt (feuert 8 s nach dem Laden von selbst).
-#   2) Helikopter: Gier- und Flugprofil ueber den Test-Harness.
+#   2) Helikopter: Teleport + Aufrichten (am Fahrzeug), dann Gier- und Flugprofil.
 # Gewartet wird auf GENUG Log-Belege (nicht auf das Demo-Ende - die Stadt kann
 # beim Umherfliegen streckenweise haengen), dann Auswertung gegen erwartete
 # Wirkungen. Kein Screenshot, kein Fenster-Fokus -> rechnerunabhaengig.
@@ -66,26 +67,28 @@ function Invoke-Session([string[]]$ExtraArgs, [string]$ExecCmds, [string]$LogFil
 }
 
 Write-Host "=== Rauchtest WiesbadenReal ==="
-Write-Host "Sitzung 1/2: Fahrzeug (Vollgas-Selbsttest, Teleport, Aufrichten, Materialien) ..."
-# ChaosCar bleibt besessen (kein WbHeli) - nur so laeuft der -WbCarTest-Selbsttest.
-Invoke-Session @("-WbChaosCar", "-WbCarTest=3") "WbTeleport 2,WbNudge 15 55,WbResetVehicle" `
-    $CarLog "Material-Bilanz:" 1 240
+Write-Host "Sitzung 1/2: Fahrzeug (Fahrprofil WbDrive + Materialien) ..."
+# Standard-Kaefer bleibt besessen (kein WbHeli): WbDrive faehrt ihn ueber den
+# Test-Harness Vollgas + Lenk-Sweep. Warten auf die Material-Bilanz (~8 s) faengt
+# alle Fahr-Messpunkte (WbDrive laeuft 7 s) mit ein.
+Invoke-Session @() "WbDrive 7" $CarLog "Material-Bilanz:" 1 240
 
-Write-Host "Sitzung 2/2: Helikopter (Gier- und Flugprofil) ..."
-Invoke-Session @() "WbHeli,WbHeliYaw 8,WbHeliFly 16" $HeliLog "WbDev Flug t=" 5 240
+Write-Host "Sitzung 2/2: Teleport + Aufrichten (Fahrzeug), dann Helikopter ..."
+Invoke-Session @() "WbTeleport 2,WbNudge 15 55,WbResetVehicle,WbHeli,WbHeliYaw 8,WbHeliFly 16" `
+    $HeliLog "WbDev Flug t=" 5 240
 
 $car  = if (Test-Path $CarLog)  { Get-Content $CarLog  -Raw } else { "" }
 $heli = if (Test-Path $HeliLog) { Get-Content $HeliLog -Raw } else { "" }
 
-# -- Teleport: Distanz > 100 m ---------------------------------------------
-$m = [regex]::Match($car, 'WbTeleport \d+ ausgefuehrt:.*Distanz ([\d.]+) cm')
+# -- Teleport: Distanz > 100 m (Sitzung 2, am Fahrzeug vor WbHeli) ---------
+$m = [regex]::Match($heli, 'WbTeleport \d+ ausgefuehrt:.*Distanz ([\d.]+) cm')
 if ($m.Success) {
     $dist = [double]$m.Groups[1].Value
     Add-Check "Teleport" ($dist -gt 10000) ("Distanz {0:N0} cm (erwartet > 10000)" -f $dist)
 } else { Add-Check "Teleport" $false "keine WbTeleport-Zeile im Log" }
 
 # -- Reset: vorher gekippt (|Roll|>30), nachher aufrecht (~0/0) -------------
-$m = [regex]::Match($car, 'WbResetVehicle ausgefuehrt: Nick/Roll vorher \(([-\d.]+)/([-\d.]+)\) -> nachher \(([-\d.]+)/([-\d.]+)\)')
+$m = [regex]::Match($heli, 'WbResetVehicle ausgefuehrt: Nick/Roll vorher \(([-\d.]+)/([-\d.]+)\) -> nachher \(([-\d.]+)/([-\d.]+)\)')
 if ($m.Success) {
     $vp = [double]$m.Groups[1].Value; $vr = [double]$m.Groups[2].Value
     $np = [double]$m.Groups[3].Value; $nr = [double]$m.Groups[4].Value
@@ -93,19 +96,21 @@ if ($m.Success) {
     Add-Check "ResetVehicle" $ok ("vorher {0}/{1} -> nachher {2}/{3}" -f $vp,$vr,$np,$nr)
 } else { Add-Check "ResetVehicle" $false "keine WbResetVehicle-Zeile im Log" }
 
-# -- Fahrphysik: Vollgas-Selbsttest -> Antriebsstrang lebt (Drehzahl steigt,
-#    Gang legt ein). Vorwaerts-Tempo ist durch den Chassis-Kollisions-Bug
-#    (Teil C) blockiert und wird bewusst NICHT geprueft. --------------------
-$fp = [regex]::Matches($car, 'Fahrprobe\s+\d+ s:\s+[-\d.]+ km/h,\s+(\d+) 1/min, Gang (\d+)')
-if ($fp.Count -ge 3) {
-    $maxRpm = 0; $maxGear = 0
-    foreach ($f in $fp) {
-        $r = [int]$f.Groups[1].Value; if ($r -gt $maxRpm) { $maxRpm = $r }
-        $g = [int]$f.Groups[2].Value; if ($g -gt $maxGear) { $maxGear = $g }
+# -- Fahren: WbDrive faehrt den Standard-Kaefer ueber die echte Fahrphysik
+#    (Test-Harness, ohne Tastatur) -> Tempo baut auf UND der Lenk-Sweep aendert
+#    den Kurs. Beweist Laengsdynamik + Lenkung des Fahrzeugs, das ausgeliefert
+#    wird (nicht der belly-gebugte ChaosCar). --------------------------------
+$fahrt = [regex]::Matches($car, 'WbDev Fahrt t=\d+: Tempo (\d+) km/h, Kursaenderung ([+-]\d+) Grad, Gang (\d+)')
+if ($fahrt.Count -ge 3) {
+    $maxTempo = 0; $maxKurs = 0; $maxGear = 0
+    foreach ($f in $fahrt) {
+        $t = [int]$f.Groups[1].Value; if ($t -gt $maxTempo) { $maxTempo = $t }
+        $k = [math]::Abs([int]$f.Groups[2].Value); if ($k -gt $maxKurs) { $maxKurs = $k }
+        $g = [int]$f.Groups[3].Value; if ($g -gt $maxGear) { $maxGear = $g }
     }
-    $ok = ($maxRpm -gt 2000) -and ($maxGear -ge 1)
-    Add-Check "Fahrphysik" $ok ("max {0} 1/min (>2000), Gang {1} (>=1), {2} Messpunkte" -f $maxRpm,$maxGear,$fp.Count)
-} else { Add-Check "Fahrphysik" $false ("nur {0} Fahrprobe-Messpunkte (-WbCarTest lief nicht?)" -f $fp.Count) }
+    $ok = ($maxTempo -gt 20) -and ($maxKurs -gt 15)
+    Add-Check "Fahren" $ok ("max Tempo {0} km/h (>20), Kursaenderung {1} Grad (>15), Gang {2}, {3} Messpunkte" -f $maxTempo,$maxKurs,$maxGear,$fahrt.Count)
+} else { Add-Check "Fahren" $false ("nur {0} Fahrt-Messpunkte (WbDrive lief nicht?)" -f $fahrt.Count) }
 
 # -- Materialien: kein Mesh-Abschnitt ohne Material -------------------------
 if ($car -match 'Material-Bilanz: alle (\d+) Mesh-Abschnitte haben ein Material') {

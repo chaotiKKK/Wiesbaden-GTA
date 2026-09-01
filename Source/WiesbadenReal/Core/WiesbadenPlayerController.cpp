@@ -7,6 +7,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
+#include "Vehicles/WiesbadenCar.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "Vehicles/WiesbadenVehicleTestHarness.h"
@@ -119,13 +120,13 @@ void AWiesbadenPlayerController::WbNudge(int32 NickGrad, int32 RollGrad)
 // Die Harness-Komponente existiert im normalen Spiel nicht - sie wird erst hier,
 // beim ersten Dev-Befehl, auf dem Pawn erzeugt. So bleibt die Fahrzeugklasse frei
 // von Test-Code.
-static UWiesbadenVehicleTestHarness* GetOrAddHarness(AWiesbadenHelicopter* Heli)
+static UWiesbadenVehicleTestHarness* GetOrAddHarness(AActor* Owner)
 {
 	UWiesbadenVehicleTestHarness* Harness =
-		Heli->FindComponentByClass<UWiesbadenVehicleTestHarness>();
+		Owner->FindComponentByClass<UWiesbadenVehicleTestHarness>();
 	if (!Harness)
 	{
-		Harness = NewObject<UWiesbadenVehicleTestHarness>(Heli);
+		Harness = NewObject<UWiesbadenVehicleTestHarness>(Owner);
 		Harness->RegisterComponent();
 	}
 	return Harness;
@@ -153,4 +154,16 @@ void AWiesbadenPlayerController::WbHeliFly(int32 Sekunden)
 	}
 	GetOrAddHarness(Heli)->StartFlightProfile(static_cast<float>(Sekunden));
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeliFly - Flugprofil fuer %d s gestartet."), Sekunden);
+}
+
+void AWiesbadenPlayerController::WbDrive(int32 Sekunden)
+{
+	AWiesbadenCar* Car = Cast<AWiesbadenCar>(GetPawn());
+	if (!Car)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbDrive erkannt, aber kein Fahrzeug besessen."));
+		return;
+	}
+	GetOrAddHarness(Car)->StartDriveProfile(static_cast<float>(Sekunden));
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbDrive - Fahrprofil fuer %d s gestartet."), Sekunden);
 }

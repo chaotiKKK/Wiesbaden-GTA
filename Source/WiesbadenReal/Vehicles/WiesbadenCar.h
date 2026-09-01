@@ -19,6 +19,23 @@ class UBoxComponent;
 class UStaticMeshComponent;
 
 /**
+ * Fertige Steuerwerte fuer die externe Fahrzeugsteuerung (KI/Test/Replay).
+ *
+ * Analog zu FWiesbadenHeliControl: ein Treiber schiebt fertige Eingaben ein,
+ * das Fahrzeug wendet sie ueber dieselbe Fahrphysik an wie eine Tastatureingabe.
+ * So bleibt die Fahrzeugklasse frei von Test-/Treiber-Code, und die Fahrphysik
+ * laesst sich ohne Tastatur nachweisen (Rauchtest) oder von einer KI fahren.
+ */
+struct FWiesbadenCarControl
+{
+	float Throttle = 0.0f;   // 0..1 (Gas)
+	float Brake = 0.0f;      // 0..1 (Bremse)
+	float Steering = 0.0f;   // -1..1 (rechts = +)
+	bool bHandbrake = false;
+	bool bReverse = false;
+};
+
+/**
  * Fahrbarer PKW-Pawn mit Platzhalter-Geometrie (Engine-Basis-Shapes).
  *
  * Die Laengs-/Querdynamik (Motor, Automatik-Getriebe, Radkraefte, Lenkung)
@@ -62,6 +79,20 @@ public:
 	/** Aktuelle Motordrehzahl (U/min). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug")
 	float GetEngineRpm() const;
+
+	/**
+	 * Externe Steuerung setzen (KI/Zwischensequenz/Test): umgeht die Tastenabfrage
+	 * und speist Gas/Bremse/Lenkung ueber die normale Fahrphysik. ReadInput wendet
+	 * sie nur an - keine Test-/Treiberlogik in der Fahrzeugklasse.
+	 */
+	void SetExternalControl(const FWiesbadenCarControl& Control)
+	{
+		ExternalControl = Control;
+		bExternalControlActive = true;
+	}
+
+	/** Externe Steuerung abschalten - die Tastatur/das Gamepad uebernimmt wieder. */
+	void ClearExternalControl() { bExternalControlActive = false; }
 
 	/** Lichtanlage des Fahrzeugs - fuer die HUD-Kontrollleuchten. */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug|Licht")
@@ -200,6 +231,10 @@ private:
 
 	bool bReverseRequested = false;
 	bool bReverseToggleHeld = false;
+
+	/** Externe Steuerung (KI/Test), siehe SetExternalControl. */
+	FWiesbadenCarControl ExternalControl;
+	bool bExternalControlActive = false;
 
 	/** Akkumulierte Rad-Drehung um die Querachse (Grad, auf 360 normalisiert). */
 	float WheelRotationPitch = 0.0f;
