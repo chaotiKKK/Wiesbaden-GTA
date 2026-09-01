@@ -295,14 +295,16 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	// schwerer, tiefer Rotorschlag (Blade Slap) statt zivilem Surren.
 	RotorPhysics.bCoaxialRotors = true;
 	// Gier-Autoritaet: der Heli drehte sich praktisch NICHT (Beschwerde "Heli
-	// dreht nicht"). Ursache: hier stand 1600 - dieselbe Groessenordnung wie
-	// die Nick-/Roll-Autoritaeten unten (~1500). Die YAW-Formel ist aber direkt
-	// (Torque.Z = Pedal * CoaxialYawAuthority * LiftNormalized), waehrend
-	// Nick/Roll anders skalieren. Bei Traegheit 40000 kg m^2 ergab 1600 nur
-	// 0,04 rad/s^2 - unmerklich. Der RotorPhysics-Default fuer diese direkte
-	// Formel ist 95000; 60000 gibt ~1,5 rad/s^2, also flinkes, aber
-	// kontrollierbares Gieren (Ka-52-Charakter). Bei Bedarf feinjustieren.
-	RotorPhysics.CoaxialYawAuthority = 60000.0f;
+	// "Heli dreht nicht": Die eigentliche Ursache lag NICHT bei dieser
+	// Autoritaet, sondern in ApplyFlightPhysics - die Ratendaempfung setzte die
+	// Gierrate per FInterpTo mit InterpSpeed 0 JEDES Bild auf null, sobald Gieren
+	// kommandiert war (FInterpTo gibt bei Speed<=0 sofort das Ziel 0 zurueck).
+	// Das Giermoment war also immer da (gemessen 360.000 N*m, 9 rad/s^2), die
+	// Drehrate wurde nur sofort wieder genullt. Nach dem Fix genuegt eine
+	// moderate Autoritaet: 16000 gibt am Boden ~30 Grad/s, im Steigflug bis
+	// ~80 Grad/s - flink, aber steuerbar. 60000 liess den Rumpf mit ueber
+	// 400 Grad/s durchdrehen.
+	RotorPhysics.CoaxialYawAuthority = 16000.0f;
 	RotorPhysics.MaxForwardSpeedMetersPerS = 85.0f;
 	RotorPhysics.CyclicPitchMomentAuthority = 1500.0f;
 	RotorPhysics.CyclicRollMomentAuthority = 1500.0f;
@@ -648,6 +650,25 @@ void AWiesbadenHelicopter::ReadInput(float DeltaSeconds)
 		UE_LOG(LogWbVehicles, Log, TEXT("Triebwerk %s."), bEngineRunning ? TEXT("an") : TEXT("aus"));
 	}
 	bEngineToggleHeld = bEnginePressed;
+
+	// Skript-Gierprobe (Dev, WbHeliYaw): stetiges Gierpedal rechts und etwas
+	// Kollektiv, damit der Rumpf frei ueber Grund giert. Ueberschreibt die
+	// geglaetteten Eingaben NACH den normalen Achsen, wirkt aber ueber die echte
+	// Rotorphysik (Coaxial-Giermoment) - keine direkte Rotation. So laesst sich
+	// die Gierfunktion ohne Tastatureingabe im echten Fenster nachweisen.
+	if (ScriptedYawSeconds > 0.0f)
+	{
+		const int32 SecBefore = FMath::CeilToInt(ScriptedYawSeconds);
+		bEngineRunning = true;
+		YawInput = 0.45f;   // gemaessigt, damit der Kurswechsel ablesbar bleibt
+		CollectiveInput = FMath::Max(CollectiveInput, 0.55f);
+		ScriptedYawSeconds = FMath::Max(0.0f, ScriptedYawSeconds - DeltaSeconds);
+		if (FMath::CeilToInt(ScriptedYawSeconds) != SecBefore)
+		{
+			UE_LOG(LogWbVehicles, Log, TEXT("WbDev Gierprobe t=%.0f: Kurs %.0f Grad (Gierrate %.1f Grad/s)."),
+				ScriptedYawSeconds, GetHeadingDegrees(), FMath::RadiansToDegrees(AngularVelocity.Z));
+		}
+	}
 }
 
 void AWiesbadenHelicopter::ApplyFlightPhysics(float DeltaSeconds)
@@ -746,12 +767,30 @@ void AWiesbadenHelicopter::ApplyFlightPhysics(float DeltaSeconds)
 		const float RollNeutral = 1.0f - FMath::Clamp(FMath::Abs(CyclicRollInput) * 2.0f, 0.0f, 1.0f);
 		const float PitchNeutral = 1.0f - FMath::Clamp(FMath::Abs(CyclicPitchInput) * 2.0f, 0.0f, 1.0f);
 		const float YawNeutral = 1.0f - FMath::Clamp(FMath::Abs(YawInput) * 2.0f, 0.0f, 1.0f);
-		AngularVelocity.X = FMath::FInterpTo(
-			AngularVelocity.X, 0.0f, DeltaSeconds, RateAssistStrength * RollNeutral);
-		AngularVelocity.Y = FMath::FInterpTo(
-			AngularVelocity.Y, 0.0f, DeltaSeconds, RateAssistStrength * PitchNeutral);
-		AngularVelocity.Z = FMath::FInterpTo(
-			AngularVelocity.Z, 0.0f, DeltaSeconds, RateAssistStrength * 0.6f * YawNeutral);
+
+		// NUR daempfen, wenn die Achse nicht (nahezu) voll kommandiert ist.
+		//
+		// FMath::FInterpTo gibt bei InterpSpeed <= 0 SOFORT das Ziel zurueck -
+		// hier also 0. Bei vollem Ausschlag ist der Neutral-Faktor 0, die
+		// Daempfung wurde damit zu einem harten Nullsetzen der Drehrate: Wer
+		// Gieren kommandierte, dem wurde die Gierrate JEDES Bild auf null
+		// gerissen - der Hubschrauber drehte trotz vollem Giermoment nicht.
+		// Deshalb die Daempfung ueberspringen, sobald der Faktor verschwindet.
+		if (RollNeutral > KINDA_SMALL_NUMBER)
+		{
+			AngularVelocity.X = FMath::FInterpTo(
+				AngularVelocity.X, 0.0f, DeltaSeconds, RateAssistStrength * RollNeutral);
+		}
+		if (PitchNeutral > KINDA_SMALL_NUMBER)
+		{
+			AngularVelocity.Y = FMath::FInterpTo(
+				AngularVelocity.Y, 0.0f, DeltaSeconds, RateAssistStrength * PitchNeutral);
+		}
+		if (YawNeutral > KINDA_SMALL_NUMBER)
+		{
+			AngularVelocity.Z = FMath::FInterpTo(
+				AngularVelocity.Z, 0.0f, DeltaSeconds, RateAssistStrength * 0.6f * YawNeutral);
+		}
 	}
 
 	// Rotation anwenden: FRotator(Pitch, Yaw, Roll) aus (Roll, Pitch, Yaw)-Achsen.

@@ -86,6 +86,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
 	bool IsEngineRunning() const { return bEngineRunning; }
 
+	/**
+	 * Skript-Gierprobe (Dev): fuer die naechsten Sekunden Gierpedal + etwas
+	 * Kollektiv setzen, ohne Tastatur. Fuer den Nachweis der Gierfunktion im
+	 * echten Fenster (WbHeliYaw). Wirkt ueber die echte Rotorphysik.
+	 */
+	void StartYawDemo(float Seconds) { ScriptedYawSeconds = FMath::Max(0.0f, Seconds); bEngineRunning = true; }
+
 	/** Triebwerk laeuft; sonst arbeitet der Rotor nur ueber Autorotation. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Heli|Physik")
 	bool bEngineRunning = false;
@@ -338,4 +345,7 @@ private:
 
 	bool bEngineToggleHeld = false;
 	bool bGrounded = false;
+
+	/** Restzeit der Skript-Gierprobe in Sekunden (0 = aus). Siehe StartYawDemo. */
+	float ScriptedYawSeconds = 0.0f;
 };

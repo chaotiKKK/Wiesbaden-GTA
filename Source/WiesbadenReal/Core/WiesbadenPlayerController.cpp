@@ -96,3 +96,31 @@ void AWiesbadenPlayerController::WbHeli()
 	}
 	UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbHeli - kein Helikopter in der Welt."));
 }
+
+void AWiesbadenPlayerController::WbNudge(int32 NickGrad, int32 RollGrad)
+{
+	APawn* ControlledPawn = GetPawn();
+	if (!ControlledPawn)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbNudge erkannt, aber kein besessener Pawn."));
+		return;
+	}
+	const FRotator Vorher = ControlledPawn->GetActorRotation();
+	const FRotator Nachher(Vorher.Pitch + NickGrad, Vorher.Yaw, Vorher.Roll + RollGrad);
+	ControlledPawn->SetActorRotation(Nachher, ETeleportType::TeleportPhysics);
+	UE_LOG(LogWbCore, Log,
+		TEXT("WbDev: WbNudge %d/%d: Nick/Roll %.0f/%.0f -> %.0f/%.0f."),
+		NickGrad, RollGrad, Vorher.Pitch, Vorher.Roll, Nachher.Pitch, Nachher.Roll);
+}
+
+void AWiesbadenPlayerController::WbHeliYaw(int32 Sekunden)
+{
+	AWiesbadenHelicopter* Heli = Cast<AWiesbadenHelicopter>(GetPawn());
+	if (!Heli)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbHeliYaw erkannt, aber kein Helikopter besessen (erst WbHeli)."));
+		return;
+	}
+	Heli->StartYawDemo(static_cast<float>(Sekunden));
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeliYaw - Gierprobe fuer %d s gestartet."), Sekunden);
+}

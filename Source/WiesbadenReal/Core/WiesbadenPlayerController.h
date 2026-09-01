@@ -49,4 +49,13 @@ public:
 	// Uebernimmt den naechsten Helikopter der Welt (Dev-Hilfe zum Testen).
 	UFUNCTION(Exec)
 	void WbHeli();
+
+	// Kippt das besessene Fahrzeug um Nick/Roll (Grad) - Testhilfe, um das
+	// Aufrichten (WbResetVehicle) sichtbar vorzufuehren.
+	UFUNCTION(Exec)
+	void WbNudge(int32 NickGrad, int32 RollGrad);
+
+	// Startet die Skript-Gierprobe am besessenen Helikopter fuer <Sekunden>.
+	UFUNCTION(Exec)
+	void WbHeliYaw(int32 Sekunden);
 };
