@@ -21,6 +21,7 @@
 #include "Vehicles/WiesbadenChaosCar.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/Pawn.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
@@ -1284,6 +1285,43 @@ void UWiesbadenCitySubsystem::LogGeometryBalance() const
 	UE_LOG(LogWbStreaming, Log,
 		TEXT("Stadt-Geometrie: %d Chunk-Actors geladen, %d Strassen- und %d Gebaeude-Abschnitte."),
 		ChunkCount, RoadSections, BuildingSections);
+
+	// Streaming-Diagnose: Wie weit sind die GELADENEN Chunks vom Spieler entfernt?
+	// Sind viele weit jenseits des Streaming-Radius geladen, streamt WP nicht
+	// distanzabhaengig aus -> die Last liegt an der WP-Einrichtung (Zellgroesse/
+	// Zuordnung), nicht an der Sichtweite. Lage+Bounds des ersten Chunks testen die
+	// "am Ursprung gespawnt"-Hypothese: Ursprung (0,0,0) mit Bounds weit weg = ok
+	// (WP kann per Bounds zuordnen); Ursprung UND riesige Ausdehnung = kaputte
+	// Zuordnung (dann helfen feinere Zellen nichts).
+	FVector ViewLoc = FVector::ZeroVector;
+	if (const APlayerController* PC = World->GetFirstPlayerController())
+	{
+		if (const APawn* Pawn = PC->GetPawn()) { ViewLoc = Pawn->GetActorLocation(); }
+	}
+	int32 Beyond2km = 0, Beyond4km = 0;
+	double NearestM = TNumericLimits<double>::Max(), FarthestM = 0.0;
+	bool bLoggedSample = false;
+	for (TActorIterator<AWiesbadenCityChunk> It(World); It; ++It)
+	{
+		const FBox Bounds = It->GetComponentsBoundingBox(true);
+		const double DistM = FVector::Dist(ViewLoc, Bounds.GetCenter()) * 0.01;
+		NearestM = FMath::Min(NearestM, DistM);
+		FarthestM = FMath::Max(FarthestM, DistM);
+		if (DistM > 2000.0) { ++Beyond2km; }
+		if (DistM > 4000.0) { ++Beyond4km; }
+		if (!bLoggedSample)
+		{
+			bLoggedSample = true;
+			const FVector L = It->GetActorLocation();
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("Streaming-Diagnose: Beispiel-Chunk Lage (%.0f, %.0f, %.0f), Bounds-Mitte (%.0f, %.0f), Ausdehnung %.0f x %.0f m."),
+				L.X, L.Y, L.Z, Bounds.GetCenter().X, Bounds.GetCenter().Y,
+				Bounds.GetSize().X * 0.01, Bounds.GetSize().Y * 0.01);
+		}
+	}
+	UE_LOG(LogWbStreaming, Log,
+		TEXT("Streaming-Diagnose: Spieler bei (%.0f, %.0f); geladene Chunks Distanz %.0f..%.0f m, davon %d jenseits 2 km, %d jenseits 4 km."),
+		ViewLoc.X, ViewLoc.Y, NearestM, FarthestM, Beyond2km, Beyond4km);
 
 	// Last-Inventar des Spiel-Strangs.
 	//
