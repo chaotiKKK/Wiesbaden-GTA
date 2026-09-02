@@ -80,8 +80,15 @@ Write-Host "  Gate 1 gruen: kompiliert."
 Section 2 "Unit-Tests (Automation RunTests WiesbadenReal)"
 $TestLog = Join-Path $LogDir "release_tests.log"
 Remove-Item $TestLog -ErrorAction SilentlyContinue
-& $CmdExe "$Proj" -ExecCmds="Automation RunTests WiesbadenReal; Quit" `
-    -unattended -nop4 -nullrhi -NoSound -stdout -ABSLOG=$TestLog | Out-Null
+# WICHTIG: -ExecCmds MUSS ueber eine .bat mit exakter Quotierung laufen. PowerShell
+# (`& exe -ExecCmds="a b; c"` oder Start-Process -ArgumentList) zerlegt den Wert an
+# Leerzeichen/Semikolon -> der Cmd startet ohne ExecCmds und schreibt kein Log.
+$TestBat = Join-Path $LogDir "release_run_tests.bat"
+@"
+@echo off
+"$CmdExe" "$Proj" -ExecCmds="Automation RunTests WiesbadenReal; Quit" -unattended -nop4 -nullrhi -NoSound -stdout -ABSLOG="$TestLog"
+"@ | Set-Content -Path $TestBat -Encoding ASCII
+& cmd /c "`"$TestBat`"" | Out-Null
 $testText = if (Test-Path $TestLog) { Get-Content $TestLog -Raw } else { "" }
 $pass = ([regex]::Matches($testText, "Result=\{Success\}")).Count
 $fail = ([regex]::Matches($testText, "Result=\{Fail\}")).Count
