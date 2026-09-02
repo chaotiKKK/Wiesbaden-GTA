@@ -5,7 +5,8 @@
 # Zwei kurze Sitzungen, weil sich Fahrzeug und Heli die Besitzung teilen:
 #   1) Fahrzeug: Fahrprofil (WbDrive - Vollgas + Lenk-Sweep ueber den Test-
 #      Harness) weist Laengsdynamik UND Lenkung des Standard-Kaefers nach,
-#      dazu die Material-Bilanz der Stadt (feuert 8 s nach dem Laden von selbst).
+#      dazu Material-Bilanz UND Perf-Regression (Spiel-Strang-Zeit + Last-
+#      Inventar) aus dem 8-s-Diagnoseblock (feuert 8 s nach dem Laden von selbst).
 #   2) Helikopter: Teleport + Aufrichten (am Fahrzeug), dann Gier- und Flugprofil.
 # Gewartet wird auf GENUG Log-Belege (nicht auf das Demo-Ende - die Stadt kann
 # beim Umherfliegen streckenweise haengen), dann Auswertung gegen erwartete
@@ -15,7 +16,15 @@
 # Exit 0 = alle Pruefungen bestanden, sonst Exit 1.
 
 param(
-    [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung"
+    [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
+    # Perf-Regression-Schranken (aus dem 8-s-Diagnoseblock). BEWUSST ueber der
+    # aktuellen Grundlast, damit der Check heute besteht und erst bei einer echten
+    # Verschlechterung durchfaellt. Nach dem WP-Streaming-Fix enger ziehen, um den
+    # Gewinn festzunageln. Ist-Werte 2026-09: Spiel ~110-163 ms, ~19.700 Komponenten,
+    # ~1,07 Mio. Instanzen.
+    [double]$MaxSpielMs        = 220,
+    [int]   $MaxPrimComponents = 24000,
+    [int]   $MaxInstances      = 1300000
 )
 
 $ErrorActionPreference = "Stop"
@@ -118,6 +127,27 @@ if ($car -match 'Material-Bilanz: alle (\d+) Mesh-Abschnitte haben ein Material'
 } elseif ($car -match 'Material-Bilanz: (\d+) von (\d+) Mesh-Abschnitten OHNE Material') {
     Add-Check "Materialien" $false ("{0} von {1} OHNE Material (Default-Schachbrett)" -f $Matches[1],$Matches[2])
 } else { Add-Check "Materialien" $false "keine Material-Bilanz im Log" }
+
+# -- Perf-Regression: Spiel-Strang-Zeit + Last-Inventar aus dem 8-s-Diagnose-
+#    block (feuert in der Fahrzeug-Sitzung). Faellt durch, wenn ein Wert seine
+#    Schranke reisst - faengt Regressionen ab, ohne am heutigen (bekannt hohen)
+#    Stand zu scheitern. Fehlt der Block ganz, ebenfalls Fehler (koennte eine
+#    Verschlechterung verdecken). --------------------------------------------
+$mSpiel = [regex]::Match($car, 'Straenge im Mittel: Spiel ([\d.]+) ms')
+$mInv   = [regex]::Match($car, 'Last-Inventar \(Spiel-Strang\): (\d+) Primitive-Komponenten .*? (\d+) Instanz-Komponenten mit (\d+) Instanzen')
+if ($mSpiel.Success -and $mInv.Success) {
+    $spielMs = [double]$mSpiel.Groups[1].Value
+    $primComps = [int]$mInv.Groups[1].Value
+    $instances = [int]$mInv.Groups[3].Value
+    $okSpiel = $spielMs -le $MaxSpielMs
+    $okComps = $primComps -le $MaxPrimComponents
+    $okInst  = $instances -le $MaxInstances
+    $ok = $okSpiel -and $okComps -and $okInst
+    Add-Check "Perf-Regression" $ok ("Spiel {0:N0} ms (<= {1}), {2:N0} Komponenten (<= {3:N0}), {4:N0} Instanzen (<= {5:N0})" -f `
+        $spielMs, $MaxSpielMs, $primComps, $MaxPrimComponents, $instances, $MaxInstances)
+} else {
+    Add-Check "Perf-Regression" $false "kein 8-s-Diagnoseblock (Straenge/Last-Inventar) im Log - Perf nicht pruefbar"
+}
 
 # -- HeliFly: Steigflug - Hoehe > 8 m zu UND Vario zeitweise > +1 ----------
 $flug = [regex]::Matches($heli, 'WbDev Flug t=\d+: Hoehe (\d+) m, Vario ([+-][\d.]+) m/s, Fahrt (\d+) km/h')
