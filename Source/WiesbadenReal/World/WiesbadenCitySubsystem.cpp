@@ -1309,14 +1309,35 @@ void UWiesbadenCitySubsystem::LogGeometryBalance() const
 		FarthestM = FMath::Max(FarthestM, DistM);
 		if (DistM > 2000.0) { ++Beyond2km; }
 		if (DistM > 4000.0) { ++Beyond4km; }
-		if (!bLoggedSample)
+		if (!bLoggedSample && Bounds.GetSize().X * 0.01 > 1000.0)
 		{
 			bLoggedSample = true;
 			const FVector L = It->GetActorLocation();
 			UE_LOG(LogWbStreaming, Log,
-				TEXT("Streaming-Diagnose: Beispiel-Chunk Lage (%.0f, %.0f, %.0f), Bounds-Mitte (%.0f, %.0f), Ausdehnung %.0f x %.0f m."),
-				L.X, L.Y, L.Z, Bounds.GetCenter().X, Bounds.GetCenter().Y,
+				TEXT("Streaming-Diagnose: Beispiel-Chunk %s Lage (%.0f, %.0f, %.0f), Gesamt-Bounds-Mitte (%.0f, %.0f), Ausdehnung %.0f x %.0f m - Komponenten einzeln:"),
+				*It->GetName(), L.X, L.Y, L.Z, Bounds.GetCenter().X, Bounds.GetCenter().Y,
 				Bounds.GetSize().X * 0.01, Bounds.GetSize().Y * 0.01);
+			TArray<UPrimitiveComponent*> ChunkPrims;
+			It->GetComponents(ChunkPrims);
+			for (const UPrimitiveComponent* P : ChunkPrims)
+			{
+				if (!P || !P->IsRegistered())
+				{
+					continue;
+				}
+				const FBoxSphereBounds B = P->Bounds;
+				int32 InstCount = -1;
+				if (const UInstancedStaticMeshComponent* Ism = Cast<UInstancedStaticMeshComponent>(P))
+				{
+					InstCount = Ism->GetInstanceCount();
+				}
+				UE_LOG(LogWbStreaming, Log,
+					TEXT("   Komponente '%s' (%s): Bounds-Mitte (%.0f, %.0f, %.0f), Ausdehnung %.0f x %.0f m%s."),
+					*P->GetName(), *P->GetClass()->GetName(),
+					B.Origin.X, B.Origin.Y, B.Origin.Z,
+					B.BoxExtent.X * 2.0 * 0.01, B.BoxExtent.Y * 2.0 * 0.01,
+					InstCount >= 0 ? *FString::Printf(TEXT(", %d Instanzen"), InstCount) : TEXT(""));
+			}
 		}
 	}
 	UE_LOG(LogWbStreaming, Log,
