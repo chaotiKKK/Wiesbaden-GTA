@@ -4,9 +4,13 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+
+#include "World/WiesbadenRailTransport.h"
+
 #include "WiesbadenNerobergbahn.generated.h"
 
 class UProceduralMeshComponent;
+class UWiesbadenVehicleCameraComponent;
 class USceneComponent;
 class UStaticMeshComponent;
 
@@ -83,6 +87,10 @@ private:
 	/** Baut einen Wagen aus Grundkoerpern (Kasten, Dach, Fenster). */
 	USceneComponent* BuildCar(const TCHAR* Name);
 
+	/** Kamera des mitfahrenden Spielers ueber das gemeinsame Fahrzeug-Rig. */
+	void CreatePassengerCamera();
+	void DestroyPassengerCamera();
+
 	/** Ein- oder Aussteigen des Spielers. */
 	void ToggleBoarding();
 
@@ -116,13 +124,21 @@ private:
 	/** Naechster Abtastversuch fuer die Hoehen. */
 	float HeightRetryRemaining = 0.0f;
 
-	/** Der mitfahrende Spieler-Pawn (nullptr = keiner). */
-	UPROPERTY(Transient)
-	APawn* Passenger = nullptr;
-
-	/** In welchem Wagen der Fahrgast sitzt (0 = A, 1 = B). */
-	int32 PassengerCar = 0;
+	/** Besitz- und Zustandsdaten der aktuellen Fahrt. */
+	WiesbadenRailTransport::FWiesbadenRideSession RideSession;
 
 	/** Flanke der Einstiegstaste. */
 	bool bBoardKeyHeld = false;
+
+	/** Gemeinsames Kamera-Rig fuer Follow/Orbit/Cockpit und Mausradzoom. */
+	UPROPERTY(Transient)
+	UWiesbadenVehicleCameraComponent* PassengerCamera = nullptr;
+
+	/** Entwicklungshilfe: Profil, Clearance und Segmentgrenzen anzeigen. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bahn|Debug")
+	bool bDebugRailway = false;
+
+#if !UE_BUILD_SHIPPING
+	void DrawRailwayDebug();
+#endif
 };

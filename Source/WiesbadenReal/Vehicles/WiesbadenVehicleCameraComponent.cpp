@@ -42,7 +42,7 @@ void UWiesbadenVehicleCameraComponent::CreateCameraRig()
 
 	// SpringArm: Kind der Fahrzeug-Wurzel -> dreht mit dem Fahrzeug mit.
 	SpringArm = NewObject<USpringArmComponent>(Owner, TEXT("VehicleSpringArm"));
-	SpringArm->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+	SpringArm->AttachToComponent(CameraAnchor ? CameraAnchor : this, FAttachmentTransformRules::KeepRelativeTransform);
 	SpringArm->TargetArmLength = FollowArmLength;
 	SpringArm->bUsePawnControlRotation = false;
 	// Ruhiger Horizont: Nicken und Rollen des Rumpfs bleiben draussen, nur
@@ -57,6 +57,7 @@ void UWiesbadenVehicleCameraComponent::CreateCameraRig()
 	SpringArm->CameraLagSpeed = FMath::Max(PositionLagSpeed, 0.01f);
 	SpringArm->CameraLagMaxDistance = 350.0f;
 	SpringArm->bEnableCameraRotationLag = false;
+	SpringArm->SetRelativeLocation(CameraOffset);
 	SpringArm->SetRelativeRotation(FRotator(FollowPitchOffset, 0.0f, 0.0f));
 	SpringArm->RegisterComponent();
 
@@ -67,7 +68,7 @@ void UWiesbadenVehicleCameraComponent::CreateCameraRig()
 	ThirdPersonCamera->RegisterComponent();
 
 	CockpitSocket = NewObject<USceneComponent>(Owner, TEXT("VehicleCockpitSocket"));
-	CockpitSocket->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+	CockpitSocket->AttachToComponent(CameraAnchor ? CameraAnchor : this, FAttachmentTransformRules::KeepRelativeTransform);
 	CockpitSocket->SetRelativeLocation(CockpitOffset);
 	CockpitSocket->RegisterComponent();
 
@@ -215,6 +216,13 @@ void UWiesbadenVehicleCameraComponent::HandleInput(float DeltaTime)
 	// Gamepad rechter Stick (analog, mit kleiner Totzone gegen Drift).
 	const float StickX = PC->GetInputAnalogKeyState(EKeys::Gamepad_RightX);
 	const float StickY = PC->GetInputAnalogKeyState(EKeys::Gamepad_RightY);
+	const float Wheel = PC->GetInputAnalogKeyState(EKeys::MouseWheelAxis);
+	if (FMath::Abs(Wheel) > KINDA_SMALL_NUMBER && SpringArm)
+	{
+		SpringArm->TargetArmLength = FMath::Clamp(
+			SpringArm->TargetArmLength - Wheel * ZoomStep,
+			ZoomMinArmLength, ZoomMaxArmLength);
+	}
 	if (FMath::Abs(StickX) > 0.15f || FMath::Abs(StickY) > 0.15f)
 	{
 		LookYaw += StickX * GamepadLookRate * DeltaTime;
@@ -272,6 +280,44 @@ void UWiesbadenVehicleCameraComponent::UpdateBoom(float DeltaTime)
 		FMath::FInterpTo(Current.Yaw, Desired.Yaw, DeltaTime, Response),
 		FMath::FInterpTo(Current.Roll, Desired.Roll, DeltaTime, Response));
 	SpringArm->SetRelativeRotation(Next);
+}
+
+void UWiesbadenVehicleCameraComponent::SetCameraAnchor(USceneComponent* Anchor)
+{
+	CameraAnchor = Anchor;
+}
+
+void UWiesbadenVehicleCameraComponent::ActivateExternalView(
+	APlayerController* Controller, USceneComponent* Anchor, AActor* RestoreTarget)
+{
+	ExternalController = Controller;
+	ExternalRestoreTarget = RestoreTarget;
+	CameraAnchor = Anchor;
+	bExternalViewActive = Controller != nullptr && Anchor != nullptr;
+	if (bExternalViewActive)
+	{
+		if (!bRigCreated)
+		{
+			CreateCameraRig();
+			bRigCreated = true;
+		}
+		if (ExternalController.IsValid())
+		{
+			ExternalController->SetViewTarget(GetOwner());
+		}
+	}
+}
+
+void UWiesbadenVehicleCameraComponent::DeactivateExternalView()
+{
+	if (ExternalController.IsValid() && ExternalRestoreTarget.IsValid())
+	{
+		ExternalController->SetViewTarget(ExternalRestoreTarget.Get());
+	}
+	bExternalViewActive = false;
+	ExternalController.Reset();
+	ExternalRestoreTarget.Reset();
+	CameraAnchor = nullptr;
 }
 
 APlayerController* UWiesbadenVehicleCameraComponent::GetPlayerController() const

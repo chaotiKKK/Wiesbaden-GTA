@@ -8,6 +8,7 @@
 
 #include "WiesbadenVehicleCameraComponent.generated.h"
 
+class AActor;
 class APlayerController;
 class UCameraComponent;
 class USpringArmComponent;
@@ -143,6 +144,20 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "0.0"))
 	float PositionLagSpeed = 0.0f;
 
+	/** Hoehenversatz des Kameraankers, z. B. Augenhoehe im Bahnwagen. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera")
+	FVector CameraOffset = FVector::ZeroVector;
+
+	/** Zoomgrenzen und Schrittweite des Mausrads. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "50.0"))
+	float ZoomMinArmLength = 80.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "80.0"))
+	float ZoomMaxArmLength = 1200.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "1.0"))
+	float ZoomStep = 45.0f;
+
 	/** Position des Cockpit-Sockets relativ zur Kamera-Komponente (cm). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera")
 	FVector CockpitOffset = FVector(95.0f, 0.0f, 140.0f);
@@ -163,6 +178,13 @@ public:
 	/** Ein Mesh registrieren, das in der Cockpit-Ansicht verborgen wird. */
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Kamera")
 	void AddCockpitHiddenMesh(UPrimitiveComponent* Mesh);
+
+	/** Kamera-Rig an einen bewegten Unterpunkt, z. B. einen Bahnwagen, haengen. */
+	void SetCameraAnchor(USceneComponent* Anchor);
+
+	/** Aktiviert das Rig fuer einen nicht besessenen Rideable-Actor. */
+	void ActivateExternalView(APlayerController* Controller, USceneComponent* Anchor, AActor* RestoreTarget);
+	void DeactivateExternalView();
 
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Kamera")
@@ -187,6 +209,12 @@ private:
 
 	APlayerController* GetPlayerController() const;
 
+	UPROPERTY(Transient)
+	USceneComponent* CameraAnchor = nullptr;
+
+	TWeakObjectPtr<APlayerController> ExternalController;
+	TWeakObjectPtr<AActor> ExternalRestoreTarget;
+	bool bExternalViewActive = false;
 	FRotator OrbitOffset = FRotator::ZeroRotator;
 	bool bCameraToggleHeld = false;
 	bool bRigCreated = false;

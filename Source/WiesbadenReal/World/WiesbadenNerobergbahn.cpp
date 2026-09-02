@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "World/WiesbadenNerobergbahn.h"
+#include "World/WiesbadenRailTransport.h"
 
 #include "WiesbadenReal.h"
 
@@ -14,6 +15,8 @@
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "DrawDebugHelpers.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Vehicles/WiesbadenFootPawn.h"
 
@@ -71,6 +74,9 @@ namespace
 	// Hoehenunterschied des Vorbilds - Rueckfallrampe, bis das Gelaende
 	// gestreamt ist.
 	constexpr double ClimbCm = 8300.0;
+	constexpr double TrackBedStartCm = 850.0;
+	constexpr double RailClearanceCm = 35.0;
+	constexpr double MaxRailGrade = 0.30;
 
 	// Wagenboden ueber Schienenoberkante.
 	constexpr float CarFloorCm = 45.0f;
@@ -249,7 +255,7 @@ void AWiesbadenNerobergbahn::BuildTracks()
 		}
 		Out.TotalLength = Arc;
 
-		// Rueckfallhoehe: lineare Rampe ueber die 83 m des Vorbilds.
+		// Rueckfallprofil: bis zur Gelaendeabtastung eine Vorbildrampe.
 		for (FTrackPoint& Point : Out.Points)
 		{
 			Point.Position.Z = Out.TotalLength > 0.0
@@ -329,20 +335,40 @@ bool AWiesbadenNerobergbahn::ResolveHeights()
 	{
 		bHeightsFinal = true;
 
-		// Die Bahn faehrt am SEIL, nicht durch Schlagloecher: die
-		// Gelaendehoehen werden monoton geglaettet, damit die Trasse eine
-		// stetige Steigung hat wie eine echte Standseilbahntrasse.
 		for (FTrack* Track : { &TrackA, &TrackB })
 		{
-			for (int32 i = 1; i < Track->Points.Num(); ++i)
+			TArray<double> ArcLengths;
+			TArray<double> TerrainHeights;
+			ArcLengths.Reserve(Track->Points.Num());
+			TerrainHeights.Reserve(Track->Points.Num());
+			for (const FTrackPoint& Point : Track->Points)
 			{
-				Track->Points[i].Position.Z = FMath::Max(
-					Track->Points[i].Position.Z,
-					Track->Points[i - 1].Position.Z);
+				ArcLengths.Add(Point.ArcLength);
+				TerrainHeights.Add(Point.Position.Z);
+			}
+
+			TArray<FWiesbadenRailProfilePoint> Profile;
+			const double StartZ = FMath::Max(TerrainHeights[0] + RailClearanceCm,
+				TerrainHeights.Last() + RailClearanceCm - Track->TotalLength * MaxRailGrade);
+			const double EndZ = FMath::Max(TerrainHeights.Last() + RailClearanceCm,
+				TerrainHeights[0] + RailClearanceCm + Track->TotalLength * MaxRailGrade);
+			if (WiesbadenRailTransport::BuildConstrainedGradeProfile(
+				ArcLengths, TerrainHeights, StartZ, EndZ,
+				RailClearanceCm, MaxRailGrade, Profile))
+			{			for (int32 Index = 0; Index < Track->Points.Num(); ++Index)
+				{
+					Track->Points[Index].Position.Z = Profile[Index].RailZCm;
+				}
 			}
 		}
 
 		BuildTrackMeshes();
+#if !UE_BUILD_SHIPPING
+		if (bDebugRailway)
+		{
+			DrawRailwayDebug();
+		}
+#endif
 
 		// Hoehenbereich MELDEN.
 		//
@@ -424,6 +450,7 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 			for (int32 i = 0; i < Track->Points.Num(); ++i)
 			{
 				const FVector& P = Track->Points[i].Position;
+				const float BedLift = Track->Points[i].ArcLength >= TrackBedStartCm ? 6.0f : 0.0f;
 				FVector Tangent = FVector::ForwardVector;
 				if (i + 1 < Track->Points.Num())
 				{
@@ -434,7 +461,7 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 					Tangent = (P - Track->Points[i - 1].Position).GetSafeNormal();
 				}
 				const FVector Right = FVector::CrossProduct(Tangent, FVector::UpVector).GetSafeNormal();
-				const FVector Centre = P + Right * Ribbon.Offset + FVector(0, 0, Ribbon.Lift);
+				const FVector Centre = P + Right * Ribbon.Offset + FVector(0, 0, Ribbon.Lift + BedLift);
 
 				Vertices.Add(Centre - Right * Ribbon.HalfWidth);
 				Vertices.Add(Centre + Right * Ribbon.HalfWidth);
@@ -545,8 +572,8 @@ void AWiesbadenNerobergbahn::Tick(float DeltaSeconds)
 
 	// Gegenlauf am Seil: Wagen B steht immer spiegelbildlich zu A.
 	PlaceCar(CarA, TrackA, CablePosition);
-	PlaceCar(CarB, TrackB, TrackB.TotalLength - CablePosition
-		* (TrackB.TotalLength / FMath::Max(TrackA.TotalLength, 1.0)));
+	PlaceCar(CarB, TrackB, WiesbadenRailTransport::OpposingCablePosition(
+		CablePosition, TrackB.TotalLength, true));
 
 	// -- Mitfahren -----------------------------------------------------------
 	UWorld* World = GetWorld();
@@ -564,6 +591,27 @@ void AWiesbadenNerobergbahn::Tick(float DeltaSeconds)
 	bBoardKeyHeld = bBoardDown;
 }
 
+#if !UE_BUILD_SHIPPING
+void AWiesbadenNerobergbahn::DrawRailwayDebug()
+{
+	if (!GetWorld() || !bDebugRailway)
+	{
+		return;
+	}
+	for (const FTrack* DebugTrack : { &TrackA, &TrackB })
+	{
+		for (int32 Index = 1; Index < DebugTrack->Points.Num(); ++Index)
+		{
+			const FVector& A = DebugTrack->Points[Index - 1].Position;
+			const FVector& B = DebugTrack->Points[Index].Position;
+			DrawDebugLine(GetWorld(), A, B, FColor::Green, false, 0.0f, 0, 3.0f);
+			DrawDebugLine(GetWorld(), A + FVector(0, 0, -RailClearanceCm),
+				A + FVector(0, 0, 120.0f), FColor::Yellow, false, 0.0f, 0, 1.0f);
+		}
+	}
+}
+#endif
+
 void AWiesbadenNerobergbahn::ToggleBoarding()
 {
 	UWorld* World = GetWorld();
@@ -575,9 +623,14 @@ void AWiesbadenNerobergbahn::ToggleBoarding()
 	}
 
 	// Aussteigen: neben dem Wagen absetzen und die Fusssteuerung freigeben.
-	if (Passenger)
+	if (RideSession.IsRiding())
 	{
-		USceneComponent* Car = PassengerCar == 0 ? CarA : CarB;
+		USceneComponent* Car = RideSession.CarIndex == 0 ? CarA : CarB;
+		APawn* Passenger = RideSession.GetPassenger();
+		if (!RideSession.BeginExiting() || !Passenger)
+		{
+			return;
+		}
 		Passenger->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 		if (Car)
 		{
@@ -588,8 +641,9 @@ void AWiesbadenNerobergbahn::ToggleBoarding()
 		{
 			Foot->SetRiding(false);
 		}
+		DestroyPassengerCamera();
 		UE_LOG(LogWbStreaming, Log, TEXT("Nerobergbahn: Fahrgast ausgestiegen."));
-		Passenger = nullptr;
+		RideSession.CompleteExit();
 		return;
 	}
 
@@ -614,14 +668,64 @@ void AWiesbadenNerobergbahn::ToggleBoarding()
 			continue;
 		}
 
-		Passenger = Pawn;
-		PassengerCar = i;
+		if (!RideSession.BeginBoarding(Pawn, i))
+		{
+			continue;
+		}
 		Foot->SetRiding(true);
 		Pawn->AttachToComponent(Cars[i], FAttachmentTransformRules::KeepWorldTransform);
+		if (!RideSession.ConfirmRiding())
+		{
+			Pawn->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+			Foot->SetRiding(false);
+			RideSession.Reset();
+			continue;
+		}
+		CreatePassengerCamera();
 		// In die Wagenmitte, Boden auf Bodenhoehe des Wagens.
 		Pawn->SetActorLocation(Cars[i]->GetComponentLocation() + FVector(0, 0, 150.0f));
 		UE_LOG(LogWbStreaming, Log, TEXT("Nerobergbahn: Fahrgast eingestiegen (Wagen %s)."),
 			i == 0 ? TEXT("A") : TEXT("B"));
 		return;
+	}
+}
+
+void AWiesbadenNerobergbahn::CreatePassengerCamera()
+{
+	if (PassengerCamera || !RideSession.GetPassenger())
+	{
+		return;
+	}
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	USceneComponent* Car = RideSession.CarIndex == 0 ? CarA : CarB;
+	if (!PC || !Car)
+	{
+		return;
+	}
+	PassengerCamera = NewObject<UWiesbadenVehicleCameraComponent>(this, TEXT("NerobergbahnPassengerCamera"));
+	PassengerCamera->SetupAttachment(Car);
+	PassengerCamera->CameraOffset = FVector(0.0f, 0.0f, 155.0f);
+	PassengerCamera->FollowArmLength = 260.0f;
+	PassengerCamera->ZoomMinArmLength = 80.0f;
+	PassengerCamera->ZoomMaxArmLength = 700.0f;
+	PassengerCamera->RegisterComponent();
+	PassengerCamera->ActivateExternalView(PC, Car, RideSession.GetPassenger());
+}
+
+void AWiesbadenNerobergbahn::DestroyPassengerCamera()
+{
+	if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+	{
+		if (APawn* PassengerPawn = RideSession.GetPassenger())
+		{
+			PC->SetViewTarget(PassengerPawn);
+		}
+	}
+	if (PassengerCamera)
+	{
+		PassengerCamera->DeactivateExternalView();
+		PassengerCamera->DestroyComponent();
+		PassengerCamera = nullptr;
 	}
 }
