@@ -148,6 +148,24 @@ AWiesbadenWorldBuilder::AWiesbadenWorldBuilder()
 	RegionAssetSpawner->SetupAttachment(Root);
 }
 
+void AWiesbadenWorldBuilder::ReleasePipelineObjects()
+{
+	// Nach Build-Ende werden die Generatoren nicht mehr gebraucht: der Worker ist
+	// fertig, der Game-Thread liest nur noch Context->Data. Das Nullen der
+	// UPROPERTY-Anker gibt sie fuer den GC frei, statt sie bis zum naechsten Build
+	// oder zur Actor-Zerstoerung am Leben zu halten.
+	PipelineConverter = nullptr;
+	PipelineParser = nullptr;
+	PipelineImporter = nullptr;
+	PipelineTypeLibrary = nullptr;
+	PipelineRoadGenerator = nullptr;
+	PipelineBuildingGenerator = nullptr;
+	PipelineRegionGenerator = nullptr;
+	PipelineRegionAssetGenerator = nullptr;
+	PipelineTerrainGenerator = nullptr;
+	PipelineFurnitureGenerator = nullptr;
+}
+
 void AWiesbadenWorldBuilder::BuildCity()
 {
 	if (bBuildInProgress)
@@ -194,6 +212,9 @@ void AWiesbadenWorldBuilder::BuildCity()
 		LastError = TEXT("Georeferenzierung konnte nicht initialisiert werden.");
 		UE_LOG(LogWbCore, Error, TEXT("BuildCity abgebrochen: %s"), *LastError);
 		bBuildInProgress = false;
+		// Frueh-Abbruch: die Generatoren wurden erzeugt, aber der Worker nie
+		// gestartet - sofort wieder freigeben.
+		ReleasePipelineObjects();
 
 		// Historie auch fuer fehlgeschlagene Laeufe (kein Pipeline-Kontext).
 		WriteBuildSummaryToCsv(nullptr, nullptr, nullptr, nullptr,
@@ -282,6 +303,11 @@ void AWiesbadenWorldBuilder::BuildCity()
 		FPlatformProcess::Sleep(0.01f);
 	}
 #endif
+
+	// Worker ist fertig (bDone). Die Pipeline-Generatoren werden ab hier nicht
+	// mehr gebraucht - der Game-Thread liest nur noch Context->Data. Einmal hier
+	// freigeben deckt alle Ausgaenge ab (Erfolg, Benutzer-Abbruch, Fehler).
+	ReleasePipelineObjects();
 
 	// Ergebnisse auf dem Game-Thread anwenden: Mesh- und Landscape-Erzeugung
 	// sind nicht thread-sicher und bleiben deshalb hier.

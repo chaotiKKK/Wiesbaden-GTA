@@ -818,4 +818,10 @@ public:
 
 	UPROPERTY(Transient)
 	URoadFurnitureGenerator* PipelineFurnitureGenerator = nullptr;
+
+	/** Setzt die 10 Pipeline-Generator-Member auf nullptr, damit der GC sie nach
+	 *  dem Build-Ende einsammeln kann - analog zum RemoveFromRoot-Timing im
+	 *  GameInstance. Wird auf allen Ausgaengen (Erfolg, Abbruch, Fehler,
+	 *  Frueh-Abbruch) aufgerufen. */
+	void ReleasePipelineObjects();
 };
