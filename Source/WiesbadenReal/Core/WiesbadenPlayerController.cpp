@@ -9,6 +9,7 @@
 #include "GameFramework/Pawn.h"
 #include "Vehicles/WiesbadenCar.h"
 #include "Vehicles/WiesbadenHelicopter.h"
+#include "Vehicles/WiesbadenHelicopterAutopilot.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "Vehicles/WiesbadenVehicleTestHarness.h"
 #include "World/WiesbadenCitySubsystem.h"
@@ -166,4 +167,46 @@ void AWiesbadenPlayerController::WbDrive(int32 Sekunden)
 	}
 	GetOrAddHarness(Car)->StartDriveProfile(static_cast<float>(Sekunden));
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbDrive - Fahrprofil fuer %d s gestartet."), Sekunden);
+}
+
+// Autopilot-Komponente on-demand am Helikopter anlegen (wie der Test-Harness):
+// im normalen Spiel existiert sie nicht, bis ein Dev-Befehl sie anfordert.
+static UWiesbadenHelicopterAutopilot* GetOrAddAutopilot(AWiesbadenHelicopter* Heli)
+{
+	UWiesbadenHelicopterAutopilot* Autopilot =
+		Heli->FindComponentByClass<UWiesbadenHelicopterAutopilot>();
+	if (!Autopilot)
+	{
+		Autopilot = NewObject<UWiesbadenHelicopterAutopilot>(Heli);
+		Autopilot->RegisterComponent();
+	}
+	return Autopilot;
+}
+
+void AWiesbadenPlayerController::WbHeliGoto(int32 DeltaXMeter, int32 DeltaYMeter, int32 DeltaZMeter)
+{
+	AWiesbadenHelicopter* Heli = Cast<AWiesbadenHelicopter>(GetPawn());
+	if (!Heli)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbHeliGoto erkannt, aber kein Helikopter besessen (erst WbHeli)."));
+		return;
+	}
+	const FVector Target = Heli->GetActorLocation()
+		+ FVector(DeltaXMeter, DeltaYMeter, DeltaZMeter) * 100.0;
+	GetOrAddAutopilot(Heli)->FlyTo(Target);
+	UE_LOG(LogWbCore, Log,
+		TEXT("WbDev: WbHeliGoto - Autopilot fliegt zu (%d, %d, %d) m relativ."),
+		DeltaXMeter, DeltaYMeter, DeltaZMeter);
+}
+
+void AWiesbadenPlayerController::WbHeliHover()
+{
+	AWiesbadenHelicopter* Heli = Cast<AWiesbadenHelicopter>(GetPawn());
+	if (!Heli)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbHeliHover erkannt, aber kein Helikopter besessen (erst WbHeli)."));
+		return;
+	}
+	GetOrAddAutopilot(Heli)->HoldPosition();
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeliHover - Autopilot haelt die Position."));
 }

@@ -67,4 +67,13 @@ public:
 	// fuer <Sekunden> - weist Fahrphysik und Lenkung ohne Tastatur nach.
 	UFUNCTION(Exec)
 	void WbDrive(int32 Sekunden);
+
+	// Autopilot: fliegt den besessenen Helikopter zu einem Punkt <dx dy dz> Meter
+	// relativ zur aktuellen Position (Weltachsen) und haelt ihn dort.
+	UFUNCTION(Exec)
+	void WbHeliGoto(int32 DeltaXMeter, int32 DeltaYMeter, int32 DeltaZMeter);
+
+	// Autopilot: haelt die aktuelle Position/Hoehe (Schweben).
+	UFUNCTION(Exec)
+	void WbHeliHover();
 };
