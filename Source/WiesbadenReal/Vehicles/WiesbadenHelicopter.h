@@ -106,6 +106,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
 	float GetYawRateDegPerSec() const;
 
+	/**
+	 * Weltgeschwindigkeit in m/s aus der internen Integration.
+	 *
+	 * WICHTIG: Dieser Pawn bewegt sich kinematisch (AddActorWorldOffset), setzt
+	 * keine ComponentVelocity und hat keine MovementComponent - `AActor::GetVelocity()`
+	 * liefert daher 0. Fuer Regelung/KI MUSS dieser Getter genutzt werden, nicht
+	 * GetVelocity(), sonst ist jede Geschwindigkeitsrueckfuehrung wirkungslos.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
+	FVector GetVelocityMetersPerSecond() const { return Velocity * 0.01f; }
+
 	// -- Externe Steuerung ------------------------------------------------
 	// Sauberer Eingang, ueber den ein anderer Treiber (KI, Zwischensequenz,
 	// Replay, Test-Harness) den Hubschrauber steuert - ueber die ECHTE

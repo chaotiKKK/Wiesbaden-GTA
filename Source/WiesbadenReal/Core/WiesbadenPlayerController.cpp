@@ -210,3 +210,24 @@ void AWiesbadenPlayerController::WbHeliHover()
 	GetOrAddAutopilot(Heli)->HoldPosition();
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeliHover - Autopilot haelt die Position."));
 }
+
+void AWiesbadenPlayerController::WbHeliOff()
+{
+	AWiesbadenHelicopter* Heli = Cast<AWiesbadenHelicopter>(GetPawn());
+	if (!Heli)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbHeliOff erkannt, aber kein Helikopter besessen."));
+		return;
+	}
+	// Nur einen VORHANDENEN Autopiloten abschalten - keinen erst anlegen, um ihn
+	// gleich wieder zu loesen.
+	if (UWiesbadenHelicopterAutopilot* Autopilot = Heli->FindComponentByClass<UWiesbadenHelicopterAutopilot>())
+	{
+		Autopilot->Disengage();
+		UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeliOff - Autopilot aus, Steuerung zurueck an Tastatur/Gamepad."));
+	}
+	else
+	{
+		UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeliOff - kein Autopilot aktiv."));
+	}
+}

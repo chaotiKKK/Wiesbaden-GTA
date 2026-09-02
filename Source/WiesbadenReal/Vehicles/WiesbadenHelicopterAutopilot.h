@@ -61,20 +61,23 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Autopilot")
 	void Disengage();
 
-	/** Aktuelle Betriebsart. */
-	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Autopilot")
-	EWiesbadenAutopilotMode GetMode() const { return Mode; }
-
-	/** Aktuelles Weltziel (nur sinnvoll bei Hold/Goto). */
-	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Autopilot")
-	FVector GetTarget() const { return Target; }
-
 	// -- Regel-Parameter (datengetrieben, im Details-Panel einstellbar) --------
 
 	/** Ziel-Horizontalgeschwindigkeit je Meter Abstand (m/s pro m), gekappt.
-	 *  Niedrig, damit der Anflug frueh abbremst und nicht ueberschiesst. */
+	 *  Niedrig, damit der traege Rotor frueh genug abbremst und nicht ueberschiesst
+	 *  (Bremsweg ~ v^2 / 2a, und die Neige-Bremsautoritaet ist gering). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.05"))
-	float ApproachGain = 0.18f;
+	float ApproachGain = 0.05f;
+
+	/**
+	 * MINIMALE Anflug-Horizontalgeschwindigkeit (m/s), solange ausserhalb des
+	 * Ankunftsradius. Der Rotor hat eine Anfahr-Totzone: sehr kleine Nick-Befehle
+	 * (aus sehr kleiner Ziel-Geschwindigkeit) bewegen ihn nicht -> er bliebe mit
+	 * stationaerem Fehler kurz vorm Ziel stehen. Diese Untergrenze haelt den Befehl
+	 * ueber der Totzone, bis er WIRKLICH im Radius ist (dort dann 0 = bremsen/halten).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.0"))
+	float MinApproachSpeed = 2.0f;
 
 	/**
 	 * Maximale Anflug-Horizontalgeschwindigkeit (m/s).
@@ -84,15 +87,16 @@ public:
 	 * Anflug ueber das Ziel hinausschiesst und es umkreist. Ruhiger = stabiler.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "1.0"))
-	float MaxApproachSpeed = 11.0f;
+	float MaxApproachSpeed = 5.0f;
 
 	/** Nick/Roll je m/s Geschwindigkeitsfehler (Anteil pro m/s). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.005"))
 	float TiltGain = 0.12f;
 
-	/** Maximaler Nick-/Roll-Ausschlag des Autopiloten (0..1). */
+	/** Maximaler Nick-/Roll-Ausschlag des Autopiloten (0..1). Etwas hoeher fuer mehr
+	 *  Bremsautoritaet nahe am Ziel (gegen Ueberschiessen des traegen Rotors). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.05", ClampMax = "1.0"))
-	float MaxTilt = 0.28f;
+	float MaxTilt = 0.38f;
 
 	/** Ziel-Steigrate je Meter Hoehenfehler (m/s pro m), gekappt. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.05"))
@@ -129,9 +133,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.5"))
 	float ArriveAltToleranceMeters = 4.0f;
 
-	/** Ab diesem Horizontalabstand (m) richtet sich der Rumpf zum Ziel aus. */
+	/**
+	 * Ab diesem Horizontalabstand (m) richtet sich der Rumpf zum Ziel aus.
+	 *
+	 * Bewusst GROSS: naeher dran wird NICHT mehr gegiert. Sonst dreht sich der
+	 * Rumpf beim leichten Ueberschiessen zum jetzt hinter ihm liegenden Ziel, und
+	 * die (jetzt echte) Geschwindigkeitsbremse wirkt im rotierenden Frame
+	 * tangential -> der Heli umkreist das Ziel. Im festen Frame bremst sie sauber.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "1.0"))
-	float FaceTargetMinDistanceMeters = 12.0f;
+	float FaceTargetMinDistanceMeters = 60.0f;
 
 private:
 	AWiesbadenHelicopter* Heli() const;

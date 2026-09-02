@@ -7,9 +7,8 @@
 
 namespace
 {
-	// cm <-> m: Positionen/Geschwindigkeiten der Engine sind in cm bzw. cm/s.
+	// Engine-Positionen sind in cm; der Regler rechnet in m.
 	constexpr float CmToM = 0.01f;
-	constexpr float MToCm = 100.0f;
 }
 
 UWiesbadenHelicopterAutopilot::UWiesbadenHelicopterAutopilot()
@@ -69,9 +68,11 @@ void UWiesbadenHelicopterAutopilot::TickComponent(float DeltaTime, ELevelTick Ti
 	}
 	ElapsedInMode += DeltaTime;
 
-	// Ist- und Fehlergroessen in Metern / m/s (Engine liefert cm / cm/s).
+	// Ist- und Fehlergroessen in Metern / m/s. ACHTUNG: die ECHTE Geschwindigkeit
+	// kommt aus der internen Integration des Helis - AActor::GetVelocity() ist bei
+	// diesem kinematischen Pawn 0 und wuerde jede Daempfung wirkungslos machen.
 	const FVector Pos = H->GetActorLocation();
-	const FVector Vel = H->GetVelocity() * CmToM;
+	const FVector Vel = H->GetVelocityMetersPerSecond();
 	const FVector ErrorCm = Target - Pos;
 	const FVector ErrorXY(ErrorCm.X, ErrorCm.Y, 0.0f);
 	const float DistXYm = ErrorXY.Size() * CmToM;
@@ -86,7 +87,13 @@ void UWiesbadenHelicopterAutopilot::TickComponent(float DeltaTime, ELevelTick Ti
 	//    Nick/Roll im Rumpf-Frame. Nahe am Ziel geht die Ziel-Geschwindigkeit gegen
 	//    0 -> die Restgeschwindigkeit wird weggebremst = Position halten. Ein
 	//    einheitliches Gesetz fuer Anflug UND Schweben, ohne Fallunterscheidung.
-	const float DesiredSpeed = FMath::Min(ApproachGain * DistXYm, MaxApproachSpeed);
+	// Im Ankunftsradius: Ziel-Geschwindigkeit 0 -> die echte Geschwindigkeit wird
+	// weggebremst (halten). Ausserhalb: proportional zum Abstand, aber mit einer
+	// Untergrenze ueber der Rotor-Anfahr-Totzone, damit der letzte Meter nicht als
+	// stationaerer Fehler stehen bleibt.
+	const float DesiredSpeed = (DistXYm <= ArriveRadiusMeters)
+		? 0.0f
+		: FMath::Clamp(ApproachGain * DistXYm, MinApproachSpeed, MaxApproachSpeed);
 	const FVector DesiredVelXY = (DistXYm > KINDA_SMALL_NUMBER)
 		? ErrorXY.GetSafeNormal() * DesiredSpeed
 		: FVector::ZeroVector;
@@ -135,6 +142,9 @@ void UWiesbadenHelicopterAutopilot::TickComponent(float DeltaTime, ELevelTick Ti
 			Mode == EWiesbadenAutopilotMode::Goto ? TEXT("Anflug") : TEXT("Halten"));
 	}
 
+	// Ankunft EINMAL je Ziel melden (bArrivedLogged wird nur von FlyTo/HoldPosition
+	// zurueckgesetzt). Kein Zuruecksetzen bei kleinem Abtreiben am Radius-Rand,
+	// sonst wiederholt sich "Wegpunkt erreicht" beim Zappeln um die Grenze.
 	const bool bArrived = (DistXYm <= ArriveRadiusMeters)
 		&& (FMath::Abs(ErrorZm) <= ArriveAltToleranceMeters);
 	if (bArrived && !bArrivedLogged)
@@ -143,11 +153,5 @@ void UWiesbadenHelicopterAutopilot::TickComponent(float DeltaTime, ELevelTick Ti
 		UE_LOG(LogWbVehicles, Log,
 			TEXT("WbDev Autopilot: Wegpunkt erreicht nach %.1f s (Abstand %.1f m) - halte Position."),
 			ElapsedInMode, Dist3Dm);
-	}
-	else if (!bArrived && bArrivedLogged)
-	{
-		// Abgetrieben (z. B. Wind/Stoss): Ankunft zuruecksetzen, damit ein
-		// erneutes Erreichen wieder gemeldet wird.
-		bArrivedLogged = false;
 	}
 }

@@ -76,4 +76,8 @@ public:
 	// Autopilot: haelt die aktuelle Position/Hoehe (Schweben).
 	UFUNCTION(Exec)
 	void WbHeliHover();
+
+	// Autopilot AUS: gibt die Steuerung an Tastatur/Gamepad zurueck (mitten im Flug).
+	UFUNCTION(Exec)
+	void WbHeliOff();
 };
