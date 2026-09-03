@@ -69,6 +69,9 @@ Die Designbegruendung des Fahndungssystems steckt weiterhin in der Spec unten
 Implementierungsplaene. Sie beschreiben geplante/laufende Arbeit, nicht das
 fertige Produkt, und altern mit ihr; Datum im Dateinamen.*
 
+- [Fahrzeug-Steuernaht vereinheitlichen (IWiesbadenVehicleControl) - Design](superpowers/specs/2026-09-03-fahrzeug-steuernaht-vereinheitlichen.md)
+  (Spec, 2026-09-03) - Car und ChaosCar hinter EIN Interface (SetExternalControl),
+  damit Harness/Autopilot/Tests/HUD beide identisch fahren. Kein Code, nur Plan.
 - [Fahndungs-/Polizei-System - Design](superpowers/specs/2026-09-02-fahndung-polizei-design.md)
   (Spec, 2026-09-02) - GTA-artiges Fahndungssystem: Sternchen-Level 0-5,
   Streifenwagen-Verfolgung, Festnahme. Enthaelt zugleich die Designbegruendung.
