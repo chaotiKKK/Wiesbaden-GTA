@@ -67,7 +67,20 @@ if ($Rollback) {
         exit 1
     }
     $swapTmp = Join-Path $ProjDir "Saved\Package_swap"
-    Remove-Item $swapTmp -Recurse -Force -ErrorAction SilentlyContinue
+    # CRASH-SICHER: Package_swap NICHT loeschen. Existiert es beim Start, wurde ein
+    # frueherer Tausch unterbrochen - es haelt dann ein fertiges (stundenlang
+    # gebautes) Paket. Loeschen wuerde es unwiderruflich vernichten. Stattdessen den
+    # unterbrochenen Tausch abschliessen und beenden.
+    if (Test-Path $swapTmp) {
+        Write-Host "Unterbrochener Tausch erkannt (Package_swap vorhanden) - schliesse ihn ab (kein Datenverlust)."
+        if (-not (Test-Path $PackageDir) -and (Test-Path $PrevPackageDir)) {
+            Move-Item $PrevPackageDir $PackageDir -Force
+        }
+        if (Test-Path $swapTmp) { Move-Item $swapTmp $PrevPackageDir -Force }
+        Set-PackageShortcut
+        Write-Host "Wiederhergestellt: Rollback aus unterbrochenem Zustand abgeschlossen."
+        exit 0
+    }
     if (Test-Path $PackageDir) { Move-Item $PackageDir $swapTmp -Force }
     Move-Item $PrevPackageDir $PackageDir -Force
     if (Test-Path $swapTmp)    { Move-Item $swapTmp $PrevPackageDir -Force }
@@ -106,8 +119,16 @@ $BuildLog = Join-Path $LogDir "release_build.log"
 Remove-Item $BuildLog -ErrorAction SilentlyContinue
 Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
+# WICHTIG (PS 5.1): UBT schreibt routinemaessig auf stderr (auch bei Warnungen).
+# Unter $ErrorActionPreference='Stop' wuerde eine ueber 2>&1 gepipte stderr-Zeile als
+# terminierender NativeCommandError den Lauf abbrechen, BEVOR der Exit-Code geprueft
+# wird - und eine gute Build stuerbe an einer Warnzeile. Fuer den nativen Aufruf auf
+# 'Continue' schalten; ueber Erfolg/Misserfolg entscheidet allein $LASTEXITCODE.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 & $BuildBat WiesbadenRealEditor Win64 Development -project="$Proj" -waitmutex 2>&1 |
     Tee-Object -FilePath $BuildLog | Select-Object -Last 4
+$ErrorActionPreference = $prevEAP
 if ($LASTEXITCODE -ne 0) {
     $firstErr = (Select-String -Path $BuildLog -Pattern "error [A-Z]|Error:" -SimpleMatch:$false |
         Select-Object -First 3 | ForEach-Object { $_.Line.Trim() }) -join " | "
@@ -169,7 +190,7 @@ if (Test-Path $PackageExe) {
 }
 & cmd /c "`"$PackageCmd`""
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $PackageExe)) {
-    Fail "Schritt 4 (Paketieren)" ("BuildCookRun Exit {0}, Paket-Exe {1}." -f $LASTEXITCODE, $(if (Test-Path $PackageExe) { "vorhanden" } else { "FEHLT" })) `
+    Fail "Schritt 4 (Paketieren)" ("BuildCookRun Exit {0}, Paket-Exe {1}. Das vorige Paket liegt unter Package_previous - mit 'build_release.cmd -Rollback' in Sekunden wiederherstellen." -f $LASTEXITCODE, $(if (Test-Path $PackageExe) { "vorhanden" } else { "FEHLT" })) `
         (Join-Path $ProjDir "package_game.log")
 }
 Write-Host "  Paket gebaut: $PackageExe"
