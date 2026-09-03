@@ -17,15 +17,21 @@
 #   Schritt 4  Paketieren (package_game.cmd -> Saved\Package\Windows\...)
 #   Schritt 5  Verknuepfung 'Wiesbaden Real (Paket)' auf das neue Paket ziehen
 #
+# Vor dem Ueberschreiben wird das bisherige Paket nach Saved\Package_previous
+# gesichert, damit eine schlechte Release umkehrbar ist.
+#
 # Aufruf:  Tools\build_release.cmd            (voll, inkl. Paket - dauert Stunden)
 #          Tools\build_release.cmd -GatesOnly (nur Gates 1-3, ~10-15 min, fuer vor
 #                                              dem Commit; ueberspringt NUR das
 #                                              Paket, KEIN Qualitaets-Gate)
-# Exit 0 = paketiert (bzw. Gates gruen bei -GatesOnly), sonst Exit 1.
+#          Tools\build_release.cmd -Rollback  (Sekunden: aktuelles <-> vorheriges
+#                                              Paket tauschen, Verknuepfung folgt)
+# Exit 0 = paketiert (bzw. Gates gruen bei -GatesOnly / Rollback ok), sonst Exit 1.
 
 param(
     [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
-    [switch]$GatesOnly
+    [switch]$GatesOnly,
+    [switch]$Rollback
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,7 +42,40 @@ $CmdExe   = Join-Path $Engine "Binaries\Win64\UnrealEditor-Cmd.exe"
 $ProjDir  = Join-Path $Root "WiesbadenReal"
 $Proj     = Join-Path $ProjDir "WiesbadenReal.uproject"
 $LogDir   = Join-Path $ProjDir "Saved\Logs"
-$PackageExe = Join-Path $ProjDir "Saved\Package\Windows\WiesbadenReal.exe"
+$PackageDir     = Join-Path $ProjDir "Saved\Package"
+$PrevPackageDir = Join-Path $ProjDir "Saved\Package_previous"
+$PackageExe = Join-Path $PackageDir "Windows\WiesbadenReal.exe"
+$LinkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "Wiesbaden Real (Paket).lnk"
+
+# Desktop-Verknuepfung auf das aktuelle Paket zeigen lassen (Release UND Rollback).
+function Set-PackageShortcut {
+    $ws = New-Object -ComObject WScript.Shell
+    $sc = $ws.CreateShortcut($LinkPath)
+    $sc.TargetPath = $PackageExe
+    $sc.WorkingDirectory = Split-Path $PackageExe -Parent
+    $sc.Description = "Wiesbaden Real - gebackenes Paket (getestete Release-Build)"
+    $sc.Save()
+}
+
+# ---- Rollback: auf das vorherige Paket zurueck (kein Bauen, Sekunden) -----
+# Deployment umkehrbar machen: eine rote Release faellt sonst nicht zurueck. Der
+# Tausch aktuell<->vorher laesst sich mit erneutem -Rollback wieder vorrollen.
+if ($Rollback) {
+    Write-Host "======== Rollback: vorheriges Paket wiederherstellen ========"
+    if (-not (Test-Path (Join-Path $PrevPackageDir "Windows\WiesbadenReal.exe"))) {
+        Write-Host "ABBRUCH: kein vorheriges Paket unter $PrevPackageDir - nichts zum Zurueckrollen."
+        exit 1
+    }
+    $swapTmp = Join-Path $ProjDir "Saved\Package_swap"
+    Remove-Item $swapTmp -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $PackageDir) { Move-Item $PackageDir $swapTmp -Force }
+    Move-Item $PrevPackageDir $PackageDir -Force
+    if (Test-Path $swapTmp)    { Move-Item $swapTmp $PrevPackageDir -Force }
+    Set-PackageShortcut
+    Write-Host "Rollback fertig: '$LinkPath' zeigt jetzt auf das vorherige Paket."
+    Write-Host "(Das zurueckgerollte Paket liegt nun unter Package_previous - erneutes -Rollback rollt wieder vor.)"
+    exit 0
+}
 
 foreach ($p in @($BuildBat, $CmdExe, $Proj)) {
     if (-not (Test-Path $p)) { Write-Host "ABBRUCH: fehlt - $p"; exit 2 }
@@ -122,7 +161,12 @@ if ($GatesOnly) {
 Section 4 "Paketieren (package_game.cmd - dauert lange)"
 $PackageCmd = Join-Path $ProjDir "package_game.cmd"
 if (-not (Test-Path $PackageCmd)) { Fail "Schritt 4 (Paketieren)" "package_game.cmd fehlt." "" }
-Remove-Item $PackageExe -ErrorAction SilentlyContinue
+# Vorheriges Paket als Rollback-Ziel sichern, BEVOR das neue es ueberschreibt.
+if (Test-Path $PackageExe) {
+    Remove-Item $PrevPackageDir -Recurse -Force -ErrorAction SilentlyContinue
+    Move-Item $PackageDir $PrevPackageDir -Force
+    Write-Host "  Vorheriges Paket gesichert -> $PrevPackageDir (fuer 'build_release.cmd -Rollback')."
+}
 & cmd /c "`"$PackageCmd`""
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $PackageExe)) {
     Fail "Schritt 4 (Paketieren)" ("BuildCookRun Exit {0}, Paket-Exe {1}." -f $LASTEXITCODE, $(if (Test-Path $PackageExe) { "vorhanden" } else { "FEHLT" })) `
@@ -132,16 +176,11 @@ Write-Host "  Paket gebaut: $PackageExe"
 
 # ---- Schritt 5: Desktop-Verknuepfung erneuern ---------------------------
 Section 5 "Desktop-Verknuepfung auf das neue Paket ziehen"
-$LinkPath = Join-Path ([Environment]::GetFolderPath("Desktop")) "Wiesbaden Real (Paket).lnk"
-$ws = New-Object -ComObject WScript.Shell
-$sc = $ws.CreateShortcut($LinkPath)
-$sc.TargetPath = $PackageExe
-$sc.WorkingDirectory = Split-Path $PackageExe -Parent
-$sc.Description = "Wiesbaden Real - gebackenes Paket (getestete Release-Build)"
-$sc.Save()
+Set-PackageShortcut
 Write-Host "  Verknuepfung erneuert: $LinkPath -> $PackageExe"
 
 Write-Host ""
 Write-Host "======== RELEASE FERTIG: getestet, paketiert, Verknuepfung aktuell ========"
 Write-Host ("Dauer gesamt: {0:N1} min" -f ((Get-Date) - $Start).TotalMinutes)
+Write-Host "Rueckrollen bei Problemen:  Tools\build_release.cmd -Rollback"
 exit 0
