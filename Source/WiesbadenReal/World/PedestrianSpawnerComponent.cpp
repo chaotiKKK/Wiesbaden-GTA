@@ -335,5 +335,18 @@ void UPedestrianSpawnerComponent::ClearInstances()
 
 int32 UPedestrianSpawnerComponent::GetVisibleCount() const
 {
-	return Instances ? Instances->GetInstanceCount() : 0;
+	// Alle Pools summieren, nicht nur den Grundpool. Sobald die vier Gangphasen
+	// geladen sind, wird animiert: der Grundpool wird GELEERT und jede Figur lebt
+	// in ihrem Pose-Pool (siehe UpdateInstances). Nur Instances->GetInstanceCount()
+	// zu lesen meldete dann dauerhaft 0, obwohl die Figuren gezeichnet werden - das
+	// loeste eine Fehlwarnung "KEINER gezeichnet" in Health-Report und Diagnose aus.
+	int32 Count = Instances ? Instances->GetInstanceCount() : 0;
+	for (const UInstancedStaticMeshComponent* Pool : PoseInstances)
+	{
+		if (Pool)
+		{
+			Count += Pool->GetInstanceCount();
+		}
+	}
+	return Count;
 }
