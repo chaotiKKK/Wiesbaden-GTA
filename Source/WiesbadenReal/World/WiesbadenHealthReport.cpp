@@ -2,6 +2,28 @@
 
 #include "World/WiesbadenHealthReport.h"
 
+EWiesbadenTrafficLightVerdict FWiesbadenHealthReport::TrafficLightVerdict() const
+{
+	// Verdikt auf FAHR-Evidenz statt Geometrie: eine Ampel im Netz heisst nicht,
+	// dass der Verkehr sie auch befaehrt. Nur ~5% der Kreuzungen sind Ampeln, der
+	// Verkehr um den Spieler quert meist ampellose Knoten - dann ist "0 an Rot"
+	// KEIN Fehler. Erst genug Anfahrten (>=20) OHNE ein einziges Halten belegen bei
+	// ~75% Rot-Anteil je Kreuzung einen echten Kopplungs-Defekt.
+	if (TrafficLightCount <= 0)
+	{
+		return EWiesbadenTrafficLightVerdict::Inconclusive;
+	}
+	if (VehiclesHeldAtRed > 0)
+	{
+		return EWiesbadenTrafficLightVerdict::Effective;
+	}
+	if (VehiclesApproachingSignal >= 20)
+	{
+		return EWiesbadenTrafficLightVerdict::Broken;
+	}
+	return EWiesbadenTrafficLightVerdict::Inconclusive;
+}
+
 TArray<FString> FWiesbadenHealthReport::Warnings() const
 {
 	TArray<FString> W;
@@ -17,11 +39,9 @@ TArray<FString> FWiesbadenHealthReport::Warnings() const
 		W.Add(TEXT("streaming: noch nicht abgeschlossen (Zellen laden)."));
 	}
 
-	// Ampel-Kopplung EVIDENZ-gewichtet: erst warnen, wenn genug Fahrzeuge eine
-	// signalisierte Verbindung anfuhren (>=20) UND nie hielten. Bei ~75% Rot je
-	// Kreuzung waere durchgehend Gruen dann astronomisch unwahrscheinlich. Wenige
-	// Anfahrten -> kein Urteil (nur ~5% der Kreuzungen sind Ampeln).
-	if (TrafficLightCount > 0 && VehiclesApproachingSignal >= 20 && VehiclesHeldAtRed == 0)
+	// Ampel-Kopplung: das Drei-Wege-Verdikt liegt zentral in TrafficLightVerdict();
+	// gewarnt wird nur beim echten Defekt (Broken).
+	if (TrafficLightVerdict() == EWiesbadenTrafficLightVerdict::Broken)
 	{
 		W.Add(TEXT("ampel-kopplung: viele Anfahrten auf signalisierte Verbindungen, aber KEIN Halten - defekt."));
 	}
@@ -33,9 +53,16 @@ TArray<FString> FWiesbadenHealthReport::Warnings() const
 		W.Add(TEXT("gebaeude-kollision: keine aktiven Koerper - Durchfahren moeglich."));
 	}
 
+	// Verkehr: bei fertiger Stadt simuliert, aber KEINES gezeichnet -> Traeger/Mesh/
+	// Cull-Defekt. Spiegelt die Inline-Bilanz, die genau dieses Praedikat liest.
+	if (bStreamingComplete && HasTrafficDrawDefect())
+	{
+		W.Add(TEXT("verkehr: simuliert, aber KEINES gezeichnet - Traeger/Mesh/Cull fehlt."));
+	}
+
 	// Fussgaenger: bei fertiger Stadt simuliert, aber KEINER gezeichnet -> echter
 	// Zeichnen-Defekt (Startup-Transient ist zum WbHealth-Zeitpunkt vorbei).
-	if (bStreamingComplete && PedestriansSimulated > 0 && PedestriansDrawn == 0)
+	if (bStreamingComplete && HasPedestrianDrawDefect())
 	{
 		W.Add(TEXT("fussgaenger: simuliert, aber KEINER gezeichnet - Mesh/Spawner fehlt."));
 	}
@@ -60,6 +87,7 @@ FString FWiesbadenHealthReport::ToJson() const
 		TEXT("\"streamingComplete\": %s, ")
 		TEXT("\"trafficLightCount\": %d, ")
 		TEXT("\"activeVehicles\": %d, ")
+		TEXT("\"trafficVehiclesVisible\": %d, ")
 		TEXT("\"vehiclesApproachingSignal\": %d, ")
 		TEXT("\"vehiclesHeldAtRed\": %d, ")
 		TEXT("\"pedestriansSimulated\": %d, ")
@@ -69,6 +97,7 @@ FString FWiesbadenHealthReport::ToJson() const
 		TEXT("\"warnings\": [%s]")
 		TEXT("}"),
 		B(bCityLoaded), B(bStreamingComplete), TrafficLightCount, ActiveVehicles,
-		VehiclesApproachingSignal, VehiclesHeldAtRed, PedestriansSimulated,
-		PedestriansDrawn, BuildingCollisionBodies, B(W.Num() == 0), *WarnJson);
+		TrafficVehiclesVisible, VehiclesApproachingSignal, VehiclesHeldAtRed,
+		PedestriansSimulated, PedestriansDrawn, BuildingCollisionBodies,
+		B(W.Num() == 0), *WarnJson);
 }

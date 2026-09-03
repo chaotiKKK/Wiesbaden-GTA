@@ -1127,14 +1127,16 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		{
 			bTrafficReported = true;
 
-			const int32 Simulated = TrafficSimulation.Vehicles.Num();
-			const int32 Visible = CityActor ? CityActor->GetVisibleTrafficVehicleCount() : 0;
+			// Zahlen UND Verdikt aus dem Health-Report als einziger Wahrheitsquelle:
+			// ActiveVehicles == Vehicles.Num() (simuliert), TrafficVehiclesVisible ==
+			// gezeichnet. Die Prosa unten stellt nur dar, was der Report feststellt.
+			const FWiesbadenHealthReport R = BuildHealthReport();
 
-			if (Visible > 0)
+			if (!R.HasTrafficDrawDefect())
 			{
 				UE_LOG(LogWbTraffic, Log,
 					TEXT("Verkehr laeuft: %d Fahrzeuge simuliert, %d davon im Sichtbereich gezeichnet."),
-					Simulated, Visible);
+					R.ActiveVehicles, R.TrafficVehiclesVisible);
 			}
 			else
 			{
@@ -1142,7 +1144,7 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					TEXT("Verkehr simuliert %d Fahrzeuge, aber KEINES wird gezeichnet. ")
 					TEXT("Moegliche Ursachen: kein Fahrzeug-Traeger (CityActor), ")
 					TEXT("kein VehicleMesh zugewiesen, oder alle ausserhalb des Cull-Radius."),
-					Simulated);
+					R.ActiveVehicles);
 			}
 		}
 	}
@@ -1160,12 +1162,14 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		{
 			bTrafficLightsReported = true;
 
-			const int32 Held = TrafficSimulation.GetLifetimeVehiclesHeldAtRed();
-			const int32 ApproachedSignal = TrafficSimulation.GetLifetimeVehiclesApproachingSignal();
+			// Zahlen UND Verdikt aus dem Health-Report als einziger Wahrheitsquelle;
+			// die Drei-Wege-Entscheidung liegt zentral in R.TrafficLightVerdict().
+			const FWiesbadenHealthReport R = BuildHealthReport();
 
 			// Entfernung zur naechsten Ampel: Ohne sie bleibt "kein Fahrzeug
 			// gehalten" zweideutig - es koennte auch schlicht keine Ampel in
 			// Reichweite des Verkehrs liegen (der entsteht nur um den Spieler).
+			// Reiner Log-Kontext (kein Health-Kriterium), daher lokal berechnet.
 			double NearestLightM = -1.0;
 			if (const UWorld* LightWorld = GetWorld())
 			{
@@ -1188,41 +1192,40 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					}
 				}
 			}
-			// Verdikt auf FAHR-Evidenz statt Geometrie: eine Ampel "in Reichweite"
-			// heisst nicht, dass der Verkehr sie auch befaehrt. Nur ~1073 der
-			// ~20213 Kreuzungen sind Ampeln (~5%), der Verkehr um den Spieler quert
-			// meist ampellose Knoten - dann ist "0 an Rot" KEIN Fehler. Erst wenn
-			// Fahrzeuge signalisierte Verbindungen anfuhren UND nie hielten, ist die
-			// Kopplung wirklich defekt. (ApproachedSignal/Held sind Lebenszeit-
-			// Summen seit dem Stadt-Spawn, nicht der letzte Tick.)
-			if (Held > 0)
+			// Das Verdikt (FAHR-Evidenz, nicht Geometrie) trifft der Report; hier nur
+			// noch die Darstellung. ApproachedSignal/Held sind Lebenszeit-Summen seit
+			// dem Stadt-Spawn, nicht der letzte Tick.
+			switch (R.TrafficLightVerdict())
 			{
+			case EWiesbadenTrafficLightVerdict::Effective:
 				UE_LOG(LogWbTraffic, Log,
 					TEXT("Ampeln wirksam: %d im Netz, %d Halte-Ereignis(se) an Rot (bei %d Anfahrten auf ")
 					TEXT("signalisierte Verbindungen), naechste Ampel %.0f m (Zyklus %.0f s, Gruen %.0f s)."),
-					TrafficLightSystem.GetTrafficLightCount(), Held, ApproachedSignal, NearestLightM,
+					R.TrafficLightCount, R.VehiclesHeldAtRed, R.VehiclesApproachingSignal, NearestLightM,
 					TrafficLightSystem.Settings.CycleSeconds,
 					TrafficLightSystem.Settings.GreenSecondsPerCycle);
-			}
-			else if (ApproachedSignal >= 20)
-			{
+				break;
+
+			case EWiesbadenTrafficLightVerdict::Broken:
 				// Genug Anfahrten (>=20), aber NIE gehalten: bei ~75% Rot-Anteil je
 				// Kreuzung waere durchgehend Gruen astronomisch unwahrscheinlich ->
 				// echter Kopplungs-Defekt.
 				UE_LOG(LogWbTraffic, Warning,
 					TEXT("Ampeln: %d im Netz, %d Anfahrten auf signalisierte Verbindungen, aber KEIN ")
 					TEXT("Fahrzeug gehalten - die Kopplung greift nicht (echter Defekt)."),
-					TrafficLightSystem.GetTrafficLightCount(), ApproachedSignal);
-			}
-			else
-			{
+					R.TrafficLightCount, R.VehiclesApproachingSignal);
+				break;
+
+			case EWiesbadenTrafficLightVerdict::Inconclusive:
+			default:
 				// held==0 und nur wenige/keine Anfahrten: statistisch normal, weil
 				// nur ~5% der Kreuzungen Ampeln sind. Kein Urteil moeglich, kein Fehler.
 				UE_LOG(LogWbTraffic, Log,
 					TEXT("Ampeln: %d im Netz, nur %d Anfahrten auf signalisierte Verbindungen im ")
 					TEXT("Messfenster (naechste Ampel %.0f m) - zu wenig, um die Kopplung zu beurteilen; ")
 					TEXT("kein Fehler (nur ein kleiner Teil der Kreuzungen hat Ampeln)."),
-					TrafficLightSystem.GetTrafficLightCount(), ApproachedSignal, NearestLightM);
+					R.TrafficLightCount, R.VehiclesApproachingSignal, NearestLightM);
+				break;
 			}
 		}
 	}
@@ -1236,21 +1239,24 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		{
 			bPedestriansReported = true;
 
-			const int32 Simulated = PedestrianSimulation.GetPedestrianCount();
-			const int32 Visible = CityActor ? CityActor->GetVisiblePedestrianCount() : 0;
+			// Zahlen UND Verdikt aus dem Health-Report als einziger Wahrheitsquelle
+			// (PedestriansSimulated == GetPedestrianCount()). Die Gehweg-km sind reiner
+			// Log-Kontext, kein Health-Kriterium - daher lokal gelesen.
+			const FWiesbadenHealthReport R = BuildHealthReport();
 
-			if (Visible > 0)
+			if (!R.HasPedestrianDrawDefect())
 			{
 				UE_LOG(LogWbCore, Log,
 					TEXT("Fussgaenger laufen: %d simuliert, %d gezeichnet (%.1f km Gehweg)."),
-					Simulated, Visible, PedestrianSimulation.GetReport().TotalSidewalkKm);
+					R.PedestriansSimulated, R.PedestriansDrawn,
+					PedestrianSimulation.GetReport().TotalSidewalkKm);
 			}
 			else
 			{
 				UE_LOG(LogWbCore, Warning,
 					TEXT("Fussgaenger: %d simuliert, aber KEINER wird gezeichnet. ")
 					TEXT("Moegliche Ursachen: kein CityActor als Traeger oder kein Mesh am Spawner."),
-					Simulated);
+					R.PedestriansSimulated);
 			}
 		}
 	}
@@ -2883,6 +2889,7 @@ FWiesbadenHealthReport UWiesbadenCitySubsystem::BuildHealthReport() const
 	R.bStreamingComplete = bStreamingComplete;
 	R.TrafficLightCount = TrafficLightSystem.GetTrafficLightCount();
 	R.ActiveVehicles = TrafficSimulation.Report.ActiveVehicleCount;
+	R.TrafficVehiclesVisible = CityActor ? CityActor->GetVisibleTrafficVehicleCount() : 0;
 	R.VehiclesApproachingSignal = TrafficSimulation.GetLifetimeVehiclesApproachingSignal();
 	R.VehiclesHeldAtRed = TrafficSimulation.GetLifetimeVehiclesHeldAtRed();
 	R.PedestriansSimulated = PedestrianSimulation.GetReport().SimulatedCount;

@@ -7,6 +7,21 @@
 #include "WiesbadenHealthReport.generated.h"
 
 /**
+ * Evidenz-gewichtetes Ampel-Kopplungs-Verdikt.
+ *
+ * EINE Stelle entscheidet, ob die Ampel-Kopplung wirkt - der Health-Report.
+ * Sowohl die Inline-Diagnose (Prosa-Log) als auch Warnings() lesen dieses
+ * Verdikt, statt die Drei-Wege-Logik je fuer sich nachzubilden (genau diese
+ * Doppelung liess die Diagnosen frueher auseinanderdriften).
+ */
+enum class EWiesbadenTrafficLightVerdict : uint8
+{
+	Effective,    // Halte-Ereignisse an Rot belegt -> Kopplung wirkt.
+	Broken,       // genug Anfahrten, aber NIE gehalten -> Kopplung defekt.
+	Inconclusive  // zu wenig Anfahrten (oder keine Ampeln) fuer ein Urteil.
+};
+
+/**
  * Maschinenlesbarer Zustandsbericht der Laufzeit-Selbstdiagnosen.
  *
  * Buendelt die bisher verstreuten Kennzahlen (Streaming, Verkehr, Ampeln,
@@ -31,9 +46,15 @@ struct WIESBADENREAL_API FWiesbadenHealthReport
 	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
 	int32 TrafficLightCount = 0;
 
-	/** Aktuell simulierte Verkehrsfahrzeuge. */
+	/** Aktuell simulierte Verkehrsfahrzeuge (== Vehicles.Num()). */
 	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
 	int32 ActiveVehicles = 0;
+
+	/** Davon tatsaechlich gezeichnete (im Cull-Radius platzierte) Fahrzeuge.
+	 *  Getrennt von ActiveVehicles, damit "simuliert aber nicht gezeichnet"
+	 *  evidenzbasiert erkannt wird - wie bei den Fussgaengern. */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	int32 TrafficVehiclesVisible = 0;
 
 	/** Seit Stadt-Spawn: Anfahrten auf signalisierte Verbindungen / Halte an Rot.
 	 *  Erlauben das evidenz-gewichtete Ampel-Verdikt. */
@@ -59,6 +80,18 @@ struct WIESBADENREAL_API FWiesbadenHealthReport
 	/** True, wenn ueberhaupt Stadtdaten geladen sind (sonst sind 0-Werte normal). */
 	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
 	bool bCityLoaded = false;
+
+	/** Verkehr simuliert, aber KEINES gezeichnet (Traeger/Mesh/Cull-Defekt). Reines
+	 *  Zahlen-Praedikat; die Aufrufer setzen ihre eigenen Vorbedingungen (Stadt
+	 *  geladen / Streaming fertig) davor. */
+	bool HasTrafficDrawDefect() const { return ActiveVehicles > 0 && TrafficVehiclesVisible == 0; }
+
+	/** Fussgaenger simuliert, aber KEINER gezeichnet. Reines Zahlen-Praedikat. */
+	bool HasPedestrianDrawDefect() const { return PedestriansSimulated > 0 && PedestriansDrawn == 0; }
+
+	/** Evidenz-gewichtetes Ampel-Kopplungs-Verdikt (siehe Enum). Einzige Stelle,
+	 *  die die Drei-Wege-Entscheidung trifft. */
+	EWiesbadenTrafficLightVerdict TrafficLightVerdict() const;
 
 	/** Evidenz-gewichtete Warnungen (leer = gesund). */
 	TArray<FString> Warnings() const;
