@@ -5,6 +5,7 @@
 #include "WiesbadenReal.h"
 #include "Core/WiesbadenDevActions.h"
 #include "Engine/World.h"
+#include "TimerManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "EngineUtils.h"
@@ -74,7 +75,45 @@ void AWiesbadenPlayerController::WbTraffic(int32 An)
 		An, Vorher, Nachher);
 }
 
-void AWiesbadenPlayerController::WbHealth()
+void AWiesbadenPlayerController::WbHealth(float MaxWaitSeconds)
+{
+	if (MaxWaitSeconds <= 0.0f)
+	{
+		// Sofort-Modus (manueller Aufruf): Ist-Zustand jetzt.
+		WriteHealthReport();
+		return;
+	}
+
+	// Gate-Modus: auf den geladenen Zustand warten (Deckel = MaxWaitSeconds), dann
+	// erst schreiben. Ein Sekundentakt-Poll genuegt; das Streaming-"fertig"-Flag
+	// flackert waehrend des Warmlaufs, deshalb keine feste Verzoegerung.
+	const UWorld* World = GetWorld();
+	HealthGateDeadlineSeconds = (World ? World->GetTimeSeconds() : 0.0) + MaxWaitSeconds;
+	UE_LOG(LogWbCore, Log,
+		TEXT("WbDev: WbHealth wartet auf geladenen Zustand (bis %.0f s)."), MaxWaitSeconds);
+	GetWorldTimerManager().SetTimer(HealthGateTimer, this,
+		&AWiesbadenPlayerController::PollHealthGate, 1.0f, /*bLoop=*/true, /*FirstDelay=*/1.0f);
+}
+
+void AWiesbadenPlayerController::PollHealthGate()
+{
+	const UWorld* World = GetWorld();
+	const UWiesbadenCitySubsystem* City = World ? World->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+
+	const bool bTimeout = World && (World->GetTimeSeconds() >= HealthGateDeadlineSeconds);
+	// Geladen = Stadt da UND Streaming fertig. BuildHealthReport ist die einzige
+	// Wahrheitsquelle - kein zweiter Zustands-Pfad.
+	const bool bLoaded = City && City->BuildHealthReport().bStreamingComplete
+		&& City->BuildHealthReport().bCityLoaded;
+
+	if (bLoaded || bTimeout || !City)
+	{
+		GetWorldTimerManager().ClearTimer(HealthGateTimer);
+		WriteHealthReport();
+	}
+}
+
+void AWiesbadenPlayerController::WriteHealthReport()
 {
 	const UWorld* World = GetWorld();
 	const UWiesbadenCitySubsystem* City = World ? World->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;

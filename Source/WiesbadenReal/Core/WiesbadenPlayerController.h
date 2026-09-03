@@ -43,8 +43,12 @@ public:
 	void WbTraffic(int32 An);
 
 	// Maschinenlesbaren Gesundheitsbericht ausgeben + als JSON nach Saved/Logs.
+	// Ohne Argument (bzw. <=0): sofort. Mit <Sekunden> > 0: Gate-Modus - wartet auf
+	// den geladenen Zustand (Stadt da + Streaming fertig), maximal <Sekunden>, dann
+	// erst der Dump. So spiegelt das JSON den geladenen Zustand statt eines
+	// Startup-Transienten (fuer den Rauchtest-Gate nach dem Laden).
 	UFUNCTION(Exec)
-	void WbHealth();
+	void WbHealth(float MaxWaitSeconds = 0.0f);
 
 	// Kameramodus des besessenen Fahrzeugs: 0=Follow, 1=Orbit, 2=Cockpit.
 	UFUNCTION(Exec)
@@ -84,4 +88,16 @@ public:
 	// Autopilot AUS: gibt die Steuerung an Tastatur/Gamepad zurueck (mitten im Flug).
 	UFUNCTION(Exec)
 	void WbHeliOff();
+
+private:
+	// Schreibt den Gesundheitsbericht JETZT (JSON + Log). Gemeinsame Endstrecke von
+	// WbHealth (sofort) und dem Gate-Poll.
+	void WriteHealthReport();
+
+	// Poll des Gate-Modus: schreibt den Bericht, sobald der geladene Zustand
+	// erreicht ist ODER der Deckel abgelaufen ist.
+	void PollHealthGate();
+
+	FTimerHandle HealthGateTimer;
+	double HealthGateDeadlineSeconds = 0.0;
 };

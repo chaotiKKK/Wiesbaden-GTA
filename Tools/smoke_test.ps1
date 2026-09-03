@@ -2,12 +2,15 @@
 # Dev-Befehle bzw. das Fahrprofil und wertet aus dem Log Bestanden/
 # Durchgefallen.
 #
-# Zwei kurze Sitzungen, weil sich Fahrzeug und Heli die Besitzung teilen:
+# Drei kurze Sitzungen, weil sich Fahrzeug und Heli die Besitzung teilen:
 #   1) Fahrzeug: Fahrprofil (WbDrive - Vollgas + Lenk-Sweep ueber den Test-
 #      Harness) weist Laengsdynamik UND Lenkung des Standard-Kaefers nach,
 #      dazu Material-Bilanz UND Perf-Regression (Spiel-Strang-Zeit + Last-
 #      Inventar) aus dem 8-s-Diagnoseblock (feuert 8 s nach dem Laden von selbst).
 #   2) Helikopter: Teleport + Aufrichten (am Fahrzeug), dann Gier- und Flugprofil.
+#   3) Gesundheits-Gate: stationaer, WbHealth im Gate-Modus (wartet auf den
+#      geladenen Zustand) -> WbHealth.json; Auswertung maschinenlesbar gegen
+#      "healthy": false statt Prosa-Logs zu greppen.
 # Gewartet wird auf GENUG Log-Belege (nicht auf das Demo-Ende - die Stadt kann
 # beim Umherfliegen streckenweise haengen), dann Auswertung gegen erwartete
 # Wirkungen. Kein Screenshot, kein Fenster-Fokus -> rechnerunabhaengig.
@@ -37,6 +40,8 @@ $Proj   = Join-Path $Root "WiesbadenReal\WiesbadenReal.uproject"
 $LogDir = Join-Path $Root "WiesbadenReal\Saved\Logs"
 $CarLog  = Join-Path $LogDir "smoke_car.log"
 $HeliLog = Join-Path $LogDir "smoke_heli.log"
+$HealthLog  = Join-Path $LogDir "smoke_health.log"
+$HealthJson = Join-Path $LogDir "WbHealth.json"
 
 if (-not (Test-Path $Exe))  { Write-Host "ABBRUCH: Editor nicht gefunden: $Exe"; exit 2 }
 if (-not (Test-Path $Proj)) { Write-Host "ABBRUCH: Projekt nicht gefunden: $Proj"; exit 2 }
@@ -100,9 +105,17 @@ Write-Host "Sitzung 1/2: Fahrzeug (Fahrprofil WbDrive + Materialien) ..."
 # alle Fahr-Messpunkte (WbDrive laeuft 7 s) mit ein.
 Invoke-Session @() "WbDrive 7" $CarLog "Material-Bilanz:" 1 240
 
-Write-Host "Sitzung 2/2: Teleport + Aufrichten (Fahrzeug), dann Helikopter ..."
+Write-Host "Sitzung 2/3: Teleport + Aufrichten (Fahrzeug), dann Helikopter ..."
 Invoke-Session @() "WbTeleport 2,WbNudge 15 55,WbResetVehicle,WbHeli,WbHeliYaw 8,WbHeliFly 16" `
     $HeliLog "WbDev Flug t=" 5 240
+
+# Sitzung 3: Gesundheits-Gate. STATIONAER (kein Teleport/Flug, damit das
+# WP-Streaming einmal sauber einrastet), WbHealth im Gate-Modus (wartet bis zu
+# 30 s auf den geladenen Zustand, dann Dump nach WbHealth.json). Auf die
+# geschriebene JSON-Zeile im Log warten.
+Write-Host "Sitzung 3/3: Gesundheits-Gate (WbHealth nach dem Laden) ..."
+Remove-Item $HealthJson -ErrorAction SilentlyContinue
+Invoke-Session @() "WbHealth 30" $HealthLog "WbDev: WbHealth:" 1 180
 
 $car  = if (Test-Path $CarLog)  { Get-Content $CarLog  -Raw } else { "" }
 $heli = if (Test-Path $HeliLog) { Get-Content $HeliLog -Raw } else { "" }
@@ -185,6 +198,26 @@ if ($gier.Count -ge 2) {
     $maxRate = ($rates | Measure-Object -Maximum).Maximum
     Add-Check "HeliYaw" ($maxRate -gt 10) ("max Gierrate {0:N1} Grad/s (>10, {1} Messpunkte)" -f $maxRate,$gier.Count)
 } else { Add-Check "HeliYaw" $false ("nur {0} Gierprobe-Messpunkte im Log" -f $gier.Count) }
+
+# -- Gesundheits-Gate: WbHealth.json parsen. Maschinenlesbar statt Prosa-grep:
+#    faellt durch bei "healthy": false und listet die Warnungen auf. Deckt die
+#    evidenz-gewichteten Laufzeit-Defekte ab (Ampel-Kopplung, Verkehr/Fussgaenger
+#    simuliert aber nicht gezeichnet, Gebaeude-Kollision, Streaming). ------------
+if (Test-Path $HealthJson) {
+    try {
+        $h = Get-Content $HealthJson -Raw | ConvertFrom-Json
+        if ($h.healthy) {
+            Add-Check "Health-Gate" $true "healthy: true (keine Warnungen)"
+        } else {
+            $warns = @($h.warnings) -join "; "
+            Add-Check "Health-Gate" $false ("healthy: false - {0}" -f $warns)
+        }
+    } catch {
+        Add-Check "Health-Gate" $false ("WbHealth.json nicht parsebar: {0}" -f $_.Exception.Message)
+    }
+} else {
+    Add-Check "Health-Gate" $false "keine WbHealth.json geschrieben (WbHealth nicht ausgeloest?)"
+}
 
 # -- Bericht ---------------------------------------------------------------
 Write-Host ""

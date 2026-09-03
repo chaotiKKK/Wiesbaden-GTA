@@ -92,7 +92,7 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 
 ## WbHealth
 
-- **Signatur:** `WbHealth`
+- **Signatur:** `WbHealth [MaxWaitSeconds:float]`
 - **Wirkung:** Sammelt die Laufzeit-Selbstdiagnosen (Streaming, Verkehr, Ampeln,
   Fussgaenger, Gebaeude-Kollision) in einen `FWiesbadenHealthReport`, gibt ihn als
   maschinenlesbare JSON-Zeile ins Log und speichert ihn nach
@@ -100,9 +100,16 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
   vielen Anfahrten ohne Halten) und stehen im JSON-Feld `warnings` samt `healthy`.
   Interpretation/JSON liegen entkoppelt in `FWiesbadenHealthReport`; das
   CitySubsystem liefert nur die Rohzahlen (`BuildHealthReport`).
+- **Argument (optional):** ohne Wert (bzw. `<=0`) schreibt der Befehl sofort den
+  Ist-Zustand. Mit `MaxWaitSeconds > 0` laeuft er im **Gate-Modus**: er wartet auf
+  den geladenen Zustand (Stadt geladen UND World-Partition-Streaming fertig),
+  hoechstens `MaxWaitSeconds` Sekunden, und schreibt den Bericht erst dann. So
+  spiegelt das JSON den geladenen Zustand statt eines Startup-Transienten - genutzt
+  vom Rauchtest als Gesundheits-Gate nach dem Laden.
 - **Voraussetzung:** ein `UWiesbadenCitySubsystem` in der Welt.
 - **Log-Nachweis:**
   - Erfolg: `WbDev: WbHealth: <json>` gefolgt von `WbDev: WbHealth - Bericht nach <pfad> geschrieben.`
+  - Gate-Modus (Info): `WbDev: WbHealth wartet auf geladenen Zustand (bis <n> s).`
   - Kein Subsystem (Warning): `WbDev: WbHealth erkannt, aber kein City-Subsystem.`
 
 ## WbCam
