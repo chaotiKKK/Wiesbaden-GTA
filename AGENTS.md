@@ -1976,3 +1976,25 @@ war. Immer absolute Pfade verwenden und die Ausgabedatei lesen.
 `cat > x.py <<'PY'`-Block kam als `\n` an, das Python dann als Zeilenumbruch
 las - der Anker traf nie. Loesung: Backslashes aus Zeichencodes bauen
 (`BS = chr(92)`) statt sie zu schreiben.
+
+## Laufzeit-Diagnose-Warnungen koennen Fehlalarme sein - Gesamtbilanz zaehlt
+
+Die Selbstdiagnosen im Log (Gebaeude-Kollision, Fussgaenger, Ampeln) feuern teils
+false-positive; eine EINZELNE Warnung nicht fixen, erst die Session-Gesamtbilanz
+pruefen. Beispiel: "Gebaeude-Kollision ... faehrt dort weiter hindurch" entsteht,
+wenn der waagerechte Diagnose-Trace am HANG ansteigendes Gelaende (Landscape)
+trifft, bevor er die Box erreicht - ueber die Session 58x "wirksam ... blockiert"
+(Ueberdeckung gedreht 1.05x) gegen 1x Warnung = gesund. Fussgaenger "KEINER
+gezeichnet" war ein Startup-Transient (danach animiert + "Ueberfahren: N
+Fussgaenger"). Grep "wirksam" vs. Warnung, sonst repariert man Nicht-Bugs.
+
+## Ampel-Kopplung: 1073 Ampeln, aber 0 Fahrzeuge an Rot (offener Bug, Stand 2026-09)
+
+Echter, noch offener Bug - NICHT die frueher gefixte "SetTrafficLightSystem nie
+gerufen"-Sache: Verdrahtung korrekt (Sim UND Ampeln nutzen DASSELBE
+Builder->RoadNetwork -> Connection-Indizes stimmen), Phase erzeugt ~75% Rot je
+4-Arm-Kreuzung, Stopp-Logik unit-getestet - trotzdem "0 an Rot gehalten" ueber die
+ganze Session. "Ampeln 0.0 ms" ist ERWARTET (Phase wird faul in IsConnectionGreen
+berechnet, Tick erhoeht nur ElapsedSeconds; kein Zeichen, dass Ampeln aus sind).
+Ursache verengt auf "Fahrzeuge treffen in der Stopp-Zone nie eine SIGNALISIERTE
+Verbindung". Instrumentierung + Kandidaten-Fixes: Saved/Logs/Bugreport_Ampel-Kopplung.md.
