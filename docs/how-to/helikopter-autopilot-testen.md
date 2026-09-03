@@ -46,12 +46,14 @@ Heli-Position (dx vorn, dy rechts, dz hoch).
 
 ## Schritt 2: Genug Laufzeit geben
 
-Der Anflug dauert bei diesem Ziel typischerweise 20-40 s (bewusst niedrige
-Anfluggeschwindigkeit, damit der Heli nicht ueberschiesst). Lass die Sitzung
-mindestens **~45 s** laufen, bevor du das Log auswertest - sonst fehlt die
-"Wegpunkt erreicht"-Zeile noch. Beim World-Partition-Streaming kann es
-zwischendurch haengen ("Gamethread hitch"); das ist normal, warte auf die
-Log-Messpunkte, nicht auf ein bestimmtes sichtbares Ende.
+Das Anflugtempo ist bewusst niedrig (~4-5 m/s horizontal), damit der Heli nicht
+ueberschiesst - der Anflug dauert entsprechend lange und SKALIERT mit der
+Distanz. Fuer das Beispielziel (300 m) sind es real **~80 s** bis "Wegpunkt
+erreicht". Lass die Sitzung also grosszuegig **~90 s** laufen, bevor du das Log
+auswertest, sonst fehlt die "Wegpunkt erreicht"-Zeile noch. Willst du es eilig
+haben, nimm ein kleineres Ziel: `WbHeliGoto 100 0 40` kommt in ~25-35 s an. Beim
+World-Partition-Streaming kann es zwischendurch haengen ("Gamethread hitch"); das
+ist normal, warte auf die Log-Messpunkte, nicht auf ein bestimmtes sichtbares Ende.
 
 ## Schritt 3: Die Autopilot-Zeilen aus dem Log ziehen
 
@@ -66,12 +68,18 @@ Erwartete Ausgabe (Werte beispielhaft):
 
 ```
 LogWbVehicles: WbDev Autopilot t=0: Abstand 306 m (horiz 300 m, Hoehe +60 m), Tempo 0 km/h, Modus Anflug.
-LogWbVehicles: WbDev Autopilot t=1: Abstand 291 m (horiz 285 m, Hoehe +58 m), Tempo 34 km/h, Modus Anflug.
+LogWbVehicles: WbDev Autopilot t=7: Abstand 287 m (horiz 285 m, Hoehe +32 m), Tempo 13 km/h, Modus Anflug.
 ...
-LogWbVehicles: WbDev Autopilot t=27: Abstand 9 m (horiz 7 m, Hoehe +5 m), Tempo 12 km/h, Modus Anflug.
-LogWbVehicles: WbDev Autopilot: Wegpunkt erreicht nach 27.4 s (Abstand 8.6 m) - halte Position.
-LogWbVehicles: WbDev Autopilot t=28: Abstand 6 m (horiz 5 m, Hoehe +3 m), Tempo 5 km/h, Modus Halten.
+LogWbVehicles: WbDev Autopilot t=80: Abstand 20 m (horiz 20 m, Hoehe +0 m), Tempo 14 km/h, Modus Anflug.
+LogWbVehicles: WbDev Autopilot: Wegpunkt erreicht nach 82.0 s (Abstand 16.0 m) - halte Position.
+LogWbVehicles: WbDev Autopilot t=83: Abstand 14 m (horiz 14 m, Hoehe +0 m), Tempo 13 km/h, Modus Anflug.
 ```
+
+**Wichtig:** Der Modus bleibt auch NACH "Wegpunkt erreicht" auf `Anflug`. Das ist
+korrekt - `WbHeliGoto` nutzt EIN Regelgesetz fuer Anflug und Schweben: bei Abstand
+nahe 0 geht die Ziel-Geschwindigkeit gegen 0, der Heli haelt die Position, ohne je
+den Modus zu wechseln. `Modus Halten` erscheint NUR nach explizitem `WbHeliHover`
+(Schritt 5), nicht durch die Goto-Ankunft.
 
 ## Schritt 4: Den Anflug bewerten
 
@@ -79,14 +87,16 @@ Der Test ist **bestanden**, wenn:
 
 - **Abstand faellt ueber die Zeit** (grob monoton) von Start Richtung 0.
 - Die Zeile **`Wegpunkt erreicht`** genau einmal erscheint.
-- Danach steht der **Modus auf `Halten`** und der Abstand bleibt klein
-  (wenige Meter), driftet nicht wieder weg.
+- Danach bleibt der **Abstand klein** (wenige Meter), driftet nicht wieder weg.
+  Der Modus bleibt dabei `Anflug` - das ist KORREKT und KEIN Durchfall (das
+  Goto-Gesetz haelt selbst; ein automatischer Wechsel auf `Halten` findet NICHT
+  statt, siehe Schritt 3).
 
-Bekannte, tolerierte Eigenheit: der Abstand kann kurz vor dem Ziel **um 16-52 m
-ueberschwingen**, bevor er sich einpendelt - die Bremsautoritaet nahe Schweben
-ist plant-bedingt schwach (siehe AGENTS.md, Autopilot-Bullet). Ein Ueberschwinger
-ist also KEIN Durchfall, solange am Ende "Wegpunkt erreicht" kommt und der Modus
-auf Halten steht.
+Bekannte, tolerierte Eigenheit: bei hoeherem Anflugtempo (naeheres/kleineres Ziel)
+kann der Abstand kurz vor dem Ziel **ueberschwingen**, bevor er sich einpendelt -
+die Bremsautoritaet nahe Schweben ist plant-bedingt schwach (siehe AGENTS.md,
+Autopilot-Bullet). Ein Ueberschwinger ist also KEIN Durchfall, solange am Ende
+"Wegpunkt erreicht" kommt und der Abstand danach klein bleibt.
 
 **Durchgefallen**, wenn: keine `WbDev Autopilot`-Zeile (Heli nicht uebernommen,
 siehe Fehlersuche), Abstand steigt dauerhaft, oder "Wegpunkt erreicht" fehlt nach
