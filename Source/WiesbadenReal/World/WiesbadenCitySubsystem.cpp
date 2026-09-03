@@ -2801,6 +2801,23 @@ void UWiesbadenCitySubsystem::CaptureDiagnosticScreenshot()
 }
 
 
+FWiesbadenHealthReport UWiesbadenCitySubsystem::BuildHealthReport() const
+{
+	// Nur ROHZAHLEN aus dem Live-Zustand sammeln; Interpretation (Warnungen) und
+	// JSON liegen entkoppelt in FWiesbadenHealthReport.
+	FWiesbadenHealthReport R;
+	R.bCityLoaded = (CityActor != nullptr) || (TrafficLightSystem.GetTrafficLightCount() > 0);
+	R.bStreamingComplete = bStreamingComplete;
+	R.TrafficLightCount = TrafficLightSystem.GetTrafficLightCount();
+	R.ActiveVehicles = TrafficSimulation.Report.ActiveVehicleCount;
+	R.VehiclesApproachingSignal = TrafficSimulation.GetLifetimeVehiclesApproachingSignal();
+	R.VehiclesHeldAtRed = TrafficSimulation.GetLifetimeVehiclesHeldAtRed();
+	R.PedestriansSimulated = PedestrianSimulation.GetReport().SimulatedCount;
+	R.PedestriansDrawn = CityActor ? CityActor->GetVisiblePedestrianCount() : 0;
+	R.BuildingCollisionBodies = BuildingCollision ? BuildingCollision->GetActiveBodyCount() : 0;
+	return R;
+}
+
 UWiesbadenGameInstance* UWiesbadenCitySubsystem::GetGameInstance() const
 {
 	UWorld* World = GetWorld();

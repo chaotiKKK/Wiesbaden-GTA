@@ -42,6 +42,10 @@ public:
 	UFUNCTION(Exec)
 	void WbTraffic(int32 An);
 
+	// Maschinenlesbaren Gesundheitsbericht ausgeben + als JSON nach Saved/Logs.
+	UFUNCTION(Exec)
+	void WbHealth();
+
 	// Kameramodus des besessenen Fahrzeugs: 0=Follow, 1=Orbit, 2=Cockpit.
 	UFUNCTION(Exec)
 	void WbCam(int32 Modus);

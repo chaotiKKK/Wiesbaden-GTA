@@ -8,6 +8,7 @@
 #include "Core/WiesbadenCityData.h"
 #include "GIS/WiesbadenBuildSummary.h"
 #include "GIS/WiesbadenPedestrianSimulation.h"
+#include "World/WiesbadenHealthReport.h"
 #include "GIS/WiesbadenTrafficLights.h"
 #include "GIS/WiesbadenTrafficSimulation.h"
 #include "World/WiesbadenWeatherSystem.h"
@@ -181,6 +182,11 @@ public:
 	/** Aktive Fahrzeuge der Verkehrs-Simulation (fuer Spawner/HUD). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Traffic")
 	const TArray<FTrafficVehicle>& GetTrafficVehicles() const { return TrafficSimulation.Vehicles; }
+
+	/** Fuellt den maschinenlesbaren Gesundheitsbericht aus dem Live-Zustand (nur
+	 *  Rohzahlen; Interpretation/JSON liegen in FWiesbadenHealthReport). Fuer den
+	 *  WbHealth-Exec und externe Analyse. */
+	FWiesbadenHealthReport BuildHealthReport() const;
 
 	// -- Ereignisse ------------------------------------------------------------
 

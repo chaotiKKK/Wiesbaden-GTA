@@ -5,6 +5,8 @@
 #include "WiesbadenReal.h"
 #include "Core/WiesbadenDevActions.h"
 #include "Engine/World.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Vehicles/WiesbadenCar.h"
@@ -70,6 +72,24 @@ void AWiesbadenPlayerController::WbTraffic(int32 An)
 	UE_LOG(LogWbCore, Log,
 		TEXT("WbDev: WbTraffic %d ausgefuehrt: Dichte %.2f -> %.2f."),
 		An, Vorher, Nachher);
+}
+
+void AWiesbadenPlayerController::WbHealth()
+{
+	const UWorld* World = GetWorld();
+	const UWiesbadenCitySubsystem* City = World ? World->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+	if (!City)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbHealth erkannt, aber kein City-Subsystem."));
+		return;
+	}
+	const FWiesbadenHealthReport Report = City->BuildHealthReport();
+	const FString Json = Report.ToJson();
+	const FString Path = FPaths::ProjectSavedDir() / TEXT("Logs") / TEXT("WbHealth.json");
+	FFileHelper::SaveStringToFile(Json, *Path);
+	// Die Verdikte stecken im JSON ("healthy"/"warnings") - eine Zeile genuegt.
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHealth: %s"), *Json);
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHealth - Bericht nach %s geschrieben."), *Path);
 }
 
 void AWiesbadenPlayerController::WbCam(int32 Modus)

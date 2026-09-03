@@ -42,6 +42,7 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 | `WbTeleport` | `WbTeleport <0-2>` | besessener Pawn | Pawn an festen Spawn 0/1/2 setzen |
 | `WbResetVehicle` | `WbResetVehicle` | besessener Pawn | Nick/Roll auf 0 (aufrichten), Yaw bleibt |
 | `WbTraffic` | `WbTraffic <0/1>` | City-Subsystem | Verkehrsdichte 0.0 (aus) oder 0.5 (an) |
+| `WbHealth` | `WbHealth` | City-Subsystem | Maschinenlesbaren Gesundheitsbericht (JSON) ausgeben + speichern |
 | `WbCam` | `WbCam <0-2>` | Fahrzeug mit Kamera | Kameramodus Follow/Orbit/Cockpit |
 | `WbHeli` | `WbHeli` | Helikopter in der Welt | ersten Helikopter uebernehmen (Possess) |
 | `WbNudge` | `WbNudge <nick> <roll>` | besessener Pawn | Nick/Roll relativ um Grad kippen |
@@ -88,6 +89,21 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 - **Log-Nachweis:**
   - Erfolg: `WbDev: WbTraffic <An> ausgefuehrt: Dichte <vorher> -> <nachher>.`
   - Kein Subsystem (Warning): `WbDev: WbTraffic <An> erkannt, aber kein City-Subsystem.`
+
+## WbHealth
+
+- **Signatur:** `WbHealth`
+- **Wirkung:** Sammelt die Laufzeit-Selbstdiagnosen (Streaming, Verkehr, Ampeln,
+  Fussgaenger, Gebaeude-Kollision) in einen `FWiesbadenHealthReport`, gibt ihn als
+  maschinenlesbare JSON-Zeile ins Log und speichert ihn nach
+  `Saved/Logs/WbHealth.json`. Warnungen sind EVIDENZ-gewichtet (z. B. Ampel nur bei
+  vielen Anfahrten ohne Halten) und stehen im JSON-Feld `warnings` samt `healthy`.
+  Interpretation/JSON liegen entkoppelt in `FWiesbadenHealthReport`; das
+  CitySubsystem liefert nur die Rohzahlen (`BuildHealthReport`).
+- **Voraussetzung:** ein `UWiesbadenCitySubsystem` in der Welt.
+- **Log-Nachweis:**
+  - Erfolg: `WbDev: WbHealth: <json>` gefolgt von `WbDev: WbHealth - Bericht nach <pfad> geschrieben.`
+  - Kein Subsystem (Warning): `WbDev: WbHealth erkannt, aber kein City-Subsystem.`
 
 ## WbCam
 
