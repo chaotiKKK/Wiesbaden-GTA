@@ -48,6 +48,15 @@ Lernreise.*
   - World-Partition-Bounds, Punkt-Bounds leerer Komponenten am Ursprung, wie das
     Anchoring sie aufloest, die Fallen (Modify/Re-Bake, Klassen-Sweep, 2C), und
     das Verhaeltnis zum Streaming-Radius.
+- [Rotor-Physik](explanation/rotor-physik.md)
+  - Das reine, deterministische Drehfluegler-Modell: Governor, Lift, Zyklik,
+    Heckrotor, Koaxial-Rotoren, Blattspitzenverlust, Autorotation.
+- [Flugsound (Helikopter)](explanation/flugsound.md)
+  - Prozeduraler Helikopter-Klang aus dem Flugzustand (assetfrei) plus optionale
+    Asset-Wiedergabe.
+- [Weltinhalte - Beschilderung, Ausstattung, Wetter, Verkehr](explanation/weltinhalte.md)
+  - Die GIS-Inhalts-Systeme: Beschilderung, Strassenklassen, Fassaden, Markierung/
+    Ausstattung, City-Prompt, Wetter (System + FX), Verkehrs-KI, Stadt-Regionen.
 
 Die Designbegruendung des Fahndungssystems steckt weiterhin in der Spec unten
 (`superpowers/specs/`).
