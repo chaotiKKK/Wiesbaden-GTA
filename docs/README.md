@@ -16,8 +16,9 @@ Vier Sorten Dokument, nach dem, was du gerade brauchst:
 
 *Lernorientierte, durchgehende Einfuehrungen fuer den ersten Kontakt.*
 
-Noch keine. (Kandidat: "Erste Fahrt durch Wiesbaden - vom Start bis zum
-Helikopterflug".)
+- [Erste Fahrt durch Wiesbaden](tutorials/erste-fahrt.md)
+  - Vom frischen Checkout an der Hand: bauen, die Stadt starten, den Kaefer
+    fahren, aussteigen, zum Helikopter laufen und den ersten Flug ausloesen.
 
 ## How-to-Anleitungen
 
