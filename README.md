@@ -7,6 +7,13 @@ GIS-Daten (OpenStreetMap + Copernicus/SRTM-Höhendaten).
 **Engine:** Unreal Engine 5.8.1+ · **Sprache:** C++ (Core) + Blueprints ·
 **Maßstab:** 1 Unreal Unit = 1 cm · **Georeferenz:** WGS84 → ECEF → East-South-Up
 
+## 📖 Dokumentation
+
+Anleitungen, Referenzen und Hintergründe liegen unter [`docs/`](docs/README.md) —
+nach dem [Diátaxis](https://diataxis.fr/)-Rahmen geordnet (Tutorial / How-to /
+Reference / Explanation). Guter Einstieg: das Tutorial
+[Erste Fahrt durch Wiesbaden](docs/tutorials/erste-fahrt.md).
+
 ## Herkunft & Aufteilung
 
 Dieses Projekt wurde ursprünglich in Claude Code unter
