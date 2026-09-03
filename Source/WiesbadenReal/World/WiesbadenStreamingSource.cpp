@@ -4,6 +4,9 @@
 
 #include "WiesbadenReal.h"
 
+#include "CollisionQueryParams.h"
+#include "Engine/EngineTypes.h"
+#include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -30,7 +33,10 @@ void AWiesbadenStreamingSource::BeginPlay()
 	if (FParse::Value(FCommandLine::Get(), TEXT("WbRadius="), ForcedRadius) && ForcedRadius > 0.0f)
 	{
 		StreamingRadiusMeters = ForcedRadius;
-		UE_LOG(LogWbCore, Log, TEXT("WbRadius: Streaming-Radius auf %.0f m erzwungen."), ForcedRadius);
+		// Diagnose: fester Radius -> Adaptivitaet aus, damit die A/B-Messung den
+		// erzwungenen Wert misst und nicht die Hoehenkurve.
+		bForceFixedRadius = true;
+		UE_LOG(LogWbCore, Log, TEXT("WbRadius: Streaming-Radius fest auf %.0f m erzwungen (adaptiv aus)."), ForcedRadius);
 	}
 
 	WorldPartitionSubsystem = GetWorld() ? GetWorld()->GetSubsystem<UWorldPartitionSubsystem>() : nullptr;
@@ -59,14 +65,15 @@ void AWiesbadenStreamingSource::EndPlay(const EEndPlayReason::Type EndPlayReason
 void AWiesbadenStreamingSource::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	UpdateSource();
+	UpdateSource(DeltaSeconds);
 }
 
-void AWiesbadenStreamingSource::UpdateSource()
+void AWiesbadenStreamingSource::UpdateSource(float DeltaSeconds)
 {
 	FVector SourceLocation = GetActorLocation();
 	FRotator SourceRotation = GetActorRotation();
 	bool bValid = true;
+	const APawn* FollowPawn = nullptr;
 
 	if (bFollowPlayerPawn)
 	{
@@ -76,6 +83,7 @@ void AWiesbadenStreamingSource::UpdateSource()
 		{
 			SourceLocation = Pawn->GetActorLocation();
 			SourceRotation = Pawn->GetActorRotation();
+			FollowPawn = Pawn;
 		}
 		else
 		{
@@ -100,12 +108,57 @@ void AWiesbadenStreamingSource::UpdateSource()
 	CurrentSource.bUseVelocityContributionToCellsSorting = false;
 	CurrentSource.DebugColor = FColor::Cyan;
 
-	// Form: Kugel um den Spieler mit konfiguriertem Radius (cm). Die Quelle
-	// haengt NICHT am Grid-Loading-Range, damit der Radius unabhaengig vom
-	// Level-Design eingestellt werden kann (StreamingRadiusMeters).
+	// Hoehenadaptiver Radius: am Boden eng (schnell), in der Luft weit (Sicht).
+	// Hoehe ueber Grund per Abwaerts-Trace vom Pawn; fuer Streaming ist etwas
+	// Rauschen unkritisch, zusaetzlich zeitkonstant geglaettet. -WbRadius laesst
+	// den Wert fest (Diagnose).
+	float EffectiveRadiusMeters = StreamingRadiusMeters;
+	if (!bForceFixedRadius)
+	{
+		float MeasuredAltMeters = AdaptiveFullAltitudeMeters; // Trace-Fehlschlag -> weit
+		if (UWorld* World = GetWorld())
+		{
+			FHitResult Hit;
+			const FVector Start = SourceLocation;
+			const FVector End = Start - FVector(0.0f, 0.0f, 2000000.0f); // 20 km abwaerts
+			FCollisionQueryParams Params(FName(TEXT("StreamingAltitude")), /*bTraceComplex=*/false);
+			if (FollowPawn)
+			{
+				Params.AddIgnoredActor(FollowPawn);
+			}
+			if (World->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params))
+			{
+				MeasuredAltMeters = FMath::Max(0.0f, (Start.Z - Hit.ImpactPoint.Z)) * 0.01f;
+			}
+		}
+		// Zeitkonstante Glaettung (~0.8 s), framerate-unabhaengig - der Radius
+		// soll beim Ueberfliegen von Daechern/Luecken nicht springen.
+		const float Tau = 0.8f;
+		const float SmoothAlpha = (DeltaSeconds > 0.0f) ? (1.0f - FMath::Exp(-DeltaSeconds / Tau)) : 1.0f;
+		SmoothedAltitudeMeters = FMath::Lerp(SmoothedAltitudeMeters, MeasuredAltMeters, SmoothAlpha);
+		EffectiveRadiusMeters = ComputeAdaptiveRadiusMeters(SmoothedAltitudeMeters,
+			GroundRadiusMeters, StreamingRadiusMeters, AdaptiveStartAltitudeMeters, AdaptiveFullAltitudeMeters);
+	}
+
+	// Diagnose-Log im Sekundentakt: laesst die Hoehe->Radius-Kurve im Flug pruefen.
+	if (const UWorld* W = GetWorld())
+	{
+		const int32 Sec = FMath::FloorToInt(W->GetTimeSeconds());
+		if (Sec != LastRadiusLogSecond)
+		{
+			LastRadiusLogSecond = Sec;
+			UE_LOG(LogWbCore, Log, TEXT("WbStreaming: Hoehe %.0f m -> Radius %.0f m%s."),
+				SmoothedAltitudeMeters, EffectiveRadiusMeters,
+				bForceFixedRadius ? TEXT(" (fest, -WbRadius)") : TEXT(""));
+		}
+	}
+
+	// Form: Kugel um den Spieler mit adaptivem Radius (cm). Die Quelle haengt
+	// NICHT am Grid-Loading-Range, damit der Radius unabhaengig vom Level-Design
+	// eingestellt werden kann.
 	FStreamingSourceShape Shape;
 	Shape.bUseGridLoadingRange = false;
-	Shape.Radius = FMath::Max(100.0f, StreamingRadiusMeters * 100.0f);
+	Shape.Radius = FMath::Max(100.0f, EffectiveRadiusMeters * 100.0f);
 	Shape.bIsSector = false;
 	Shape.Location = FVector::ZeroVector;
 	Shape.Rotation = FRotator::ZeroRotator;
@@ -114,6 +167,19 @@ void AWiesbadenStreamingSource::UpdateSource()
 	CurrentSource.Shapes.Add(Shape);
 
 	bHasValidSource = true;
+}
+
+float AWiesbadenStreamingSource::ComputeAdaptiveRadiusMeters(float AltitudeMeters, float GroundRadiusM,
+	float AirRadiusM, float StartAltM, float FullAltM)
+{
+	// Degenerierte Baender (Full <= Start): harte Stufe statt Division durch <=0.
+	if (FullAltM <= StartAltM)
+	{
+		return (AltitudeMeters >= FullAltM) ? AirRadiusM : GroundRadiusM;
+	}
+	const float T = FMath::Clamp((AltitudeMeters - StartAltM) / (FullAltM - StartAltM), 0.0f, 1.0f);
+	const float S = T * T * (3.0f - 2.0f * T); // smoothstep - weiche Blende ohne Knick
+	return FMath::Lerp(GroundRadiusM, AirRadiusM, S);
 }
 
 bool AWiesbadenStreamingSource::GetStreamingSource(FWorldPartitionStreamingSource& OutStreamingSource) const
