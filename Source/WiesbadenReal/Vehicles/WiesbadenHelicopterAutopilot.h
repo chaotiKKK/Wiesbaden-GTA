@@ -35,7 +35,9 @@ enum class EWiesbadenAutopilotMode : uint8
  *  - Lage:   Horizontalfehler -> Ziel-Horizontalgeschwindigkeit -> Nick/Roll
  *            (im Rumpf-Frame, damit die Nase-vorn-Konvention stimmt). Nahe am
  *            Ziel geht die Ziel-Geschwindigkeit gegen 0 -> der Regler bremst die
- *            Restgeschwindigkeit weg und HAELT die Position (Schweben).
+ *            Restgeschwindigkeit weg und HAELT die Position (Schweben). Im Settle-
+ *            Band kommt ein INTEGRALTERM (mit Anti-Windup) dazu, der den letzten,
+ *            von der Rotor-Totzone verursachten Restversatz schliesst.
  *  - Gieren: zum Ziel ausrichten, solange es weit weg ist.
  */
 UCLASS(ClassGroup = (Wiesbaden), meta = (BlueprintSpawnableComponent))
@@ -93,6 +95,36 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.005"))
 	float TiltGain = 0.12f;
 
+	/**
+	 * INTEGRAL-Anteil der Lageregelung: Nick/Roll je Meter*Sekunde aufgelaufenem
+	 * Positionsfehler. NUR im Settle-Band aktiv (nahe Ziel). Loest den stationaeren
+	 * Rest-Versatz: das reine P-Kommando bei kleinem Fehler liegt unter der Rotor-
+	 * Anfahr-Totzone -> der Heli bliebe ~15 m neben dem Ziel stehen. Der Integrator
+	 * summiert den Fehler, ueberschreitet die Totzone und schliesst die letzten
+	 * Meter sanft, ohne den harten Mindesttempo-Kick (der ueberschiessen liesse).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.0"))
+	float TiltIntegralGain = 0.004f;
+
+	/** Anti-Windup: Betrag des aufgelaufenen Positionsfehlers (m*s) wird hierauf
+	 *  gedeckelt, damit der Integrator nicht ueberlaeuft und ueberschiesst. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "1.0"))
+	float TiltIntegralMaxMeterSeconds = 70.0f;
+
+	/**
+	 * Anti-Windup durch bedingte Integration: der Integrator laedt NUR auf, solange
+	 * der Heli langsamer als dieser Wert (m/s) ist - also von der Totzone festge-
+	 * halten wird. Sobald er sich bewegt, wird nicht weiter aufgeladen, sonst
+	 * schoebe der Integrator ueber das Ziel hinaus (langsame Schwingung).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.1"))
+	float IntegralFreezeSpeed = 1.5f;
+
+	/** Zeitkonstante (s), mit der der Integrator auslaeuft - verhindert Dauer-
+	 *  Wind-up und laesst ihn nach dem Ueberfahren sauber abklingen. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.5"))
+	float IntegralLeakTau = 8.0f;
+
 	/** Maximaler Nick-/Roll-Ausschlag des Autopiloten (0..1). Etwas hoeher fuer mehr
 	 *  Bremsautoritaet nahe am Ziel (gegen Ueberschiessen des traegen Rotors). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.05", ClampMax = "1.0"))
@@ -129,6 +161,18 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "1.0"))
 	float ArriveRadiusMeters = 8.0f;
 
+	/**
+	 * SETTLE-Band-Radius (m): zwischen Ankunftsradius und hier entfaellt das
+	 * Mindest-Anflugtempo (MinApproachSpeed), die Zielgeschwindigkeit laeuft
+	 * stetig gegen 0. Ohne dieses Band kickt der Mindesttempo-Boden den Heli beim
+	 * kleinsten Abdriften mit voller Mindestgeschwindigkeit zur Mitte zurueck ->
+	 * er ueberschiesst und kreist (Halte-Grenzzyklus, ~15 m gemessen). Nur JENSEITS
+	 * dieses Bandes (echter Transit) gilt der Boden, um die Rotor-Totzone zu
+	 * ueberwinden. Muss > ArriveRadiusMeters sein.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "1.0"))
+	float SettleRadiusMeters = 30.0f;
+
 	/** Hoehen-Toleranz fuer "am Ziel" (m). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Autopilot", meta = (ClampMin = "0.5"))
 	float ArriveAltToleranceMeters = 4.0f;
@@ -149,6 +193,10 @@ private:
 
 	EWiesbadenAutopilotMode Mode = EWiesbadenAutopilotMode::Off;
 	FVector Target = FVector::ZeroVector;
+
+	/** Aufgelaufener horizontaler Positionsfehler (m*s, Weltframe) fuer den
+	 *  Integralterm. Wird bei jedem neuen Ziel (FlyTo/HoldPosition/Off) genullt. */
+	FVector IntegralErrorXY = FVector::ZeroVector;
 
 	/** Fortschritts-Log im Sekundentakt + einmaliges "erreicht". */
 	float ElapsedInMode = 0.0f;

@@ -28,6 +28,7 @@ void UWiesbadenHelicopterAutopilot::FlyTo(const FVector& WorldTarget)
 	ElapsedInMode = 0.0f;
 	LastLogSecond = -1;
 	bArrivedLogged = false;
+	IntegralErrorXY = FVector::ZeroVector;
 }
 
 void UWiesbadenHelicopterAutopilot::HoldPosition()
@@ -40,11 +41,13 @@ void UWiesbadenHelicopterAutopilot::HoldPosition()
 	ElapsedInMode = 0.0f;
 	LastLogSecond = -1;
 	bArrivedLogged = false;
+	IntegralErrorXY = FVector::ZeroVector;
 }
 
 void UWiesbadenHelicopterAutopilot::Disengage()
 {
 	Mode = EWiesbadenAutopilotMode::Off;
+	IntegralErrorXY = FVector::ZeroVector;
 	if (AWiesbadenHelicopter* H = Heli())
 	{
 		H->ClearExternalControl();
@@ -87,13 +90,25 @@ void UWiesbadenHelicopterAutopilot::TickComponent(float DeltaTime, ELevelTick Ti
 	//    Nick/Roll im Rumpf-Frame. Nahe am Ziel geht die Ziel-Geschwindigkeit gegen
 	//    0 -> die Restgeschwindigkeit wird weggebremst = Position halten. Ein
 	//    einheitliches Gesetz fuer Anflug UND Schweben, ohne Fallunterscheidung.
-	// Im Ankunftsradius: Ziel-Geschwindigkeit 0 -> die echte Geschwindigkeit wird
-	// weggebremst (halten). Ausserhalb: proportional zum Abstand, aber mit einer
-	// Untergrenze ueber der Rotor-Anfahr-Totzone, damit der letzte Meter nicht als
-	// stationaerer Fehler stehen bleibt.
-	const float DesiredSpeed = (DistXYm <= ArriveRadiusMeters)
-		? 0.0f
-		: FMath::Clamp(ApproachGain * DistXYm, MinApproachSpeed, MaxApproachSpeed);
+	// Zielgeschwindigkeit als Bremsprofil mit drei Zonen - so rastet der Heli sanft
+	// ein, statt am Mindesttempo-Boden um den Zielpunkt zu kreisen:
+	//  - Ankunftsradius (<= Arrive): 0 -> reine Geschwindigkeitsdaempfung = halten.
+	//  - Settle-Band (Arrive..Settle): proportional zum Abstand, OHNE Boden -> laeuft
+	//    stetig gegen 0; kein Mindesttempo-Kick mehr (das war der ~15-m-Grenzzyklus).
+	//  - Transit (> Settle): Mindesttempo ueber der Rotor-Totzone, gekappt.
+	float DesiredSpeed;
+	if (DistXYm <= ArriveRadiusMeters)
+	{
+		DesiredSpeed = 0.0f;
+	}
+	else
+	{
+		DesiredSpeed = FMath::Min(ApproachGain * DistXYm, MaxApproachSpeed);
+		if (DistXYm > SettleRadiusMeters)
+		{
+			DesiredSpeed = FMath::Max(DesiredSpeed, MinApproachSpeed);
+		}
+	}
 	const FVector DesiredVelXY = (DistXYm > KINDA_SMALL_NUMBER)
 		? ErrorXY.GetSafeNormal() * DesiredSpeed
 		: FVector::ZeroVector;
@@ -101,12 +116,36 @@ void UWiesbadenHelicopterAutopilot::TickComponent(float DeltaTime, ELevelTick Ti
 
 	FVector Forward = H->GetActorForwardVector(); Forward.Z = 0.0f; Forward = Forward.GetSafeNormal();
 	FVector Right = H->GetActorRightVector(); Right.Z = 0.0f; Right = Right.GetSafeNormal();
-	const float ForwardError = FVector::DotProduct(VelErrorXY, Forward);
-	const float RightError = FVector::DotProduct(VelErrorXY, Right);
+	const float ForwardVelError = FVector::DotProduct(VelErrorXY, Forward);
+	const float RightVelError = FVector::DotProduct(VelErrorXY, Right);
 
-	// Nase runter (+Pitch) beschleunigt vorwaerts; +Roll nach rechts.
-	ControlCmd.Pitch = FMath::Clamp(TiltGain * ForwardError, -MaxTilt, MaxTilt);
-	ControlCmd.Roll = FMath::Clamp(TiltGain * RightError, -MaxTilt, MaxTilt);
+	// Integralterm der Lage: NUR im Settle-Band aufsummieren (sonst Wind-up beim
+	// langen Transit), Betrag deckeln (Anti-Windup). Er hebt das Kommando ueber die
+	// Rotor-Totzone und schliesst den stationaeren Restversatz, den das reine
+	// P-Kommando (zu klein) stehen liesse.
+	if (DistXYm <= SettleRadiusMeters)
+	{
+		// Bedingte Integration: nur aufladen, solange der Heli nahezu steht (die
+		// Totzone haelt ihn) - sobald er sich bewegt, nicht weiter aufladen, sonst
+		// schoebe der Integrator ueber das Ziel (Schwingung). Plus sanftes Auslaufen.
+		if (VelXY.Size() < IntegralFreezeSpeed)
+		{
+			IntegralErrorXY += FVector(ErrorCm.X, ErrorCm.Y, 0.0f) * CmToM * DeltaTime;
+		}
+		IntegralErrorXY *= FMath::Max(0.0f, 1.0f - DeltaTime / IntegralLeakTau);
+		IntegralErrorXY = IntegralErrorXY.GetClampedToMaxSize(TiltIntegralMaxMeterSeconds);
+	}
+	else
+	{
+		IntegralErrorXY = FVector::ZeroVector;
+	}
+	const float ForwardIntegral = FVector::DotProduct(IntegralErrorXY, Forward);
+	const float RightIntegral = FVector::DotProduct(IntegralErrorXY, Right);
+
+	// Nase runter (+Pitch) beschleunigt vorwaerts; +Roll nach rechts. P auf dem
+	// Geschwindigkeitsfehler + I auf dem Positionsfehler.
+	ControlCmd.Pitch = FMath::Clamp(TiltGain * ForwardVelError + TiltIntegralGain * ForwardIntegral, -MaxTilt, MaxTilt);
+	ControlCmd.Roll = FMath::Clamp(TiltGain * RightVelError + TiltIntegralGain * RightIntegral, -MaxTilt, MaxTilt);
 
 	// -- Hoehe: Rueckfuehrung (Hoehenfehler -> Ziel-Steigrate -> Kollektiv) PLUS
 	//    Vorsteuerung gegen den Auftriebsverlust durch die Rotorneigung. Ohne die
