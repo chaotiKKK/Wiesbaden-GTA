@@ -28,6 +28,10 @@
 #                                              Paket tauschen, Verknuepfung folgt)
 # Exit 0 = paketiert (bzw. Gates gruen bei -GatesOnly / Rollback ok), sonst Exit 1.
 
+# CmdletBinding: unbekannte Flags (z. B. Tippfehler '-GateOnly' statt '-GatesOnly')
+# werden abgewiesen statt still ignoriert - sonst laeuft versehentlich der VOLLE,
+# stundenlange Release-Build durch (im Playtest so beobachtet).
+[CmdletBinding()]
 param(
     [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
     [switch]$GatesOnly,

@@ -22,15 +22,19 @@ void AWiesbadenPlayerController::WbTeleport(int32 Ziel)
 		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbTeleport %d erkannt, aber kein besessener Pawn."), Ziel);
 		return;
 	}
-	const EWiesbadenDevTeleport Target =
-		static_cast<EWiesbadenDevTeleport>(FMath::Clamp(Ziel, 0, 2));
+	const int32 ZielClamped = FMath::Clamp(Ziel, 0, 2);
+	if (Ziel != ZielClamped)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbTeleport %d ausserhalb 0-2 - auf Ziel %d begrenzt."), Ziel, ZielClamped);
+	}
+	const EWiesbadenDevTeleport Target = static_cast<EWiesbadenDevTeleport>(ZielClamped);
 	const FVector Von = ControlledPawn->GetActorLocation();
 	ControlledPawn->SetActorLocation(FWiesbadenDevActions::TeleportSpawnCm(Target),
 		/*bSweep=*/false, nullptr, ETeleportType::TeleportPhysics);
 	const FVector Nach = ControlledPawn->GetActorLocation();
 	UE_LOG(LogWbCore, Log,
 		TEXT("WbDev: WbTeleport %d ausgefuehrt: von (%.0f,%.0f,%.0f) nach (%.0f,%.0f,%.0f), Distanz %.0f cm."),
-		Ziel, Von.X, Von.Y, Von.Z, Nach.X, Nach.Y, Nach.Z, FVector::Dist(Von, Nach));
+		ZielClamped, Von.X, Von.Y, Von.Z, Nach.X, Nach.Y, Nach.Z, FVector::Dist(Von, Nach));
 }
 
 void AWiesbadenPlayerController::WbResetVehicle()
@@ -78,10 +82,13 @@ void AWiesbadenPlayerController::WbCam(int32 Modus)
 		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbCam %d erkannt, aber kein Fahrzeug mit Kamera."), Modus);
 		return;
 	}
-	const EWiesbadenVehicleCameraMode Mode =
-		static_cast<EWiesbadenVehicleCameraMode>(FMath::Clamp(Modus, 0, 2));
-	Cam->SetCameraMode(Mode);
-	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbCam %d gesetzt (0=Follow,1=Orbit,2=Cockpit)."), Modus);
+	const int32 ModusClamped = FMath::Clamp(Modus, 0, 2);
+	if (Modus != ModusClamped)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbCam %d ausserhalb 0-2 - auf %d begrenzt."), Modus, ModusClamped);
+	}
+	Cam->SetCameraMode(static_cast<EWiesbadenVehicleCameraMode>(ModusClamped));
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbCam %d gesetzt (0=Follow,1=Orbit,2=Cockpit)."), ModusClamped);
 }
 
 void AWiesbadenPlayerController::WbHeli()
