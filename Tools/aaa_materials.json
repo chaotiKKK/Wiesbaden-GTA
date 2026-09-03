@@ -1,0 +1,13 @@
+{
+  "_comment": "Datengetriebenes AAA-Material-Manifest. Jeder Eintrag: Oberflaeche -> CC0-Asset-ID (ambientCG) -> Ziel-Material + Kachelung. aaa_import_materials.py laedt/importiert die CC0-PBR-Saetze, baut je Oberflaeche ein M_AAA_<surface>-Material und biegt (falls config_key gesetzt) die DefaultGame.ini-Soft-Ref der City auf das neue Material um. Content/*.uasset ist git-ignoriert - deshalb NUR neue Assets + Config, keine bestehenden Materialien ueberschreiben. Baked Map uebernimmt die neuen Materialien beim naechsten Re-Bake.",
+  "resolution": "2K",
+  "texture_root": "/Game/Materials/AAA/Textures",
+  "material_root": "/Game/Materials/AAA",
+  "sets": [
+    { "surface": "RoofClay",      "cc0": "RoofingTiles004", "tiling": 6.0,  "ao": false, "config_key": "BuildingRoofMaterial" },
+    { "surface": "FacadePlaster", "cc0": "Plaster001",      "tiling": 4.0,  "ao": false, "config_key": "BuildingWallMaterial" },
+    { "surface": "RoadAsphalt",   "cc0": "Asphalt012",      "tiling": 40.0, "ao": false, "config_key": "RoadMaterial" },
+    { "surface": "Paving",        "cc0": "PavingStones037", "tiling": 8.0,  "ao": true,  "config_key": "SidewalkMaterial" },
+    { "surface": "TerrainGrass",  "cc0": "Grass001",        "tiling": 60.0, "ao": false, "config_key": "TerrainMaterial" }
+  ]
+}
