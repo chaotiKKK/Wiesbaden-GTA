@@ -17,14 +17,16 @@
 
 param(
     [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
-    # Perf-Regression-Schranken (aus dem 8-s-Diagnoseblock). BEWUSST ueber der
-    # aktuellen Grundlast, damit der Check heute besteht und erst bei einer echten
-    # Verschlechterung durchfaellt. Nach dem WP-Streaming-Fix enger ziehen, um den
-    # Gewinn festzunageln. Ist-Werte 2026-09: Spiel ~110-163 ms, ~19.700 Komponenten,
-    # ~1,07 Mio. Instanzen.
-    [double]$MaxSpielMs        = 220,
-    [int]   $MaxPrimComponents = 24000,
-    [int]   $MaxInstances      = 1300000
+    # Perf-Regression-Schranken (aus dem 8-s-Diagnoseblock am Boden). BEWUSST ueber
+    # der aktuellen Grundlast, damit der Check heute besteht und erst bei einer
+    # echten Verschlechterung durchfaellt - jetzt aber ENG an der Ist-Last, um den
+    # WP-Streaming-Fix (hoehenadaptiver Radius, 1a8f34c) festzunageln.
+    # Ist-Werte am Boden nach dem Fix: Spiel ~13-16 ms, ~8.832 Komponenten,
+    # ~565k Instanzen (vorher 6000-m-Regime: ~110-163 ms / ~19.700 / ~1,07 Mio.).
+    # Ein Rueckfall Richtung altem Streaming-Verhalten reisst diese Schranken.
+    [double]$MaxSpielMs        = 45,
+    [int]   $MaxPrimComponents = 13000,
+    [int]   $MaxInstances      = 800000
 )
 
 $ErrorActionPreference = "Stop"
