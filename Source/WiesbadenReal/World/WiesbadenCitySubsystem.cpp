@@ -30,6 +30,7 @@
 #include "Misc/Paths.h"
 #include "ProceduralMeshComponent.h"
 #include "World/WiesbadenCityActor.h"
+#include "Engine/PostProcessVolume.h"
 #include "World/WiesbadenCityChunk.h"
 #include "World/WiesbadenStreamingSource.h"
 #include "UnrealClient.h"
@@ -143,12 +144,57 @@ void UWiesbadenCitySubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	}
 
 	InitializeCity();
+
+	// Kohaerenter Bildeindruck: Belichtung klemmen + dezentes Color-Grading.
+	EnsureCinematicLighting(InWorld);
 }
 
 void UWiesbadenCitySubsystem::OnWorldEndPlay(UWorld& InWorld)
 {
 	ClearCity();
 	Super::OnWorldEndPlay(InWorld);
+}
+
+void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
+{
+	// Der Default-Look war flach/ueberbelichtet: die Auto-Belichtung hellt die
+	// helle Szene (Himmel/Gras) auf Mittelgrau und waescht Kontrast aus. Eine
+	// unbegrenzte PostProcessVolume klemmt die Belichtung, dunkelt leicht ab und
+	// hebt Kontrast/Saettigung dezent an - fuer einen kohaerenten Bildeindruck.
+	// Nur EINE anlegen (OnWorldBeginPlay feuert je Welt einmal).
+	for (TActorIterator<APostProcessVolume> It(&World); It; ++It)
+	{
+		if (It->ActorHasTag(TEXT("WbCinematicLighting")))
+		{
+			return;
+		}
+	}
+
+	APostProcessVolume* PPV = World.SpawnActor<APostProcessVolume>();
+	if (!PPV)
+	{
+		return;
+	}
+	PPV->Tags.Add(TEXT("WbCinematicLighting"));
+	PPV->bUnbound = true;
+	PPV->Priority = 1.0f;
+
+	FPostProcessSettings& S = PPV->Settings;
+	// Belichtung klemmen + leicht abdunkeln (gegen "ueberbelichtet"). Min/Max-
+	// Brightness begrenzen die Auto-Adaption, der negative Bias (in EV) dunkelt ab.
+	S.bOverride_AutoExposureMinBrightness = true;
+	S.AutoExposureMinBrightness = 0.15f;
+	S.bOverride_AutoExposureMaxBrightness = true;
+	S.AutoExposureMaxBrightness = 1.5f;
+	S.bOverride_AutoExposureBias = true;
+	S.AutoExposureBias = -0.5f;
+	// Dezent mehr Kontrast/Saettigung (gegen "flach"). W = Luminanz.
+	S.bOverride_ColorContrast = true;
+	S.ColorContrast = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
+	S.bOverride_ColorSaturation = true;
+	S.ColorSaturation = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
+
+	UE_LOG(LogWbCore, Log, TEXT("Cinematic-Lighting: PostProcessVolume gesetzt (Belichtung geklemmt, Kontrast/Saettigung +8%%)."));
 }
 
 void UWiesbadenCitySubsystem::Tick(float DeltaTime)

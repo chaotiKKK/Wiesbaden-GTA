@@ -441,6 +441,11 @@ private:
 	/** Erzeugt die World-Partition-Streaming-Quelle (folgt dem Player). */
 	void EnsureStreamingSource();
 
+	/** Spawnt einmalig eine unbegrenzte PostProcessVolume, die die Belichtung
+	 *  klemmt (gegen den flachen/ueberbelichteten Look) und dezent Kontrast/
+	 *  Saettigung anhebt - fuer einen kohaerenten Bildeindruck. */
+	void EnsureCinematicLighting(UWorld& World);
+
 	/** Fragt den World-Partition-Streaming-Zustand ab und meldet Wechsel. */
 	void UpdateStreamingState();
 
