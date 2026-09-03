@@ -43,10 +43,13 @@ Lernreise.*
 
 *Hintergrund und Designbegruendung - warum etwas so gebaut ist.*
 
-Noch keine eigenstaendige Explanation. Die Designbegruendung des
-Fahndungssystems steckt vorerst in der Spec unten (`superpowers/specs/`).
-(Kandidat: "Warum der Streaming-Anker - World-Partition-Bounds und Punkt-Bounds
-leerer Komponenten".)
+- [Warum der Streaming-Anker noetig ist](explanation/streaming-anker.md)
+  - World-Partition-Bounds, Punkt-Bounds leerer Komponenten am Ursprung, wie das
+    Anchoring sie aufloest, die Fallen (Modify/Re-Bake, Klassen-Sweep, 2C), und
+    das Verhaeltnis zum Streaming-Radius.
+
+Die Designbegruendung des Fahndungssystems steckt weiterhin in der Spec unten
+(`superpowers/specs/`).
 
 ---
 
