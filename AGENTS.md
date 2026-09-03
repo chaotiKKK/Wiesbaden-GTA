@@ -1988,13 +1988,18 @@ trifft, bevor er die Box erreicht - ueber die Session 58x "wirksam ... blockiert
 gezeichnet" war ein Startup-Transient (danach animiert + "Ueberfahren: N
 Fussgaenger"). Grep "wirksam" vs. Warnung, sonst repariert man Nicht-Bugs.
 
-## Ampel-Kopplung: 1073 Ampeln, aber 0 Fahrzeuge an Rot (offener Bug, Stand 2026-09)
+## Ampel-Kopplung "0 an Rot" war KEIN Bug - nur Ampel-Sparsamkeit (AUFGEKLAERT, 284daab)
 
-Echter, noch offener Bug - NICHT die frueher gefixte "SetTrafficLightSystem nie
-gerufen"-Sache: Verdrahtung korrekt (Sim UND Ampeln nutzen DASSELBE
-Builder->RoadNetwork -> Connection-Indizes stimmen), Phase erzeugt ~75% Rot je
-4-Arm-Kreuzung, Stopp-Logik unit-getestet - trotzdem "0 an Rot gehalten" ueber die
-ganze Session. "Ampeln 0.0 ms" ist ERWARTET (Phase wird faul in IsConnectionGreen
-berechnet, Tick erhoeht nur ElapsedSeconds; kein Zeichen, dass Ampeln aus sind).
-Ursache verengt auf "Fahrzeuge treffen in der Stopp-Zone nie eine SIGNALISIERTE
-Verbindung". Instrumentierung + Kandidaten-Fixes: Saved/Logs/Bugreport_Ampel-Kopplung.md.
+Das gemeldete "1073 Ampeln, 0 Fahrzeuge an Rot / Kopplung greift nicht" war ein
+DIAGNOSE-Fehlalarm, kein Kopplungs-Defekt. Instrumentierung der Stopp-Schleife
+(Zaehlung StopZone -> signalisiert -> rot) zeigte: von 4-6 Fahrzeugen in der
+Stopp-Zone erreicht fast KEINES eine signalisierte Verbindung (signalisiert~0),
+weil nur ~1073 der ~20213 Kreuzungen Ampeln sind (~5%) - der Verkehr um den Spieler
+quert fast nur ampellose Knoten. Die Kopplung ist korrekt (Unit-Test
+`Traffic.RedLightStop`). Defekt war die Diagnose, die geometrische Ampel-Naehe mit
+Versagen verwechselte. Fix: Sim summiert `LifetimeVehiclesApproachingSignal`/
+`-HeldAtRed` (via `TrafficLights::IsConnectionControlled`); CitySubsystem urteilt auf
+Fahr-Evidenz statt Geometrie (held>0 -> wirksam; wenige Anfahrten -> kein Fehler;
+>=20 Anfahrten ohne Halten -> echter Defekt). "Ampeln 0.0 ms" bleibt ERWARTET
+(Phase faul in IsConnectionGreen). MERKE (drittes Mal diese Sitzung): eine einzelne
+Selbstdiagnose-Warnung erst gegen die Fahr-/Gesamtbilanz pruefen, bevor man sie glaubt.
