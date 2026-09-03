@@ -26,6 +26,9 @@ Helikopterflug".)
 - [Den Helikopter-Autopiloten per WbDev-Befehlen testen](how-to/helikopter-autopilot-testen.md)
   - Anflug ausloesen, Laufzeit abwarten, Log auswerten (Bestehen/Durchfall),
     Halten/Abschalten interaktiv, Fehlersuche.
+- [Das Fahrverhalten per WbDrive testen](how-to/fahrverhalten-testen.md)
+  - Fahrprofil ausloesen, Log auswerten (Tempo/Laengsdynamik, Kursaenderung/
+    Lenkung, Gangwechsel), Schwellen, Fehlersuche.
 
 ## Reference
 
