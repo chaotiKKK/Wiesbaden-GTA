@@ -1087,7 +1087,8 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		{
 			bTrafficLightsReported = true;
 
-			const int32 Held = TrafficSimulation.GetVehiclesHeldAtRed();
+			const int32 Held = TrafficSimulation.GetLifetimeVehiclesHeldAtRed();
+			const int32 ApproachedSignal = TrafficSimulation.GetLifetimeVehiclesApproachingSignal();
 
 			// Entfernung zur naechsten Ampel: Ohne sie bleibt "kein Fahrzeug
 			// gehalten" zweideutig - es koennte auch schlicht keine Ampel in
@@ -1114,25 +1115,41 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					}
 				}
 			}
+			// Verdikt auf FAHR-Evidenz statt Geometrie: eine Ampel "in Reichweite"
+			// heisst nicht, dass der Verkehr sie auch befaehrt. Nur ~1073 der
+			// ~20213 Kreuzungen sind Ampeln (~5%), der Verkehr um den Spieler quert
+			// meist ampellose Knoten - dann ist "0 an Rot" KEIN Fehler. Erst wenn
+			// Fahrzeuge signalisierte Verbindungen anfuhren UND nie hielten, ist die
+			// Kopplung wirklich defekt. (ApproachedSignal/Held sind Lebenszeit-
+			// Summen seit dem Stadt-Spawn, nicht der letzte Tick.)
 			if (Held > 0)
 			{
 				UE_LOG(LogWbTraffic, Log,
-					TEXT("Ampeln wirksam: %d im Netz, %d Fahrzeug(e) stehen an Rot, naechste Ampel %.0f m ")
-					TEXT("(Zyklus %.0f s, Gruen %.0f s)."),
-					TrafficLightSystem.GetTrafficLightCount(), Held, NearestLightM,
+					TEXT("Ampeln wirksam: %d im Netz, %d Halte-Ereignis(se) an Rot (bei %d Anfahrten auf ")
+					TEXT("signalisierte Verbindungen), naechste Ampel %.0f m (Zyklus %.0f s, Gruen %.0f s)."),
+					TrafficLightSystem.GetTrafficLightCount(), Held, ApproachedSignal, NearestLightM,
 					TrafficLightSystem.Settings.CycleSeconds,
 					TrafficLightSystem.Settings.GreenSecondsPerCycle);
 			}
+			else if (ApproachedSignal >= 20)
+			{
+				// Genug Anfahrten (>=20), aber NIE gehalten: bei ~75% Rot-Anteil je
+				// Kreuzung waere durchgehend Gruen astronomisch unwahrscheinlich ->
+				// echter Kopplungs-Defekt.
+				UE_LOG(LogWbTraffic, Warning,
+					TEXT("Ampeln: %d im Netz, %d Anfahrten auf signalisierte Verbindungen, aber KEIN ")
+					TEXT("Fahrzeug gehalten - die Kopplung greift nicht (echter Defekt)."),
+					TrafficLightSystem.GetTrafficLightCount(), ApproachedSignal);
+			}
 			else
 			{
-				UE_LOG(LogWbTraffic, Warning,
-					TEXT("Ampeln: %d im Netz, KEIN Fahrzeug gehalten. Naechste Ampel %.0f m entfernt, ")
-					TEXT("Verkehr entsteht im Umkreis von %.0f m - %s"),
-					TrafficLightSystem.GetTrafficLightCount(), NearestLightM,
-					TrafficSimulation.Settings.SpawnRadiusMeters,
-					NearestLightM > TrafficSimulation.Settings.SpawnRadiusMeters
-						? TEXT("also liegt gar keine Ampel im Verkehrsbereich (kein Fehler).")
-						: TEXT("eine Ampel LIEGT in Reichweite - die Kopplung greift nicht."));
+				// held==0 und nur wenige/keine Anfahrten: statistisch normal, weil
+				// nur ~5% der Kreuzungen Ampeln sind. Kein Urteil moeglich, kein Fehler.
+				UE_LOG(LogWbTraffic, Log,
+					TEXT("Ampeln: %d im Netz, nur %d Anfahrten auf signalisierte Verbindungen im ")
+					TEXT("Messfenster (naechste Ampel %.0f m) - zu wenig, um die Kopplung zu beurteilen; ")
+					TEXT("kein Fehler (nur ein kleiner Teil der Kreuzungen hat Ampeln)."),
+					TrafficLightSystem.GetTrafficLightCount(), ApproachedSignal, NearestLightM);
 			}
 		}
 	}

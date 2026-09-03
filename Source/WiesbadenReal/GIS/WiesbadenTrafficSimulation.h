@@ -434,6 +434,13 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	 */
 	int32 GetVehiclesHeldAtRed() const { return LastVehiclesHeldAtRed; }
 
+	/** Seit Initialize aufsummiert: wie oft ein Fahrzeug an einer signalisierten
+	 *  Verbindung angehalten wurde bzw. eine solche ueberhaupt anfuhr. Erlaubt der
+	 *  Diagnose, "Kopplung defekt" von "keine Ampel auf den befahrenen Spuren" zu
+	 *  unterscheiden (nur ~5% der Kreuzungen sind Ampeln). */
+	int32 GetLifetimeVehiclesHeldAtRed() const { return LifetimeVehiclesHeldAtRed; }
+	int32 GetLifetimeVehiclesApproachingSignal() const { return LifetimeVehiclesApproachingSignal; }
+
 	/** Setzt die Simulation zurueck (kein Netz, keine Fahrzeuge). */
 	void Reset();
 
@@ -646,6 +653,10 @@ private:
 
 	/** Zaehler des letzten Ticks - siehe GetVehiclesHeldAtRed(). */
 	int32 LastVehiclesHeldAtRed = 0;
+
+	/** Seit Initialize aufsummierte Kennzahlen fuer die ehrliche Ampel-Diagnose. */
+	int32 LifetimeVehiclesHeldAtRed = 0;
+	int32 LifetimeVehiclesApproachingSignal = 0;
 	TArray<int32> SpawnLaneIds;
 	TMap<int32, double> ConnectionLengthCm;
 	TMap<int32, TArray<int32>> LaneSuccessorIndices; // LaneId -> Verbindungs-Indizes

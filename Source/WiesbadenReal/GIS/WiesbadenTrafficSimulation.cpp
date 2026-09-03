@@ -50,6 +50,8 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 	SpawnAccumulator = 0.0;
 	TotalSpawned = 0;
 	TotalRemoved = 0;
+	LifetimeVehiclesHeldAtRed = 0;
+	LifetimeVehiclesApproachingSignal = 0;
 	TotalDistanceCm = 0.0;
 	Report = FWiesbadenTrafficReport();
 
@@ -212,6 +214,8 @@ void FWiesbadenTrafficSimulation::Reset()
 	SpawnAccumulator = 0.0;
 	TotalSpawned = 0;
 	TotalRemoved = 0;
+	LifetimeVehiclesHeldAtRed = 0;
+	LifetimeVehiclesApproachingSignal = 0;
 	TotalDistanceCm = 0.0;
 	Report = FWiesbadenTrafficReport();
 }
@@ -1088,17 +1092,22 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 				continue;
 			}
 			const int32 NextConnection = PickSuccessorConnection(Vehicle);
+			// Faehrt das Fahrzeug ueberhaupt auf eine SIGNALISIERTE Verbindung zu?
+			// Nur dann kann die Kopplung wirken. Ohne diese Kennzahl liesse sich
+			// "0 an Rot gehalten" nicht von "keine Ampel auf der Fahrspur" trennen -
+			// nur ~1073 der ~20213 Kreuzungen sind Ampeln, der Verkehr quert meist
+			// ampellose Knoten (das ist KEIN Kopplungsfehler).
+			if (NextConnection != INDEX_NONE && TrafficLights->IsConnectionControlled(NextConnection))
+			{
+				++LifetimeVehiclesApproachingSignal;
+			}
 			if (NextConnection != INDEX_NONE && !TrafficLights->IsConnectionGreen(NextConnection))
 			{
 				Vehicle.SpeedCmS = 0.0;
-
-				// Kennzahl: Ohne sie liesse sich nicht unterscheiden, ob die
-				// Ampeln wirken oder ob nur das System laeuft. Genau diese
-				// Luecke hat in diesem Projekt schon den unsichtbaren Verkehr
-				// und die unsichtbaren Strassen verdeckt.
 				++LastVehiclesHeldAtRed;
 			}
 		}
+		LifetimeVehiclesHeldAtRed += LastVehiclesHeldAtRed;
 	}
 
 	// -- 1c) Ruecksicht auf das Spielerfahrzeug ---------------------------------

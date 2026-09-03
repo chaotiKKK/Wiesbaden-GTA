@@ -117,6 +117,11 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSystem
 	 */
 	bool IsConnectionGreen(int32 ConnectionIndex) const;
 
+	/** True, wenn diese Verbindung ueberhaupt von einer Ampel kontrolliert wird
+	 *  (Kreuzung mit TrafficSignals). Diagnose: unterscheidet "keine Ampel an der
+	 *  Verbindung" von "Ampel steht auf gruen". */
+	bool IsConnectionControlled(int32 ConnectionIndex) const { return ConnectionToLight.Contains(ConnectionIndex); }
+
 	/** Einstellungen (fuer Diagnose/HUD). */
 	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
 	FWiesbadenTrafficLightSettings Settings;
