@@ -9,6 +9,7 @@
 #include "Vehicles/WiesbadenCarAudioComponent.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
+#include "Vehicles/WiesbadenVehicleControl.h"
 #include "Vehicles/WiesbadenVehiclePhysics.h"
 
 #include "WiesbadenCar.generated.h"
@@ -18,22 +19,8 @@ class USceneComponent;
 class UBoxComponent;
 class UStaticMeshComponent;
 
-/**
- * Fertige Steuerwerte fuer die externe Fahrzeugsteuerung (KI/Test/Replay).
- *
- * Analog zu FWiesbadenHeliControl: ein Treiber schiebt fertige Eingaben ein,
- * das Fahrzeug wendet sie ueber dieselbe Fahrphysik an wie eine Tastatureingabe.
- * So bleibt die Fahrzeugklasse frei von Test-/Treiber-Code, und die Fahrphysik
- * laesst sich ohne Tastatur nachweisen (Rauchtest) oder von einer KI fahren.
- */
-struct FWiesbadenCarControl
-{
-	float Throttle = 0.0f;   // 0..1 (Gas)
-	float Brake = 0.0f;      // 0..1 (Bremse)
-	float Steering = 0.0f;   // -1..1 (rechts = +)
-	bool bHandbrake = false;
-	bool bReverse = false;
-};
+// FWiesbadenCarControl liegt jetzt im neutralen Header WiesbadenVehicleControl.h
+// (gemeinsame Steuernaht beider Fahrzeuge), von hier aus mit-inkludiert.
 
 /**
  * Fahrbarer PKW-Pawn mit Platzhalter-Geometrie (Engine-Basis-Shapes).
@@ -48,7 +35,7 @@ struct FWiesbadenCarControl
  *  - R = Rueckwaertsgang (Flanke), C = Kamera umschalten, Pfeiltasten = Orbit
  */
 UCLASS()
-class WIESBADENREAL_API AWiesbadenCar : public APawn
+class WIESBADENREAL_API AWiesbadenCar : public APawn, public IWiesbadenVehicleControl
 {
 	GENERATED_BODY()
 
@@ -70,11 +57,11 @@ public:
 
 	/** Absolutgeschwindigkeit in km/h (Tacho). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug")
-	float GetSpeedKmh() const;
+	virtual float GetSpeedKmh() const override;
 
 	/** Aktueller Gang (1..N; -1 = Rueckwaerts). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug")
-	int32 GetGear() const;
+	virtual int32 GetGear() const override;
 
 	/** Aktuelle Motordrehzahl (U/min). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug")
@@ -85,14 +72,17 @@ public:
 	 * und speist Gas/Bremse/Lenkung ueber die normale Fahrphysik. ReadInput wendet
 	 * sie nur an - keine Test-/Treiberlogik in der Fahrzeugklasse.
 	 */
-	void SetExternalControl(const FWiesbadenCarControl& Control)
+	virtual void SetExternalControl(const FWiesbadenCarControl& Control) override
 	{
 		ExternalControl = Control;
 		bExternalControlActive = true;
 	}
 
 	/** Externe Steuerung abschalten - die Tastatur/das Gamepad uebernimmt wieder. */
-	void ClearExternalControl() { bExternalControlActive = false; }
+	virtual void ClearExternalControl() override { bExternalControlActive = false; }
+
+	/** True, solange die externe Steuerung aktiv ist (Interface-Naht). */
+	virtual bool IsExternalControlActive() const override { return bExternalControlActive; }
 
 	/** Lichtanlage des Fahrzeugs - fuer die HUD-Kontrollleuchten. */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug|Licht")

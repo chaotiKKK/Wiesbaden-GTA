@@ -9,6 +9,7 @@
 #include "Vehicles/WiesbadenCarAudioComponent.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
+#include "Vehicles/WiesbadenVehicleControl.h"
 
 #include "WiesbadenChaosCar.generated.h"
 
@@ -36,7 +37,7 @@ class UChaosWheeledVehicleMovementComponent;
  * -WbChaosCar.
  */
 UCLASS()
-class WIESBADENREAL_API AWiesbadenChaosCar : public AWheeledVehiclePawn
+class WIESBADENREAL_API AWiesbadenChaosCar : public AWheeledVehiclePawn, public IWiesbadenVehicleControl
 {
 	GENERATED_BODY()
 
@@ -45,9 +46,17 @@ public:
 
 	virtual void Tick(float DeltaSeconds) override;
 
+	// -- Gemeinsame Steuernaht (IWiesbadenVehicleControl) --------------------
+	// Speichert den externen Befehl; im Tick wird er bei aktivem externem
+	// Control statt der Tastatur an die Chaos-Bewegungskomponente gelegt.
+	virtual void SetExternalControl(const FWiesbadenCarControl& Control) override;
+	virtual void ClearExternalControl() override;
+	virtual bool IsExternalControlActive() const override { return bExternalControlActive; }
+	virtual int32 GetGear() const override { return GetCurrentGear(); }
+
 	/** Geschwindigkeit in km/h - fuer HUD und Diagnose. */
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Fahrzeug")
-	float GetSpeedKmh() const;
+	virtual float GetSpeedKmh() const override;
 
 	/** Motordrehzahl in 1/min. */
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Fahrzeug")
@@ -95,6 +104,19 @@ private:
 	 * je nach Fahrzeugart aendert.
 	 */
 	void ReadInput(float DeltaSeconds);
+
+	/**
+	 * Externen Steuerbefehl (Naht) auf die Chaos-Bewegungskomponente legen.
+	 *
+	 * Uebersetzung: Throttle/Brake/Steering direkt; bHandbrake ->
+	 * SetHandbrakeInput; bReverse -> Rueckwaertsgang (SetTargetGear(-1)), sonst
+	 * automatisch. Ersetzt im Tick die Tastenabfrage, solange die Naht aktiv ist.
+	 */
+	void ApplyExternalControl();
+
+	/** Gespeicherter externer Befehl + Aktiv-Flag (Interface-Naht). */
+	FWiesbadenCarControl ExternalControl;
+	bool bExternalControlActive = false;
 
 	/** Taste gedrueckt? Ueber den Spielercontroller, ohne Zuordnung. */
 	bool IsKeyDown(const FKey& Key) const;

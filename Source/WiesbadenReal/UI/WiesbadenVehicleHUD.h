@@ -8,6 +8,7 @@
 #include "WiesbadenVehicleHUD.generated.h"
 
 class AWiesbadenCar;
+class IWiesbadenVehicleControl;
 class AWiesbadenHelicopter;
 
 /**
@@ -96,6 +97,10 @@ private:
 	/** Liefert das aktuell gesteuerte Fahrzeug oder nullptr. */
 	AWiesbadenCar* GetPlayerCar() const;
 
+	/** Liefert das aktuell gesteuerte Fahrzeug ueber die Steuernaht (Interface)
+	 *  oder nullptr - erfasst AUCH den ChaosCar, den GetPlayerCar nicht kennt. */
+	IWiesbadenVehicleControl* GetPlayerVehicleControl() const;
+
 	/** Liefert den aktuell gesteuerten Helikopter oder nullptr. */
 	AWiesbadenHelicopter* GetPlayerHelicopter() const;
 
@@ -156,6 +161,13 @@ private:
 	void DrawSpeedometer(const AWiesbadenCar& Car, float CenterX, float CenterY, float Radius);
 	void DrawRpmBar(const AWiesbadenCar& Car, float X, float Y, float Width, float Height);
 	void DrawTellTales(const AWiesbadenCar& Car, float X, float Y);
+
+	/**
+	 * Minimalanzeige Tempo/Gang ueber die Steuernaht - fuer Fahrzeuge ohne die
+	 * reichen Kaefer-Instrumente (ChaosCar). Drehzahlband/Kontrollleuchten/Cockpit
+	 * bleiben Car-spezifisch (siehe Spec).
+	 */
+	void DrawMinimalVehicleReadout(const IWiesbadenVehicleControl& Vehicle, float Width, float Height);
 
 	/**
 	 * Minikarte unten rechts, gezeichnet aus den Mittellinien des

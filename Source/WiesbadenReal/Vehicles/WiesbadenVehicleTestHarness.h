@@ -8,7 +8,7 @@
 #include "WiesbadenVehicleTestHarness.generated.h"
 
 class AWiesbadenHelicopter;
-class AWiesbadenCar;
+class IWiesbadenVehicleControl;
 
 /**
  * Dev-Test-Harness: fuehrt ein Fahrzeug ueber seinen NORMALEN Steuereingang
@@ -44,7 +44,9 @@ public:
 
 private:
 	AWiesbadenHelicopter* Heli() const;
-	AWiesbadenCar* Car() const;
+	// Der Fahr-Pfad spricht das Fahrzeug ueber die Steuernaht an (Interface),
+	// nicht ueber eine konkrete Klasse - so treibt er BEIDE Fahrzeugarten.
+	IWiesbadenVehicleControl* VehicleControl() const;
 
 	// Ein Harness lebt auf EINEM Pawn: Gier-/Flugprofil treiben einen Helikopter,
 	// das Fahrprofil ein Fahrzeug. Beide Zweige pruefen ihren Owner-Typ selbst.

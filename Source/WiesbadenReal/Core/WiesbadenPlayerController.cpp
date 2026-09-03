@@ -11,6 +11,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Vehicles/WiesbadenCar.h"
+#include "Vehicles/WiesbadenVehicleControl.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 #include "Vehicles/WiesbadenHelicopterAutopilot.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
@@ -225,13 +226,15 @@ void AWiesbadenPlayerController::WbHeliFly(int32 Sekunden)
 
 void AWiesbadenPlayerController::WbDrive(int32 Sekunden)
 {
-	AWiesbadenCar* Car = Cast<AWiesbadenCar>(GetPawn());
-	if (!Car)
+	// Ueber die Steuernaht (Interface) statt auf eine konkrete Klasse - so greift
+	// WbDrive auf BEIDE Fahrzeuge (Kaefer wie ChaosCar).
+	APawn* ControlledPawn = GetPawn();
+	if (!Cast<IWiesbadenVehicleControl>(ControlledPawn))
 	{
 		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbDrive erkannt, aber kein Fahrzeug besessen."));
 		return;
 	}
-	GetOrAddHarness(Car)->StartDriveProfile(static_cast<float>(Sekunden));
+	GetOrAddHarness(ControlledPawn)->StartDriveProfile(static_cast<float>(Sekunden));
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbDrive - Fahrprofil fuer %d s gestartet."), Sekunden);
 }
 

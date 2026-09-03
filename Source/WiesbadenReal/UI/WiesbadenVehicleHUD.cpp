@@ -12,6 +12,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Vehicles/WiesbadenCar.h"
+#include "Vehicles/WiesbadenVehicleControl.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 #include "World/WiesbadenNerobergbahn.h"
@@ -129,6 +130,12 @@ AWiesbadenCar* AWiesbadenVehicleHUD::GetPlayerCar() const
 	return PC ? Cast<AWiesbadenCar>(PC->GetPawn()) : nullptr;
 }
 
+IWiesbadenVehicleControl* AWiesbadenVehicleHUD::GetPlayerVehicleControl() const
+{
+	const APlayerController* PC = GetOwningPlayerController();
+	return PC ? Cast<IWiesbadenVehicleControl>(PC->GetPawn()) : nullptr;
+}
+
 AWiesbadenHelicopter* AWiesbadenVehicleHUD::GetPlayerHelicopter() const
 {
 	const APlayerController* PC = GetOwningPlayerController();
@@ -214,6 +221,24 @@ void AWiesbadenVehicleHUD::DrawSpeedometer(const AWiesbadenCar& Car, float Cente
 		DialText, CenterX - 34.0f, CenterY + Radius * 0.35f, GEngine->GetMediumFont(), 1.0f);
 
 	DrawText(FString::Printf(TEXT("Gang %s"), *FormatGear(Car.GetGear())),
+		DialText, CenterX - 28.0f, CenterY + Radius * 0.55f, GEngine->GetSmallFont(), 1.0f);
+}
+
+void AWiesbadenVehicleHUD::DrawMinimalVehicleReadout(
+	const IWiesbadenVehicleControl& Vehicle, float Width, float Height)
+{
+	// Position wie der Tacho (rechts unten, neben der Minikarte), aber nur die
+	// digitale Ablesung Tempo/Gang - kein Zeiger, kein Drehzahlband, keine
+	// Kontrollleuchten. Fuer Fahrzeuge ohne die reichen Kaefer-Instrumente.
+	constexpr float MapDiameter = 260.0f;
+	constexpr float MapMargin = 24.0f;
+	const float Radius = FMath::Clamp(Height * 0.16f, 60.0f, 130.0f);
+	const float CenterX = Width - MapDiameter - MapMargin * 2.0f - Radius - 20.0f;
+	const float CenterY = Height - Radius - 70.0f;
+
+	DrawText(FString::Printf(TEXT("%3d km/h"), FMath::RoundToInt(Vehicle.GetSpeedKmh())),
+		DialText, CenterX - 34.0f, CenterY + Radius * 0.35f, GEngine->GetMediumFont(), 1.0f);
+	DrawText(FString::Printf(TEXT("Gang %s"), *FormatGear(Vehicle.GetGear())),
 		DialText, CenterX - 28.0f, CenterY + Radius * 0.55f, GEngine->GetSmallFont(), 1.0f);
 }
 
@@ -660,6 +685,15 @@ void AWiesbadenVehicleHUD::DrawHUD()
 
 	if (!Car)
 	{
+		// Kein Kaefer, aber ein anderes Fahrzeug mit der Steuernaht (ChaosCar):
+		// Minimalanzeige Tempo/Gang ueber das Interface. Die reichen
+		// Kaefer-Instrumente bleiben dem AWiesbadenCar vorbehalten.
+		if (IWiesbadenVehicleControl* Vehicle = GetPlayerVehicleControl())
+		{
+			DrawMinimalVehicleReadout(*Vehicle, Width, Height);
+			return;
+		}
+
 		// Zu Fuss: statt Tacho der Hinweis, was hier gerade moeglich ist.
 		DrawFootPrompt(Width * 0.5f, Height - 120.0f);
 		return;
@@ -1213,8 +1247,9 @@ void AWiesbadenVehicleHUD::DrawVehicleBanner(float CenterX, float Y)
 			{
 				VehicleBannerText = TEXT("Eingestiegen: Helikopter");
 			}
-			else if (Cast<AWiesbadenCar>(Cur))
+			else if (Cast<IWiesbadenVehicleControl>(Cur))
 			{
+				// Ueber die Steuernaht - erfasst Kaefer UND ChaosCar.
 				VehicleBannerText = TEXT("Eingestiegen: Fahrzeug");
 			}
 			else

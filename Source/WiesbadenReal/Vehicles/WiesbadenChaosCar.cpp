@@ -255,10 +255,54 @@ void AWiesbadenChaosCar::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 
 	TickSelfTest(DeltaSeconds);
+	if (bSelfTestActive)
+	{
+		return;
+	}
 
-	if (!bSelfTestActive)
+	// Reihenfolge: Selbsttest > externe Naht (KI/Harness/WbDrive) > Tastatur.
+	// So faehrt der ChaosCar ueber DIESELBE Naht wie der kinematische Car.
+	if (bExternalControlActive)
+	{
+		ApplyExternalControl();
+	}
+	else
 	{
 		ReadInput(DeltaSeconds);
+	}
+}
+
+void AWiesbadenChaosCar::SetExternalControl(const FWiesbadenCarControl& Control)
+{
+	ExternalControl = Control;
+	bExternalControlActive = true;
+}
+
+void AWiesbadenChaosCar::ClearExternalControl()
+{
+	bExternalControlActive = false;
+}
+
+void AWiesbadenChaosCar::ApplyExternalControl()
+{
+	UChaosWheeledVehicleMovementComponent* Movement = GetChaosMovement();
+	if (!Movement)
+	{
+		return;
+	}
+
+	Movement->SetThrottleInput(FMath::Clamp(ExternalControl.Throttle, 0.0f, 1.0f));
+	Movement->SetBrakeInput(FMath::Clamp(ExternalControl.Brake, 0.0f, 1.0f));
+	Movement->SetSteeringInput(FMath::Clamp(ExternalControl.Steering, -1.0f, 1.0f));
+	Movement->SetHandbrakeInput(ExternalControl.bHandbrake);
+
+	// Rueckwaerts: expliziter Rueckwaertsgang; sonst regelt die Automatik
+	// (bUseAutomaticGears/bUseAutoReverse) den Vorwaertsgang selbst.
+	// Hinweis: erst nach dem PhysicsAsset-Bauch-Fix end-to-end verifizierbar
+	// (siehe Spec) - der ChaosCar steht bis dahin auf dem Bauch.
+	if (ExternalControl.bReverse)
+	{
+		Movement->SetTargetGear(-1, /*bImmediate=*/true);
 	}
 }
 

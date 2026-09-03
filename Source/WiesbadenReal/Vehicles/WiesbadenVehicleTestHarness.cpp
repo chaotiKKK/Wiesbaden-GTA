@@ -3,7 +3,8 @@
 #include "Vehicles/WiesbadenVehicleTestHarness.h"
 
 #include "WiesbadenReal.h"
-#include "Vehicles/WiesbadenCar.h"
+#include "GameFramework/Actor.h"
+#include "Vehicles/WiesbadenVehicleControl.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 
 UWiesbadenVehicleTestHarness::UWiesbadenVehicleTestHarness()
@@ -16,9 +17,9 @@ AWiesbadenHelicopter* UWiesbadenVehicleTestHarness::Heli() const
 	return Cast<AWiesbadenHelicopter>(GetOwner());
 }
 
-AWiesbadenCar* UWiesbadenVehicleTestHarness::Car() const
+IWiesbadenVehicleControl* UWiesbadenVehicleTestHarness::VehicleControl() const
 {
-	return Cast<AWiesbadenCar>(GetOwner());
+	return Cast<IWiesbadenVehicleControl>(GetOwner());
 }
 
 void UWiesbadenVehicleTestHarness::StartYawProbe(float Seconds)
@@ -41,7 +42,8 @@ void UWiesbadenVehicleTestHarness::StartDriveProfile(float Seconds)
 	DriveElapsed = 0.0f;
 	DriveLastSecond = -1;
 	// Startkurs merken: die Kursaenderung wird wrap-sicher dagegen gemessen.
-	DriveStartYaw = Car() ? Car()->GetActorRotation().Yaw : 0.0f;
+	// Kurs kommt aus der Actor-Ebene (GetOwner), Steuerung aus der Naht.
+	DriveStartYaw = GetOwner() ? GetOwner()->GetActorRotation().Yaw : 0.0f;
 }
 
 void UWiesbadenVehicleTestHarness::TickComponent(float DeltaTime, ELevelTick TickType,
@@ -140,8 +142,11 @@ void UWiesbadenVehicleTestHarness::TickDriveProfile(float DeltaTime)
 	{
 		return;
 	}
-	AWiesbadenCar* C = Car();
-	if (!C)
+	// Fahrzeug ueber die Steuernaht (Interface) UND der traegende Actor fuer den
+	// Kurs. So treibt derselbe Pfad Kaefer wie ChaosCar.
+	IWiesbadenVehicleControl* Ctrl = VehicleControl();
+	AActor* Owner = GetOwner();
+	if (!Ctrl || !Owner)
 	{
 		DriveDuration = 0.0f;
 		return;
@@ -159,21 +164,21 @@ void UWiesbadenVehicleTestHarness::TickDriveProfile(float DeltaTime)
 	if (Frac < 0.45f)      { Control.Steering = 0.0f; }
 	else if (Frac < 0.72f) { Control.Steering = 0.6f; }
 	else                   { Control.Steering = -0.6f; }
-	C->SetExternalControl(Control);
+	Ctrl->SetExternalControl(Control);
 
 	const int32 Second = FMath::CeilToInt(DriveElapsed);
 	if (Second != DriveLastSecond)
 	{
 		DriveLastSecond = Second;
 		// Kursaenderung wrap-sicher gegen den Startkurs (FindDeltaAngle: -180..180).
-		const float HeadingDelta = FMath::FindDeltaAngleDegrees(DriveStartYaw, C->GetActorRotation().Yaw);
+		const float HeadingDelta = FMath::FindDeltaAngleDegrees(DriveStartYaw, Owner->GetActorRotation().Yaw);
 		UE_LOG(LogWbVehicles, Log,
 			TEXT("WbDev Fahrt t=%.0f: Tempo %.0f km/h, Kursaenderung %+.0f Grad, Gang %d."),
-			DriveElapsed, C->GetSpeedKmh(), HeadingDelta, C->GetGear());
+			DriveElapsed, Ctrl->GetSpeedKmh(), HeadingDelta, Ctrl->GetGear());
 	}
 	if (DriveElapsed >= DriveDuration)
 	{
 		UE_LOG(LogWbVehicles, Log, TEXT("WbDev Fahren fertig."));
-		C->ClearExternalControl();
+		Ctrl->ClearExternalControl();
 	}
 }
