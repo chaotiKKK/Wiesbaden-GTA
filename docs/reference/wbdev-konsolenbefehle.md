@@ -212,3 +212,7 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
   Aufrichte-Logik (geteilt mit dem Pause-Menue).
 - `Tools/smoke_test.cmd` / `smoke_test.ps1` - automatisierter Rauchtest, der
   diese Befehle feuert und das Log auswertet.
+- `Tools/check_wbdev_docs.ps1` - statische Drift-Pruefung: haelt diese Referenz
+  mit dem Code synchron (jeder Befehl existiert, jede Log-Zeile stimmt woertlich).
+  Laeuft als erste Pruefung im Rauchtest. Wer hier eine Log-Zeile oder einen
+  Befehl aendert, muss den Code mitziehen - sonst faellt die Pruefung durch.

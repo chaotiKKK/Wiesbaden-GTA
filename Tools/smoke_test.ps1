@@ -76,6 +76,20 @@ function Invoke-Session([string[]]$ExtraArgs, [string]$ExecCmds, [string]$LogFil
 }
 
 Write-Host "=== Rauchtest WiesbadenReal ==="
+
+# -- Doku-Drift: WbDev-Referenz gegen Quellcode (statisch, editor-unabhaengig,
+#    Sekunden). Faengt umbenannte/entfernte Befehle und umformulierte Log-Zeilen,
+#    bevor die teuren Editor-Sitzungen laufen. --------------------------------
+$DocCheck = Join-Path $PSScriptRoot "check_wbdev_docs.ps1"
+$docOut = & $DocCheck -Root (Join-Path $Root "WiesbadenReal")
+$docOk  = ($LASTEXITCODE -eq 0)
+$docDetail = if ($docOk) {
+    (@($docOut) | Select-Object -Last 1)
+} else {
+    (@($docOut) | Where-Object { $_ -match 'FEHLT|PHANTOM|DRIFT' } | Select-Object -First 1)
+}
+Add-Check "DocDrift" $docOk ("{0}" -f $docDetail)
+
 Write-Host "Sitzung 1/2: Fahrzeug (Fahrprofil WbDrive + Materialien) ..."
 # Standard-Kaefer bleibt besessen (kein WbHeli): WbDrive faehrt ihn ueber den
 # Test-Harness Vollgas + Lenk-Sweep. Warten auf die Material-Bilanz (~8 s) faengt
