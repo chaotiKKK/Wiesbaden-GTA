@@ -170,6 +170,11 @@ private:
 	/** Strassenname, auf der sich der Spieler befindet - Balken oben mittig. */
 	void DrawStreetName(float CenterX, float Y);
 
+	/** Kurze Einblendung "Eingestiegen: <Fahrzeug>" / "Ausgestiegen" beim Wechsel
+	 *  des besessenen Pawns (F). Selbst-enthalten: erkennt den Wechsel selbst und
+	 *  zeichnet im Stil des Strassennamen-Overlays mit Ausblenden. */
+	void DrawVehicleBanner(float CenterX, float Y);
+
 	/** Zeichnet den Handlungshinweis zu Fuss ("F Einsteigen" und dergleichen). */
 	void DrawFootPrompt(float CenterX, float Y);
 
@@ -256,6 +261,11 @@ private:
 	 */
 	FString CurrentStreetName;
 	float StreetNameAge = 0.0f;
+
+	/** Fahrzeug-Wechsel-Einblendung: zuletzt besessener Pawn + aktueller Text/Alter. */
+	TWeakObjectPtr<class APawn> LastBannerPawn;
+	FString VehicleBannerText;
+	float VehicleBannerAge = 0.0f;
 
 	/** Kreisbogen aus kurzen Linien - Canvas kennt keine Bogenprimitive. */
 	void DrawArc(float CenterX, float CenterY, float Radius,

@@ -647,6 +647,7 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		MapDiameter);
 
 	DrawStreetName(Width * 0.5f, 28.0f);
+	DrawVehicleBanner(Width * 0.5f, Height * 0.16f);
 
 	// -- Helikopter: eigene Cockpit-Instrumententafel -----------------------
 	if (Heli)
@@ -1188,4 +1189,73 @@ void AWiesbadenVehicleHUD::DrawStreetName(float CenterX, float Y)
 		TextWidth + PadX * 2.0f, TextHeight + PadY * 2.0f);
 
 	DrawText(CurrentStreetName, DialText, CenterX - TextWidth * 0.5f, Y, Font, 1.0f);
+}
+
+void AWiesbadenVehicleHUD::DrawVehicleBanner(float CenterX, float Y)
+{
+	if (!Canvas)
+	{
+		return;
+	}
+	const APlayerController* PC = GetOwningPlayerController();
+	APawn* Cur = PC ? PC->GetPawn() : nullptr;
+
+	// Pawn-Wechsel selbst erkennen: nur bei einem ECHTEN Wechsel zwischen zwei
+	// Pawns einblenden - nicht beim ersten Spawn (Prev == nullptr), damit der
+	// Start nicht mit der Steuerungs-Legende kollidiert.
+	if (Cur != LastBannerPawn.Get())
+	{
+		const APawn* Prev = LastBannerPawn.Get();
+		LastBannerPawn = Cur;
+		if (Prev != nullptr && Cur != nullptr)
+		{
+			if (Cast<AWiesbadenHelicopter>(Cur))
+			{
+				VehicleBannerText = TEXT("Eingestiegen: Helikopter");
+			}
+			else if (Cast<AWiesbadenCar>(Cur))
+			{
+				VehicleBannerText = TEXT("Eingestiegen: Fahrzeug");
+			}
+			else
+			{
+				VehicleBannerText = TEXT("Ausgestiegen - zu Fuss");
+			}
+			VehicleBannerAge = 0.0f;
+		}
+	}
+
+	if (VehicleBannerText.IsEmpty())
+	{
+		return;
+	}
+
+	VehicleBannerAge += GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.0f;
+	constexpr float ShowSeconds = 2.2f;
+	constexpr float FadeSeconds = 0.8f;
+	if (VehicleBannerAge > ShowSeconds + FadeSeconds)
+	{
+		VehicleBannerText.Reset();
+		return;
+	}
+	const float Alpha = (VehicleBannerAge <= ShowSeconds)
+		? 1.0f
+		: FMath::Clamp(1.0f - (VehicleBannerAge - ShowSeconds) / FadeSeconds, 0.0f, 1.0f);
+
+	UFont* Font = GEngine ? GEngine->GetLargeFont() : nullptr;
+	float TextWidth = 0.0f;
+	float TextHeight = 0.0f;
+	Canvas->TextSize(Font, VehicleBannerText, TextWidth, TextHeight);
+
+	constexpr float PadX = 20.0f;
+	constexpr float PadY = 8.0f;
+
+	FLinearColor Bg = MapBackground;
+	Bg.A *= Alpha;
+	FLinearColor Fg = DialText;
+	Fg.A *= Alpha;
+
+	DrawRect(Bg, CenterX - TextWidth * 0.5f - PadX, Y - PadY,
+		TextWidth + PadX * 2.0f, TextHeight + PadY * 2.0f);
+	DrawText(VehicleBannerText, Fg, CenterX - TextWidth * 0.5f, Y, Font, 1.0f);
 }
