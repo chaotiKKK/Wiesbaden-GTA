@@ -51,7 +51,7 @@ ueberschiesst - der Anflug dauert entsprechend lange und SKALIERT mit der
 Distanz. Fuer das Beispielziel (300 m) sind es real **~80 s** bis "Wegpunkt
 erreicht". Lass die Sitzung also grosszuegig **~90 s** laufen, bevor du das Log
 auswertest, sonst fehlt die "Wegpunkt erreicht"-Zeile noch. Willst du es eilig
-haben, nimm ein kleineres Ziel: `WbHeliGoto 100 0 40` kommt in ~25-35 s an. Beim
+haben, nimm ein kleineres Ziel: `WbHeliGoto 100 0 40` kommt in ~40-50 s an. Beim
 World-Partition-Streaming kann es zwischendurch haengen ("Gamethread hitch"); das
 ist normal, warte auf die Log-Messpunkte, nicht auf ein bestimmtes sichtbares Ende.
 
@@ -72,14 +72,14 @@ LogWbVehicles: WbDev Autopilot t=7: Abstand 287 m (horiz 285 m, Hoehe +32 m), Te
 ...
 LogWbVehicles: WbDev Autopilot t=80: Abstand 20 m (horiz 20 m, Hoehe +0 m), Tempo 14 km/h, Modus Anflug.
 LogWbVehicles: WbDev Autopilot: Wegpunkt erreicht nach 82.0 s (Abstand 16.0 m) - halte Position.
-LogWbVehicles: WbDev Autopilot t=83: Abstand 14 m (horiz 14 m, Hoehe +0 m), Tempo 13 km/h, Modus Anflug.
+LogWbVehicles: WbDev Autopilot t=83: Abstand 14 m (horiz 14 m, Hoehe +0 m), Tempo 13 km/h, Modus Anflug (angekommen, haelt).
 ```
 
-**Wichtig:** Der Modus bleibt auch NACH "Wegpunkt erreicht" auf `Anflug`. Das ist
-korrekt - `WbHeliGoto` nutzt EIN Regelgesetz fuer Anflug und Schweben: bei Abstand
-nahe 0 geht die Ziel-Geschwindigkeit gegen 0, der Heli haelt die Position, ohne je
-den Modus zu wechseln. `Modus Halten` erscheint NUR nach explizitem `WbHeliHover`
-(Schritt 5), nicht durch die Goto-Ankunft.
+**Modus-Label:** `WbHeliGoto` nutzt EIN Regelgesetz fuer Anflug und Schweben -
+technisch bleibt der interne Modus "Goto". Vor der Ankunft steht `Modus Anflug`,
+nach "Wegpunkt erreicht" `Modus Anflug (angekommen, haelt)`: derselbe Regler haelt
+jetzt die Position. Der echte Modus `Halten` erscheint NUR nach explizitem
+`WbHeliHover` (Schritt 5), nicht durch die Goto-Ankunft.
 
 ## Schritt 4: Den Anflug bewerten
 
@@ -87,10 +87,11 @@ Der Test ist **bestanden**, wenn:
 
 - **Abstand faellt ueber die Zeit** (grob monoton) von Start Richtung 0.
 - Die Zeile **`Wegpunkt erreicht`** genau einmal erscheint.
-- Danach bleibt der **Abstand klein** (wenige Meter), driftet nicht wieder weg.
-  Der Modus bleibt dabei `Anflug` - das ist KORREKT und KEIN Durchfall (das
-  Goto-Gesetz haelt selbst; ein automatischer Wechsel auf `Halten` findet NICHT
-  statt, siehe Schritt 3).
+- Danach zeigt die Fortschrittszeile `Modus Anflug (angekommen, haelt)` und der
+  **Abstand bleibt klein** - leichtes Zappeln bis ~15 m ist normal (schwache
+  Bremse nahe Schweben), er darf nur nicht dauerhaft wegdriften. Ein automatischer
+  Wechsel auf den echten Modus `Halten` findet NICHT statt (nur via `WbHeliHover`)
+  und ist KEIN Durchfall.
 
 Bekannte, tolerierte Eigenheit: bei hoeherem Anflugtempo (naeheres/kleineres Ziel)
 kann der Abstand kurz vor dem Ziel **ueberschwingen**, bevor er sich einpendelt -

@@ -136,10 +136,17 @@ void UWiesbadenHelicopterAutopilot::TickComponent(float DeltaTime, ELevelTick Ti
 	if (Second != LastLogSecond)
 	{
 		LastLogSecond = Second;
+		// Ehrliches Modus-Label: Goto benutzt EIN Gesetz fuer Anflug+Schweben, der
+		// Modus bleibt technisch "Goto" auch nach Ankunft. Ohne Zusatz sieht der
+		// Leser dauerhaft "Anflug", obwohl der Heli laengst haelt - deshalb nach
+		// dem Wegpunkt "(angekommen, haelt)" anhaengen.
+		const TCHAR* const ModusText = (Mode == EWiesbadenAutopilotMode::Goto)
+			? (bArrivedLogged ? TEXT("Anflug (angekommen, haelt)") : TEXT("Anflug"))
+			: TEXT("Halten");
 		UE_LOG(LogWbVehicles, Log,
 			TEXT("WbDev Autopilot t=%.0f: Abstand %.0f m (horiz %.0f m, Hoehe %+.0f m), Tempo %.0f km/h, Modus %s."),
 			ElapsedInMode, Dist3Dm, DistXYm, ErrorZm, H->GetAirspeedKmh(),
-			Mode == EWiesbadenAutopilotMode::Goto ? TEXT("Anflug") : TEXT("Halten"));
+			ModusText);
 	}
 
 	// Ankunft EINMAL je Ziel melden (bArrivedLogged wird nur von FlyTo/HoldPosition
