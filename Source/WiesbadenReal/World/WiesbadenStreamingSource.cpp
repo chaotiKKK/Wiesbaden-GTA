@@ -7,6 +7,8 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "WorldPartition/WorldPartitionSubsystem.h"
 
 AWiesbadenStreamingSource::AWiesbadenStreamingSource()
@@ -18,6 +20,18 @@ AWiesbadenStreamingSource::AWiesbadenStreamingSource()
 void AWiesbadenStreamingSource::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// PERF-DIAGNOSE-SCHALTER: Radius per Kommandozeile erzwingen (ueberschreibt den in
+	// der Karte serialisierten Wert). Damit wurde bewiesen, dass die ~6-10 FPS
+	// STREAMING-HITCHES sind, nicht residente Foliage: 800 m -> 76 FPS, 6000 m ->
+	// 6 FPS, bei fast gleicher Instanzenzahl (~560k vs ~578k). Zum Nachmessen/Tunen
+	// des Boden-Radius: `-WbRadius=800`.
+	float ForcedRadius = 0.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("WbRadius="), ForcedRadius) && ForcedRadius > 0.0f)
+	{
+		StreamingRadiusMeters = ForcedRadius;
+		UE_LOG(LogWbCore, Log, TEXT("WbRadius: Streaming-Radius auf %.0f m erzwungen."), ForcedRadius);
+	}
 
 	WorldPartitionSubsystem = GetWorld() ? GetWorld()->GetSubsystem<UWorldPartitionSubsystem>() : nullptr;
 	if (WorldPartitionSubsystem)
