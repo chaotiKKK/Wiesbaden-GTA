@@ -17,14 +17,16 @@
 
 param(
     [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
-    # Perf-Regression-Schranken (aus dem 8-s-Diagnoseblock am Boden). BEWUSST ueber
-    # der aktuellen Grundlast, damit der Check heute besteht und erst bei einer
-    # echten Verschlechterung durchfaellt - jetzt aber ENG an der Ist-Last, um den
-    # WP-Streaming-Fix (hoehenadaptiver Radius, 1a8f34c) festzunageln.
-    # Ist-Werte am Boden nach dem Fix: Spiel ~13-16 ms, ~8.832 Komponenten,
-    # ~565k Instanzen (vorher 6000-m-Regime: ~110-163 ms / ~19.700 / ~1,07 Mio.).
-    # Ein Rueckfall Richtung altem Streaming-Verhalten reisst diese Schranken.
-    [double]$MaxSpielMs        = 45,
+    # Perf-Regression-Schranken (aus dem 8-s-Diagnoseblock am Boden), die den
+    # WP-Streaming-Fix (hoehenadaptiver Radius, 1a8f34c) festnageln.
+    # PRIMAeRES Signal = die DETERMINISTISCHEN Zaehler: Komponenten/Instanzen sind
+    # lauf-zu-lauf bit-identisch (8.832 / 565.557 gemessen) und eng gesetzt; ein
+    # Rueckfall zum 6000-m-Regime (~19.700 / ~1,07 Mio.) reisst sie sofort.
+    # Die FRAME-ZEIT ist dagegen LAST-SENSIBEL: ueber Laeufe 13-26 ms gemessen
+    # (~2x Varianz je nach Maschinenlast). Deshalb ist $MaxSpielMs bewusst LOCKER
+    # als Backup gesetzt (60 statt eng an 26) - hoch genug, dass Varianz nicht
+    # faelschlich ausloest, aber weit unter der echten Regression (~110-163 ms).
+    [double]$MaxSpielMs        = 60,
     [int]   $MaxPrimComponents = 13000,
     [int]   $MaxInstances      = 800000
 )
