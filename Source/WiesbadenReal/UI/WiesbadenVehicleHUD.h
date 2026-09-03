@@ -264,6 +264,11 @@ private:
 	/** Laufzeit seit dem ersten gezeichneten Bild - fuer die Einblenddauer. */
 	float ElapsedSeconds = 0.0f;
 
+	/** Einmal-Latch: der Steuerungs-Legenden-Timer wird erst neu gestartet, wenn
+	 *  die Stadt fertig gestreamt ist (sonst verfaellt die Legende waehrend des
+	 *  Ladens, bevor der Neuling handeln kann). */
+	bool bLegendArmed = false;
+
 	/** Umschaltzustand und Halte-Flanke der F1-Taste. */
 	bool bShowControlLegend = true;
 	bool bLegendKeyHeld = false;

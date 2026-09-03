@@ -561,6 +561,28 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		ElapsedSeconds += HudWorld->GetDeltaSeconds();
 	}
 
+	// First-Run-Fuehrung: den Legenden-Timer (ControlLegendSeconds) erst NEU
+	// starten, wenn die Stadt wirklich spielbar ist (Streaming fertig). Sonst
+	// zaehlt er ab HUD-Start waehrend des ~25-38-s-Ladens durch und die Legende
+	// ist beim ersten Fahren schon zum "F1 Steuerung"-Rest verblasst - der
+	// Neuling sieht die Steuerung nie. Einmal-Latch, damit spaeteres Nachstreamen
+	// sie nicht wieder aufpoppen laesst.
+	if (!bLegendArmed)
+	{
+		const UWorld* W = GetWorld();
+		const UWiesbadenCitySubsystem* City =
+			W ? W->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+		if (City && City->IsCityStreamingComplete())
+		{
+			UE_LOG(LogWbCore, Log,
+				TEXT("HUD: Steuerungs-Legende bei Streaming-fertig neu gestartet (bisher %.1f s gelaufen)."),
+				ElapsedSeconds);
+			ElapsedSeconds = 0.0f;
+			bShowControlLegend = true;
+			bLegendArmed = true;
+		}
+	}
+
 	// Pausemenue zuerst: es liegt ueber allem und haelt die Zeit an.
 	UpdatePauseMenu();
 	if (bPaused)
