@@ -8,6 +8,12 @@
     { "surface": "FacadePlaster", "cc0": "Plaster001",      "tiling": 4.0,  "ao": false, "config_key": "BuildingWallMaterial" },
     { "surface": "RoadAsphalt",   "cc0": "Asphalt012",      "tiling": 40.0, "ao": false, "config_key": "RoadMaterial" },
     { "surface": "Paving",        "cc0": "PavingStones037", "tiling": 8.0,  "ao": true,  "config_key": "SidewalkMaterial" },
-    { "surface": "TerrainGrass",  "cc0": "Grass001",        "tiling": 60.0, "ao": false, "config_key": "TerrainMaterial" }
+    { "surface": "TerrainGrass",  "cc0": "Grass001",        "tiling": 60.0, "ao": false, "config_key": "TerrainMaterial" },
+
+    { "surface": "FacadeBrick",   "cc0": "Bricks023",       "tiling": 4.0,  "ao": true },
+    { "surface": "FacadeConcrete","cc0": "Concrete033",     "tiling": 3.0,  "ao": true },
+    { "surface": "FacadeStone",   "cc0": "Rock030",         "tiling": 4.0,  "ao": true },
+    { "surface": "TerrainGrassAlt","cc0": "Grass004",       "tiling": 60.0, "ao": true },
+    { "surface": "GroundDirt",    "cc0": "Ground037",       "tiling": 45.0, "ao": true }
   ]
 }
