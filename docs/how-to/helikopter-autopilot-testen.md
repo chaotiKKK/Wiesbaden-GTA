@@ -88,8 +88,8 @@ Der Test ist **bestanden**, wenn:
 - **Abstand faellt ueber die Zeit** (grob monoton) von Start Richtung 0.
 - Die Zeile **`Wegpunkt erreicht`** genau einmal erscheint.
 - Danach zeigt die Fortschrittszeile `Modus Anflug (angekommen, haelt)` und der
-  **Abstand bleibt klein** - leichtes Zappeln bis ~15 m ist normal (schwache
-  Bremse nahe Schweben), er darf nur nicht dauerhaft wegdriften. Ein automatischer
+  **Abstand bleibt klein** - leichtes Zappeln um den Ankunftsradius (~8-10 m) ist
+  normal (Rotor-Totzone), er darf nur nicht dauerhaft wegdriften. Ein automatischer
   Wechsel auf den echten Modus `Halten` findet NICHT statt (nur via `WbHeliHover`)
   und ist KEIN Durchfall.
 
