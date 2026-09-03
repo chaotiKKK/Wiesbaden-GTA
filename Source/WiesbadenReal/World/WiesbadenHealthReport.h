@@ -22,6 +22,23 @@ enum class EWiesbadenTrafficLightVerdict : uint8
 };
 
 /**
+ * Evidenz-gewichtetes Perf-Verdikt (Spiel-Strang-Last).
+ *
+ * Wie beim Ampel-Verdikt entscheidet EINE Stelle - der Report. Bewusst auf die
+ * DETERMINISTISCHEN Primaerzahlen (Primitive-Komponenten, Instanzen) gestuetzt:
+ * die sind lauf-zu-lauf bit-identisch und eine Ueberschreitung ist eine echte
+ * Regression. Die Bildzeit (Spiel-Strang-ms) ist last-sensibel und wird nur als
+ * Kontext gemeldet, NICHT ins Verdikt gezogen - sonst risse Maschinenlast das
+ * Urteil faelschlich (dieselbe Falle wie die 60-ms-Rauchtest-Backup-Schranke).
+ */
+enum class EWiesbadenPerfVerdict : uint8
+{
+	Ok,          // deterministische Zaehler im Rahmen.
+	Overloaded,  // Komponenten/Instanzen ueber der harten Schwelle -> Regression.
+	Unknown      // noch kein Snapshot erhoben (vor dem 8-s-Diagnoseblock).
+};
+
+/**
  * Maschinenlesbarer Zustandsbericht der Laufzeit-Selbstdiagnosen.
  *
  * Buendelt die bisher verstreuten Kennzahlen (Streaming, Verkehr, Ampeln,
@@ -81,6 +98,48 @@ struct WIESBADENREAL_API FWiesbadenHealthReport
 	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
 	bool bCityLoaded = false;
 
+	// -- Perf-Snapshot (Spiel-Strang-Last) ----------------------------------
+	// Einmal beim 8-s-Diagnoseblock erhoben; vorher bPerfValid == false.
+
+	/** Mittlere Spiel-Strang-Zeit je Bild in ms. LAST-SENSIBEL -> Kontext, kein
+	 *  Verdikt-Kriterium (siehe EWiesbadenPerfVerdict). */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	float PerfGameThreadMs = 0.0f;
+
+	/** Verwaltete Primitive-Komponenten (Sichtbarkeit/Bounds je Bild). DETERMINISTISCH. */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	int32 PerfPrimitiveComponents = 0;
+
+	/** Davon beweglich bzw. mit Kollision (Kontext der Last-Verteilung). */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	int32 PerfMovableComponents = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	int32 PerfCollisionComponents = 0;
+
+	/** Instanz-Komponenten (HISM/ISM) und ihre Instanzen gesamt. DETERMINISTISCH. */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	int32 PerfInstanceComponents = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	int32 PerfInstances = 0;
+
+	/** Mesh-Abschnitte gesamt bzw. OHNE Material (Zeichnen-Defekt = Schachbrett). */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	int32 PerfMeshSectionsTotal = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	int32 PerfMeshSectionsWithoutMaterial = 0;
+
+	/** True, sobald der Perf-Snapshot erhoben ist (8-s-Block gelaufen). */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	bool bPerfValid = false;
+
+	// Harte, deterministische Schwellen (identisch zum Rauchtest-Primaersignal:
+	// ein Rueckfall zum 6000-m-Streaming-Regime riss ~19.700 / ~1,07 Mio.).
+	static constexpr int32 PerfMaxPrimitiveComponents = 13000;
+	static constexpr int32 PerfMaxInstances = 800000;
+
 	/** Verkehr simuliert, aber KEINES gezeichnet (Traeger/Mesh/Cull-Defekt). Reines
 	 *  Zahlen-Praedikat; die Aufrufer setzen ihre eigenen Vorbedingungen (Stadt
 	 *  geladen / Streaming fertig) davor. */
@@ -92,6 +151,14 @@ struct WIESBADENREAL_API FWiesbadenHealthReport
 	/** Evidenz-gewichtetes Ampel-Kopplungs-Verdikt (siehe Enum). Einzige Stelle,
 	 *  die die Drei-Wege-Entscheidung trifft. */
 	EWiesbadenTrafficLightVerdict TrafficLightVerdict() const;
+
+	/** Evidenz-gewichtetes Perf-Verdikt (siehe Enum). Einziger Owner der
+	 *  Ueberlast-Entscheidung; stuetzt sich NUR auf die deterministischen Zaehler. */
+	EWiesbadenPerfVerdict PerfVerdict() const;
+
+	/** Mesh-Abschnitte ohne Material -> Zeichnen-Defekt (Schachbrett). Reines
+	 *  Zahlen-Praedikat; Aufrufer setzen ihre Vorbedingungen davor. */
+	bool HasMaterialDrawDefect() const { return PerfMeshSectionsWithoutMaterial > 0; }
 
 	/** Evidenz-gewichtete Warnungen (leer = gesund). */
 	TArray<FString> Warnings() const;

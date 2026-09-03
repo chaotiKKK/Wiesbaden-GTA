@@ -292,6 +292,19 @@ private:
 	 * Aussage gebracht, die Materialien seien die Last. */
 	double GpuTimeMs = 0.0;
 
+	// -- Perf-Snapshot-Cache ------------------------------------------------
+	// EINMAL in CachePerfSnapshot() erhoben (8-s-Block), danach von
+	// BuildHealthReport gelesen. So bleibt der Report-Bau billig, obwohl die
+	// Erhebung alle Actors durchlaeuft.
+	int32 PerfPrimComps = 0;
+	int32 PerfMovableComps = 0;
+	int32 PerfCollisionComps = 0;
+	int32 PerfInstanceComps = 0;
+	int32 PerfInstanceCount = 0;
+	int32 PerfSectionsTotal = 0;
+	int32 PerfSectionsNoMaterial = 0;
+	bool bPerfSnapshotValid = false;
+
 	/** Laufzeit bis zum einmaligen GPU-Profil (-WbProfileGPU=<Sekunden>). */
 	/** Das Strassennetz wurde bereits ausgeschrieben (-WbDumpStreets). */
 	bool bStreetsDumped = false;
@@ -395,8 +408,17 @@ private:
 	/** Wartezeit bis zur Geometrie-Bilanz - World Partition braucht Anlauf. */
 	float GeometryReportDelay = 0.0f;
 
-	/** Zaehlt geladene Chunk-Actors und ihre Mesh-Abschnitte. */
-	void LogGeometryBalance() const;
+	/**
+	 * Erhebt den Perf-Snapshot (Primitive-Komponenten, Instanzen, Mesh-Abschnitte
+	 * ohne Material) EINMAL und legt ihn in den Cache-Feldern ab. Wird im
+	 * 8-s-Diagnoseblock gerufen; BuildHealthReport liest danach nur noch den Cache
+	 * (kein Actor-Durchlauf auf dem Hot-Path von WbHealth-Gate/Inline-Diagnosen).
+	 */
+	void CachePerfSnapshot();
+
+	/** Zaehlt geladene Chunk-Actors und ihre Mesh-Abschnitte. Die Last-Inventar-
+	 *  Zeile liest ihre Zahlen aus dem uebergebenen Report. */
+	void LogGeometryBalance(const FWiesbadenHealthReport& Report) const;
 
 	/**
 	 * Zaehlt Mesh-Abschnitte ohne zugewiesenes Material.
@@ -406,8 +428,10 @@ private:
 	 * "leer" aussah - die Geometrie-Bilanz meldete korrekt tausende
 	 * Abschnitte, aber keine Kennzahl verriet, dass keiner davon ein
 	 * Material hatte.
+	 *
+	 * Liest die Zahlen aus dem uebergebenen Report (Perf-Snapshot).
 	 */
-	void LogMaterialBalance() const;
+	void LogMaterialBalance(const FWiesbadenHealthReport& Report) const;
 
 	/**
 	 * Misst am Spielerort die Hoehenlage von Strassen-, Gebaeude-Mesh und

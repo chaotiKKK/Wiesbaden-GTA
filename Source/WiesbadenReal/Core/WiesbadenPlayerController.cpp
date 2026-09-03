@@ -102,10 +102,12 @@ void AWiesbadenPlayerController::PollHealthGate()
 	const UWiesbadenCitySubsystem* City = World ? World->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
 
 	const bool bTimeout = World && (World->GetTimeSeconds() >= HealthGateDeadlineSeconds);
-	// Geladen = Stadt da UND Streaming fertig. BuildHealthReport ist die einzige
-	// Wahrheitsquelle - kein zweiter Zustands-Pfad.
-	const bool bLoaded = City && City->BuildHealthReport().bStreamingComplete
-		&& City->BuildHealthReport().bCityLoaded;
+	// Geladen = Stadt da, Streaming fertig UND Perf-Snapshot erhoben (8-s-Block).
+	// Ohne bPerfValid meldete das Gate perf: "unknown", weil das Streaming-"fertig"-
+	// Flackern das Tor schon vor dem Snapshot oeffnete. BuildHealthReport ist die
+	// einzige Wahrheitsquelle - kein zweiter Zustands-Pfad.
+	const FWiesbadenHealthReport R = City ? City->BuildHealthReport() : FWiesbadenHealthReport();
+	const bool bLoaded = City && R.bStreamingComplete && R.bCityLoaded && R.bPerfValid;
 
 	if (bLoaded || bTimeout || !City)
 	{

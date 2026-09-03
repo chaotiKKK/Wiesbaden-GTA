@@ -24,6 +24,35 @@ EWiesbadenTrafficLightVerdict FWiesbadenHealthReport::TrafficLightVerdict() cons
 	return EWiesbadenTrafficLightVerdict::Inconclusive;
 }
 
+EWiesbadenPerfVerdict FWiesbadenHealthReport::PerfVerdict() const
+{
+	// Nur die DETERMINISTISCHEN Zaehler entscheiden - die Bildzeit ist last-
+	// sensibel und bleibt Kontext (sonst Fehlalarm bei Maschinenlast).
+	if (!bPerfValid)
+	{
+		return EWiesbadenPerfVerdict::Unknown;
+	}
+	if (PerfPrimitiveComponents > PerfMaxPrimitiveComponents
+		|| PerfInstances > PerfMaxInstances)
+	{
+		return EWiesbadenPerfVerdict::Overloaded;
+	}
+	return EWiesbadenPerfVerdict::Ok;
+}
+
+namespace
+{
+	const TCHAR* PerfVerdictJson(EWiesbadenPerfVerdict V)
+	{
+		switch (V)
+		{
+		case EWiesbadenPerfVerdict::Ok:         return TEXT("ok");
+		case EWiesbadenPerfVerdict::Overloaded: return TEXT("overloaded");
+		default:                                return TEXT("unknown");
+		}
+	}
+}
+
 TArray<FString> FWiesbadenHealthReport::Warnings() const
 {
 	TArray<FString> W;
@@ -67,6 +96,26 @@ TArray<FString> FWiesbadenHealthReport::Warnings() const
 		W.Add(TEXT("fussgaenger: simuliert, aber KEINER gezeichnet - Mesh/Spawner fehlt."));
 	}
 
+	// Perf-Ueberlast: NUR die deterministischen Zaehler (Verdikt), nicht die
+	// last-sensible Bildzeit. Overloaded = echter Rueckfall (z. B. zu grosser
+	// Streaming-Ladebereich), nicht Maschinenlast.
+	if (PerfVerdict() == EWiesbadenPerfVerdict::Overloaded)
+	{
+		W.Add(FString::Printf(
+			TEXT("perf: %d Primitive-Komponenten / %d Instanzen ueber der Schwelle (%d / %d) - Regression."),
+			PerfPrimitiveComponents, PerfInstances,
+			PerfMaxPrimitiveComponents, PerfMaxInstances));
+	}
+
+	// Material: Mesh-Abschnitte ohne Material rendern mit dem Default-Schachbrett
+	// (Zeichnen-Defekt). Erst pruefen, wenn der Perf-Snapshot erhoben ist.
+	if (bPerfValid && HasMaterialDrawDefect())
+	{
+		W.Add(FString::Printf(
+			TEXT("material: %d von %d Mesh-Abschnitten ohne Material - Default-Schachbrett."),
+			PerfMeshSectionsWithoutMaterial, PerfMeshSectionsTotal));
+	}
+
 	return W;
 }
 
@@ -93,11 +142,27 @@ FString FWiesbadenHealthReport::ToJson() const
 		TEXT("\"pedestriansSimulated\": %d, ")
 		TEXT("\"pedestriansDrawn\": %d, ")
 		TEXT("\"buildingCollisionBodies\": %d, ")
+		TEXT("\"perf\": {")
+			TEXT("\"gameThreadMs\": %.1f, ")
+			TEXT("\"primitiveComponents\": %d, ")
+			TEXT("\"movableComponents\": %d, ")
+			TEXT("\"collisionComponents\": %d, ")
+			TEXT("\"instanceComponents\": %d, ")
+			TEXT("\"instances\": %d, ")
+			TEXT("\"meshSectionsTotal\": %d, ")
+			TEXT("\"meshSectionsWithoutMaterial\": %d, ")
+			TEXT("\"verdict\": \"%s\", ")
+			TEXT("\"snapshotValid\": %s")
+		TEXT("}, ")
 		TEXT("\"healthy\": %s, ")
 		TEXT("\"warnings\": [%s]")
 		TEXT("}"),
 		B(bCityLoaded), B(bStreamingComplete), TrafficLightCount, ActiveVehicles,
 		TrafficVehiclesVisible, VehiclesApproachingSignal, VehiclesHeldAtRed,
 		PedestriansSimulated, PedestriansDrawn, BuildingCollisionBodies,
+		PerfGameThreadMs, PerfPrimitiveComponents, PerfMovableComponents,
+		PerfCollisionComponents, PerfInstanceComponents, PerfInstances,
+		PerfMeshSectionsTotal, PerfMeshSectionsWithoutMaterial,
+		PerfVerdictJson(PerfVerdict()), B(bPerfValid),
 		B(W.Num() == 0), *WarnJson);
 }

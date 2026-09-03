@@ -1276,6 +1276,13 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		if (GeometryReportDelay >= 8.0f)
 		{
 			bGeometryReported = true;
+
+			// Perf-Snapshot ZUERST: danach lesen Straenge-Zeile, Last-Inventar und
+			// Material-Bilanz ihre Zahlen (und das Verdikt) aus dem Report - eine
+			// Quelle, keine Doppelzaehlung.
+			CachePerfSnapshot();
+			const FWiesbadenHealthReport PerfReport = BuildHealthReport();
+
 			if (FrameCount > 10)
 			{
 				const double AverageMs = FrameTimeSumMs / FrameCount;
@@ -1293,17 +1300,19 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					(LightTimeMs + TrafficTimeMs + PedestrianTimeMs) / FrameCount,
 					AverageMs);
 
+				// Spiel-Strang-ms aus dem Report (einziger Owner der Perf-Zahl);
+				// Renderer/GPU/Subsystem sind reiner Kontext -> lokal.
 				UE_LOG(LogWbStreaming, Log,
 					TEXT("Straenge im Mittel: Spiel %.1f ms, Renderer %.1f ms, ")
 					TEXT("Grafikkarte %.1f ms. Davon dieses Subsystem %.1f ms."),
-					GameThreadTimeMs / FrameCount,
+					PerfReport.PerfGameThreadMs,
 					RenderThreadTimeMs / FrameCount,
 					GpuTimeMs / FrameCount,
 					SubsystemTimeMs / FrameCount);
 			}
 
-			LogGeometryBalance();
-			LogMaterialBalance();
+			LogGeometryBalance(PerfReport);
+			LogMaterialBalance(PerfReport);
 			LogHeightStackNearPlayer();
 			RequestDiagnosticScreenshot();
 		}
@@ -1334,7 +1343,7 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 	UpdateStreamingState();
 }
 
-void UWiesbadenCitySubsystem::LogGeometryBalance() const
+void UWiesbadenCitySubsystem::LogGeometryBalance(const FWiesbadenHealthReport& Report) const
 {
 	UWorld* World = GetWorld();
 	if (!World)
@@ -1446,72 +1455,23 @@ void UWiesbadenCitySubsystem::LogGeometryBalance() const
 	// NICHT auf GPU (~16 ms) - Nanite/LODs braeuchten hier gar nichts. Der Spiel-
 	// Strang bezahlt pro Bild fuer die VERWALTETE (nicht die sichtbare) Menge:
 	// Primitive-Komponenten (Sichtbarkeit/Bounds), Foliage-Instanzen (HISM-Cluster-
-	// Cull je Bild) und Kollisionskoerper (Physik-Szene). Diese Zaehlung macht die
-	// Aufteilung sichtbar, damit die naechste Optimierung das Richtige trifft
-	// (z. B. World-Partition-Ladebereich verkleinern statt an der Grafik zu drehen).
-	int32 PrimComps = 0, MovablePrims = 0, CollisionPrims = 0;
-	int32 FoliageComps = 0, FoliageInstances = 0;
-	for (TActorIterator<AActor> It(World); It; ++It)
-	{
-		TArray<UPrimitiveComponent*> Prims;
-		It->GetComponents(Prims);
-		for (const UPrimitiveComponent* P : Prims)
-		{
-			if (!P || !P->IsRegistered())
-			{
-				continue;
-			}
-			++PrimComps;
-			if (P->Mobility == EComponentMobility::Movable) { ++MovablePrims; }
-			if (P->IsCollisionEnabled()) { ++CollisionPrims; }
-			if (const UInstancedStaticMeshComponent* Ism = Cast<UInstancedStaticMeshComponent>(P))
-			{
-				++FoliageComps;
-				FoliageInstances += Ism->GetInstanceCount();
-			}
-		}
-	}
-
+	// Cull je Bild) und Kollisionskoerper (Physik-Szene). Die Zahlen kommen aus dem
+	// Perf-Snapshot des Reports (einzige Quelle) - der Actor-Durchlauf lief einmal
+	// in CachePerfSnapshot, nicht hier erneut.
 	UE_LOG(LogWbStreaming, Log,
 		TEXT("Last-Inventar (Spiel-Strang): %d Primitive-Komponenten (%d beweglich, %d mit Kollision), ")
 		TEXT("%d Instanz-Komponenten mit %d Instanzen gesamt. Kosten haengen an DIESEN Zahlen, nicht an der Sichtweite."),
-		PrimComps, MovablePrims, CollisionPrims, FoliageComps, FoliageInstances);
+		Report.PerfPrimitiveComponents, Report.PerfMovableComponents,
+		Report.PerfCollisionComponents, Report.PerfInstanceComponents, Report.PerfInstances);
 }
 
-void UWiesbadenCitySubsystem::LogMaterialBalance() const
+void UWiesbadenCitySubsystem::LogMaterialBalance(const FWiesbadenHealthReport& Report) const
 {
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		return;
-	}
-
-	int32 Total = 0;
-	int32 WithoutMaterial = 0;
-
-	auto CountSections = [&Total, &WithoutMaterial](const UProceduralMeshComponent* Mesh)
-	{
-		if (!Mesh)
-		{
-			return;
-		}
-
-		const int32 Sections = Mesh->GetNumSections();
-		for (int32 Index = 0; Index < Sections; ++Index)
-		{
-			++Total;
-			if (Mesh->GetMaterial(Index) == nullptr)
-			{
-				++WithoutMaterial;
-			}
-		}
-	};
-
-	for (TActorIterator<AWiesbadenCityChunk> It(World); It; ++It)
-	{
-		CountSections(It->GetRoadMesh());
-		CountSections(It->GetBuildingMesh());
-	}
+	// Zahlen aus dem Perf-Snapshot des Reports (CachePerfSnapshot hat sie erhoben);
+	// hier nur noch die Darstellung. Der Zeichnen-Defekt (Abschnitte ohne Material)
+	// steckt als Warnung im Report - diese Zeile spiegelt ihn.
+	const int32 Total = Report.PerfMeshSectionsTotal;
+	const int32 WithoutMaterial = Report.PerfMeshSectionsWithoutMaterial;
 
 	if (Total == 0)
 	{
@@ -1531,6 +1491,73 @@ void UWiesbadenCitySubsystem::LogMaterialBalance() const
 
 	UE_LOG(LogWbStreaming, Log,
 		TEXT("Material-Bilanz: alle %d Mesh-Abschnitte haben ein Material."), Total);
+}
+
+void UWiesbadenCitySubsystem::CachePerfSnapshot()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// -- Last-Inventar: alle registrierten Primitive-Komponenten der Welt. Ein
+	//    einziger Durchlauf, dessen Ergebnis der Report weiterreicht.
+	int32 PrimComps = 0, MovablePrims = 0, CollisionPrims = 0;
+	int32 InstanceComps = 0, InstanceCount = 0;
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		TArray<UPrimitiveComponent*> Prims;
+		It->GetComponents(Prims);
+		for (const UPrimitiveComponent* P : Prims)
+		{
+			if (!P || !P->IsRegistered())
+			{
+				continue;
+			}
+			++PrimComps;
+			if (P->Mobility == EComponentMobility::Movable) { ++MovablePrims; }
+			if (P->IsCollisionEnabled()) { ++CollisionPrims; }
+			if (const UInstancedStaticMeshComponent* Ism = Cast<UInstancedStaticMeshComponent>(P))
+			{
+				++InstanceComps;
+				InstanceCount += Ism->GetInstanceCount();
+			}
+		}
+	}
+
+	// -- Material-Bilanz: Mesh-Abschnitte der Chunks, davon ohne Material.
+	int32 SectionsTotal = 0, SectionsNoMaterial = 0;
+	auto CountSections = [&SectionsTotal, &SectionsNoMaterial](const UProceduralMeshComponent* Mesh)
+	{
+		if (!Mesh)
+		{
+			return;
+		}
+		const int32 Sections = Mesh->GetNumSections();
+		for (int32 Index = 0; Index < Sections; ++Index)
+		{
+			++SectionsTotal;
+			if (Mesh->GetMaterial(Index) == nullptr)
+			{
+				++SectionsNoMaterial;
+			}
+		}
+	};
+	for (TActorIterator<AWiesbadenCityChunk> It(World); It; ++It)
+	{
+		CountSections(It->GetRoadMesh());
+		CountSections(It->GetBuildingMesh());
+	}
+
+	PerfPrimComps = PrimComps;
+	PerfMovableComps = MovablePrims;
+	PerfCollisionComps = CollisionPrims;
+	PerfInstanceComps = InstanceComps;
+	PerfInstanceCount = InstanceCount;
+	PerfSectionsTotal = SectionsTotal;
+	PerfSectionsNoMaterial = SectionsNoMaterial;
+	bPerfSnapshotValid = true;
 }
 
 
@@ -2895,6 +2922,19 @@ FWiesbadenHealthReport UWiesbadenCitySubsystem::BuildHealthReport() const
 	R.PedestriansSimulated = PedestrianSimulation.GetReport().SimulatedCount;
 	R.PedestriansDrawn = CityActor ? CityActor->GetVisiblePedestrianCount() : 0;
 	R.BuildingCollisionBodies = BuildingCollision ? BuildingCollision->GetActiveBodyCount() : 0;
+
+	// Perf: die deterministischen Zaehler aus dem einmaligen Snapshot-Cache
+	// (CachePerfSnapshot, 8-s-Block) - KEIN Actor-Durchlauf hier, damit der
+	// Report-Bau auf dem Hot-Path billig bleibt. Die Bildzeit ist live und billig.
+	R.PerfGameThreadMs = (FrameCount > 0) ? static_cast<float>(GameThreadTimeMs / FrameCount) : 0.0f;
+	R.PerfPrimitiveComponents = PerfPrimComps;
+	R.PerfMovableComponents = PerfMovableComps;
+	R.PerfCollisionComponents = PerfCollisionComps;
+	R.PerfInstanceComponents = PerfInstanceComps;
+	R.PerfInstances = PerfInstanceCount;
+	R.PerfMeshSectionsTotal = PerfSectionsTotal;
+	R.PerfMeshSectionsWithoutMaterial = PerfSectionsNoMaterial;
+	R.bPerfValid = bPerfSnapshotValid;
 	return R;
 }
 
