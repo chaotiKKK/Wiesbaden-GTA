@@ -31,6 +31,8 @@
 #include "ProceduralMeshComponent.h"
 #include "World/WiesbadenCityActor.h"
 #include "Engine/PostProcessVolume.h"
+#include "Engine/DirectionalLight.h"
+#include "Components/DirectionalLightComponent.h"
 #include "World/WiesbadenCityChunk.h"
 #include "World/WiesbadenStreamingSource.h"
 #include "UnrealClient.h"
@@ -193,8 +195,33 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 	S.ColorContrast = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
 	S.bOverride_ColorSaturation = true;
 	S.ColorSaturation = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
+	// Lumen-GI + -Reflexionen erzwingen (Bounce-Licht/Tiefe statt flachem Ambient)
+	// und Screen-Space-AO fuer Kontaktschatten in Ecken/unter Objekten.
+	S.bOverride_DynamicGlobalIlluminationMethod = true;
+	S.DynamicGlobalIlluminationMethod = EDynamicGlobalIlluminationMethod::Lumen;
+	S.bOverride_ReflectionMethod = true;
+	S.ReflectionMethod = EReflectionMethod::Lumen;
+	S.bOverride_AmbientOcclusionIntensity = true;
+	S.AmbientOcclusionIntensity = 0.6f;
+	S.bOverride_AmbientOcclusionRadius = true;
+	S.AmbientOcclusionRadius = 80.0f;
 
-	UE_LOG(LogWbCore, Log, TEXT("Cinematic-Lighting: PostProcessVolume gesetzt (Belichtung geklemmt, Kontrast/Saettigung +8%%)."));
+	// Sonne: dynamische Schatten sicherstellen (Tiefe). Intensitaet/Farbe steuert
+	// das Wetter-System - hier nur die Schatten erzwingen, kein Konflikt.
+	int32 SunsWithShadows = 0;
+	for (TActorIterator<ADirectionalLight> It(&World); It; ++It)
+	{
+		if (UDirectionalLightComponent* Sun = Cast<UDirectionalLightComponent>(It->GetLightComponent()))
+		{
+			Sun->SetCastShadows(true);
+			Sun->SetDynamicShadowDistanceMovableLight(20000.0f);
+			++SunsWithShadows;
+		}
+	}
+
+	UE_LOG(LogWbCore, Log,
+		TEXT("Cinematic-Lighting: PPV (Belichtung/Kontrast/Saettigung, Lumen-GI+Refl, SSAO), %d Sonne(n) mit Schatten."),
+		SunsWithShadows);
 }
 
 void UWiesbadenCitySubsystem::Tick(float DeltaTime)
