@@ -2,6 +2,10 @@
 
 #include "World/WiesbadenCityActor.h"
 
+#include "WiesbadenReal.h"
+#include "Camera/PlayerCameraManager.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
 #include "World/RegionAssetSpawnerComponent.h"
@@ -12,7 +16,9 @@
 
 AWiesbadenCityActor::AWiesbadenCityActor()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	// Tickt fuer das Gebaeude-Distanz-Streaming (nur aktiv, wenn ApplyCityData den
+	// Streaming-Pfad gewaehlt hat; der gebackene Traeger-Actor tickt effektiv leer).
+	PrimaryActorTick.bCanEverTick = true;
 
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
@@ -75,6 +81,17 @@ void AWiesbadenCityActor::ClearMeshes()
 	if (TerrainMesh) { TerrainMesh->ClearAllMeshSections(); }
 	if (FurnitureSpawner) { FurnitureSpawner->ClearFurniture(); }
 	if (TrafficVehicleSpawner) { TrafficVehicleSpawner->ClearVehicles(); }
+
+	// Gebaeude-Streaming zuruecksetzen (Pool-Komponenten bleiben zur Wiederverwendung).
+	for (UProceduralMeshComponent* C : BuildingCellPool)
+	{
+		if (C) { C->ClearAllMeshSections(); }
+	}
+	LoadedBuildingCells.Empty();
+	FreeBuildingComponents.Reset();
+	FreeBuildingComponents.Append(BuildingCellPool);
+	BuildingCells.Empty();
+	bBuildingStreamingActive = false;
 }
 
 void AWiesbadenCityActor::ApplyCityData(const FWiesbadenCityData& Data, bool bCreateCollision)
@@ -115,8 +132,36 @@ void AWiesbadenCityActor::ApplyCityData(const FWiesbadenCityData& Data, bool bCr
 	}
 
 	// -- Gebaeude -----------------------------------------------------------
-	if (BuildingMesh && Data.BuildingMesh.Sections.Num() > 0)
+	if (bStreamBuildings && Data.BuildingMesh.Sections.Num() > 0)
 	{
+		// Distanz-Streaming: die (nach Materialkanal zusammengelegte) Geometrie in
+		// ein Zell-Raster re-einsortieren und nur den Ausschnitt um den Spieler
+		// als Procedural-Mesh halten. Verhindert, dass alle ~119k Gebaeude
+		// gleichzeitig resident sind (VRAM-/Lumen-Crash im Laufzeit-Build).
+		BuildBuildingCells(Data.BuildingMesh);
+		SetupBuildingCellPool(bCreateCollision);
+		bBuildingStreamingActive = true;
+		StreamTickAccumSeconds = 0.0f;
+
+		// Startausschnitt sofort laden (Spieler startet nahe dem Georeferenz-Origin).
+		FVector InitialView = GetActorLocation();
+		if (UWorld* World = GetWorld())
+		{
+			if (APlayerController* PC = World->GetFirstPlayerController())
+			{
+				if (PC->PlayerCameraManager) { InitialView = PC->PlayerCameraManager->GetCameraLocation(); }
+				else if (APawn* ViewPawn = PC->GetPawn()) { InitialView = ViewPawn->GetActorLocation(); }
+			}
+		}
+		UpdateBuildingStreaming(InitialView);
+
+		UE_LOG(LogWbCore, Log,
+			TEXT("Gebaeude-Streaming aktiv: %d Rasterzellen a %.0f m, Radius %.0f m, %d sofort geladen."),
+			BuildingCells.Num(), BuildingCellSizeCm / 100.0f, BuildingStreamRadiusCm / 100.0f, LoadedBuildingCells.Num());
+	}
+	else if (BuildingMesh && Data.BuildingMesh.Sections.Num() > 0)
+	{
+		// Nicht-Streaming-Fallback: alles auf die eine Gebaeude-Komponente.
 		int32 SectionIndex = 0;
 		for (const FBuildingMeshSection& Section : Data.BuildingMesh.Sections)
 		{
@@ -218,6 +263,244 @@ UMaterialInterface* AWiesbadenCityActor::ResolveBuildingMaterial(EBuildingMeshCh
 	}
 
 	return BuildingWallMaterial;
+}
+
+void AWiesbadenCityActor::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (!bBuildingStreamingActive)
+	{
+		return;
+	}
+
+	// Nicht jedes Bild: das Nachladen ist bei ruhiger Bewegung selten noetig.
+	StreamTickAccumSeconds += DeltaSeconds;
+	if (StreamTickAccumSeconds < 0.25f)
+	{
+		return;
+	}
+	StreamTickAccumSeconds = 0.0f;
+
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!PC)
+	{
+		return;
+	}
+
+	FVector ViewLocation;
+	if (PC->PlayerCameraManager)
+	{
+		ViewLocation = PC->PlayerCameraManager->GetCameraLocation();
+	}
+	else if (APawn* ViewPawn = PC->GetPawn())
+	{
+		ViewLocation = ViewPawn->GetActorLocation();
+	}
+	else
+	{
+		return;
+	}
+
+	UpdateBuildingStreaming(ViewLocation);
+}
+
+void AWiesbadenCityActor::BuildBuildingCells(const FBuildingMeshData& BuildingMeshData)
+{
+	BuildingCells.Empty();
+	const double CellSize = FMath::Max(1.0f, BuildingCellSizeCm);
+
+	for (const FBuildingMeshSection& Src : BuildingMeshData.Sections)
+	{
+		if (Src.IsEmpty())
+		{
+			continue;
+		}
+
+		// Pro Zelle: alte Vertex-Indizes dieses Quell-Abschnitts -> neue Indizes.
+		// Haelt die Vertex-Teilung INNERHALB der Zelle (statt jedes Dreieck zu
+		// verdreifachen) -> die re-einsortierte Kopie bleibt ~so gross wie das
+		// Original; nur an den Zellgrenzen werden wenige Vertices dupliziert.
+		TMap<FIntPoint, TMap<int32, int32>> Remap;
+
+		const int32 TriCount = Src.Triangles.Num();
+		for (int32 t = 0; t + 2 < TriCount; t += 3)
+		{
+			const int32 Idx[3] = { Src.Triangles[t], Src.Triangles[t + 1], Src.Triangles[t + 2] };
+			if (!Src.Vertices.IsValidIndex(Idx[0]) || !Src.Vertices.IsValidIndex(Idx[1]) || !Src.Vertices.IsValidIndex(Idx[2]))
+			{
+				continue;
+			}
+
+			const FVector Centroid = (Src.Vertices[Idx[0]] + Src.Vertices[Idx[1]] + Src.Vertices[Idx[2]]) / 3.0;
+			const FIntPoint Cell(FMath::FloorToInt(Centroid.X / CellSize), FMath::FloorToInt(Centroid.Y / CellSize));
+
+			// Ziel-Sub-Abschnitt der Zelle, gruppiert nach Kanal/Variante/Adresse.
+			TArray<FBuildingMeshSection>& CellSubs = BuildingCells.FindOrAdd(Cell);
+			FBuildingMeshSection* Dst = nullptr;
+			for (FBuildingMeshSection& S : CellSubs)
+			{
+				if (S.Channel == Src.Channel && S.MaterialVariant == Src.MaterialVariant && S.FacadeOverrideKey == Src.FacadeOverrideKey)
+				{
+					Dst = &S;
+					break;
+				}
+			}
+			if (!Dst)
+			{
+				FBuildingMeshSection NewSub;
+				NewSub.Channel = Src.Channel;
+				NewSub.MaterialVariant = Src.MaterialVariant;
+				NewSub.FacadeOverrideKey = Src.FacadeOverrideKey;
+				Dst = &CellSubs[CellSubs.Add(MoveTemp(NewSub))];
+			}
+
+			TMap<int32, int32>& CellRemap = Remap.FindOrAdd(Cell);
+			for (int32 k = 0; k < 3; ++k)
+			{
+				const int32 Old = Idx[k];
+				int32 New;
+				if (const int32* FoundNew = CellRemap.Find(Old))
+				{
+					New = *FoundNew;
+				}
+				else
+				{
+					New = Dst->Vertices.Num();
+					Dst->Vertices.Add(Src.Vertices[Old]);
+					Dst->Normals.Add(Src.Normals.IsValidIndex(Old) ? Src.Normals[Old] : FVector::UpVector);
+					Dst->UVs.Add(Src.UVs.IsValidIndex(Old) ? Src.UVs[Old] : FVector2D::ZeroVector);
+					Dst->VertexColors.Add(Src.VertexColors.IsValidIndex(Old) ? Src.VertexColors[Old] : FColor::White);
+					Dst->Tangents.Add(Src.Tangents.IsValidIndex(Old) ? Src.Tangents[Old] : FProcMeshTangent());
+					CellRemap.Add(Old, New);
+				}
+				Dst->Triangles.Add(New);
+			}
+		}
+	}
+}
+
+void AWiesbadenCityActor::SetupBuildingCellPool(bool bCreateCollision)
+{
+	bBuildingCollision = bCreateCollision;
+
+	// Pool gross genug fuer das quadratische Ladefenster + einen Randring, damit
+	// beim Bewegen neue Zellen laden koennen, bevor alte entladen sind.
+	const int32 R = FMath::Max(1, FMath::CeilToInt(BuildingStreamRadiusCm / FMath::Max(1.0f, BuildingCellSizeCm)));
+	const int32 Side = 2 * (R + 1) + 1;
+	const int32 Needed = Side * Side;
+
+	FreeBuildingComponents.Reset();
+	for (UProceduralMeshComponent* C : BuildingCellPool)
+	{
+		if (C)
+		{
+			C->ClearAllMeshSections();
+			FreeBuildingComponents.Add(C);
+		}
+	}
+	while (BuildingCellPool.Num() < Needed)
+	{
+		UProceduralMeshComponent* C = NewObject<UProceduralMeshComponent>(this);
+		C->SetupAttachment(Root);
+		C->RegisterComponent();
+		BuildingCellPool.Add(C);
+		FreeBuildingComponents.Add(C);
+	}
+	LoadedBuildingCells.Empty();
+}
+
+void AWiesbadenCityActor::UpdateBuildingStreaming(const FVector& ViewLocation)
+{
+	if (!bBuildingStreamingActive)
+	{
+		return;
+	}
+
+	const double CellSize = FMath::Max(1.0f, BuildingCellSizeCm);
+	const FIntPoint Center(FMath::FloorToInt(ViewLocation.X / CellSize), FMath::FloorToInt(ViewLocation.Y / CellSize));
+	const int32 R = FMath::Max(1, FMath::CeilToInt(BuildingStreamRadiusCm / (float)CellSize));
+
+	// Gewuenschte Zellen: quadratisches Fenster um den Spieler, sofern Geometrie da ist.
+	TSet<FIntPoint> Desired;
+	Desired.Reserve((2 * R + 1) * (2 * R + 1));
+	for (int32 dy = -R; dy <= R; ++dy)
+	{
+		for (int32 dx = -R; dx <= R; ++dx)
+		{
+			const FIntPoint Cell(Center.X + dx, Center.Y + dy);
+			if (BuildingCells.Contains(Cell))
+			{
+				Desired.Add(Cell);
+			}
+		}
+	}
+
+	// Nicht mehr gewuenschte Zellen entladen (gibt Pool-Komponenten frei).
+	TArray<FIntPoint> ToUnload;
+	for (const TPair<FIntPoint, UProceduralMeshComponent*>& P : LoadedBuildingCells)
+	{
+		if (!Desired.Contains(P.Key))
+		{
+			ToUnload.Add(P.Key);
+		}
+	}
+	for (const FIntPoint& Cell : ToUnload)
+	{
+		UnloadBuildingCell(Cell);
+	}
+
+	// Neu gewuenschte Zellen laden.
+	for (const FIntPoint& Cell : Desired)
+	{
+		if (!LoadedBuildingCells.Contains(Cell))
+		{
+			LoadBuildingCell(Cell);
+		}
+	}
+}
+
+void AWiesbadenCityActor::LoadBuildingCell(const FIntPoint& Cell)
+{
+	if (FreeBuildingComponents.Num() == 0)
+	{
+		return; // Pool erschoepft (bei korrekter Pool-Groesse nicht zu erwarten).
+	}
+	const TArray<FBuildingMeshSection>* Subs = BuildingCells.Find(Cell);
+	if (!Subs)
+	{
+		return;
+	}
+
+	UProceduralMeshComponent* C = FreeBuildingComponents.Pop(EAllowShrinking::No);
+	int32 SecIdx = 0;
+	for (const FBuildingMeshSection& S : *Subs)
+	{
+		if (S.IsEmpty())
+		{
+			continue;
+		}
+		C->CreateMeshSection(SecIdx, S.Vertices, S.Triangles, S.Normals, S.UVs, S.VertexColors, S.Tangents, bBuildingCollision);
+		if (UMaterialInterface* Material = ResolveBuildingMaterial(S.Channel, S.FacadeOverrideKey))
+		{
+			C->SetMaterial(SecIdx, Material);
+		}
+		++SecIdx;
+	}
+	C->SetCollisionEnabled(bBuildingCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+	LoadedBuildingCells.Add(Cell, C);
+}
+
+void AWiesbadenCityActor::UnloadBuildingCell(const FIntPoint& Cell)
+{
+	UProceduralMeshComponent** Found = LoadedBuildingCells.Find(Cell);
+	if (Found && *Found)
+	{
+		(*Found)->ClearAllMeshSections();
+		FreeBuildingComponents.Add(*Found);
+	}
+	LoadedBuildingCells.Remove(Cell);
 }
 
 void AWiesbadenCityActor::BuildTerrainPreview(const FTerrainTile& Tile, int32 GridSize)

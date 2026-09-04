@@ -126,6 +126,26 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Terrain", meta = (ClampMin = "2", ClampMax = "2049"))
 	int32 TerrainPreviewGridSize = 257;
 
+	// -- Gebaeude-Distanz-Streaming (nur Laufzeit-Build) ---------------------
+	// Die Gebaeude-Geometrie liegt (draw-call-optimiert) nach Materialkanal
+	// ZUSAMMENGELEGT vor - jede Section spannt die ganze Stadt. Alle ~119k
+	// Gebaeude gleichzeitig resident sprengt den VRAM/die Lumen-Scene (GPU-Crash).
+	// Loesung: die Geometrie beim Spawn in ein Zell-Raster re-einsortieren und nur
+	// den Ausschnitt um den Spieler als Procedural-Mesh halten (Tick-gesteuert).
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming")
+	bool bStreamBuildings = true;
+
+	/** Kantenlaenge einer Streaming-Rasterzelle in cm. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming", meta = (ClampMin = "2000"))
+	float BuildingCellSizeCm = 15000.0f;
+
+	/** Ladehalbmesser um den Spieler in cm (quadratisches Zellfenster). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming", meta = (ClampMin = "5000"))
+	float BuildingStreamRadiusCm = 37500.0f;
+
+	/** Tick-gesteuertes Distanz-Streaming der Gebaeudezellen. */
+	virtual void Tick(float DeltaSeconds) override;
+
 private:
 	/** Material fuer einen Strassen-Mesh-Kanal (Fallback: RoadMaterial). */
 	UMaterialInterface* ResolveRoadMaterial(ERoadMeshChannel Channel) const;
@@ -139,6 +159,33 @@ private:
 
 	/** Baut ein herunterskaliertes Terrain-Vorschau-Mesh aus der Heightmap. */
 	void BuildTerrainPreview(const FTerrainTile& Tile, int32 GridSize);
+
+	// -- Gebaeude-Streaming intern -------------------------------------------
+	/** Sortiert die zusammengelegte Gebaeude-Geometrie in ein Zell-Raster um. */
+	void BuildBuildingCells(const FBuildingMeshData& BuildingMeshData);
+	/** Legt/erneuert den Procedural-Mesh-Pool fuer die Streaming-Zellen an. */
+	void SetupBuildingCellPool(bool bCreateCollision);
+	/** Laedt/entlaedt Zellen nach Distanz zur ViewLocation. */
+	void UpdateBuildingStreaming(const FVector& ViewLocation);
+	void LoadBuildingCell(const FIntPoint& Cell);
+	void UnloadBuildingCell(const FIntPoint& Cell);
+
+	/** Re-einsortierte Gebaeude-Geometrie je Rasterzelle (kein UObject -> kein GC). */
+	TMap<FIntPoint, TArray<FBuildingMeshSection>> BuildingCells;
+
+	/** Komponenten-Pool (haelt die Komponenten am Leben -> UPROPERTY). */
+	UPROPERTY(Transient)
+	TArray<UProceduralMeshComponent*> BuildingCellPool;
+
+	/** Freie Pool-Komponenten (Lebensdauer ueber den Pool gesichert). */
+	TArray<UProceduralMeshComponent*> FreeBuildingComponents;
+
+	/** Aktuell geladene Zelle -> zugewiesene Komponente. */
+	TMap<FIntPoint, UProceduralMeshComponent*> LoadedBuildingCells;
+
+	bool bBuildingStreamingActive = false;
+	bool bBuildingCollision = false;
+	float StreamTickAccumSeconds = 0.0f;
 
 	UPROPERTY(Transient)
 	USceneComponent* Root = nullptr;
