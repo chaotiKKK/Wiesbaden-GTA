@@ -134,6 +134,41 @@ for name in SETTINGS:
     except Exception as exc:
         log("Einstellung %s nicht setzbar: %s" % (name, exc))
 
+# -- 2b) Quelldaten-Pfade auf den AKTUELLEN Projektstamm umbiegen -----------
+#
+# Die aus der gespeicherten Karte kopierten Datei-Pfade (OSM/DEM/ALKIS/Road-
+# Config) zeigen noch auf den ALTEN Rechner
+# (C:/Users/ssonn/aivideo/WiesbadenReal/...). Auf diesem Rechner liegen die
+# Daten unter dem gleichen relativen Pfad, nur unter einem anderen Stamm ->
+# build_city scheiterte sonst mit "Datei nicht gefunden" in 0,1 s. Der Stamm
+# ".../WiesbadenReal" wird generisch auf den laufenden Projektordner gebogen;
+# Dateiname/Unterordner (auch die richtige DEM-Kachel) bleiben erhalten.
+import re
+
+PROJ_ROOT = unreal.Paths.project_dir().replace("\\", "/").rstrip("/")
+
+
+def rebase_to_project(p):
+    if not p:
+        return p
+    q = p.replace("\\", "/")
+    m = re.match(r"^(.*/WiesbadenReal)(/.*)$", q)
+    if m and m.group(1) != PROJ_ROOT:
+        return PROJ_ROOT + m.group(2)
+    return p
+
+
+for name in ("osm_file_path", "dem_file_path", "alkis_file_path",
+             "road_type_config_path"):
+    try:
+        old = builder.get_editor_property(name)
+        new = rebase_to_project(old)
+        if new != old:
+            builder.set_editor_property(name, new)
+            log("Pfad %s umgebogen: %s -> %s" % (name, old, new))
+    except Exception as exc:
+        log("Pfad %s nicht umbiegbar: %s" % (name, exc))
+
 # -- 3) Die VOLLE Stadt ----------------------------------------------------
 builder.set_editor_property("generate_roads", True)
 builder.set_editor_property("generate_terrain", True)
