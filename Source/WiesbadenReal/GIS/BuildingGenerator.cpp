@@ -1114,6 +1114,21 @@ void UBuildingGenerator::BuildRoof(
 	FBuildingMeshSection& Section = FindOrAddSection(
 		OutMeshData, EBuildingMeshChannel::Roof, MaterialVariant, FacadeOverrideKey);
 
+	// Dach-UVs GEBAeUDE-LOKAL statt weltbezogen. Die georeferenzierten
+	// Weltkoordinaten sind in Wiesbaden riesig (Tausende Meter). Als per-Vertex-
+	// float32 gespeichert und ueber das Dreieck interpoliert verlieren so grosse
+	// UVs die Praezision -> die Dachtextur kollabiert zu Grau (das frueher als
+	// "fehlende Dach-UVs" beobachtete Symptom, das nur die material-seitige
+	// Weltraum-Projektion umging). Relativ zum Gebaeude-Schwerpunkt bleiben die
+	// Werte klein und praezise; die Kachelgroesse (1 Kachel/m via /MetersToCm)
+	// bleibt ueber alle Gebaeude gleich - nur die Kachel-PHASE startet je Dach
+	// neu, was fuer getrennte Daecher unerheblich ist.
+	const FVector2D UVOrigin = FPolygonUtils::ComputeCentroid(OuterRing);
+	auto RoofUV = [&](double WorldX, double WorldY) -> FVector2D
+	{
+		return FVector2D((WorldX - UVOrigin.X) / MetersToCm, (WorldY - UVOrigin.Y) / MetersToCm);
+	};
+
 	// -- Flachdach und Fallback --------------------------------------------
 
 	auto BuildFlatCap = [&](double CapZ)
@@ -1143,9 +1158,7 @@ void UBuildingGenerator::BuildRoof(
 		{
 			Section.Vertices.Add(FVector(Point.X, Point.Y, CapZ));
 			Section.Normals.Add(FVector::UpVector);
-			// Dach-UVs weltbezogen in Metern, damit Ziegel ueber alle Gebaeude
-			// gleich gross sind.
-			Section.UVs.Add(FVector2D(Point.X / MetersToCm, Point.Y / MetersToCm));
+			Section.UVs.Add(RoofUV(Point.X, Point.Y));
 			Section.VertexColors.Add(FColor::White);
 			Section.Tangents.Add(FProcMeshTangent(1.0f, 0.0f, 0.0f));
 		}
@@ -1205,9 +1218,9 @@ void UBuildingGenerator::BuildRoof(
 				Section.Tangents.Add(FProcMeshTangent((VB - VA).GetSafeNormal(), false));
 			}
 
-			Section.UVs.Add(FVector2D(A.X / MetersToCm, A.Y / MetersToCm));
-			Section.UVs.Add(FVector2D(B.X / MetersToCm, B.Y / MetersToCm));
-			Section.UVs.Add(FVector2D(Centroid.X / MetersToCm, Centroid.Y / MetersToCm));
+			Section.UVs.Add(RoofUV(A.X, A.Y));
+			Section.UVs.Add(RoofUV(B.X, B.Y));
+			Section.UVs.Add(RoofUV(Centroid.X, Centroid.Y));
 
 			// Vorderseite nach oben (siehe Dach-Wicklung oben).
 			Section.Triangles.Add(TriangleBase + 0);
@@ -1309,10 +1322,10 @@ void UBuildingGenerator::BuildRoof(
 			Section.Tangents.Add(FProcMeshTangent((EaveB - EaveA).GetSafeNormal(), false));
 		}
 
-		Section.UVs.Add(FVector2D(EaveA.X / MetersToCm, EaveA.Y / MetersToCm));
-		Section.UVs.Add(FVector2D(EaveB.X / MetersToCm, EaveB.Y / MetersToCm));
-		Section.UVs.Add(FVector2D(RidgeA.X / MetersToCm, RidgeA.Y / MetersToCm));
-		Section.UVs.Add(FVector2D(RidgeB.X / MetersToCm, RidgeB.Y / MetersToCm));
+		Section.UVs.Add(RoofUV(EaveA.X, EaveA.Y));
+		Section.UVs.Add(RoofUV(EaveB.X, EaveB.Y));
+		Section.UVs.Add(RoofUV(RidgeA.X, RidgeA.Y));
+		Section.UVs.Add(RoofUV(RidgeB.X, RidgeB.Y));
 
 		// Dachflaeche zwischen Traufe und First - Vorderseite nach aussen.
 		Section.Triangles.Add(Base + 0);
