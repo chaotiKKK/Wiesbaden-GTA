@@ -507,6 +507,40 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		UE_LOG(LogWbStreaming, Log, TEXT("Lumen eingeschaltet (-WbLumen)."));
 	}
 
+	// Lumen mit HARDWARE-Raytracing: -WbLumenHW.
+	//
+	// Software-Lumen rechnet fuer diese Stadt KEIN Bounce: es traced das globale
+	// Distanzfeld, an dem die Procedural-Gebaeude gar nicht teilnehmen (Proc-
+	// Meshes erzeugen keine Distanzfelder). HWRT traced dagegen die echte
+	// RT-Geometrie der Proc-Meshes (UProceduralMeshComponent baut sie) -> echtes
+	// indirektes Licht. Schaltet Lumen-GI + -Reflexionen (Methode 1) UND
+	// r.Lumen.HardwareRayTracing ein. Die RT-Unterstuetzung selbst (r.RayTracing)
+	// ist eine Startzeit-Vorgabe aus DefaultEngine.ini; hier zur Laufzeit nur der
+	// Lumen-Modus. Opt-in - ohne den Schalter bleibt Lumen aus (Perf ~40 ms +
+	// Crash-Risiko auf der neuen sm_120-GPU, die schon unter Software-Lumen fiel).
+	if (FParse::Param(FCommandLine::Get(), TEXT("WbLumenHW")))
+	{
+		const auto SetVar = [](const TCHAR* Name, int32 Value)
+		{
+			if (IConsoleVariable* Var = IConsoleManager::Get().FindConsoleVariable(Name))
+			{
+				Var->Set(Value, ECVF_SetByCode);
+			}
+		};
+		SetVar(TEXT("r.DynamicGlobalIlluminationMethod"), 1);
+		SetVar(TEXT("r.ReflectionMethod"), 1);
+		SetVar(TEXT("r.Lumen.HardwareRayTracing"), 1);
+		// Hit-Lighting statt Surface-Cache: der Oberflaechen-Cache fuellt sich fuer
+		// die 10k+ Proc-Mesh-Abschnitte dieser Stadt nicht, sein Bounce blieb daher
+		// schwarz (schattige Fassaden fielen unter Lumen dunkler als unter dem
+		// simplen SkyLight-Ambient). LightingMode 2 wertet die Beleuchtung direkt am
+		// RT-Treffer aus - teurer, aber unabhaengig vom lueckenhaften Cache.
+		SetVar(TEXT("r.Lumen.HardwareRayTracing.LightingMode"), 2);
+		UE_LOG(LogWbStreaming, Log,
+			TEXT("Lumen mit Hardware-Raytracing eingeschaltet (-WbLumenHW): GI+Reflexionen=1, ")
+			TEXT("r.Lumen.HardwareRayTracing=1, LightingMode=2 (Hit-Lighting)."));
+	}
+
 	// Auflösungsskalierung: -WbScreenPercentage=<Prozent>.
 	//
 	// Nach der Kantenglaettung und den Schatten ist die schiere Pixelzahl der

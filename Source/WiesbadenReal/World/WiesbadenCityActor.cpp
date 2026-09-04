@@ -404,6 +404,12 @@ void AWiesbadenCityActor::SetupBuildingCellPool(bool bCreateCollision)
 	{
 		UProceduralMeshComponent* C = NewObject<UProceduralMeshComponent>(this);
 		C->SetupAttachment(Root);
+		// Fuer Hardware-Raytracing-Lumen (-WbLumenHW): die gestreamten Gebaeude
+		// muessen in der RT-Szene liegen und indirektes Licht beeinflussen duerfen,
+		// sonst traced Lumen ins Leere. Beides ist Default true - hier ausdruecklich
+		// gesetzt, damit der Bounce-Pfad nicht an einer stillen Vorgabe scheitert.
+		C->SetVisibleInRayTracing(true);
+		C->SetAffectDynamicIndirectLighting(true);
 		C->RegisterComponent();
 		BuildingCellPool.Add(C);
 		FreeBuildingComponents.Add(C);
