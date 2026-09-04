@@ -290,17 +290,17 @@ bool AWiesbadenNerobergbahn::ResolveHeights()
 
 			// Von WEIT oben nach unten.
 			//
-			// Hier standen 20.000 cm, also 200 m. Das klang grosszuegig - die
-			// Talstation liegt bei 130 m - war aber der Grund, warum die
-			// Bahn im Berg steckte: die Bergstation liegt bei 245 m, der
-			// Trace begann dort also UNTERHALB der Gelaendeoberflaeche. Ein
-			// Trace, der in der Geometrie startet, meldet diese Flaeche nicht;
-			// er faellt durch und trifft irgendetwas Tieferes. Genau so kam
-			// der gemessene Bereich 88 bis 173 m zustande statt 130 bis 240 m,
-			// und der obere Teil der Trasse verschwand im Hang.
+			// Hier standen einmal 20.000 cm (200 m). Das ist zu wenig: auf
+			// hohem Gelaende beginnt der Trace dann UNTERHALB der Oberflaeche,
+			// meldet die Startflaeche nicht, faellt durch und trifft etwas
+			// Tieferes - die Trasse haenge dort im Hang. 100.000 cm (1.000 m)
+			// liegen deutlich ueber der Hohen Wurzel (618 m), dem hoechsten
+			// Punkt im Stadtgebiet, und damit ueber jedem moeglichen Start.
 			//
-			// 100.000 cm sind 1.000 m - deutlich ueber der Hohen Wurzel
-			// (618 m), dem hoechsten Punkt im Stadtgebiet.
+			// Zur Groessenordnung: der In-Game-Hoehendatensatz der Bahn misst
+			// rund 88 bis 173 m - etwa 70 m unter den echten 160 bis 243 m NN,
+			// aber bei gleicher Steigung von rund 83 m (siehe die Plausibili-
+			// taetspruefung weiter unten).
 			constexpr double TraceTopCm = 100000.0;
 			constexpr double TraceBottomCm = -20000.0;
 
@@ -380,10 +380,9 @@ bool AWiesbadenNerobergbahn::ResolveHeights()
 		// "Die Bahn ist nicht da" hat bisher keine pruefbare Zahl gehabt: das
 		// Protokoll meldete Gleislaengen, und die entstehen aus den
 		// Wegpunkten - auch dann, wenn die Trasse anschliessend unter dem
-		// Gelaende liegt. Der Hoehenbereich sagt es sofort: die Talstation
-		// liegt bei rund 130 m, die Bergstation bei rund 240 m. Steht hier
-		// etwas nahe null, wurden die Hoehen vor dem Streaming abgefragt und
-		// die Trasse steckt im Berg.
+		// Gelaende liegt. Der Hoehenbereich sagt es sofort. Steht hier etwas
+		// nahe null, wurden die Hoehen vor dem Streaming abgefragt und die
+		// Trasse steckt im Berg.
 		double MinZ = TNumericLimits<double>::Max();
 		double MaxZ = TNumericLimits<double>::Lowest();
 		for (const FTrack* Track : { &TrackA, &TrackB })
@@ -402,22 +401,28 @@ bool AWiesbadenNerobergbahn::ResolveHeights()
 
 		// Und sofort sagen, wenn das Ergebnis nicht stimmen KANN.
 		//
-		// Die echte Bahn ueberwindet 83 m zwischen 130 m und 245 m. Weicht
-		// das deutlich ab, ist die Trasse falsch abgetastet - und der Fehler
-		// soll im Protokoll stehen, nicht erst im Spiel auffallen, wo er sich
-		// nur als "die Bahn fehlt komplett" zeigt.
-		constexpr double ExpectedTopM = 245.0;
-		constexpr double ExpectedBottomM = 130.0;
-		constexpr double ToleranceM = 25.0;
-		if (FMath::Abs(MaxZ / 100.0 - ExpectedTopM) > ToleranceM
-			|| FMath::Abs(MinZ / 100.0 - ExpectedBottomM) > ToleranceM)
+		// Geprueft wird der HOEHENUNTERSCHIED, nicht die absolute Lage. Das
+		// Vorbild ueberwindet 83 m (ESWE Verkehr: Talstation ~160 m NN,
+		// Bergstation ~243 m NN). Der In-Game-Hoehendatensatz liegt aber rund
+		// 70 m TIEFER als NN - gemessen 88 bis 173 m -, waehrend die Relief-
+		// spanne stimmt: 85 m gegen 83 m. Absolute Erwartungswerte (frueher
+		// 130 bis 245 m) passen deshalb WEDER zum Vorbild NOCH zum Spiel und
+		// gaben bei korrekt abgetasteter Trasse Fehlalarm. Der Klettergewinn
+		// ist datumsunabhaengig; zusaetzlich faengt eine lockere Untergrenze
+		// den Fall ab, dass die Hoehen vor dem Streaming am Weltnullpunkt
+		// abgefragt wurden.
+		constexpr double ExpectedClimbM = 83.0;
+		constexpr double ClimbToleranceM = 20.0;
+		constexpr double MinBottomM = 20.0;
+		const double ClimbM = (MaxZ - MinZ) / 100.0;
+		const double BottomM = MinZ / 100.0;
+		if (FMath::Abs(ClimbM - ExpectedClimbM) > ClimbToleranceM || BottomM < MinBottomM)
 		{
 			UE_LOG(LogWbStreaming, Warning,
-				TEXT("Nerobergbahn: Hoehen unplausibel - erwartet %.0f bis %.0f m ")
-				TEXT("(+/- %.0f m), gemessen %.0f bis %.0f m. Die Trasse steckt ")
-				TEXT("vermutlich im Gelaende."),
-				ExpectedBottomM, ExpectedTopM, ToleranceM,
-				MinZ / 100.0, MaxZ / 100.0);
+				TEXT("Nerobergbahn: Hoehen unplausibel - erwartet ~%.0f m Steigung ")
+				TEXT("(+/- %.0f m) und Talfuss ueber %.0f m, gemessen %.0f m Steigung ")
+				TEXT("ab %.0f m. Die Trasse steckt vermutlich im Gelaende."),
+				ExpectedClimbM, ClimbToleranceM, MinBottomM, ClimbM, BottomM);
 		}
 	}
 
