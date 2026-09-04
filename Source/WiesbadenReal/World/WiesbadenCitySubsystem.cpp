@@ -36,6 +36,8 @@
 #include "World/WiesbadenCityChunk.h"
 #include "World/WiesbadenStreamingSource.h"
 #include "UnrealClient.h"
+#include "HighResScreenshot.h"
+#include "Engine/GameViewportClient.h"
 #include "WorldPartition/WorldPartitionSubsystem.h"
 
 #include "RHI.h"
@@ -1326,6 +1328,35 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		{
 			AerialShotDelay = -1.0f;
 			CaptureDiagnosticScreenshot();
+		}
+	}
+
+	// WbShotWhenReady: automatischer 2x-HighResShot, sobald die Stadt bereit ist.
+	// Loest das Timing-Problem des asynchronen Laufzeit-Builds - erst wenn
+	// IsCityReady() true wurde, laeuft ein kurzer Settle-Countdown, dann feuert
+	// EIN HighResShot. Die Kamera positioniert man vorher per -ExecCmds
+	// (z. B. WbHeli,WbHeliGoto ...).
+	if (!bShotWhenReadyFired && FParse::Param(FCommandLine::Get(), TEXT("WbShotWhenReady")))
+	{
+		if (!bShotWhenReadyArmed)
+		{
+			if (IsCityReady())
+			{
+				bShotWhenReadyArmed = true;
+				// Genug Zeit fuer Streaming-Nachladen, Shader-Kompilierung und
+				// Belichtungs-Adaption, bevor das Bild steht.
+				ShotWhenReadyDelay = 6.0f;
+				FParse::Value(FCommandLine::Get(), TEXT("WbShotDelay="), ShotWhenReadyDelay);
+			}
+		}
+		else
+		{
+			ShotWhenReadyDelay -= DeltaTime;
+			if (ShotWhenReadyDelay <= 0.0f)
+			{
+				FireReadyHighResShot();
+				bShotWhenReadyFired = true;
+			}
 		}
 	}
 
@@ -2904,6 +2935,52 @@ void UWiesbadenCitySubsystem::CaptureDiagnosticScreenshot()
 	// Dem Renderer ein paar Frames Zeit lassen, danach beenden - der Lauf ist
 	// automatisiert und soll nicht offen stehen bleiben.
 	ScreenshotQuitDelay = 3.0f;
+}
+
+void UWiesbadenCitySubsystem::FireReadyHighResShot()
+{
+	// WICHTIG: HighResShot wird von UGameViewportClient::Exec behandelt
+	// (HandleHighresScreenshotCommand), NICHT von GEngine->Exec - der Umweg ueber
+	// GEngine->Exec erreicht den Handler nie und erfasst nichts. Deshalb hier den
+	// Handler direkt nachbilden: Multiplier parsen -> FilenameOverride setzen ->
+	// Viewport->TakeHighResScreenShot().
+	UGameViewportClient* Viewport = GEngine ? GEngine->GameViewport : nullptr;
+	if (!Viewport || !Viewport->Viewport)
+	{
+		UE_LOG(LogWbStreaming, Warning, TEXT("WbShotWhenReady: kein GameViewport - HighResShot nicht moeglich."));
+		return;
+	}
+
+	float Scale = 2.0f;
+	FParse::Value(FCommandLine::Get(), TEXT("WbShotScale="), Scale);
+	Scale = FMath::Clamp(Scale, 1.0f, 8.0f);
+
+	FHighResScreenshotConfig& Config = GetHighResScreenshotConfig();
+	// ParseConsoleCommand setzt Multiplier/Aufloesung UND FilenameOverride (auf
+	// den Kommando-Wert bzw. leer) - deshalb den Zielpfad DANACH setzen.
+	if (Config.ParseConsoleCommand(FString::Printf(TEXT("%g"), Scale), *GLog))
+	{
+		// Vorhersagbarer Zielpfad statt Saved/Screenshots/Windows/HighresScreenshotNNNN.
+		const FString ShotPath = FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("WbReadyShot");
+		Config.FilenameOverride = ShotPath;
+
+		Viewport->Viewport->TakeHighResScreenShot();
+
+		UE_LOG(LogWbStreaming, Log,
+			TEXT("WbShotWhenReady: HighResShot %gx ausgeloest (Stadt bereit), Ziel '%s.png'."),
+			Scale, *ShotPath);
+
+		// Nach dem Schreiben beenden (automatisierter Ablauf) - ausser -WbShotNoQuit.
+		// Der HighResShot rendert ueber die naechsten Frames; Zeit zum Schreiben lassen.
+		if (!FParse::Param(FCommandLine::Get(), TEXT("WbShotNoQuit")))
+		{
+			ScreenshotQuitDelay = 8.0f;
+		}
+	}
+	else
+	{
+		UE_LOG(LogWbStreaming, Warning, TEXT("WbShotWhenReady: HighResShot-Konfiguration abgelehnt (Skala %g)."), Scale);
+	}
 }
 
 

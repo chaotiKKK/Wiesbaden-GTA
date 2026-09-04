@@ -366,6 +366,22 @@ private:
 	/** Countdown bis zur Luftaufnahme nach dem Kamerawechsel (negativ = aus). */
 	float AerialShotDelay = -1.0f;
 
+	// -- WbShotWhenReady ------------------------------------------------------
+	// Automatischer 2x-HighResShot, sobald die Stadt fertig ist. Loest das
+	// Timing-Problem des Laufzeit-Builds: der ist asynchron (~22 s), waehrend
+	// -WbScreenshot fix bei 8 s feuert und HighResShot per -ExecCmds zum Start.
+	// Scharf ueber -WbShotWhenReady; Skalierung -WbShotScale=<n> (Default 2);
+	// beendet nach dem Schreiben, ausser -WbShotNoQuit.
+	/** Scharfgeschaltet, sobald IsCityReady() true wurde (dann Settle-Countdown). */
+	bool bShotWhenReadyArmed = false;
+	/** Bereits ausgeloest (einmalig je Sitzung). */
+	bool bShotWhenReadyFired = false;
+	/** Settle-Countdown, damit Rendering/Streaming/Shader eingeschwungen sind. */
+	float ShotWhenReadyDelay = -1.0f;
+
+	/** Loest den 2x-HighResShot aus (einmalig, wenn die Stadt bereit ist). */
+	void FireReadyHighResShot();
+
 	// -- Kreuzungs-Rundgang ---------------------------------------------------
 	//
 	// "Die Kreuzungen sind kaputt" liess sich aus der Fahrerkamera nie
