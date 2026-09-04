@@ -3006,7 +3006,32 @@ void UWiesbadenCitySubsystem::InitializeCity()
 				// sonst bleibt der Zeiger nullptr und alles gilt als gruen.
 				TrafficLightSystem.Initialize(Builder->RoadNetwork, Builder->TrafficLightSettings);
 				TrafficSimulation.SetTrafficLightSystem(&TrafficLightSystem);
-				PedestrianSimulation.Initialize(Builder->RoadNetwork, Builder->PedestrianSettings);
+
+				// Fussgaenger-Dichte optional hochsetzen - NUR fuer Sicht-/Screenshot-
+				// Belege (ein belebter Gehweg), per -WbPedDensity=<Faktor>. Ohne den
+				// Schalter voellig unveraendert; im normalen Spiel also wirkungslos.
+				FWiesbadenPedestrianSettings PedSettings = Builder->PedestrianSettings;
+				float PedDensityFactor = 1.0f;
+				if (FParse::Value(FCommandLine::Get(), TEXT("WbPedDensity="), PedDensityFactor)
+					&& PedDensityFactor > 0.0f)
+				{
+					// Die Zielzahl im Radius treibt die Menge (Density ist ein 0..1-Gate).
+					// Zusaetzlich die Aussen-Ausduennung abschalten, damit der Beleg auch
+					// am Stadtrand (Platter Strasse) einen belebten Gehweg zeigt.
+					PedSettings.TargetPedestriansInRadius = FMath::RoundToInt(
+						PedSettings.TargetPedestriansInRadius * PedDensityFactor);
+					PedSettings.OuterFalloffPerRing = 0.0;
+					PedSettings.MinOuterFraction = 1.0;
+					// Spawn-Radius eng ziehen, damit die Figuren dicht um die Kamera
+					// stehen (Nahbeleg der Gangposen). Optional per -WbPedRadius=<m>.
+					float PedRadius = 55.0f;
+					FParse::Value(FCommandLine::Get(), TEXT("WbPedRadius="), PedRadius);
+					PedSettings.SpawnRadiusMeters = PedRadius;  // Despawn (240 m) bleibt groesser.
+					UE_LOG(LogWbCore, Log,
+						TEXT("Fussgaenger-Zielzahl x%.1f -> %d im Radius %.0f m (-WbPedDensity) - nur fuer Sicht-Belege."),
+						PedDensityFactor, PedSettings.TargetPedestriansInRadius, PedRadius);
+				}
+				PedestrianSimulation.Initialize(Builder->RoadNetwork, PedSettings);
 
 				// Traeger fuer die sichtbaren Fahrzeuge erzeugen.
 				//
