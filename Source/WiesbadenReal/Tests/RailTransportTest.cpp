@@ -32,6 +32,44 @@ bool FRailTransportProfileTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRailTransportStationGroundingTest,
+	"WiesbadenReal.World.RailTransport.StationGrounding",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+
+bool FRailTransportStationGroundingTest::RunTest(const FString& Parameters)
+{
+	// Nerobergbahn-nah: 438 m Lauf, ~26 % Durchschnittssteigung, klar unter der
+	// Maximalsteigung von 30 %. Frueher hob der Aufrufer das obere Ende auf
+	// Talhoehe + Laenge * MaxSteigung an - hier 130 m + 131 m = 261 m gegen die
+	// echten 245 m -, und die Bergstation hing 16 m in der Luft.
+	const double Clearance = 35.0;
+	const double MaxGrade = 0.30;
+	const double TerrainBottom = 13000.0;   // 130 m
+	const double TerrainTop = 24500.0;      // 245 m
+
+	double StartZ = 0.0;
+	double EndZ = 0.0;
+	WiesbadenRailTransport::StationRailEndpoints(TerrainBottom, TerrainTop, Clearance, StartZ, EndZ);
+
+	// Die Enden ruhen auf dem Gelaende - kein Anheben des Bergendes.
+	TestEqual(TEXT("Talstation auf Gelaende"), StartZ, TerrainBottom + Clearance);
+	TestEqual(TEXT("Bergstation auf Gelaende"), EndZ, TerrainTop + Clearance);
+
+	const TArray<double> Distances = { 0.0, 15000.0, 30000.0, 43800.0 };
+	const TArray<double> Terrain = { 13000.0, 17000.0, 21000.0, 24500.0 };
+	TArray<FWiesbadenRailProfilePoint> Profile;
+	TestTrue(TEXT("Profil wird erzeugt"), WiesbadenRailTransport::BuildConstrainedGradeProfile(
+		Distances, Terrain, StartZ, EndZ, Clearance, MaxGrade, Profile));
+
+	// Das obere Ende steht auf dem Terrain, nicht darueber in der Luft.
+	TestTrue(TEXT("Bergstation liegt am Boden"),
+		FMath::Abs(Profile.Last().RailZCm - (Terrain.Last() + Clearance)) < 1.0);
+	TestTrue(TEXT("Talstation liegt am Boden"),
+		FMath::Abs(Profile[0].RailZCm - (Terrain[0] + Clearance)) < 1.0);
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRailTransportMovementTest,
 	"WiesbadenReal.World.RailTransport.Movement",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)

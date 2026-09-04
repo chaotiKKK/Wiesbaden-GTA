@@ -348,10 +348,15 @@ bool AWiesbadenNerobergbahn::ResolveHeights()
 			}
 
 			TArray<FWiesbadenRailProfilePoint> Profile;
-			const double StartZ = FMath::Max(TerrainHeights[0] + RailClearanceCm,
-				TerrainHeights.Last() + RailClearanceCm - Track->TotalLength * MaxRailGrade);
-			const double EndZ = FMath::Max(TerrainHeights.Last() + RailClearanceCm,
-				TerrainHeights[0] + RailClearanceCm + Track->TotalLength * MaxRailGrade);
+			// Beide Stationen ruhen auf dem Gelaende - kein kuenstliches
+			// Anheben des oberen Endes (das hing die Bergstation in die Luft,
+			// siehe StationRailEndpoints). Ob die Sehne dazwischen fahrbar ist,
+			// klaert BuildConstrainedGradeProfile; scheitert sie, bleibt das
+			// abgetastete Terrainprofil stehen - am Boden, nicht darueber.
+			double StartZ = 0.0;
+			double EndZ = 0.0;
+			WiesbadenRailTransport::StationRailEndpoints(
+				TerrainHeights[0], TerrainHeights.Last(), RailClearanceCm, StartZ, EndZ);
 			if (WiesbadenRailTransport::BuildConstrainedGradeProfile(
 				ArcLengths, TerrainHeights, StartZ, EndZ,
 				RailClearanceCm, MaxRailGrade, Profile))

@@ -108,6 +108,14 @@ namespace WiesbadenRailTransport
 		return true;
 	}
 
+	void StationRailEndpoints(
+		double TerrainBottomZCm, double TerrainTopZCm, double ClearanceCm,
+		double& OutStartRailZCm, double& OutEndRailZCm)
+	{
+		OutStartRailZCm = TerrainBottomZCm + ClearanceCm;
+		OutEndRailZCm = TerrainTopZCm + ClearanceCm;
+	}
+
 	double OpposingCablePosition(double CablePositionCm, double TrackLengthCm, bool bOpposingCar)
 	{
 		const double Position = FMath::Clamp(CablePositionCm, 0.0, FMath::Max(TrackLengthCm, 0.0));

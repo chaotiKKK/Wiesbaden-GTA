@@ -30,6 +30,21 @@ namespace WiesbadenRailTransport
 		double MaxGrade,
 		TArray<FWiesbadenRailProfilePoint>& OutProfile);
 
+	/**
+	 * Schienenhoehen der beiden Stationsenden.
+	 *
+	 * Die Schienen RUHEN an beiden Stationen auf dem Gelaende (plus Abstand).
+	 * Frueher hob der Aufrufer das obere Ende an, damit die Sehne genau die
+	 * Maximalsteigung traf - das haengte das obere Streckendrittel samt
+	 * Bergstation bis zu 16 m in die Luft, sobald die echte Durchschnitts-
+	 * steigung unter der Maximalsteigung lag (Nerobergbahn: ~19 % gegen 30 %).
+	 * Die Enden gehoeren aufs Terrain; ob die Sehne dazwischen fahrbar ist,
+	 * entscheidet allein BuildConstrainedGradeProfile.
+	 */
+	WIESBADENREAL_API void StationRailEndpoints(
+		double TerrainBottomZCm, double TerrainTopZCm, double ClearanceCm,
+		double& OutStartRailZCm, double& OutEndRailZCm);
+
 	/** Position entlang einer gegenlaeufigen Seilbahnstrecke. */
 	WIESBADENREAL_API double OpposingCablePosition(
 		double CablePositionCm, double TrackLengthCm, bool bOpposingCar);
