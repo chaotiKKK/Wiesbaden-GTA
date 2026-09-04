@@ -85,8 +85,9 @@ void AWiesbadenCityActor::ClearMeshes()
 	// Gebaeude-Streaming zuruecksetzen (Pool-Komponenten bleiben zur Wiederverwendung).
 	for (UProceduralMeshComponent* C : BuildingCellPool)
 	{
-		if (C) { C->ClearAllMeshSections(); }
+		if (C) { C->ClearAllMeshSections(); C->SetRelativeLocation(FVector::ZeroVector); }
 	}
+	FadingBuildingComponents.Empty();
 	LoadedBuildingCells.Empty();
 	FreeBuildingComponents.Reset();
 	FreeBuildingComponents.Append(BuildingCellPool);
@@ -191,7 +192,7 @@ void AWiesbadenCityActor::ApplyCityData(const FWiesbadenCityData& Data, bool bCr
 				else if (APawn* ViewPawn = PC->GetPawn()) { InitialView = ViewPawn->GetActorLocation(); }
 			}
 		}
-		UpdateBuildingStreaming(InitialView);
+		UpdateBuildingStreaming(InitialView, /*bImmediate*/ true);
 
 		UE_LOG(LogWbCore, Log,
 			TEXT("Gebaeude-Streaming aktiv: %d Rasterzellen a %.0f m, Radius %.0f m, %d sofort geladen."),
@@ -311,6 +312,10 @@ void AWiesbadenCityActor::Tick(float DeltaSeconds)
 	{
 		return;
 	}
+
+	// Einblenden JEDES Bild fortschreiten - fluessig, nicht im gedrosselten
+	// Streaming-Takt (dort wuerde die Zelle ruckweise aufsteigen).
+	AdvanceBuildingCellFades(DeltaSeconds);
 
 	// Nicht jedes Bild: das Nachladen ist bei ruhiger Bewegung selten noetig.
 	StreamTickAccumSeconds += DeltaSeconds;
@@ -456,7 +461,7 @@ void AWiesbadenCityActor::SetupBuildingCellPool(bool bCreateCollision)
 	LoadedBuildingCells.Empty();
 }
 
-void AWiesbadenCityActor::UpdateBuildingStreaming(const FVector& ViewLocation)
+void AWiesbadenCityActor::UpdateBuildingStreaming(const FVector& ViewLocation, bool bImmediate)
 {
 	if (!bBuildingStreamingActive)
 	{
@@ -496,13 +501,34 @@ void AWiesbadenCityActor::UpdateBuildingStreaming(const FVector& ViewLocation)
 		UnloadBuildingCell(Cell);
 	}
 
-	// Neu gewuenschte Zellen laden.
+	// Neu gewuenschte Zellen laden - BUDGETIERT und NAECHSTE zuerst. Beim schnellen
+	// Fliegen treten viele Zellen zugleich ins Fenster; alle in einem Tick zu bauen
+	// reisst einen Ruckler. Nur MaxBuildingLoadsPerTick je Tick, die naechsten
+	// zuerst -> die Ferne erscheint zuletzt (dort faellt Pop-in am wenigsten auf).
+	TArray<FIntPoint> ToLoad;
 	for (const FIntPoint& Cell : Desired)
 	{
 		if (!LoadedBuildingCells.Contains(Cell))
 		{
-			LoadBuildingCell(Cell);
+			ToLoad.Add(Cell);
 		}
+	}
+	if (!bImmediate && MaxBuildingLoadsPerTick > 0 && ToLoad.Num() > MaxBuildingLoadsPerTick)
+	{
+		const double CS = FMath::Max(1.0f, BuildingCellSizeCm);
+		ToLoad.Sort([&](const FIntPoint& A, const FIntPoint& B)
+		{
+			const double Ax = (A.X + 0.5) * CS - ViewLocation.X;
+			const double Ay = (A.Y + 0.5) * CS - ViewLocation.Y;
+			const double Bx = (B.X + 0.5) * CS - ViewLocation.X;
+			const double By = (B.Y + 0.5) * CS - ViewLocation.Y;
+			return (Ax * Ax + Ay * Ay) < (Bx * Bx + By * By);
+		});
+		ToLoad.SetNum(MaxBuildingLoadsPerTick, EAllowShrinking::No);
+	}
+	for (const FIntPoint& Cell : ToLoad)
+	{
+		LoadBuildingCell(Cell);
 	}
 }
 
@@ -535,6 +561,48 @@ void AWiesbadenCityActor::LoadBuildingCell(const FIntPoint& Cell)
 	}
 	C->SetCollisionEnabled(bBuildingCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
 	LoadedBuildingCells.Add(Cell, C);
+
+	// Einblenden: die Zelle unter ihre Endlage versetzen; AdvanceBuildingCellFades
+	// hebt sie ueber BuildingCellFadeInSeconds an. Ohne Fade sofort auf Endlage
+	// (RelativeLocation zuruecksetzen, falls die Pool-Komponente noch versetzt war).
+	if (BuildingCellFadeInSeconds > 0.0f && BuildingCellFadeRiseCm > 0.0f)
+	{
+		C->SetRelativeLocation(FVector(0.0, 0.0, -BuildingCellFadeRiseCm));
+		FadingBuildingComponents.Add(C, 0.0f);
+	}
+	else
+	{
+		C->SetRelativeLocation(FVector::ZeroVector);
+	}
+}
+
+void AWiesbadenCityActor::AdvanceBuildingCellFades(float DeltaSeconds)
+{
+	if (FadingBuildingComponents.Num() == 0 || BuildingCellFadeInSeconds <= 0.0f)
+	{
+		return;
+	}
+	TArray<UProceduralMeshComponent*> Done;
+	for (TPair<UProceduralMeshComponent*, float>& P : FadingBuildingComponents)
+	{
+		UProceduralMeshComponent* C = P.Key;
+		if (!C)
+		{
+			Done.Add(C);
+			continue;
+		}
+		P.Value += DeltaSeconds;
+		const float Alpha = FMath::Clamp(P.Value / BuildingCellFadeInSeconds, 0.0f, 1.0f);
+		C->SetRelativeLocation(FVector(0.0, 0.0, -BuildingCellFadeRiseCm * (1.0f - Alpha)));
+		if (Alpha >= 1.0f)
+		{
+			Done.Add(C);
+		}
+	}
+	for (UProceduralMeshComponent* C : Done)
+	{
+		FadingBuildingComponents.Remove(C);
+	}
 }
 
 void AWiesbadenCityActor::UnloadBuildingCell(const FIntPoint& Cell)
@@ -543,6 +611,10 @@ void AWiesbadenCityActor::UnloadBuildingCell(const FIntPoint& Cell)
 	if (Found && *Found)
 	{
 		(*Found)->ClearAllMeshSections();
+		// Falls die Zelle noch im Einblenden war: aus der Liste nehmen und die
+		// versetzte Lage zuruecksetzen, damit die freie Komponente sauber ist.
+		FadingBuildingComponents.Remove(*Found);
+		(*Found)->SetRelativeLocation(FVector::ZeroVector);
 		FreeBuildingComponents.Add(*Found);
 	}
 	LoadedBuildingCells.Remove(Cell);

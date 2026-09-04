@@ -143,6 +143,23 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming", meta = (ClampMin = "5000"))
 	float BuildingStreamRadiusCm = 37500.0f;
 
+	/** Max. neu geladene Gebaeudezellen pro Streaming-Tick. Beim schnellen Fliegen
+	 *  treten viele neue Zellen zugleich ins Fenster; alle in EINEM Tick zu bauen
+	 *  reisst einen Ruckler. Auf wenige je Tick begrenzt (NAECHSTE zuerst) verteilt
+	 *  die Kosten und laesst die Ferne zuletzt erscheinen. 0 = unbegrenzt (alt). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming", meta = (ClampMin = "0"))
+	int32 MaxBuildingLoadsPerTick = 4;
+
+	/** Einblend-Dauer neuer Gebaeudezellen in Sekunden. Statt hartem Pop-in steigt
+	 *  die Zelle in dieser Zeit aus dem Boden auf ihre Endlage (materialunabhaengig,
+	 *  kein Masked-Shader noetig). 0 = aus. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming", meta = (ClampMin = "0.0"))
+	float BuildingCellFadeInSeconds = 0.35f;
+
+	/** Tiefe, aus der eine neue Zelle einblendet (cm unter Endlage). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming", meta = (ClampMin = "0.0"))
+	float BuildingCellFadeRiseCm = 1500.0f;
+
 	/** Strassen ebenfalls entfernungsabhaengig streamen (nur Laufzeit-Build).
 	 *  Nutzt DASSELBE Zell-Raster (BuildingCellSizeCm) wie die Gebaeude, damit die
 	 *  Zellen zusammenfallen. */
@@ -177,10 +194,15 @@ private:
 	void BuildBuildingCells(const FBuildingMeshData& BuildingMeshData);
 	/** Legt/erneuert den Procedural-Mesh-Pool fuer die Streaming-Zellen an. */
 	void SetupBuildingCellPool(bool bCreateCollision);
-	/** Laedt/entlaedt Zellen nach Distanz zur ViewLocation. */
-	void UpdateBuildingStreaming(const FVector& ViewLocation);
+	/** Laedt/entlaedt Zellen nach Distanz zur ViewLocation. bImmediate=true umgeht
+	 *  das Pro-Tick-Budget (fuer den Erstladevorgang am Spawn - die Umgebung soll
+	 *  sofort stehen; budgetiert wird nur das Nachladen bei Bewegung). */
+	void UpdateBuildingStreaming(const FVector& ViewLocation, bool bImmediate = false);
 	void LoadBuildingCell(const FIntPoint& Cell);
 	void UnloadBuildingCell(const FIntPoint& Cell);
+	/** Schreitet das Einblenden (Aufsteigen aus dem Boden) neu geladener Zellen
+	 *  JEDES Bild fort - nicht nur im gedrosselten Streaming-Takt. */
+	void AdvanceBuildingCellFades(float DeltaSeconds);
 
 	// -- Strassen-Streaming intern (dasselbe Zell-Raster wie die Gebaeude) ----
 	/** Sortiert die zusammengelegte Strassen-Geometrie in das Zell-Raster um. */
@@ -206,6 +228,11 @@ private:
 	bool bBuildingStreamingActive = false;
 	bool bBuildingCollision = false;
 	float StreamTickAccumSeconds = 0.0f;
+
+	/** Aktuell einblendende Zellen-Komponente -> bisher vergangene Einblend-Sekunden.
+	 *  Die Komponente sitzt um BuildingCellFadeRiseCm*(1-alpha) unter ihrer Endlage
+	 *  und steigt bis alpha==1 auf. Lebensdauer haengt am Pool (kein eigenes GC). */
+	TMap<UProceduralMeshComponent*, float> FadingBuildingComponents;
 
 	// -- Strassen-Streaming (analog zu den Gebaeuden, dasselbe Raster) -------
 	/** Re-einsortierte Strassen-Geometrie je Rasterzelle (kein UObject -> kein GC). */
