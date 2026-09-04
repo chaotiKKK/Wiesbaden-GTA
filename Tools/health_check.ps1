@@ -13,6 +13,11 @@
 # ist der schnelle Puls: laeuft die Stadt und meldet sie sich gesund? Der volle
 # Rauchtest (Tools\smoke_test.ps1) bleibt fuer Fahrphysik + Regressionsschranken.
 #
+# Jeder Lauf wird ausserdem als eine JSONL-Zeile an Saved\health_history.jsonl
+# angehaengt, und health_trend.ps1 wertet daraus schleichende Regressionen aus
+# (z. B. ueber Laeufe einbrechende gezeichnete Fussgaenger/Fahrzeuge) - das faengt
+# ein langsames Absterben, das das binaere healthy-Flag nicht sieht.
+#
 # Aufruf:  Tools\health_check.cmd   (oder powershell -File Tools\health_check.ps1)
 
 param(
@@ -84,6 +89,39 @@ if ($p) {
     Write-Host ("  perf: verdict={0}  komponenten={1}  instanzen={2}  spielMs={3}  abschnitte-ohne-material={4}" -f `
         $p.verdict, $p.primitiveComponents, $p.instances, $p.gameThreadMs, $p.meshSectionsWithoutMaterial)
 }
+
+# -- Historie: diesen Lauf als eine JSONL-Zeile anhaengen -------------------
+# Flach und kompakt, damit health_trend.ps1 Trends ueber Laeufe rechnen kann.
+$perfVerdict = if ($p) { [string]$p.verdict } else { "unknown" }
+$perfPrims   = if ($p) { [int]$p.primitiveComponents } else { 0 }
+$perfInst    = if ($p) { [int]$p.instances } else { 0 }
+$perfMs      = if ($p) { [double]$p.gameThreadMs } else { 0.0 }
+$perfNoMat   = if ($p) { [int]$p.meshSectionsWithoutMaterial } else { 0 }
+$record = [pscustomobject]@{
+    ts                              = (Get-Date).ToString("o")
+    healthy                         = [bool]$h.healthy
+    streamingComplete               = [bool]$h.streamingComplete
+    trafficLightCount               = [int]$h.trafficLightCount
+    activeVehicles                  = [int]$h.activeVehicles
+    trafficVehiclesVisible          = [int]$h.trafficVehiclesVisible
+    pedestriansSimulated            = [int]$h.pedestriansSimulated
+    pedestriansDrawn                = [int]$h.pedestriansDrawn
+    buildingCollisionBodies         = [int]$h.buildingCollisionBodies
+    perfVerdict                     = $perfVerdict
+    perfPrimitiveComponents         = $perfPrims
+    perfInstances                   = $perfInst
+    perfGameThreadMs                = $perfMs
+    perfMeshSectionsWithoutMaterial = $perfNoMat
+    warningsCount                   = @($h.warnings).Count
+}
+$History = Join-Path $Root "WiesbadenReal\Saved\health_history.jsonl"
+Add-Content -Path $History -Value ($record | ConvertTo-Json -Compress) -Encoding utf8
+Write-Host ("  Historie: Lauf angehaengt an {0}" -f $History)
+
+# -- Trend: schleichende Regressionen ueber Laeufe (informativ) -------------
+# Eigener Exit-Code im standalone health_trend.ps1; hier nur zur Sichtbarkeit.
+Write-Host ""
+& (Join-Path $PSScriptRoot "health_trend.ps1") -Root $Root | Out-Host
 
 Write-Host ""
 if ($h.healthy) {
