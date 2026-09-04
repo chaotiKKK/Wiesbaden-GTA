@@ -1082,32 +1082,60 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		const double StopDistance = FMath::Max(Settings.MinGapCm * 0.5, 100.0);
 		for (FTrafficVehicle& Vehicle : Vehicles)
 		{
+			// Fahrzeug quert gerade den Knoten (auf einer Verbindung) oder hat keine
+			// gueltige Spur -> es faehrt keine Haltelinie an. Zustand zuruecksetzen,
+			// damit ein spaeteres Anfahren wieder als NEUES Ereignis zaehlt.
 			if (!Vehicle.bOnLane || !Network->Lanes.IsValidIndex(Vehicle.LaneId))
 			{
+				Vehicle.bWasApproachingSignal = false;
+				Vehicle.bWasHeldAtRed = false;
 				continue;
 			}
 			const double LaneLength = Network->Lanes[Vehicle.LaneId].LengthCm;
 			if (LaneLength <= 0.0 || Vehicle.DistanceCm < LaneLength - StopDistance)
 			{
+				// Noch nicht im Anfahr-Fenster der Haltelinie.
+				Vehicle.bWasApproachingSignal = false;
+				Vehicle.bWasHeldAtRed = false;
 				continue;
 			}
 			const int32 NextConnection = PickSuccessorConnection(Vehicle);
+
 			// Faehrt das Fahrzeug ueberhaupt auf eine SIGNALISIERTE Verbindung zu?
 			// Nur dann kann die Kopplung wirken. Ohne diese Kennzahl liesse sich
 			// "0 an Rot gehalten" nicht von "keine Ampel auf der Fahrspur" trennen -
 			// nur ~1073 der ~20213 Kreuzungen sind Ampeln, der Verkehr quert meist
 			// ampellose Knoten (das ist KEIN Kopplungsfehler).
-			if (NextConnection != INDEX_NONE && TrafficLights->IsConnectionControlled(NextConnection))
+			const bool bApproachingSignal =
+				(NextConnection != INDEX_NONE) && TrafficLights->IsConnectionControlled(NextConnection);
+			const bool bHeldAtRed =
+				bApproachingSignal && !TrafficLights->IsConnectionGreen(NextConnection);
+
+			// LIFETIME-Zaehler (speisen das Diagnose-Verdikt): DISTINKTE Ereignisse,
+			// nur die FALSE->TRUE-Flanke - sonst zaehlt ein einziges wartendes
+			// Fahrzeug hunderte "Anfahrten" und die Kennzahl luegt.
+			if (bApproachingSignal && !Vehicle.bWasApproachingSignal)
 			{
 				++LifetimeVehiclesApproachingSignal;
 			}
-			if (NextConnection != INDEX_NONE && !TrafficLights->IsConnectionGreen(NextConnection))
+
+			// Die Stopp-Regel wirkt weiterhin JEDEN Tick (Verhalten unveraendert).
+			if (bHeldAtRed)
 			{
 				Vehicle.SpeedCmS = 0.0;
+				// Live-Kennzahl: aktuell gehaltene Fahrzeuge DIESEN Tick (fuer die
+				// Momentan-Anzeige, GetVehiclesHeldAtRed).
 				++LastVehiclesHeldAtRed;
+				// Lifetime: nur das Einsetzen des Haltens (distinktes Ereignis).
+				if (!Vehicle.bWasHeldAtRed)
+				{
+					++LifetimeVehiclesHeldAtRed;
+				}
 			}
+
+			Vehicle.bWasApproachingSignal = bApproachingSignal;
+			Vehicle.bWasHeldAtRed = bHeldAtRed;
 		}
-		LifetimeVehiclesHeldAtRed += LastVehiclesHeldAtRed;
 	}
 
 	// -- 1c) Ruecksicht auf das Spielerfahrzeug ---------------------------------

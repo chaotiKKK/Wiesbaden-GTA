@@ -115,6 +115,18 @@ struct WIESBADENREAL_API FTrafficVehicle
 
 	/** Intern: zum Entfernen markiert (am Bahnende ohne Folgebahn). */
 	bool bRemoved = false;
+
+	/**
+	 * Intern: war das Fahrzeug im letzten Tick im Anfahr-Fenster einer
+	 * signalisierten Verbindung bzw. dort an Rot gehalten?
+	 *
+	 * Fuer die Ampel-Diagnose werden DISTINKTE Ereignisse gezaehlt (die
+	 * FALSE->TRUE-Flanke), nicht pro Tick: sonst inflationiert ein einziges
+	 * wartendes Fahrzeug die "Anfahrten" in unter einer Sekunde auf beliebige
+	 * Hoehe, und die Kennzahl luegt (20 "Anfahrten" = ein Fahrzeug, 20 Frames).
+	 */
+	bool bWasApproachingSignal = false;
+	bool bWasHeldAtRed = false;
 };
 
 /** Parameter der Verkehrs-Simulation. */
