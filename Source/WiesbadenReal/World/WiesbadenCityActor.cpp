@@ -92,6 +92,17 @@ void AWiesbadenCityActor::ClearMeshes()
 	FreeBuildingComponents.Append(BuildingCellPool);
 	BuildingCells.Empty();
 	bBuildingStreamingActive = false;
+
+	// Strassen-Streaming zuruecksetzen (Pool-Komponenten bleiben zur Wiederverwendung).
+	for (UProceduralMeshComponent* C : RoadCellPool)
+	{
+		if (C) { C->ClearAllMeshSections(); }
+	}
+	LoadedRoadCells.Empty();
+	FreeRoadComponents.Reset();
+	FreeRoadComponents.Append(RoadCellPool);
+	RoadCells.Empty();
+	bRoadStreamingActive = false;
 }
 
 void AWiesbadenCityActor::ApplyCityData(const FWiesbadenCityData& Data, bool bCreateCollision)
@@ -99,8 +110,35 @@ void AWiesbadenCityActor::ApplyCityData(const FWiesbadenCityData& Data, bool bCr
 	ClearMeshes();
 
 	// -- Strassen -----------------------------------------------------------
-	if (RoadMesh && Data.RoadMesh.Sections.Num() > 0)
+	if (bStreamRoads && Data.RoadMesh.Sections.Num() > 0)
 	{
+		// Distanz-Streaming wie bei den Gebaeuden (dasselbe Zell-Raster): die nach
+		// Kanal zusammengelegte Fahrbahn-Geometrie ins Raster re-einsortieren und
+		// nur das Fenster um den Spieler als Procedural-Mesh halten. Der Radius ist
+		// grosszuegig, weil hier gefahren wird und die Fahrbahn voraus liegen muss.
+		BuildRoadCells(Data.RoadMesh);
+		SetupRoadCellPool(bCreateCollision);
+		bRoadStreamingActive = true;
+		StreamTickAccumSeconds = 0.0f;
+
+		FVector InitialView = GetActorLocation();
+		if (UWorld* World = GetWorld())
+		{
+			if (APlayerController* PC = World->GetFirstPlayerController())
+			{
+				if (PC->PlayerCameraManager) { InitialView = PC->PlayerCameraManager->GetCameraLocation(); }
+				else if (APawn* ViewPawn = PC->GetPawn()) { InitialView = ViewPawn->GetActorLocation(); }
+			}
+		}
+		UpdateRoadStreaming(InitialView);
+
+		UE_LOG(LogWbCore, Log,
+			TEXT("Strassen-Streaming aktiv: %d Rasterzellen a %.0f m, Radius %.0f m, %d sofort geladen."),
+			RoadCells.Num(), BuildingCellSizeCm / 100.0f, RoadStreamRadiusCm / 100.0f, LoadedRoadCells.Num());
+	}
+	else if (RoadMesh && Data.RoadMesh.Sections.Num() > 0)
+	{
+		// Nicht-Streaming-Fallback: alles auf die eine Strassen-Komponente.
 		int32 SectionIndex = 0;
 		for (const FRoadMeshSection& Section : Data.RoadMesh.Sections)
 		{
@@ -269,7 +307,7 @@ void AWiesbadenCityActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (!bBuildingStreamingActive)
+	if (!bBuildingStreamingActive && !bRoadStreamingActive)
 	{
 		return;
 	}
@@ -304,6 +342,7 @@ void AWiesbadenCityActor::Tick(float DeltaSeconds)
 	}
 
 	UpdateBuildingStreaming(ViewLocation);
+	UpdateRoadStreaming(ViewLocation);
 }
 
 void AWiesbadenCityActor::BuildBuildingCells(const FBuildingMeshData& BuildingMeshData)
@@ -507,6 +546,204 @@ void AWiesbadenCityActor::UnloadBuildingCell(const FIntPoint& Cell)
 		FreeBuildingComponents.Add(*Found);
 	}
 	LoadedBuildingCells.Remove(Cell);
+}
+
+// -- Strassen-Streaming: dieselbe Mechanik wie bei den Gebaeuden -------------
+// Bewusst kein gemeinsamer Template-Code: Gebaeude- und Strassen-Section sind
+// verschiedene Structs (Channel/Variante/Adresse vs. Channel/Surface), und die
+// Doppelung von ~40 Zeilen ist lesbarer als eine Template-Abstraktion ueber zwei
+// fremde Geometrie-Typen.
+void AWiesbadenCityActor::BuildRoadCells(const FRoadMeshData& RoadMeshData)
+{
+	RoadCells.Empty();
+	const double CellSize = FMath::Max(1.0f, BuildingCellSizeCm);
+
+	for (const FRoadMeshSection& Src : RoadMeshData.Sections)
+	{
+		if (Src.IsEmpty())
+		{
+			continue;
+		}
+
+		// Vertex-Teilung INNERHALB der Zelle halten (nur an Zellgrenzen duplizieren).
+		TMap<FIntPoint, TMap<int32, int32>> Remap;
+
+		const int32 TriCount = Src.Triangles.Num();
+		for (int32 t = 0; t + 2 < TriCount; t += 3)
+		{
+			const int32 Idx[3] = { Src.Triangles[t], Src.Triangles[t + 1], Src.Triangles[t + 2] };
+			if (!Src.Vertices.IsValidIndex(Idx[0]) || !Src.Vertices.IsValidIndex(Idx[1]) || !Src.Vertices.IsValidIndex(Idx[2]))
+			{
+				continue;
+			}
+
+			const FVector Centroid = (Src.Vertices[Idx[0]] + Src.Vertices[Idx[1]] + Src.Vertices[Idx[2]]) / 3.0;
+			const FIntPoint Cell(FMath::FloorToInt(Centroid.X / CellSize), FMath::FloorToInt(Centroid.Y / CellSize));
+
+			// Ziel-Sub-Abschnitt der Zelle, gruppiert nach Kanal + Oberflaeche (so wie
+			// FindOrAddSection sie erzeugt hat; das Material haengt am Kanal).
+			TArray<FRoadMeshSection>& CellSubs = RoadCells.FindOrAdd(Cell);
+			FRoadMeshSection* Dst = nullptr;
+			for (FRoadMeshSection& S : CellSubs)
+			{
+				if (S.Channel == Src.Channel && S.Surface == Src.Surface)
+				{
+					Dst = &S;
+					break;
+				}
+			}
+			if (!Dst)
+			{
+				FRoadMeshSection NewSub;
+				NewSub.Channel = Src.Channel;
+				NewSub.Surface = Src.Surface;
+				Dst = &CellSubs[CellSubs.Add(MoveTemp(NewSub))];
+			}
+
+			TMap<int32, int32>& CellRemap = Remap.FindOrAdd(Cell);
+			for (int32 k = 0; k < 3; ++k)
+			{
+				const int32 Old = Idx[k];
+				int32 New;
+				if (const int32* FoundNew = CellRemap.Find(Old))
+				{
+					New = *FoundNew;
+				}
+				else
+				{
+					New = Dst->Vertices.Num();
+					Dst->Vertices.Add(Src.Vertices[Old]);
+					Dst->Normals.Add(Src.Normals.IsValidIndex(Old) ? Src.Normals[Old] : FVector::UpVector);
+					Dst->UVs.Add(Src.UVs.IsValidIndex(Old) ? Src.UVs[Old] : FVector2D::ZeroVector);
+					Dst->VertexColors.Add(Src.VertexColors.IsValidIndex(Old) ? Src.VertexColors[Old] : FColor::White);
+					Dst->Tangents.Add(Src.Tangents.IsValidIndex(Old) ? Src.Tangents[Old] : FProcMeshTangent());
+					CellRemap.Add(Old, New);
+				}
+				Dst->Triangles.Add(New);
+			}
+		}
+	}
+}
+
+void AWiesbadenCityActor::SetupRoadCellPool(bool bCreateCollision)
+{
+	bRoadCollision = bCreateCollision;
+
+	// Pool fuer das quadratische Ladefenster + Randring (Strassenradius, groesser).
+	const int32 R = FMath::Max(1, FMath::CeilToInt(RoadStreamRadiusCm / FMath::Max(1.0f, BuildingCellSizeCm)));
+	const int32 Side = 2 * (R + 1) + 1;
+	const int32 Needed = Side * Side;
+
+	FreeRoadComponents.Reset();
+	for (UProceduralMeshComponent* C : RoadCellPool)
+	{
+		if (C)
+		{
+			C->ClearAllMeshSections();
+			FreeRoadComponents.Add(C);
+		}
+	}
+	while (RoadCellPool.Num() < Needed)
+	{
+		UProceduralMeshComponent* C = NewObject<UProceduralMeshComponent>(this);
+		C->SetupAttachment(Root);
+		C->SetVisibleInRayTracing(true);
+		C->SetAffectDynamicIndirectLighting(true);
+		C->RegisterComponent();
+		RoadCellPool.Add(C);
+		FreeRoadComponents.Add(C);
+	}
+	LoadedRoadCells.Empty();
+}
+
+void AWiesbadenCityActor::UpdateRoadStreaming(const FVector& ViewLocation)
+{
+	if (!bRoadStreamingActive)
+	{
+		return;
+	}
+
+	const double CellSize = FMath::Max(1.0f, BuildingCellSizeCm);
+	const FIntPoint Center(FMath::FloorToInt(ViewLocation.X / CellSize), FMath::FloorToInt(ViewLocation.Y / CellSize));
+	const int32 R = FMath::Max(1, FMath::CeilToInt(RoadStreamRadiusCm / (float)CellSize));
+
+	TSet<FIntPoint> Desired;
+	Desired.Reserve((2 * R + 1) * (2 * R + 1));
+	for (int32 dy = -R; dy <= R; ++dy)
+	{
+		for (int32 dx = -R; dx <= R; ++dx)
+		{
+			const FIntPoint Cell(Center.X + dx, Center.Y + dy);
+			if (RoadCells.Contains(Cell))
+			{
+				Desired.Add(Cell);
+			}
+		}
+	}
+
+	TArray<FIntPoint> ToUnload;
+	for (const TPair<FIntPoint, UProceduralMeshComponent*>& P : LoadedRoadCells)
+	{
+		if (!Desired.Contains(P.Key))
+		{
+			ToUnload.Add(P.Key);
+		}
+	}
+	for (const FIntPoint& Cell : ToUnload)
+	{
+		UnloadRoadCell(Cell);
+	}
+
+	for (const FIntPoint& Cell : Desired)
+	{
+		if (!LoadedRoadCells.Contains(Cell))
+		{
+			LoadRoadCell(Cell);
+		}
+	}
+}
+
+void AWiesbadenCityActor::LoadRoadCell(const FIntPoint& Cell)
+{
+	if (FreeRoadComponents.Num() == 0)
+	{
+		return;
+	}
+	const TArray<FRoadMeshSection>* Subs = RoadCells.Find(Cell);
+	if (!Subs)
+	{
+		return;
+	}
+
+	UProceduralMeshComponent* C = FreeRoadComponents.Pop(EAllowShrinking::No);
+	int32 SecIdx = 0;
+	for (const FRoadMeshSection& S : *Subs)
+	{
+		if (S.IsEmpty())
+		{
+			continue;
+		}
+		C->CreateMeshSection(SecIdx, S.Vertices, S.Triangles, S.Normals, S.UVs, S.VertexColors, S.Tangents, bRoadCollision);
+		if (UMaterialInterface* Material = ResolveRoadMaterial(S.Channel))
+		{
+			C->SetMaterial(SecIdx, Material);
+		}
+		++SecIdx;
+	}
+	// Kollision fuer geladene Strassenzellen: der Spieler faehrt darauf.
+	C->SetCollisionEnabled(bRoadCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+	LoadedRoadCells.Add(Cell, C);
+}
+
+void AWiesbadenCityActor::UnloadRoadCell(const FIntPoint& Cell)
+{
+	UProceduralMeshComponent** Found = LoadedRoadCells.Find(Cell);
+	if (Found && *Found)
+	{
+		(*Found)->ClearAllMeshSections();
+		FreeRoadComponents.Add(*Found);
+	}
+	LoadedRoadCells.Remove(Cell);
 }
 
 void AWiesbadenCityActor::BuildTerrainPreview(const FTerrainTile& Tile, int32 GridSize)

@@ -143,7 +143,19 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming", meta = (ClampMin = "5000"))
 	float BuildingStreamRadiusCm = 37500.0f;
 
-	/** Tick-gesteuertes Distanz-Streaming der Gebaeudezellen. */
+	/** Strassen ebenfalls entfernungsabhaengig streamen (nur Laufzeit-Build).
+	 *  Nutzt DASSELBE Zell-Raster (BuildingCellSizeCm) wie die Gebaeude, damit die
+	 *  Zellen zusammenfallen. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming")
+	bool bStreamRoads = true;
+
+	/** Ladehalbmesser fuer Strassenzellen in cm. Grosszuegiger als bei Gebaeuden:
+	 *  der Spieler FAEHRT auf der Fahrbahn, sie muss weit voraus geladen sein, sonst
+	 *  faellt das Auto bei Tempo durch eine noch nicht geladene Zelle. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming", meta = (ClampMin = "5000"))
+	float RoadStreamRadiusCm = 50000.0f;
+
+	/** Tick-gesteuertes Distanz-Streaming der Gebaeude- UND Strassenzellen. */
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
@@ -170,6 +182,14 @@ private:
 	void LoadBuildingCell(const FIntPoint& Cell);
 	void UnloadBuildingCell(const FIntPoint& Cell);
 
+	// -- Strassen-Streaming intern (dasselbe Zell-Raster wie die Gebaeude) ----
+	/** Sortiert die zusammengelegte Strassen-Geometrie in das Zell-Raster um. */
+	void BuildRoadCells(const FRoadMeshData& RoadMeshData);
+	void SetupRoadCellPool(bool bCreateCollision);
+	void UpdateRoadStreaming(const FVector& ViewLocation);
+	void LoadRoadCell(const FIntPoint& Cell);
+	void UnloadRoadCell(const FIntPoint& Cell);
+
 	/** Re-einsortierte Gebaeude-Geometrie je Rasterzelle (kein UObject -> kein GC). */
 	TMap<FIntPoint, TArray<FBuildingMeshSection>> BuildingCells;
 
@@ -186,6 +206,21 @@ private:
 	bool bBuildingStreamingActive = false;
 	bool bBuildingCollision = false;
 	float StreamTickAccumSeconds = 0.0f;
+
+	// -- Strassen-Streaming (analog zu den Gebaeuden, dasselbe Raster) -------
+	/** Re-einsortierte Strassen-Geometrie je Rasterzelle (kein UObject -> kein GC). */
+	TMap<FIntPoint, TArray<FRoadMeshSection>> RoadCells;
+
+	/** Komponenten-Pool (haelt die Komponenten am Leben -> UPROPERTY). */
+	UPROPERTY(Transient)
+	TArray<UProceduralMeshComponent*> RoadCellPool;
+
+	TArray<UProceduralMeshComponent*> FreeRoadComponents;
+
+	TMap<FIntPoint, UProceduralMeshComponent*> LoadedRoadCells;
+
+	bool bRoadStreamingActive = false;
+	bool bRoadCollision = false;
 
 	UPROPERTY(Transient)
 	USceneComponent* Root = nullptr;
