@@ -26,12 +26,26 @@ param(
     # lauf-zu-lauf bit-identisch (8.832 / 565.557 gemessen) und eng gesetzt; ein
     # Rueckfall zum 6000-m-Regime (~19.700 / ~1,07 Mio.) reisst sie sofort.
     # Die FRAME-ZEIT ist dagegen LAST-SENSIBEL: ueber Laeufe 13-26 ms gemessen
-    # (~2x Varianz je nach Maschinenlast). Deshalb ist $MaxSpielMs bewusst LOCKER
-    # als Backup gesetzt (60 statt eng an 26) - hoch genug, dass Varianz nicht
-    # faelschlich ausloest, aber weit unter der echten Regression (~110-163 ms).
-    [double]$MaxSpielMs        = 60,
+    # (~2x Varianz je nach Maschinenlast). $MaxSpielMs ist die BASIS-Schranke fuer
+    # eine UNBELASTETE Maschine; sie wird zur Laufzeit mit einem gemessenen
+    # Lastfaktor hochskaliert (siehe unten), damit Maschinenlast sie nicht
+    # faelschlich reisst. Die deterministischen Zaehler bleiben die harte
+    # Primaer-Schranke, die eine ECHTE Regression (6000-m-Regime, ~19.700/~1,07 Mio.)
+    # last-UNABHAENGIG faengt.
+    [double]$MaxSpielMs        = 40,
     [int]   $MaxPrimComponents = 13000,
-    [int]   $MaxInstances      = 800000
+    [int]   $MaxInstances      = 800000,
+    # -- Last-Normierung der Frame-Zeit-Schranke ----------------------------
+    # Eine CPU-Mikrobench misst die AKTUELLE Maschinengeschwindigkeit; ihr
+    # Verhaeltnis zur Referenz (unbelastet gemessen) ist der Lastfaktor. Er
+    # skaliert $MaxSpielMs, gedeckelt auf $MaxLoadFactor - so relaxt der Test unter
+    # Last, statt falsch durchzufallen, deckt aber echte Ausreisser weiter ab
+    # (absolutes Dach $AbsoluteMaxSpielMs, unabhaengig vom Lastfaktor).
+    [double]$CalibRefMs        = 236,   # 3M sqrt-Iterationen auf dieser Maschine, unbelastet (min).
+    [int]   $CalibIter         = 3000000,
+    [int]   $CalibSamples      = 5,
+    [double]$MaxLoadFactor     = 8.0,
+    [double]$AbsoluteMaxSpielMs = 250
 )
 
 $ErrorActionPreference = "Stop"
@@ -53,6 +67,28 @@ function Add-Check([string]$Name, [bool]$Ok, [string]$Detail) {
 function Count-Lines([string]$File, [string]$Pattern) {
     if (-not (Test-Path $File)) { return 0 }
     return @(Select-String -Path $File -Pattern $Pattern).Count
+}
+
+# Misst die AKTUELLE CPU-Geschwindigkeit dieser Maschine ueber eine feste,
+# deterministische Last (Median mehrerer Proben glaettet Ausreisser). Steht die
+# Maschine unter Last, dauert das laenger - genau das soll die Frame-Zeit-
+# Schranke relaxen. Der Median mehrerer Proben ist der "typische" Ist-Zustand.
+function Measure-LoadFactor([int]$Iter, [int]$Samples, [double]$RefMs, [double]$MaxFactor) {
+    $times = @()
+    for ($s = 0; $s -lt $Samples; $s++) {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $acc = 0.0
+        for ($i = 1; $i -le $Iter; $i++) { $acc += [math]::Sqrt($i) }
+        $sw.Stop()
+        $times += $sw.Elapsed.TotalMilliseconds
+    }
+    $median = ($times | Sort-Object)[[int]($times.Count / 2)]
+    # Faktor >= 1 (schnellere Maschine als die Referenz bekommt keinen Bonus,
+    # sondern die strenge Basis-Schranke) und gedeckelt (kein Freibrief).
+    $factor = $median / $RefMs
+    if ($factor -lt 1.0) { $factor = 1.0 }
+    if ($factor -gt $MaxFactor) { $factor = $MaxFactor }
+    return $factor
 }
 
 # Eine Sitzung fahren: bis GENUG Belege (WaitPattern >= MinCount) im Log stehen,
@@ -160,22 +196,35 @@ if ($car -match 'Material-Bilanz: alle (\d+) Mesh-Abschnitte haben ein Material'
 } else { Add-Check "Materialien" $false "keine Material-Bilanz im Log" }
 
 # -- Perf-Regression: Spiel-Strang-Zeit + Last-Inventar aus dem 8-s-Diagnose-
-#    block (feuert in der Fahrzeug-Sitzung). Faellt durch, wenn ein Wert seine
-#    Schranke reisst - faengt Regressionen ab, ohne am heutigen (bekannt hohen)
-#    Stand zu scheitern. Fehlt der Block ganz, ebenfalls Fehler (koennte eine
-#    Verschlechterung verdecken). --------------------------------------------
+#    block (feuert in der Fahrzeug-Sitzung). Zwei Signale mit verschiedener Natur:
+#    die DETERMINISTISCHEN Zaehler (Komponenten/Instanzen) sind die harte, last-
+#    unabhaengige Primaer-Schranke; die FRAME-ZEIT wird last-normiert (Basis x
+#    gemessener Lastfaktor, gedeckelt + absolutes Dach), damit Maschinenlast sie
+#    nicht faelschlich reisst - ohne eine echte Regression zu verdecken. Fehlt der
+#    Block ganz, ebenfalls Fehler (koennte eine Verschlechterung verdecken). -----
 $mSpiel = [regex]::Match($car, 'Straenge im Mittel: Spiel ([\d.]+) ms')
 $mInv   = [regex]::Match($car, 'Last-Inventar \(Spiel-Strang\): (\d+) Primitive-Komponenten .*? (\d+) Instanz-Komponenten mit (\d+) Instanzen')
 if ($mSpiel.Success -and $mInv.Success) {
     $spielMs = [double]$mSpiel.Groups[1].Value
     $primComps = [int]$mInv.Groups[1].Value
     $instances = [int]$mInv.Groups[3].Value
-    $okSpiel = $spielMs -le $MaxSpielMs
+
+    # DETERMINISTISCH (primaer, last-UNABHAENGIG): Komponenten + Instanzen sind
+    # bit-identisch je Lauf; eine echte Streaming-Regression reisst sie sofort.
     $okComps = $primComps -le $MaxPrimComponents
     $okInst  = $instances -le $MaxInstances
+
+    # FRAME-ZEIT (last-normiert): Basis-Schranke mit dem gemessenen Lastfaktor
+    # hochskalieren, aber ein absolutes Dach behalten - so relaxt die Schranke
+    # unter Maschinenlast, ohne eine astronomische Frame-Zeit durchzulassen.
+    $loadFactor = Measure-LoadFactor $CalibIter $CalibSamples $CalibRefMs $MaxLoadFactor
+    $effMaxSpiel = [Math]::Min($MaxSpielMs * $loadFactor, $AbsoluteMaxSpielMs)
+    $okSpiel = $spielMs -le $effMaxSpiel
+
     $ok = $okSpiel -and $okComps -and $okInst
-    Add-Check "Perf-Regression" $ok ("Spiel {0:N0} ms (<= {1}), {2:N0} Komponenten (<= {3:N0}), {4:N0} Instanzen (<= {5:N0})" -f `
-        $spielMs, $MaxSpielMs, $primComps, $MaxPrimComponents, $instances, $MaxInstances)
+    Add-Check "Perf-Regression" $ok ("Spiel {0:N0} ms (<= {1:N0} = {2}x{3:N1}, Dach {4:N0}), {5:N0} Komponenten (<= {6:N0}), {7:N0} Instanzen (<= {8:N0})" -f `
+        $spielMs, $effMaxSpiel, $MaxSpielMs, $loadFactor, $AbsoluteMaxSpielMs, `
+        $primComps, $MaxPrimComponents, $instances, $MaxInstances)
 } else {
     Add-Check "Perf-Regression" $false "kein 8-s-Diagnoseblock (Straenge/Last-Inventar) im Log - Perf nicht pruefbar"
 }
