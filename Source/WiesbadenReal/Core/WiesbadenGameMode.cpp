@@ -187,8 +187,27 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 	// ueber dem Boden.
 	if (FParse::Param(FCommandLine::Get(), TEXT("WbChaosCar")))
 	{
+		// Steht schon ein ChaosCar? Dann NICHT neu spawnen (Platzsuche uebersprungen),
+		// aber sicherstellen, dass er auch BESESSEN ist: der erste Durchlauf kann ihn
+		// gespawnt haben, bevor ein PlayerController existierte - dann haette WbDrive
+		// keinen Zugriff. Der zweite Durchlauf (nach City-Ready) holt das nach.
 		for (TActorIterator<AWiesbadenChaosCar> It(World); It; ++It)
 		{
+			AWiesbadenChaosCar* Existing = *It;
+			if (APlayerController* PC = World->GetFirstPlayerController())
+			{
+				if (PC->GetPawn() != Existing)
+				{
+					if (APawn* Other = PC->GetPawn())
+					{
+						PC->UnPossess();
+						Other->Destroy();
+					}
+					PC->Possess(Existing);
+					UE_LOG(LogWbCore, Log,
+						TEXT("Spielerfahrzeug (Chaos): vorhandenes Fahrzeug nachtraeglich uebernommen."));
+				}
+			}
 			return true;
 		}
 	}
@@ -352,19 +371,37 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 
 		if (APlayerController* ChaosPC = World->GetFirstPlayerController())
 		{
+			// Vorhandenen Pawn freigeben UND entfernen (wie im Kaefer-Zweig): sonst
+			// bleibt er als toter Actor stehen und die Kamera kann an ihm haengen.
 			if (APawn* Existing = ChaosPC->GetPawn())
 			{
 				if (Existing != ChaosCar)
 				{
 					ChaosPC->UnPossess();
+					Existing->Destroy();
 				}
 			}
 			ChaosPC->Possess(ChaosCar);
-		}
 
-		UE_LOG(LogWbCore, Log,
-			TEXT("Spielerfahrzeug: Chaos Vehicles aktiv (-WbChaosCar) bei (%.0f, %.0f)."),
-			SpawnLocation.X, SpawnLocation.Y);
+			// Besitz verifizieren: NUR wenn der Controller den ChaosCar wirklich
+			// haelt, erreicht ihn WbDrive ueber die Steuernaht (IWiesbadenVehicleControl).
+			if (ChaosPC->GetPawn() == ChaosCar)
+			{
+				UE_LOG(LogWbCore, Log,
+					TEXT("Spielerfahrzeug: Chaos Vehicles aktiv (-WbChaosCar) bei (%.0f, %.0f)."),
+					SpawnLocation.X, SpawnLocation.Y);
+			}
+			else
+			{
+				UE_LOG(LogWbCore, Error,
+					TEXT("Spielerfahrzeug (Chaos): Besitz nicht uebernommen - WbDrive erreicht das Fahrzeug nicht."));
+			}
+		}
+		else
+		{
+			UE_LOG(LogWbCore, Warning,
+				TEXT("Spielerfahrzeug (Chaos) steht, aber es gibt keinen PlayerController zum Uebernehmen."));
+		}
 		return true;
 	}
 
