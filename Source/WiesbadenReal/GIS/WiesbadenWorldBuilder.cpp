@@ -164,6 +164,7 @@ void AWiesbadenWorldBuilder::ReleasePipelineObjects()
 	PipelineRegionAssetGenerator = nullptr;
 	PipelineTerrainGenerator = nullptr;
 	PipelineFurnitureGenerator = nullptr;
+	PipelinePickupSpotGenerator = nullptr;
 }
 
 void AWiesbadenWorldBuilder::BuildCity()
@@ -204,6 +205,7 @@ void AWiesbadenWorldBuilder::BuildCity()
 	PipelineRegionAssetGenerator = NewObject<UWiesbadenRegionAssetGenerator>(this);
 	PipelineTerrainGenerator = NewObject<UTerrainGenerator>(this);
 	PipelineFurnitureGenerator = NewObject<URoadFurnitureGenerator>(this);
+	PipelinePickupSpotGenerator = NewObject<UWiesbadenPickupSpotGenerator>(this);
 
 	if (!(bUseWiesbadenOrigin
 		? PipelineConverter->InitializeWithWiesbadenOrigin()
@@ -239,6 +241,8 @@ void AWiesbadenWorldBuilder::BuildCity()
 	Context->Input.bGenerateTerrain = bGenerateTerrain;
 	Context->Input.bGenerateRegionAssets = bGenerateRegionAssets;
 	Context->Input.bGenerateFurniture = bGenerateFurniture;
+	Context->Input.bGeneratePickupSpots = bGeneratePickupSpots;
+	Context->Input.PickupSpotSettings = PickupSpotSettings;
 	Context->Input.RegionAssetSettings = RegionAssetSettings;
 	Context->Input.VerticalReferenceMeters = VerticalReferenceMeters;
 	Context->Input.RoadSettings = RoadSettings;
@@ -258,6 +262,7 @@ void AWiesbadenWorldBuilder::BuildCity()
 	Context->Tools.RegionAssetGenerator = PipelineRegionAssetGenerator;
 	Context->Tools.TerrainGenerator = PipelineTerrainGenerator;
 	Context->Tools.FurnitureGenerator = PipelineFurnitureGenerator;
+	Context->Tools.PickupSpotGenerator = PipelinePickupSpotGenerator;
 
 	// Schwergewichtige Verarbeitung auf den Thread-Pool auslagern.
 	Async(EAsyncExecution::ThreadPool,
@@ -1545,8 +1550,12 @@ void AWiesbadenWorldBuilder::EnsureLightingActors()
 
 	if (!Sun)
 	{
-		// Pitch -42 Grad: mittlerer Sonnenstand mit gut lesbaren Schatten.
-		Sun = World->SpawnActor<ADirectionalLight>(High, FRotator(-42.0f, -35.0f, 0.0f), Params);
+		// Pitch -24 Grad: tiefer, streifender Sonnenstand fuer lange, plastische
+		// Schatten - per Vorher/Nachher-HighResShot als bester Kompromiss aus
+		// Tiefe und Tageslicht-Helligkeit ermittelt (identisch zum Wert, den
+		// Tools/set_alkis_raking_light.py auf die gebackene Karte setzt; hier fest
+		// verankert, damit ein Re-Bake nicht auf den flachen Stand zuruecksetzt).
+		Sun = World->SpawnActor<ADirectionalLight>(High, FRotator(-24.0f, -35.0f, 0.0f), Params);
 		++Created;
 	}
 	if (Sun)
@@ -1589,10 +1598,16 @@ void AWiesbadenWorldBuilder::EnsureLightingActors()
 			// Gehwege fast weiss.
 			//
 			// 2.0 raeumte den Schleier weg, liess die Fassaden aber in Richtung
-			// Schwarz kippen - beides ist am Bild nachgeprueft. 3.5 liegt
-			// dazwischen (35 Prozent) und haelt die Schattenseiten lesbar, ohne
-			// das gerichtete Licht zu ueberstrahlen.
-			Comp->SetIntensity(3.5f);
+			// Schwarz kippen - beides ist am Bild nachgeprueft. 3.5 lag dazwischen
+			// und hielt die Schattenseiten lesbar.
+			//
+			// Mit dem jetzt tiefen, streifenden Sonnenstand (Pitch -24, siehe oben)
+			// fuellte 3.5 die langen Schatten aber wieder auf und nahm ihnen die
+			// Tiefe. 1.3 (13 Prozent - nahe am realen Tageslicht-Verhaeltnis)
+			// laesst die Streiflicht-Schatten stehen und haelt die reine
+			// Himmelslicht-Seite gerade noch lesbar. Per Vorher/Nachher-HighResShot
+			// iteriert; identisch zu Tools/set_alkis_raking_light.py.
+			Comp->SetIntensity(1.3f);
 		}
 		MarkAlwaysLoaded(Sky);
 	}
