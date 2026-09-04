@@ -45,6 +45,20 @@ namespace WiesbadenRailTransport
 		double TerrainBottomZCm, double TerrainTopZCm, double ClearanceCm,
 		double& OutStartRailZCm, double& OutEndRailZCm);
 
+	/**
+	 * Prueft, ob ein abgetastetes Gleisprofil unplausibel ist.
+	 *
+	 * Geprueft wird der datumsunabhaengige HOEHENUNTERSCHIED gegen den
+	 * erwarteten Klettergewinn (Nerobergbahn: 83 m Vorbild) mit Toleranz -
+	 * NICHT die absolute Lage, denn der In-Game-Hoehendatensatz liegt rund
+	 * 70 m unter NN. Zusaetzlich eine Untergrenze fuer den Talfuss: liegt er
+	 * nahe dem Weltnullpunkt, wurden die Hoehen vor dem Streaming abgefragt
+	 * und die Trasse steckt im Gelaende. True = unplausibel.
+	 */
+	WIESBADENREAL_API bool RailHeightsImplausible(
+		double BottomM, double TopM,
+		double ExpectedClimbM, double ClimbToleranceM, double MinBottomM);
+
 	/** Position entlang einer gegenlaeufigen Seilbahnstrecke. */
 	WIESBADENREAL_API double OpposingCablePosition(
 		double CablePositionCm, double TrackLengthCm, bool bOpposingCar);

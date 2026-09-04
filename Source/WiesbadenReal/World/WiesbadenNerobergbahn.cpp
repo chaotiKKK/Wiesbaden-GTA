@@ -416,7 +416,8 @@ bool AWiesbadenNerobergbahn::ResolveHeights()
 		constexpr double MinBottomM = 20.0;
 		const double ClimbM = (MaxZ - MinZ) / 100.0;
 		const double BottomM = MinZ / 100.0;
-		if (FMath::Abs(ClimbM - ExpectedClimbM) > ClimbToleranceM || BottomM < MinBottomM)
+		if (WiesbadenRailTransport::RailHeightsImplausible(
+			BottomM, MaxZ / 100.0, ExpectedClimbM, ClimbToleranceM, MinBottomM))
 		{
 			UE_LOG(LogWbStreaming, Warning,
 				TEXT("Nerobergbahn: Hoehen unplausibel - erwartet ~%.0f m Steigung ")

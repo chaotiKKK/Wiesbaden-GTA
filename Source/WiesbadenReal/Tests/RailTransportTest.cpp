@@ -70,6 +70,47 @@ bool FRailTransportStationGroundingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRailHeightPlausibilityTest,
+	"WiesbadenReal.World.RailTransport.HeightPlausibility",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+
+bool FRailHeightPlausibilityTest::RunTest(const FString& Parameters)
+{
+	// Eichung wie in der Nerobergbahn: 83 m Klettergewinn (+/- 20 m), Talfuss
+	// ueber 20 m. Die absolute Lage bleibt bewusst aussen vor - der In-Game-
+	// Hoehendatensatz liegt rund 70 m unter NN.
+	const double Climb = 83.0;
+	const double Tol = 20.0;
+	const double Floor = 20.0;
+	using WiesbadenRailTransport::RailHeightsImplausible;
+
+	// Korrekt abgetastete Trasse (in Alkis4 gemessen): 88 bis 173 m, 85 m Steigung.
+	TestFalse(TEXT("Korrekte In-Game-Trasse loest keinen Alarm aus"),
+		RailHeightsImplausible(88.0, 173.0, Climb, Tol, Floor));
+
+	// Dieselbe Bahn in echten NN-Hoehen: 160 bis 243 m, 83 m Steigung.
+	TestFalse(TEXT("Vorbildhoehen loesen keinen Alarm aus"),
+		RailHeightsImplausible(160.0, 243.0, Climb, Tol, Floor));
+
+	// Vor dem Streaming abgefragt: Trasse klebt am Weltnullpunkt.
+	TestTrue(TEXT("Trasse am Ursprung loest Alarm aus"),
+		RailHeightsImplausible(0.0, 5.0, Climb, Tol, Floor));
+
+	// Teilweise steckengeblieben: Talfuss ok, aber viel zu geringe Steigung.
+	TestTrue(TEXT("Zu geringe Steigung loest Alarm aus"),
+		RailHeightsImplausible(88.0, 100.0, Climb, Tol, Floor));
+
+	// Talfuss unter der Untergrenze, obwohl die Steigung stimmt.
+	TestTrue(TEXT("Zu tiefer Talfuss loest Alarm aus"),
+		RailHeightsImplausible(10.0, 93.0, Climb, Tol, Floor));
+
+	// Grenzfall: Steigung genau am Toleranzrand (103 m) bleibt still.
+	TestFalse(TEXT("Steigung am Toleranzrand bleibt still"),
+		RailHeightsImplausible(50.0, 50.0 + Climb + Tol, Climb, Tol, Floor));
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRailTransportMovementTest,
 	"WiesbadenReal.World.RailTransport.Movement",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)

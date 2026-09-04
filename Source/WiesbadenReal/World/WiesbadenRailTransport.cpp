@@ -116,6 +116,15 @@ namespace WiesbadenRailTransport
 		OutEndRailZCm = TerrainTopZCm + ClearanceCm;
 	}
 
+	bool RailHeightsImplausible(
+		double BottomM, double TopM,
+		double ExpectedClimbM, double ClimbToleranceM, double MinBottomM)
+	{
+		const double ClimbM = TopM - BottomM;
+		return FMath::Abs(ClimbM - ExpectedClimbM) > ClimbToleranceM
+			|| BottomM < MinBottomM;
+	}
+
 	double OpposingCablePosition(double CablePositionCm, double TrackLengthCm, bool bOpposingCar)
 	{
 		const double Position = FMath::Clamp(CablePositionCm, 0.0, FMath::Max(TrackLengthCm, 0.0));
