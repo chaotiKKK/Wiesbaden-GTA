@@ -20,6 +20,7 @@
 #include "UI/WiesbadenVehicleHUD.h"
 #include "World/WiesbadenCitySubsystem.h"
 #include "World/WiesbadenNerobergbahn.h"
+#include "World/WiesbadenNerotalbahn.h"
 #include "World/WiesbadenNerotal48.h"
 
 AWiesbadenGameMode::AWiesbadenGameMode()
@@ -80,6 +81,14 @@ void AWiesbadenGameMode::BeginPlay()
 			ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		BahnWorld->SpawnActor<AWiesbadenNerobergbahn>(
 			AWiesbadenNerobergbahn::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator, BahnParams);
+
+		// Die Nerotalbahn: die historische Talstrassenbahn vom Nerotal die
+		// Taunusstrasse hinunter. Setzt sich wie die Nerobergbahn selbst und
+		// legt ihre Gleishoehen ueber denselben korrigierten Profil-Pfad aufs
+		// Gelaende.
+		BahnWorld->SpawnActor<AWiesbadenNerotalbahn>(
+			AWiesbadenNerotalbahn::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator, BahnParams);
 	}
 
