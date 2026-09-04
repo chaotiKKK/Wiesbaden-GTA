@@ -40,6 +40,15 @@ public:
 	/** Zahl der aktuell gezeichneten Figuren. */
 	int32 GetVisibleCount() const;
 
+	/**
+	 * True, sobald die vier Gangphasen geladen sind und animiert wird.
+	 *
+	 * Bei aktiver Animation liegt der GRUNDPOOL leer und alle Figuren stecken in
+	 * den vier Pose-Pools - GetVisibleCount MUSS dann deren Summe liefern, nicht
+	 * faelschlich 0 (genau dieser Zaehl-Defekt war schon einmal da).
+	 */
+	bool IsAnimated() const { return PoseInstances.Num() == WalkPoseCount; }
+
 	/** Mesh der Figur. Ohne Zuweisung wird der Engine-Zylinder verwendet. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fussgaenger")
 	UStaticMesh* PedestrianMesh = nullptr;
