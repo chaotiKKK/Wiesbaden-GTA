@@ -124,12 +124,6 @@ FString AWiesbadenVehicleHUD::FormatHeadlightMode(uint8 Mode)
 	}
 }
 
-AWiesbadenCar* AWiesbadenVehicleHUD::GetPlayerCar() const
-{
-	const APlayerController* PC = GetOwningPlayerController();
-	return PC ? Cast<AWiesbadenCar>(PC->GetPawn()) : nullptr;
-}
-
 IWiesbadenVehicleControl* AWiesbadenVehicleHUD::GetPlayerVehicleControl() const
 {
 	const APlayerController* PC = GetOwningPlayerController();
@@ -172,7 +166,7 @@ void AWiesbadenVehicleHUD::DrawArc(float CenterX, float CenterY, float Radius,
 	}
 }
 
-void AWiesbadenVehicleHUD::DrawSpeedometer(const AWiesbadenCar& Car, float CenterX, float CenterY, float Radius)
+void AWiesbadenVehicleHUD::DrawSpeedometer(const IWiesbadenVehicleControl& Vehicle, float CenterX, float CenterY, float Radius)
 {
 	// Skala beginnt links unten und laeuft ueber oben nach rechts unten.
 	const float StartDegrees = -SpeedoSweepDegrees * 0.5f;
@@ -207,7 +201,7 @@ void AWiesbadenVehicleHUD::DrawSpeedometer(const AWiesbadenCar& Car, float Cente
 	}
 
 	// Zeiger.
-	const float SpeedKmh = Car.GetSpeedKmh();
+	const float SpeedKmh = Vehicle.GetSpeedKmh();
 	const float NeedleDegrees = StartDegrees + ComputeNeedleAngleDegrees(SpeedKmh, SpeedoMaxKmh, SpeedoSweepDegrees);
 	const float NeedleRadians = FMath::DegreesToRadians(NeedleDegrees);
 
@@ -220,36 +214,18 @@ void AWiesbadenVehicleHUD::DrawSpeedometer(const AWiesbadenCar& Car, float Cente
 	DrawText(FString::Printf(TEXT("%3d km/h"), FMath::RoundToInt(SpeedKmh)),
 		DialText, CenterX - 34.0f, CenterY + Radius * 0.35f, GEngine->GetMediumFont(), 1.0f);
 
-	DrawText(FString::Printf(TEXT("Gang %s"), *FormatGear(Car.GetGear())),
-		DialText, CenterX - 28.0f, CenterY + Radius * 0.55f, GEngine->GetSmallFont(), 1.0f);
-}
-
-void AWiesbadenVehicleHUD::DrawMinimalVehicleReadout(
-	const IWiesbadenVehicleControl& Vehicle, float Width, float Height)
-{
-	// Position wie der Tacho (rechts unten, neben der Minikarte), aber nur die
-	// digitale Ablesung Tempo/Gang - kein Zeiger, kein Drehzahlband, keine
-	// Kontrollleuchten. Fuer Fahrzeuge ohne die reichen Kaefer-Instrumente.
-	constexpr float MapDiameter = 260.0f;
-	constexpr float MapMargin = 24.0f;
-	const float Radius = FMath::Clamp(Height * 0.16f, 60.0f, 130.0f);
-	const float CenterX = Width - MapDiameter - MapMargin * 2.0f - Radius - 20.0f;
-	const float CenterY = Height - Radius - 70.0f;
-
-	DrawText(FString::Printf(TEXT("%3d km/h"), FMath::RoundToInt(Vehicle.GetSpeedKmh())),
-		DialText, CenterX - 34.0f, CenterY + Radius * 0.35f, GEngine->GetMediumFont(), 1.0f);
 	DrawText(FString::Printf(TEXT("Gang %s"), *FormatGear(Vehicle.GetGear())),
 		DialText, CenterX - 28.0f, CenterY + Radius * 0.55f, GEngine->GetSmallFont(), 1.0f);
 }
 
-void AWiesbadenVehicleHUD::DrawRpmBar(const AWiesbadenCar& Car, float X, float Y, float Width, float Height)
+void AWiesbadenVehicleHUD::DrawRpmBar(const IWiesbadenVehicleControl& Vehicle, float X, float Y, float Width, float Height)
 {
 	DrawRect(DialBackground, X, Y, Width, Height);
 
 	const float Fill = ComputeRpmFill(
-		Car.GetEngineRpm(),
-		Car.VehiclePhysics.EngineIdleRpm,
-		Car.VehiclePhysics.EngineMaxRpm);
+		Vehicle.GetEngineRpm(),
+		Vehicle.GetEngineIdleRpm(),
+		Vehicle.GetEngineMaxRpm());
 
 	const FLinearColor Color = Fill >= RedlineFraction ? RpmRed : RpmSafe;
 	DrawRect(Color, X, Y, Width * Fill, Height);
@@ -261,9 +237,9 @@ void AWiesbadenVehicleHUD::DrawRpmBar(const AWiesbadenCar& Car, float X, float Y
 	DrawText(TEXT("U/min"), DialText, X, Y - 14.0f, GEngine->GetSmallFont(), 1.0f);
 }
 
-void AWiesbadenVehicleHUD::DrawTellTales(const AWiesbadenCar& Car, float X, float Y)
+void AWiesbadenVehicleHUD::DrawTellTales(const IWiesbadenVehicleControl& Vehicle, float X, float Y)
 {
-	const UWiesbadenCarLightsComponent* Lights = Car.GetLights();
+	const UWiesbadenCarLightsComponent* Lights = Vehicle.GetLights();
 	if (!Lights)
 	{
 		return;
@@ -634,9 +610,11 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		bLegendKeyHeld = bKeyDown;
 	}
 
-	const AWiesbadenCar* Car = GetPlayerCar();
-	const AWiesbadenHelicopter* Heli = Car ? nullptr : GetPlayerHelicopter();
-	const bool bInVehicle = (Car != nullptr) || (Heli != nullptr);
+	// Fahrzeug ueber die Steuernaht-Familie (Kaefer wie ChaosCar); der Heli hat
+	// seine eigene Instrumententafel.
+	IWiesbadenVehicleControl* Vehicle = GetPlayerVehicleControl();
+	const AWiesbadenHelicopter* Heli = Vehicle ? nullptr : GetPlayerHelicopter();
+	const bool bInVehicle = (Vehicle != nullptr) || (Heli != nullptr);
 
 	// Legende zeichnen, solange sie eingeschaltet ist. Nach
 	// ControlLegendSeconds blendet sie von selbst aus; F1 holt sie zurueck.
@@ -683,28 +661,17 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		return;
 	}
 
-	if (!Car)
+	if (!Vehicle)
 	{
-		// Kein Kaefer, aber ein anderes Fahrzeug mit der Steuernaht (ChaosCar):
-		// Minimalanzeige Tempo/Gang ueber das Interface. Die reichen
-		// Kaefer-Instrumente bleiben dem AWiesbadenCar vorbehalten.
-		if (IWiesbadenVehicleControl* Vehicle = GetPlayerVehicleControl())
-		{
-			DrawMinimalVehicleReadout(*Vehicle, Width, Height);
-			return;
-		}
-
 		// Zu Fuss: statt Tacho der Hinweis, was hier gerade moeglich ist.
 		DrawFootPrompt(Width * 0.5f, Height - 120.0f);
 		return;
 	}
 
-	// Cockpit-Ansicht des Kaefers: Armaturenbrett-Band unterlegen (der Wagen
-	// selbst ist fuer den Fahrer ausgeblendet). ZUERST, damit Tacho und
-	// Drehzahl darauf liegen.
-	const bool bCarCockpit =
-		Car->GetCameraMode() == EWiesbadenVehicleCameraMode::Cockpit;
-	if (bCarCockpit)
+	// Cockpit-Ansicht: Armaturenbrett-Band unterlegen (das Fahrzeug ist fuer den
+	// Fahrer ausgeblendet). ZUERST, damit Tacho und Drehzahl darauf liegen. Ueber
+	// das Interface fuer JEDES Fahrzeug der Familie (Kaefer wie ChaosCar).
+	if (Vehicle->GetCameraMode() == EWiesbadenVehicleCameraMode::Cockpit)
 	{
 		DrawCarCockpitDash(Width, Height);
 	}
@@ -713,9 +680,10 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	const float CenterX = Width - MapDiameter - MapMargin * 2.0f - Radius - 20.0f;
 	const float CenterY = Height - Radius - 70.0f;
 
-	DrawSpeedometer(*Car, CenterX, CenterY, Radius);
-	DrawRpmBar(*Car, CenterX - Radius, CenterY + Radius + 18.0f, Radius * 2.0f, 10.0f);
-	DrawTellTales(*Car, CenterX - Radius * 0.5f, CenterY - Radius - 46.0f);
+	// Volle Instrumententafel ueber die Familie - identisch fuer beide Autos.
+	DrawSpeedometer(*Vehicle, CenterX, CenterY, Radius);
+	DrawRpmBar(*Vehicle, CenterX - Radius, CenterY + Radius + 18.0f, Radius * 2.0f, 10.0f);
+	DrawTellTales(*Vehicle, CenterX - Radius * 0.5f, CenterY - Radius - 46.0f);
 }
 
 

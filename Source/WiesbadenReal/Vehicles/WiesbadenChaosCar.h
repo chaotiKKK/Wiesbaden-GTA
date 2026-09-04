@@ -54,19 +54,22 @@ public:
 	virtual bool IsExternalControlActive() const override { return bExternalControlActive; }
 	virtual int32 GetGear() const override { return GetCurrentGear(); }
 
+	// -- Volle Instrumententafel (IWiesbadenVehicleControl, HUD) -------------
+	// Damit das reiche Fahrzeug-HUD (Drehzahlband, Kontrollleuchten, Cockpit)
+	// AUCH fuer den ChaosCar laeuft, nicht nur die Tempo/Gang-Minimalanzeige.
+	virtual float GetEngineRpm() const override;
+	virtual float GetEngineIdleRpm() const override;
+	virtual float GetEngineMaxRpm() const override;
+	virtual UWiesbadenCarLightsComponent* GetLights() const override { return Lights; }
+	virtual EWiesbadenVehicleCameraMode GetCameraMode() const override;
+
 	/** Geschwindigkeit in km/h - fuer HUD und Diagnose. */
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Fahrzeug")
 	virtual float GetSpeedKmh() const override;
 
-	/** Motordrehzahl in 1/min. */
-	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Fahrzeug")
-	float GetEngineRpm() const;
-
 	/** Eingelegter Gang; 0 = Leerlauf, negativ = Rueckwaerts. */
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Fahrzeug")
 	int32 GetCurrentGear() const;
-
-	UWiesbadenCarLightsComponent* GetLights() const { return Lights; }
 
 	/** Kameraart weiterschalten (Verfolgung, Umkreis, Cockpit). */
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Fahrzeug")

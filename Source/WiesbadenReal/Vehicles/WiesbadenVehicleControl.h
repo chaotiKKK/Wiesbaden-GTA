@@ -7,6 +7,9 @@
 
 #include "WiesbadenVehicleControl.generated.h"
 
+class UWiesbadenCarLightsComponent;
+enum class EWiesbadenVehicleCameraMode : uint8;
+
 /**
  * Fertige Steuerwerte fuer die externe FAHRZEUG-Steuerung (KI/Test/Replay).
  *
@@ -98,6 +101,23 @@ public:
 
 	/** Aktueller Gang (1..N; 0 = Leerlauf, negativ = Rueckwaerts). */
 	virtual int32 GetGear() const = 0;
+
+	// -- Volle Instrumententafel (HUD) ------------------------------------
+	// Damit das reiche Fahrzeug-HUD (Drehzahlband, Kontrollleuchten, Cockpit)
+	// fuer JEDES Fahrzeug der Familie funktioniert - nicht nur den Kaefer.
+
+	/** Aktuelle Motordrehzahl (U/min). */
+	virtual float GetEngineRpm() const = 0;
+
+	/** Leerlauf- bzw. Hoechstdrehzahl (U/min) - Skala des Drehzahlbands. */
+	virtual float GetEngineIdleRpm() const = 0;
+	virtual float GetEngineMaxRpm() const = 0;
+
+	/** Lichtanlage fuer die HUD-Kontrollleuchten. */
+	virtual UWiesbadenCarLightsComponent* GetLights() const = 0;
+
+	/** Kameramodus (Follow/Orbit/Cockpit) - fuer die Cockpit-Instrumententafel. */
+	virtual EWiesbadenVehicleCameraMode GetCameraMode() const = 0;
 };
 
 UINTERFACE(MinimalAPI)

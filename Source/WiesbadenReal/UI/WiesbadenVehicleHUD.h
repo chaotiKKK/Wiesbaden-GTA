@@ -94,11 +94,8 @@ protected:
 	float ControlLegendSeconds = 20.0f;
 
 private:
-	/** Liefert das aktuell gesteuerte Fahrzeug oder nullptr. */
-	AWiesbadenCar* GetPlayerCar() const;
-
-	/** Liefert das aktuell gesteuerte Fahrzeug ueber die Steuernaht (Interface)
-	 *  oder nullptr - erfasst AUCH den ChaosCar, den GetPlayerCar nicht kennt. */
+	/** Liefert das aktuell gesteuerte Fahrzeug ueber die Steuernaht-Familie
+	 *  (Interface) oder nullptr - erfasst BEIDE Autos (Kaefer wie ChaosCar). */
 	IWiesbadenVehicleControl* GetPlayerVehicleControl() const;
 
 	/** Liefert den aktuell gesteuerten Helikopter oder nullptr. */
@@ -158,16 +155,11 @@ private:
 	 */
 	void DrawControlLegend(bool bInVehicle, float X, float Y);
 
-	void DrawSpeedometer(const AWiesbadenCar& Car, float CenterX, float CenterY, float Radius);
-	void DrawRpmBar(const AWiesbadenCar& Car, float X, float Y, float Width, float Height);
-	void DrawTellTales(const AWiesbadenCar& Car, float X, float Y);
-
-	/**
-	 * Minimalanzeige Tempo/Gang ueber die Steuernaht - fuer Fahrzeuge ohne die
-	 * reichen Kaefer-Instrumente (ChaosCar). Drehzahlband/Kontrollleuchten/Cockpit
-	 * bleiben Car-spezifisch (siehe Spec).
-	 */
-	void DrawMinimalVehicleReadout(const IWiesbadenVehicleControl& Vehicle, float Width, float Height);
+	// Die volle Instrumententafel laeuft ueber die Steuernaht-Familie, damit sie
+	// fuer JEDES Fahrzeug (Kaefer wie ChaosCar) identisch funktioniert.
+	void DrawSpeedometer(const IWiesbadenVehicleControl& Vehicle, float CenterX, float CenterY, float Radius);
+	void DrawRpmBar(const IWiesbadenVehicleControl& Vehicle, float X, float Y, float Width, float Height);
+	void DrawTellTales(const IWiesbadenVehicleControl& Vehicle, float X, float Y);
 
 	/**
 	 * Minikarte unten rechts, gezeichnet aus den Mittellinien des

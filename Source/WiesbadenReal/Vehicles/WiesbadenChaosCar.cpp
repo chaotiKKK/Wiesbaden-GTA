@@ -587,6 +587,24 @@ float AWiesbadenChaosCar::GetEngineRpm() const
 	return Movement ? Movement->GetEngineRotationSpeed() : 0.0f;
 }
 
+float AWiesbadenChaosCar::GetEngineIdleRpm() const
+{
+	// Skala des HUD-Drehzahlbands aus dem Chaos-Antrieb (EngineSetup).
+	const UChaosWheeledVehicleMovementComponent* Movement = GetChaosMovement();
+	return Movement ? Movement->EngineSetup.EngineIdleRPM : 0.0f;
+}
+
+float AWiesbadenChaosCar::GetEngineMaxRpm() const
+{
+	const UChaosWheeledVehicleMovementComponent* Movement = GetChaosMovement();
+	return Movement ? Movement->EngineSetup.MaxRPM : 1.0f;
+}
+
+EWiesbadenVehicleCameraMode AWiesbadenChaosCar::GetCameraMode() const
+{
+	return VehicleCamera ? VehicleCamera->GetCameraMode() : EWiesbadenVehicleCameraMode::Follow;
+}
+
 int32 AWiesbadenChaosCar::GetCurrentGear() const
 {
 	const UChaosWheeledVehicleMovementComponent* Movement = GetChaosMovement();

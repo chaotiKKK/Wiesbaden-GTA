@@ -53,7 +53,7 @@ public:
 
 	/** Aktueller Kameramodus (Forward an die Fahrzeug-Kamera-Komponente). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug")
-	EWiesbadenVehicleCameraMode GetCameraMode() const;
+	virtual EWiesbadenVehicleCameraMode GetCameraMode() const override;
 
 	/** Absolutgeschwindigkeit in km/h (Tacho). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug")
@@ -65,7 +65,11 @@ public:
 
 	/** Aktuelle Motordrehzahl (U/min). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug")
-	float GetEngineRpm() const;
+	virtual float GetEngineRpm() const override;
+
+	/** Leerlauf-/Hoechstdrehzahl (U/min) fuer die HUD-Drehzahlband-Skala. */
+	virtual float GetEngineIdleRpm() const override { return VehiclePhysics.EngineIdleRpm; }
+	virtual float GetEngineMaxRpm() const override { return VehiclePhysics.EngineMaxRpm; }
 
 	/**
 	 * Externe Steuerung setzen (KI/Zwischensequenz/Test): umgeht die Tastenabfrage
@@ -86,7 +90,7 @@ public:
 
 	/** Lichtanlage des Fahrzeugs - fuer die HUD-Kontrollleuchten. */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug|Licht")
-	UWiesbadenCarLightsComponent* GetLights() const { return Lights; }
+	virtual UWiesbadenCarLightsComponent* GetLights() const override { return Lights; }
 
 	/** Fahrzeug-Physik-Modul (Motor, Getriebe, Radkraefte, Lenkung). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik")
