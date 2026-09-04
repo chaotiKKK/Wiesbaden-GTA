@@ -4,6 +4,8 @@
 
 #include "WiesbadenReal.h"
 
+#include <initializer_list>
+
 #include "Algo/Reverse.h"
 #include "GIS/CityPrompt.h"
 #include "GIS/GeoCoordinateConverter.h"
@@ -205,9 +207,11 @@ bool UBuildingGenerator::IsLandmark(const FString& BuildingName, EOSMBuildingTyp
 	return false;
 }
 
-int32 UBuildingGenerator::SelectMaterialVariant(const TMap<FName, FString>& Tags, EOSMBuildingType Type)
+int32 UBuildingGenerator::SelectMaterialVariant(const TMap<FName, FString>& Tags,
+	EOSMBuildingType Type, int64 SeedId)
 {
-	// Prioritaet 1: explizites Material-Tag.
+	// Prioritaet 1: explizites Material-Tag - authoritativ, KEINE Streuung.
+	// Wo OSM die Bauweise kennt, wird sie befolgt.
 	if (const FString* Material = Tags.Find(TEXT("building:material")))
 	{
 		const FString Value = Material->ToLower();
@@ -219,56 +223,87 @@ int32 UBuildingGenerator::SelectMaterialVariant(const TMap<FName, FString>& Tags
 		if (Value.Contains(TEXT("plaster")) || Value.Contains(TEXT("render"))) { return Facade_Plaster; }
 	}
 
-	// Prioritaet 2: Baujahr. Wiesbadens Innenstadt ist ueberwiegend
-	// Gruenderzeit (1870-1914) mit Putz- und Sandsteinfassaden; alles ab den
-	// 1960ern ist Beton oder Glas.
-	const FString* StartDate = Tags.Find(TEXT("start_date"));
-	if (StartDate)
+	// Deterministische Streuung je Gebaeude aus der Quell-Id. Benachbarte
+	// Gebaeude tragen verschiedene OSM-Ids -> verschiedene Fassaden, aber
+	// stabil ueber Neubauten hinweg (gleiche Id -> gleiche Wahl). Ohne das
+	// fiel frueher ein ganzer Wohnblock auf DIESELBE Variante (meist Putz) und
+	// wirkte uniform - genau das soll die Palette aufbrechen.
+	struct FWeighted { int32 Variant; int32 Weight; };
+	auto Pick = [SeedId](std::initializer_list<FWeighted> Items) -> int32
 	{
-		// start_date kann "1895", "1895-04", "C19" oder "~1900" sein. Die
-		// ersten vier Ziffern genuegen.
+		int32 Total = 0;
+		for (const FWeighted& It : Items) { Total += It.Weight; }
+		if (Total <= 0) { return Facade_Plaster; }
+		uint32 H = static_cast<uint32>(SeedId);
+		H *= 2654435761u; H ^= H >> 15; H *= 2246822519u; H ^= H >> 13;
+		int32 Roll = static_cast<int32>(H % static_cast<uint32>(Total));
+		for (const FWeighted& It : Items)
+		{
+			if (Roll < It.Weight) { return It.Variant; }
+			Roll -= It.Weight;
+		}
+		return Items.begin()->Variant;
+	};
+
+	// Baujahr bestimmen (start_date: "1895", "1895-04", "C19", "~1900" -> erste
+	// vier Ziffern). 0 = unbekannt.
+	int32 Year = 0;
+	if (const FString* StartDate = Tags.Find(TEXT("start_date")))
+	{
 		FString YearString;
 		for (const TCHAR Char : *StartDate)
 		{
 			if (FChar::IsDigit(Char))
 			{
 				YearString.AppendChar(Char);
-				if (YearString.Len() == 4)
-				{
-					break;
-				}
+				if (YearString.Len() == 4) { break; }
 			}
-			else if (YearString.Len() > 0)
-			{
-				break;
-			}
+			else if (YearString.Len() > 0) { break; }
 		}
-
-		if (YearString.Len() == 4)
-		{
-			const int32 Year = FCString::Atoi(*YearString);
-			if (Year > 1000 && Year < 1850) { return Facade_Timber; }
-			if (Year >= 1850 && Year < 1920) { return Facade_Sandstone; }
-			if (Year >= 1920 && Year < 1960) { return Facade_Plaster; }
-			if (Year >= 1960 && Year < 1990) { return Facade_Concrete; }
-			if (Year >= 1990) { return Facade_Glass; }
-		}
+		if (YearString.Len() == 4) { Year = FCString::Atoi(*YearString); }
 	}
 
-	// Prioritaet 3: Gebaeudetyp.
+	// Prioritaet 2: eindeutig nicht-wohnliche Typen bleiben EINHEITLICH - ein
+	// Bueroturm soll Glas sein, ein Parkhaus Beton, eine Kirche Sandstein.
 	switch (Type)
 	{
-	case EOSMBuildingType::Office:			return Facade_Glass;
+	case EOSMBuildingType::Office:
+	case EOSMBuildingType::Commercial:
+	case EOSMBuildingType::Retail:			return Facade_Glass;
 	case EOSMBuildingType::Industrial:
 	case EOSMBuildingType::Warehouse:
 	case EOSMBuildingType::Garage:			return Facade_Concrete;
 	case EOSMBuildingType::Church:
 	case EOSMBuildingType::Civic:
 	case EOSMBuildingType::University:		return Facade_Sandstone;
-	case EOSMBuildingType::Commercial:
-	case EOSMBuildingType::Retail:			return Facade_Glass;
-	default:								return Facade_Plaster;
+	default:								break;   // Wohn-/Generisch: streuen
 	}
+
+	// Prioritaet 3: Wohnbauten - je Epoche eine gemischte Palette statt EINER
+	// Variante. Die Gewichte spiegeln die Wiesbadener Bausubstanz wider.
+	if (Year > 1000 && Year < 1850)
+	{
+		return Pick({ { Facade_Timber, 60 }, { Facade_Plaster, 30 }, { Facade_Sandstone, 10 } });
+	}
+	if (Year >= 1850 && Year < 1920)   // Gruenderzeit
+	{
+		return Pick({ { Facade_Sandstone, 40 }, { Facade_Plaster, 40 }, { Facade_Brick, 20 } });
+	}
+	if (Year >= 1920 && Year < 1960)   // Zwischenkrieg / Wiederaufbau
+	{
+		return Pick({ { Facade_Plaster, 55 }, { Facade_Brick, 30 }, { Facade_Sandstone, 15 } });
+	}
+	if (Year >= 1960 && Year < 1990)
+	{
+		return Pick({ { Facade_Concrete, 55 }, { Facade_Plaster, 45 } });
+	}
+	if (Year >= 1990)
+	{
+		return Pick({ { Facade_Glass, 50 }, { Facade_Concrete, 50 } });
+	}
+
+	// Kein Baujahr: Wiesbadener Gruenderzeit-Mischung als Standard.
+	return Pick({ { Facade_Plaster, 45 }, { Facade_Sandstone, 35 }, { Facade_Brick, 20 } });
 }
 
 FString UBuildingGenerator::NormalizeAddressForMatch(const FString& Address)
@@ -903,7 +938,7 @@ bool UBuildingGenerator::BuildSingleBuilding(
 	// Varianten-Pipeline ein, sondern gibt dem Gebaeude nur einen eigenen
 	// Mesh-Abschnitt (FacadeOverrideKey), dem die Render-Seite ein eigenes
 	// Material zuweist.
-	const int32 MaterialVariant = SelectMaterialVariant(Tags, OutBuilding.BuildingType);
+	const int32 MaterialVariant = SelectMaterialVariant(Tags, OutBuilding.BuildingType, SourceId);
 	FString FacadeOverrideKey = ResolveFacadeOverrideKey(
 		OutBuilding.Address, Settings.FacadeOverrideAddresses);
 

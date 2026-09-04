@@ -455,14 +455,20 @@ private:
 		int32 MaterialVariant,
 		const FString& FacadeOverrideKey);
 
+public:
 	/**
-	 * Waehlt die Fassaden-Materialvariante.
+	 * Waehlt die Fassaden-Materialvariante (0-5).
 	 * Beruecksichtigt Gebaeudetyp und, falls vorhanden, start_date /
 	 * building:material - dadurch bekommt die Wilhelmstrasse
 	 * Gruenderzeit-Putzfassaden und das Industriegebiet in Biebrich
 	 * Sichtbeton, ohne dass beides einzeln getaggt sein muss.
+	 *
+	 * SeedId (OSM-Id) streut Wohnbauten OHNE eindeutiges Material/Typ
+	 * deterministisch ueber eine epochengerechte Palette - so wirken
+	 * benachbarte Wohnbloecke nicht uniform. Oeffentlich fuer den Unit-Test.
 	 */
-	static int32 SelectMaterialVariant(const TMap<FName, FString>& Tags, EOSMBuildingType Type);
+	static int32 SelectMaterialVariant(const TMap<FName, FString>& Tags, EOSMBuildingType Type,
+		int64 SeedId);
 
 public:
 	/**
