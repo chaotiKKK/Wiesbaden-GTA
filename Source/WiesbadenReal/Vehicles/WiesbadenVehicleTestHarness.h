@@ -7,7 +7,7 @@
 
 #include "WiesbadenVehicleTestHarness.generated.h"
 
-class AWiesbadenHelicopter;
+class IWiesbadenHeliControl;
 class IWiesbadenVehicleControl;
 
 /**
@@ -43,9 +43,9 @@ public:
 		FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
-	AWiesbadenHelicopter* Heli() const;
-	// Der Fahr-Pfad spricht das Fahrzeug ueber die Steuernaht an (Interface),
-	// nicht ueber eine konkrete Klasse - so treibt er BEIDE Fahrzeugarten.
+	// Beide Zweige sprechen ueber die Steuernaht-FAMILIE (Interface), nicht ueber
+	// konkrete Klassen: das Flug-/Gierprofil den Heli, das Fahrprofil das Fahrzeug.
+	IWiesbadenHeliControl* HeliControl() const;
 	IWiesbadenVehicleControl* VehicleControl() const;
 
 	// Ein Harness lebt auf EINEM Pawn: Gier-/Flugprofil treiben einen Helikopter,

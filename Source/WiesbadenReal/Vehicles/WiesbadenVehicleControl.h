@@ -8,17 +8,12 @@
 #include "WiesbadenVehicleControl.generated.h"
 
 /**
- * Fertige Steuerwerte fuer die externe Fahrzeugsteuerung (KI/Test/Replay).
+ * Fertige Steuerwerte fuer die externe FAHRZEUG-Steuerung (KI/Test/Replay).
  *
- * Analog zu FWiesbadenHeliControl: ein Treiber schiebt fertige Eingaben ein,
- * das Fahrzeug wendet sie ueber dieselbe Fahrphysik an wie eine Tastatureingabe.
- * So bleibt die Fahrzeugklasse frei von Test-/Treiber-Code, und die Fahrphysik
- * laesst sich ohne Tastatur nachweisen (Rauchtest) oder von einer KI fahren.
- *
- * Bewusst in einem NEUTRALEN Header (nicht in WiesbadenCar.h): so kann auch der
- * ChaosCar die Naht nutzen, ohne WiesbadenCar.h (und dessen kinematisches
- * FWiesbadenVehiclePhysics) einzuziehen. Das bleibt das gemeinsame
- * Steuer-Vokabular beider Fahrzeugarten.
+ * Ein Treiber schiebt fertige Eingaben ein, das Fahrzeug wendet sie ueber
+ * dieselbe Fahrphysik an wie eine Tastatureingabe. So bleibt die Fahrzeugklasse
+ * frei von Test-/Treiber-Code, und die Fahrphysik laesst sich ohne Tastatur
+ * nachweisen (Rauchtest) oder von einer KI fahren.
  */
 struct FWiesbadenCarControl
 {
@@ -29,44 +24,114 @@ struct FWiesbadenCarControl
 	bool bReverse = false;
 };
 
+/**
+ * Fertige Steuerwerte fuer die externe HELIKOPTER-Steuerung (KI/Test/Replay).
+ *
+ * Dasselbe Prinzip wie FWiesbadenCarControl, nur die Achsen eines Hubschraubers.
+ * Bewusst hier im NEUTRALEN Steuernaht-Header (nicht in WiesbadenHelicopter.h),
+ * damit Autopilot, Harness und die Interface-Familie ihn nutzen koennen, ohne
+ * die schwere Heli-Klasse (FWiesbadenRotorPhysics) einzuziehen.
+ */
+struct FWiesbadenHeliControl
+{
+	float Collective = 0.0f;   // -1..1 (steigen/sinken)
+	float Pitch = 0.0f;        // -1..1 (Nase runter = +)
+	float Roll = 0.0f;         // -1..1 (rechts = +)
+	float Yaw = 0.0f;          // -1..1 (rechts = +)
+	bool bEngine = true;
+};
+
+// ---------------------------------------------------------------------------
+// Interface-FAMILIE der externen Steuernaht.
+//
+// Wurzel IWiesbadenExternalControl: der gemeinsame Lebenszyklus (aktivieren via
+// typspezifischem SetExternalControl, abschalten, abfragen) PLUS der eine
+// gemeinsame Readout (Tempo). Auto UND Helikopter implementieren sie - deshalb
+// haben Autopilot und Harness EINEN Zugriffspfad (Cast<IWiesbadenExternalControl>)
+// fuer "steht das Ding unter externer Steuerung / gib sie frei / wie schnell".
+//
+// Zwei typisierte Zweige, weil die Steuer-Nutzlast (Car vs Heli) verschieden ist
+// und kein gemeinsamer Pawn-Basistyp moeglich ist (ChaosCar erbt zwingend von
+// AWheeledVehiclePawn). Die Zweige ERBEN die Wurzel (U- und I-Klasse), sodass ein
+// Cast auf die Wurzel ueber IsChildOf auch bei den Ableitungen greift.
+// ---------------------------------------------------------------------------
+
 UINTERFACE(MinimalAPI)
-class UWiesbadenVehicleControl : public UInterface
+class UWiesbadenExternalControl : public UInterface
 {
 	GENERATED_BODY()
 };
 
-/**
- * Gemeinsame Steuernaht beider Fahrzeuge (AWiesbadenCar kinematisch,
- * AWiesbadenChaosCar Chaos-Physik).
- *
- * Warum ein Interface und kein gemeinsamer Basistyp: der ChaosCar MUSS von
- * AWheeledVehiclePawn erben (Chaos), der Car ist ein reiner APawn - ein
- * gemeinsamer Pawn-Basistyp ist unmoeglich. Harness, WbDrive und die HUD-Basis
- * casten deshalb auf DIESES Interface (Dependency Inversion) statt auf eine
- * konkrete Klasse, und erreichen damit BEIDE Fahrzeuge ueber denselben Pfad.
- *
- * Bewusst SCHLANK: nur Steuerung + die zwei Readouts (Tempo, Gang), die
- * Harness/Tests/HUD-Basis brauchen. Reiche fahrzeugspezifische Anzeigen
- * (Drehzahlband, Kontrollleuchten, Cockpit) bleiben vorerst Car-spezifisch.
- */
-class IWiesbadenVehicleControl
+/** Gemeinsame Wurzel: externer-Steuerung-Lebenszyklus + gemeinsamer Readout. */
+class IWiesbadenExternalControl
 {
 	GENERATED_BODY()
 
 public:
-	/** Externe Steuerung setzen: umgeht die Tastenabfrage und speist die Werte
-	 *  ueber die normale Fahrphysik ein. */
-	virtual void SetExternalControl(const FWiesbadenCarControl& Control) = 0;
-
 	/** Externe Steuerung abschalten - Tastatur/Gamepad uebernimmt wieder. */
 	virtual void ClearExternalControl() = 0;
 
 	/** True, solange eine externe Steuerung aktiv ist. */
 	virtual bool IsExternalControlActive() const = 0;
 
-	/** Absolutgeschwindigkeit in km/h (Tacho/Diagnose). */
+	/** Fahrtgeschwindigkeit in km/h (Auto: Tacho; Heli: Fahrt/Airspeed). */
 	virtual float GetSpeedKmh() const = 0;
+};
+
+UINTERFACE(MinimalAPI)
+class UWiesbadenVehicleControl : public UWiesbadenExternalControl
+{
+	GENERATED_BODY()
+};
+
+/**
+ * Fahrzeug-Zweig (AWiesbadenCar kinematisch, AWiesbadenChaosCar Chaos-Physik).
+ * Erbt den gemeinsamen Lebenszyklus, ergaenzt die Auto-Nutzlast + den Gang.
+ */
+class IWiesbadenVehicleControl : public IWiesbadenExternalControl
+{
+	GENERATED_BODY()
+
+public:
+	/** Externe Fahr-Steuerung setzen (aktiviert die externe Steuerung). */
+	virtual void SetExternalControl(const FWiesbadenCarControl& Control) = 0;
 
 	/** Aktueller Gang (1..N; 0 = Leerlauf, negativ = Rueckwaerts). */
 	virtual int32 GetGear() const = 0;
+};
+
+UINTERFACE(MinimalAPI)
+class UWiesbadenHeliControl : public UWiesbadenExternalControl
+{
+	GENERATED_BODY()
+};
+
+/**
+ * Helikopter-Zweig (AWiesbadenHelicopter). Erbt den gemeinsamen Lebenszyklus,
+ * ergaenzt die Heli-Nutzlast + die Flug-Telemetrie, die Autopilot und Harness
+ * brauchen - damit beide den Heli AUSSCHLIESSLICH ueber die Familie ansprechen
+ * (kein Cast mehr auf die konkrete Klasse).
+ */
+class IWiesbadenHeliControl : public IWiesbadenExternalControl
+{
+	GENERATED_BODY()
+
+public:
+	/** Externe Flug-Steuerung setzen (aktiviert die externe Steuerung). */
+	virtual void SetExternalControl(const FWiesbadenHeliControl& Control) = 0;
+
+	/** Weltgeschwindigkeit in m/s aus der internen Integration (Regelung/KI). */
+	virtual FVector GetVelocityMetersPerSecond() const = 0;
+
+	/** Hoehe ueber Grund in Metern. */
+	virtual float GetAltitudeMeters() const = 0;
+
+	/** Steig-/Sinkrate in m/s (positiv = steigen). */
+	virtual float GetVerticalSpeedMs() const = 0;
+
+	/** Steuerkurs 0..360 Grad. */
+	virtual float GetHeadingDegrees() const = 0;
+
+	/** Momentane Gierrate in Grad/s. */
+	virtual float GetYawRateDegPerSec() const = 0;
 };

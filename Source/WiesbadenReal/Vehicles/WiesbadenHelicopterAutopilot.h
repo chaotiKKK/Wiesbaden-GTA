@@ -7,7 +7,7 @@
 
 #include "WiesbadenHelicopterAutopilot.generated.h"
 
-class AWiesbadenHelicopter;
+class IWiesbadenHeliControl;
 
 /** Betriebsart des Autopiloten. */
 UENUM(BlueprintType)
@@ -189,7 +189,9 @@ public:
 	float FaceTargetMinDistanceMeters = 60.0f;
 
 private:
-	AWiesbadenHelicopter* Heli() const;
+	// Der Heli wird ueber die Familien-Naht angesprochen (Interface), nicht ueber
+	// die konkrete Klasse - EIN Zugriffspfad, denselben wie Harness/WbDrive nutzen.
+	IWiesbadenHeliControl* HeliControl() const;
 
 	EWiesbadenAutopilotMode Mode = EWiesbadenAutopilotMode::Off;
 	FVector Target = FVector::ZeroVector;

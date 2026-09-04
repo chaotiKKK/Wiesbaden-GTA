@@ -9,6 +9,7 @@
 #include "Vehicles/WiesbadenHelicopterAudioComponent.h"
 #include "Vehicles/WiesbadenRotorPhysics.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
+#include "Vehicles/WiesbadenVehicleControl.h"
 
 #include "WiesbadenHelicopter.generated.h"
 
@@ -17,21 +18,8 @@ class USceneComponent;
 class USphereComponent;
 class UStaticMeshComponent;
 
-/**
- * Geglaettete Steuerwerte fuer die externe Steuerung des Hubschraubers.
- *
- * Ein Treiber (KI, Zwischensequenz, Replay, Test-Harness) reicht hierueber die
- * fertigen Steuerwerte (-1..1) ein; der Hubschrauber wendet sie ueber die echte
- * Rotorphysik an. So bleibt die Flugsimulation frei von Treiber-/Test-Code.
- */
-struct FWiesbadenHeliControl
-{
-	float Collective = 0.0f;   // -1..1 (steigen/sinken)
-	float Pitch = 0.0f;        // -1..1 (Nase runter = +)
-	float Roll = 0.0f;         // -1..1 (rechts = +)
-	float Yaw = 0.0f;          // -1..1 (rechts = +)
-	bool bEngine = true;
-};
+// FWiesbadenHeliControl liegt jetzt im neutralen Steuernaht-Header
+// WiesbadenVehicleControl.h (gemeinsame Interface-Familie), von hier mit-inkludiert.
 
 /**
  * Fliegbarer Helikopter-Pawn mit Platzhalter-Geometrie (Engine-Basis-Shapes).
@@ -51,7 +39,7 @@ struct FWiesbadenHeliControl
  * (bLevelHorizon), der Rumpf neigt sich im Bild statt das Bild mitzukippen.
  */
 UCLASS()
-class WIESBADENREAL_API AWiesbadenHelicopter : public APawn
+class WIESBADENREAL_API AWiesbadenHelicopter : public APawn, public IWiesbadenHeliControl
 {
 	GENERATED_BODY()
 
@@ -82,17 +70,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
 	float GetAirspeedKmh() const;
 
+	/** Gemeinsamer Familien-Readout (IWiesbadenExternalControl): fuer den Heli die
+	 *  Fahrt/Airspeed. */
+	virtual float GetSpeedKmh() const override { return GetAirspeedKmh(); }
+
 	/** Steig-/Sinkrate in m/s (positiv = steigen). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
-	float GetVerticalSpeedMs() const;
+	virtual float GetVerticalSpeedMs() const override;
 
 	/** Hoehe ueber Grund in Metern (Strahl nach unten; Fallback: Welthoehe). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
-	float GetAltitudeMeters() const;
+	virtual float GetAltitudeMeters() const override;
 
 	/** Steuerkurs 0..360 Grad (aus dem Gier-Winkel des Rumpfes). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
-	float GetHeadingDegrees() const;
+	virtual float GetHeadingDegrees() const override;
 
 	/** Kollektiv-Blattverstellung, 0..1 (Hebelstellung). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
@@ -104,7 +96,7 @@ public:
 
 	/** Momentane Gierrate in Grad/s (Telemetrie fuer KI/Test/Anzeige). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
-	float GetYawRateDegPerSec() const;
+	virtual float GetYawRateDegPerSec() const override;
 
 	/**
 	 * Weltgeschwindigkeit in m/s aus der internen Integration.
@@ -115,7 +107,7 @@ public:
 	 * GetVelocity(), sonst ist jede Geschwindigkeitsrueckfuehrung wirkungslos.
 	 */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Instrumente")
-	FVector GetVelocityMetersPerSecond() const { return Velocity * 0.01f; }
+	virtual FVector GetVelocityMetersPerSecond() const override { return Velocity * 0.01f; }
 
 	// -- Externe Steuerung ------------------------------------------------
 	// Sauberer Eingang, ueber den ein anderer Treiber (KI, Zwischensequenz,
@@ -125,14 +117,17 @@ public:
 	// Test-/Skript-Code (die Choreografie liegt in UWiesbadenVehicleTestHarness).
 
 	/** Geglaettete Steuerwerte setzen (aktiviert die externe Steuerung). */
-	void SetExternalControl(const FWiesbadenHeliControl& Control)
+	virtual void SetExternalControl(const FWiesbadenHeliControl& Control) override
 	{
 		ExternalControl = Control;
 		bExternalControlActive = true;
 	}
 
 	/** Externe Steuerung abschalten - der Rumpf hoert wieder auf Tastatur/Gamepad. */
-	void ClearExternalControl() { bExternalControlActive = false; }
+	virtual void ClearExternalControl() override { bExternalControlActive = false; }
+
+	/** True, solange die externe Steuerung aktiv ist (Familien-Naht). */
+	virtual bool IsExternalControlActive() const override { return bExternalControlActive; }
 
 	/** Triebwerk laeuft; sonst arbeitet der Rotor nur ueber Autorotation. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Heli|Physik")

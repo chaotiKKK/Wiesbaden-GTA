@@ -5,16 +5,15 @@
 #include "WiesbadenReal.h"
 #include "GameFramework/Actor.h"
 #include "Vehicles/WiesbadenVehicleControl.h"
-#include "Vehicles/WiesbadenHelicopter.h"
 
 UWiesbadenVehicleTestHarness::UWiesbadenVehicleTestHarness()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 }
 
-AWiesbadenHelicopter* UWiesbadenVehicleTestHarness::Heli() const
+IWiesbadenHeliControl* UWiesbadenVehicleTestHarness::HeliControl() const
 {
-	return Cast<AWiesbadenHelicopter>(GetOwner());
+	return Cast<IWiesbadenHeliControl>(GetOwner());
 }
 
 IWiesbadenVehicleControl* UWiesbadenVehicleTestHarness::VehicleControl() const
@@ -63,7 +62,7 @@ void UWiesbadenVehicleTestHarness::TickHeliProfiles(float DeltaTime)
 	{
 		return;
 	}
-	AWiesbadenHelicopter* H = Heli();
+	IWiesbadenHeliControl* H = HeliControl();
 	if (!H)
 	{
 		YawDuration = FlyDuration = 0.0f;
@@ -94,7 +93,7 @@ void UWiesbadenVehicleTestHarness::TickHeliProfiles(float DeltaTime)
 			FlyLastSecond = Second;
 			UE_LOG(LogWbVehicles, Log,
 				TEXT("WbDev Flug t=%.0f: Hoehe %.0f m, Vario %+.1f m/s, Fahrt %.0f km/h."),
-				FlyElapsed, H->GetAltitudeMeters(), H->GetVerticalSpeedMs(), H->GetAirspeedKmh());
+				FlyElapsed, H->GetAltitudeMeters(), H->GetVerticalSpeedMs(), H->GetSpeedKmh());
 		}
 		if (FlyElapsed >= FlyDuration)
 		{

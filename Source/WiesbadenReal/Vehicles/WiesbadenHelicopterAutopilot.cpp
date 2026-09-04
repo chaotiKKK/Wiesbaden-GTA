@@ -3,7 +3,8 @@
 #include "Vehicles/WiesbadenHelicopterAutopilot.h"
 
 #include "WiesbadenReal.h"
-#include "Vehicles/WiesbadenHelicopter.h"
+#include "GameFramework/Actor.h"
+#include "Vehicles/WiesbadenVehicleControl.h"
 
 namespace
 {
@@ -16,9 +17,9 @@ UWiesbadenHelicopterAutopilot::UWiesbadenHelicopterAutopilot()
 	PrimaryComponentTick.bCanEverTick = true;
 }
 
-AWiesbadenHelicopter* UWiesbadenHelicopterAutopilot::Heli() const
+IWiesbadenHeliControl* UWiesbadenHelicopterAutopilot::HeliControl() const
 {
-	return Cast<AWiesbadenHelicopter>(GetOwner());
+	return Cast<IWiesbadenHeliControl>(GetOwner());
 }
 
 void UWiesbadenHelicopterAutopilot::FlyTo(const FVector& WorldTarget)
@@ -33,9 +34,10 @@ void UWiesbadenHelicopterAutopilot::FlyTo(const FVector& WorldTarget)
 
 void UWiesbadenHelicopterAutopilot::HoldPosition()
 {
-	if (const AWiesbadenHelicopter* H = Heli())
+	// Aktuelle Position halten - die Lage kommt aus dem Traeger-Actor.
+	if (const AActor* Owner = GetOwner())
 	{
-		Target = H->GetActorLocation();
+		Target = Owner->GetActorLocation();
 	}
 	Mode = EWiesbadenAutopilotMode::Hold;
 	ElapsedInMode = 0.0f;
@@ -48,7 +50,7 @@ void UWiesbadenHelicopterAutopilot::Disengage()
 {
 	Mode = EWiesbadenAutopilotMode::Off;
 	IntegralErrorXY = FVector::ZeroVector;
-	if (AWiesbadenHelicopter* H = Heli())
+	if (IWiesbadenHeliControl* H = HeliControl())
 	{
 		H->ClearExternalControl();
 	}
@@ -63,8 +65,11 @@ void UWiesbadenHelicopterAutopilot::TickComponent(float DeltaTime, ELevelTick Ti
 	{
 		return;
 	}
-	AWiesbadenHelicopter* H = Heli();
-	if (!H)
+	// Steuerung ueber die Familien-Naht (Interface), Lage/Ausrichtung ueber den
+	// Traeger-Actor - EIN Zugriffspfad, keine Bindung an die konkrete Heli-Klasse.
+	AActor* Owner = GetOwner();
+	IWiesbadenHeliControl* H = HeliControl();
+	if (!Owner || !H)
 	{
 		Mode = EWiesbadenAutopilotMode::Off;
 		return;
@@ -74,7 +79,7 @@ void UWiesbadenHelicopterAutopilot::TickComponent(float DeltaTime, ELevelTick Ti
 	// Ist- und Fehlergroessen in Metern / m/s. ACHTUNG: die ECHTE Geschwindigkeit
 	// kommt aus der internen Integration des Helis - AActor::GetVelocity() ist bei
 	// diesem kinematischen Pawn 0 und wuerde jede Daempfung wirkungslos machen.
-	const FVector Pos = H->GetActorLocation();
+	const FVector Pos = Owner->GetActorLocation();
 	const FVector Vel = H->GetVelocityMetersPerSecond();
 	const FVector ErrorCm = Target - Pos;
 	const FVector ErrorXY(ErrorCm.X, ErrorCm.Y, 0.0f);
@@ -114,8 +119,8 @@ void UWiesbadenHelicopterAutopilot::TickComponent(float DeltaTime, ELevelTick Ti
 		: FVector::ZeroVector;
 	const FVector VelErrorXY = DesiredVelXY - VelXY;
 
-	FVector Forward = H->GetActorForwardVector(); Forward.Z = 0.0f; Forward = Forward.GetSafeNormal();
-	FVector Right = H->GetActorRightVector(); Right.Z = 0.0f; Right = Right.GetSafeNormal();
+	FVector Forward = Owner->GetActorForwardVector(); Forward.Z = 0.0f; Forward = Forward.GetSafeNormal();
+	FVector Right = Owner->GetActorRightVector(); Right.Z = 0.0f; Right = Right.GetSafeNormal();
 	const float ForwardVelError = FVector::DotProduct(VelErrorXY, Forward);
 	const float RightVelError = FVector::DotProduct(VelErrorXY, Right);
 
@@ -184,7 +189,7 @@ void UWiesbadenHelicopterAutopilot::TickComponent(float DeltaTime, ELevelTick Ti
 			: TEXT("Halten");
 		UE_LOG(LogWbVehicles, Log,
 			TEXT("WbDev Autopilot t=%.0f: Abstand %.0f m (horiz %.0f m, Hoehe %+.0f m), Tempo %.0f km/h, Modus %s."),
-			ElapsedInMode, Dist3Dm, DistXYm, ErrorZm, H->GetAirspeedKmh(),
+			ElapsedInMode, Dist3Dm, DistXYm, ErrorZm, H->GetSpeedKmh(),
 			ModusText);
 	}
 
