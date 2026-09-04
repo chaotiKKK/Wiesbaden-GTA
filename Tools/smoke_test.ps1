@@ -4,13 +4,14 @@
 #
 # Drei kurze Sitzungen, weil sich Fahrzeug und Heli die Besitzung teilen:
 #   1) Fahrzeug: Fahrprofil (WbDrive - Vollgas + Lenk-Sweep ueber den Test-
-#      Harness) weist Laengsdynamik UND Lenkung des Standard-Kaefers nach,
-#      dazu Material-Bilanz UND Perf-Regression (Spiel-Strang-Zeit + Last-
-#      Inventar) aus dem 8-s-Diagnoseblock (feuert 8 s nach dem Laden von selbst).
+#      Harness) weist Laengsdynamik UND Lenkung des Standard-Kaefers nach, dazu
+#      Perf-Regression (Spiel-Strang-Zeit + Last-Inventar) aus dem 8-s-Diagnose-
+#      block (feuert 8 s nach dem Laden von selbst).
 #   2) Helikopter: Teleport + Aufrichten (am Fahrzeug), dann Gier- und Flugprofil.
 #   3) Gesundheits-Gate: stationaer, WbHealth im Gate-Modus (wartet auf den
-#      geladenen Zustand) -> WbHealth.json; Auswertung maschinenlesbar gegen
-#      "healthy": false statt Prosa-Logs zu greppen.
+#      geladenen Zustand) -> WbHealth.json. Daraus MASCHINENLESBAR ausgewertet
+#      (kein Prosa-grep): die Material-Pruefung (perf.meshSectionsWithoutMaterial)
+#      und die evidenz-gewichteten Health-Warnungen als je EIGENE Pruefung.
 # Gewartet wird auf GENUG Log-Belege (nicht auf das Demo-Ende - die Stadt kann
 # beim Umherfliegen streckenweise haengen), dann Auswertung gegen erwartete
 # Wirkungen. Kein Screenshot, kein Fenster-Fokus -> rechnerunabhaengig.
@@ -156,6 +157,18 @@ Invoke-Session @() "WbHealth 30" $HealthLog "WbDev: WbHealth:" 1 180
 $car  = if (Test-Path $CarLog)  { Get-Content $CarLog  -Raw } else { "" }
 $heli = if (Test-Path $HeliLog) { Get-Content $HeliLog -Raw } else { "" }
 
+# WbHealth.json EINMAL parsen (aus der stationaeren Gate-Sitzung 3). Speist das
+# Gesundheits-Gate UND die Material-Pruefung MASCHINENLESBAR aus dem Report,
+# statt Prosa-Logzeilen zu greppen.
+$health = $null
+$healthErr = ""
+if (Test-Path $HealthJson) {
+    try { $health = Get-Content $HealthJson -Raw | ConvertFrom-Json }
+    catch { $healthErr = $_.Exception.Message }
+} else {
+    $healthErr = "keine WbHealth.json geschrieben (WbHealth nicht ausgeloest?)"
+}
+
 # -- Teleport: Distanz > 100 m (Sitzung 2, am Fahrzeug vor WbHeli) ---------
 $m = [regex]::Match($heli, 'WbTeleport \d+ ausgefuehrt:.*Distanz ([\d.]+) cm')
 if ($m.Success) {
@@ -188,12 +201,18 @@ if ($fahrt.Count -ge 3) {
     Add-Check "Fahren" $ok ("max Tempo {0} km/h (>20), Kursaenderung {1} Grad (>15), Gang {2}, {3} Messpunkte" -f $maxTempo,$maxKurs,$maxGear,$fahrt.Count)
 } else { Add-Check "Fahren" $false ("nur {0} Fahrt-Messpunkte (WbDrive lief nicht?)" -f $fahrt.Count) }
 
-# -- Materialien: kein Mesh-Abschnitt ohne Material -------------------------
-if ($car -match 'Material-Bilanz: alle (\d+) Mesh-Abschnitte haben ein Material') {
-    Add-Check "Materialien" $true ("alle {0} Abschnitte mit Material" -f $Matches[1])
-} elseif ($car -match 'Material-Bilanz: (\d+) von (\d+) Mesh-Abschnitten OHNE Material') {
-    Add-Check "Materialien" $false ("{0} von {1} OHNE Material (Default-Schachbrett)" -f $Matches[1],$Matches[2])
-} else { Add-Check "Materialien" $false "keine Material-Bilanz im Log" }
+# -- Materialien: kein Mesh-Abschnitt ohne Material - aus dem WbHealth.json-
+#    Report-Feld (perf.meshSectionsWithoutMaterial), NICHT mehr aus der Material-
+#    Bilanz-Prosa gegreppt. -------------------------------------------------
+if ($null -ne $health -and $null -ne $health.perf) {
+    $noMat = [int]$health.perf.meshSectionsWithoutMaterial
+    $total = [int]$health.perf.meshSectionsTotal
+    $matDetail = if ($noMat -eq 0) { "alle {0} Abschnitte mit Material" -f $total } `
+        else { "{0} von {1} OHNE Material (Default-Schachbrett)" -f $noMat, $total }
+    Add-Check "Materialien" ($noMat -eq 0) $matDetail
+} else {
+    Add-Check "Materialien" $false ("Material aus WbHealth.json nicht lesbar: {0}" -f $healthErr)
+}
 
 # -- Perf-Regression: Spiel-Strang-Zeit + Last-Inventar aus dem 8-s-Diagnose-
 #    block (feuert in der Fahrzeug-Sitzung). Zwei Signale mit verschiedener Natur:
@@ -248,24 +267,21 @@ if ($gier.Count -ge 2) {
     Add-Check "HeliYaw" ($maxRate -gt 10) ("max Gierrate {0:N1} Grad/s (>10, {1} Messpunkte)" -f $maxRate,$gier.Count)
 } else { Add-Check "HeliYaw" $false ("nur {0} Gierprobe-Messpunkte im Log" -f $gier.Count) }
 
-# -- Gesundheits-Gate: WbHealth.json parsen. Maschinenlesbar statt Prosa-grep:
-#    faellt durch bei "healthy": false und listet die Warnungen auf. Deckt die
-#    evidenz-gewichteten Laufzeit-Defekte ab (Ampel-Kopplung, Verkehr/Fussgaenger
-#    simuliert aber nicht gezeichnet, Gebaeude-Kollision, Streaming). ------------
-if (Test-Path $HealthJson) {
-    try {
-        $h = Get-Content $HealthJson -Raw | ConvertFrom-Json
-        if ($h.healthy) {
-            Add-Check "Health-Gate" $true "healthy: true (keine Warnungen)"
-        } else {
-            $warns = @($h.warnings) -join "; "
-            Add-Check "Health-Gate" $false ("healthy: false - {0}" -f $warns)
-        }
-    } catch {
-        Add-Check "Health-Gate" $false ("WbHealth.json nicht parsebar: {0}" -f $_.Exception.Message)
-    }
+# -- Gesundheits-Gate: die evidenz-gewichteten Warnungen aus WbHealth.json als
+#    EIGENE Pruefungen (maschinenlesbar, kein Prosa-grep). Gesund -> eine gruene
+#    Zeile; ungesund -> je Warnung eine eigene rote Pruefung, benannt nach ihrer
+#    Kategorie (ampel-kopplung, verkehr, fussgaenger, gebaeude-kollision, perf,
+#    material, streaming). So ist auf einen Blick sichtbar, WELCHE Dimension
+#    kippt, statt eine Sammel-Zeile. --------------------------------------------
+if ($null -eq $health) {
+    Add-Check "Health-Gate" $false ("WbHealth.json fehlt/unparsebar: {0}" -f $healthErr)
+} elseif ($health.healthy) {
+    Add-Check "Health-Gate" $true "healthy: true (keine Warnungen)"
 } else {
-    Add-Check "Health-Gate" $false "keine WbHealth.json geschrieben (WbHealth nicht ausgeloest?)"
+    foreach ($w in @($health.warnings)) {
+        $cat = ($w -split ':', 2)[0].Trim()
+        Add-Check ("Health:" + $cat) $false $w
+    }
 }
 
 # -- Bericht ---------------------------------------------------------------
