@@ -70,6 +70,57 @@ bool FRailTransportStationGroundingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRailTransportEndpointsNotLiftedTest,
+	"WiesbadenReal.World.RailTransport.EndpointsNotLifted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+
+bool FRailTransportEndpointsNotLiftedTest::RunTest(const FString& Parameters)
+{
+	// Der historische Fehler: solange die DURCHSCHNITTSSTEIGUNG unter der
+	// Maximalsteigung lag, hob die alte Formel
+	//   Max(TopTerrain, BottomTerrain + Laenge * MaxSteigung)
+	// das obere Ende ueber das Gelaende - die Bergstation hing in der Luft.
+	// StationRailEndpoints darf das NIE tun, egal wie flach die Strecke ist.
+	const double Clearance = 30.0;
+	const double MaxGrade = 0.30;
+	const double LengthCm = 40000.0;   // 400 m
+	const double BottomZ = 10000.0;    // Talfuss 100 m
+
+	// Mehrere Durchschnittssteigungen, alle klar UNTER der Maximalsteigung.
+	const double AvgGrades[] = { 0.05, 0.12, 0.20, 0.29 };
+	for (double Avg : AvgGrades)
+	{
+		const double TopZ = BottomZ + LengthCm * Avg;
+
+		// Was die alte Formel geliefert HAETTE - hier gewinnt immer der
+		// Steigungsterm, das Ende waere also angehoben worden.
+		const double OldLiftedEndZ = FMath::Max(
+			TopZ + Clearance, BottomZ + Clearance + LengthCm * MaxGrade);
+		TestTrue(*FString::Printf(
+			TEXT("Szenario haette unter alter Formel angehoben (avg %.2f)"), Avg),
+			OldLiftedEndZ > TopZ + Clearance + KINDA_SMALL_NUMBER);
+
+		double StartZ = 0.0;
+		double EndZ = 0.0;
+		WiesbadenRailTransport::StationRailEndpoints(BottomZ, TopZ, Clearance, StartZ, EndZ);
+
+		// Die Enden ruhen EXAKT auf dem Terrain, nicht auf dem angehobenen Wert.
+		TestEqual(TEXT("Talende auf Terrain"), StartZ, BottomZ + Clearance);
+		TestEqual(TEXT("Bergende auf Terrain"), EndZ, TopZ + Clearance);
+		TestTrue(TEXT("Bergende liegt unter der alten Anhebung"), EndZ < OldLiftedEndZ);
+
+		// Durch den Profilbauer bleibt das Bergende am Boden.
+		const TArray<double> Distances = { 0.0, LengthCm * 0.5, LengthCm };
+		const TArray<double> Terrain = { BottomZ, (BottomZ + TopZ) * 0.5, TopZ };
+		TArray<FWiesbadenRailProfilePoint> Profile;
+		TestTrue(TEXT("Profil wird erzeugt"), WiesbadenRailTransport::BuildConstrainedGradeProfile(
+			Distances, Terrain, StartZ, EndZ, Clearance, MaxGrade, Profile));
+		TestTrue(TEXT("Bergstation bleibt am Boden (nicht angehoben)"),
+			FMath::Abs(Profile.Last().RailZCm - (TopZ + Clearance)) < 1.0);
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRailHeightPlausibilityTest,
 	"WiesbadenReal.World.RailTransport.HeightPlausibility",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
