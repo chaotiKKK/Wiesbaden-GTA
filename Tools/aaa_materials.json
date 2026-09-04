@@ -5,6 +5,7 @@
   "material_root": "/Game/Materials/AAA",
   "sets": [
     { "surface": "RoofClay",      "cc0": "RoofingTiles004", "tiling": 6.0,  "ao": false, "config_key": "BuildingRoofMaterial" },
+    { "surface": "RoofTile",      "cc0": "RoofingTiles007", "tiling": 6.0,  "ao": false },
     { "surface": "FacadePlaster", "cc0": "Plaster001",      "tiling": 4.0,  "ao": false, "config_key": "BuildingWallMaterial" },
     { "surface": "RoadAsphalt",   "cc0": "Asphalt012",      "tiling": 40.0, "ao": false, "config_key": "RoadMaterial" },
     { "surface": "Paving",        "cc0": "PavingStones037", "tiling": 8.0,  "ao": true,  "config_key": "SidewalkMaterial" },
