@@ -1,17 +1,23 @@
 # Setzt die Beleuchtung der gebackenen Alkis4-Karte auf mehr TIEFE:
 #  - Sonne von fast senkrecht (pitch=-88, Zenit -> flach) auf ein tiefes,
-#    RAKENDES Streiflicht (pitch=-18) -> lange Schatten, plastische Fassaden.
-#  - SkyLight-Ambient von 3.5 auf 1.5 -> Schatten werden nicht mehr flach
-#    aufgefuellt, mehr Kontrast/Tiefe.
+#    RAKENDES Streiflicht -> lange Schatten, plastische Fassaden.
+#  - SkyLight-Ambient reduziert -> Schatten werden nicht mehr flach aufgefuellt.
 # WeatherFX bleibt unberuehrt: es setzt NUR Sonnenfarbe + -intensitaet
 # (WiesbadenWeatherFX.cpp Z.450-451), NICHT Rotation und NICHT das SkyLight.
 # Daher kein Konflikt - die Rotation/Ambient-Aenderung bleibt bestehen.
+#
+# Defaults pitch=-24 / SkyLight=1.3: per Vorher/Nachher-HighResShot-Iteration als
+# bester Kompromiss aus Tiefe UND Tageslicht-Helligkeit gewaehlt (pitch=-18 war zu
+# daemmrig-golden, -32/-40 wurden wieder flach; sky<1.3 kippt Richtung schwarz).
+import os
 import unreal
 
 MAP = "/Game/Maps/WiesbadenCity_Alkis4"
-SUN_PITCH = -18.0
-SUN_YAW = -35.0
-SKY_INTENSITY = 1.5
+# Feinjustierbar per Umgebungsvariablen (fuer die Vorher/Nachher-Iteration):
+#   WB_SUN_PITCH (Grad, negativ = Sonne ueber Horizont), WB_SKY_INTENSITY, WB_SUN_YAW.
+SUN_PITCH = float(os.environ.get("WB_SUN_PITCH", -24.0))
+SUN_YAW = float(os.environ.get("WB_SUN_YAW", -35.0))
+SKY_INTENSITY = float(os.environ.get("WB_SKY_INTENSITY", 1.3))
 
 les = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 les.load_level(MAP)
