@@ -67,7 +67,17 @@ def import_tex(abspath, dest_path, name):
     task.set_editor_property("replace_existing", True)
     task.set_editor_property("save", True)
     tools.import_asset_tasks([task])
-    return unreal.load_asset(dest_path + "/" + name)
+    tex = unreal.load_asset(dest_path + "/" + name)
+    # Roughness/AO sind LINEARE GRAUWERTE. Werden sie als sRGB-Farbe importiert
+    # (JPG-Default), aber im Material als Linear-Grayscale gesampelt, schlaegt die
+    # Material-Kompilierung fehl ("Sampler type is Linear Grayscale, should be
+    # Linear Color") -> Default-Material im Spiel. Daher hier auf Grauwert stellen.
+    if tex and (name.endswith("_R") or name.endswith("_AO")):
+        tex.set_editor_property("srgb", False)
+        tex.set_editor_property("compression_settings",
+                                unreal.TextureCompressionSettings.TC_GRAYSCALE)
+        EAL.save_loaded_asset(tex)
+    return tex
 
 
 def build_material(surface, color, normal, rough, ao, tiling, mat_root):
