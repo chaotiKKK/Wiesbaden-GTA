@@ -1343,8 +1343,18 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			if (IsCityReady())
 			{
 				bShotWhenReadyArmed = true;
+				// Optionale Fassaden-Nahaufnahme: -WbCamHeight=<Meter> setzt die
+				// Kamera aus dieser Hoehe ueber dem Spieler (mit -WbYaw/-WbPitch,
+				// optional -WbAtX/-WbAtY) - so nimmt der 2x-HighResShot eine
+				// sonnenbeschienene Hauswand gross ins Bild statt der Spielkamera
+				// im Schatten. Ohne das Flag bleibt die Spielkamera unveraendert.
+				float CamHeight = 0.0f;
+				if (FParse::Value(FCommandLine::Get(), TEXT("WbCamHeight="), CamHeight) && CamHeight > 0.0f)
+				{
+					SetupAerialView(CamHeight);
+				}
 				// Genug Zeit fuer Streaming-Nachladen, Shader-Kompilierung und
-				// Belichtungs-Adaption, bevor das Bild steht.
+				// Belichtungs-Adaption (und den Kamerawechsel), bevor das Bild steht.
 				ShotWhenReadyDelay = 6.0f;
 				FParse::Value(FCommandLine::Get(), TEXT("WbShotDelay="), ShotWhenReadyDelay);
 			}
@@ -2903,15 +2913,45 @@ bool UWiesbadenCitySubsystem::SetupAerialView(float HeightMeters)
 			AtX, AtY, HeightMeters);
 	}
 
-	const FVector CameraLocation = ViewLocation + FVector(0.0, 0.0, HeightMeters * 100.0);
+	// Blickrichtung fuer den optionalen Vorwaerts-Versatz vorab lesen.
+	float Pitch = -70.0f;
+	float Yaw = 0.0f;
+	FParse::Value(FCommandLine::Get(), TEXT("WbPitch="), Pitch);
+	FParse::Value(FCommandLine::Get(), TEXT("WbYaw="), Yaw);
+
+	// Optionaler horizontaler Vorwaerts-Versatz entlang der Blickrichtung:
+	// -WbCamForward=<Meter>. Der Spielerstart liegt im beschatteten Innenhof;
+	// die sonnenbeschienenen Fronten stehen im Nachbarblock. Ohne bekannte
+	// Weltkoordinaten schiebt dieser Versatz die Kamera "mit der Sonne im
+	// Ruecken" bis vor eine besonnte Wand - die Hoehe (Traufniveau) bleibt.
+	float ForwardMeters = 0.0f;
+	FParse::Value(FCommandLine::Get(), TEXT("WbCamForward="), ForwardMeters);
+	const FVector Forward = FRotator(0.0f, Yaw, 0.0f).Vector();
+
+	const FVector CameraLocation = ViewLocation
+		+ FVector(0.0, 0.0, HeightMeters * 100.0)
+		+ Forward * (ForwardMeters * 100.0);
 
 	FActorSpawnParameters Params;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	// Leicht geneigt statt exakt senkrecht: so bleibt der Horizont im Bild und
-	// die Hoehenlage der Geometrie ist beurteilbar.
+	// Blickrichtung: standardmaessig leicht geneigt nach unten (Luftaufnahme -
+	// so bleibt der Horizont im Bild und die Hoehenlage ist beurteilbar). Fuer
+	// FASSADEN-Aufnahmen laesst sie sich frei setzen: -WbPitch=<Grad> (0 = waag-
+	// recht) und -WbYaw=<Grad> (oben bereits gelesen).
+	//
+	// Blick UND Fahrt entkoppeln: -WbLookYaw/-WbLookPitch ueberschreiben allein
+	// die Blickrichtung, waehrend -WbYaw weiter die Richtung des Vorwaerts-
+	// Versatzes bestimmt. So faehrt die Kamera z. B. "zur Sonne hinaus" aus dem
+	// Innenhof (Yaw 145) und blickt dann zurueck (LookYaw -35) auf die nun
+	// besonnte Aussenwand. Ohne die Flags gilt Blick = Fahrtrichtung wie bisher.
+	float LookYaw = Yaw;
+	float LookPitch = Pitch;
+	FParse::Value(FCommandLine::Get(), TEXT("WbLookYaw="), LookYaw);
+	FParse::Value(FCommandLine::Get(), TEXT("WbLookPitch="), LookPitch);
+
 	ACameraActor* Camera = World->SpawnActor<ACameraActor>(
-		CameraLocation, FRotator(-70.0f, 0.0f, 0.0f), Params);
+		CameraLocation, FRotator(LookPitch, LookYaw, 0.0f), Params);
 	if (!Camera)
 	{
 		return false;
@@ -2920,8 +2960,8 @@ bool UWiesbadenCitySubsystem::SetupAerialView(float HeightMeters)
 	PC->SetViewTarget(Camera);
 
 	UE_LOG(LogWbStreaming, Log,
-		TEXT("Luftaufnahme: Kamera %.0f m ueber dem Spieler bei (%.0f, %.0f, %.0f)."),
-		HeightMeters, CameraLocation.X, CameraLocation.Y, CameraLocation.Z);
+		TEXT("Aufnahme-Kamera %.0f m ueber Ziel bei (%.0f, %.0f, %.0f), Pitch %.0f Yaw %.0f."),
+		HeightMeters, CameraLocation.X, CameraLocation.Y, CameraLocation.Z, Pitch, Yaw);
 	return true;
 }
 
