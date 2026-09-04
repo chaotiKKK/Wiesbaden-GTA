@@ -159,3 +159,18 @@ bool FWiesbadenTrafficLightSystem::IsConnectionGreen(int32 ConnectionIndex) cons
 	const double SlotStart = static_cast<double>(*GroupPtr) * Slot;
 	return CyclePhase >= SlotStart && CyclePhase < SlotStart + Green;
 }
+
+bool FWiesbadenTrafficLightSystem::AnyControlledConnectionRed() const
+{
+	// Frueh-Ausstieg beim ersten Rot: bei staffelphasigen Kreuzungen ist fast
+	// immer eine kontrollierte Verbindung rot, die Schleife bricht praktisch
+	// sofort ab. Die Sim ruft das nur, bis EINMAL Rot beobachtet wurde.
+	for (const TPair<int32, int32>& Pair : ConnectionToLight)
+	{
+		if (!IsConnectionGreen(Pair.Key))
+		{
+			return true;
+		}
+	}
+	return false;
+}

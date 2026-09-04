@@ -17,6 +17,18 @@ EWiesbadenTrafficLightVerdict FWiesbadenHealthReport::TrafficLightVerdict() cons
 	{
 		return EWiesbadenTrafficLightVerdict::Effective;
 	}
+	// EHRLICHES, verkehrsUNABHAENGIGES Signal fuer den historischen "nicht
+	// verdrahtet"-Bug (SetTrafficLightSystem nie gerufen): sind Ampeln im Netz und
+	// die Stadt vollstaendig geladen, war aber ueber die ganze Laufzeit NIE eine
+	// kontrollierte Verbindung rot, dann liest die Sim das Ampelsystem gar nicht -
+	// echter Defekt. Das rutschte frueher als "Inconclusive" durch, weil am
+	// stationaeren Spawn fast nie 20 Fahrzeuge eine Ampel anfahren. Gate auf
+	// bStreamingComplete: erst dann hat die Sim lange genug getickt, dass eine
+	// staffelphasige Ampel garantiert schon einmal Rot gezeigt haette.
+	if (bStreamingComplete && !bSignalizedConnectionEverRed)
+	{
+		return EWiesbadenTrafficLightVerdict::Broken;
+	}
 	if (VehiclesApproachingSignal >= 20)
 	{
 		return EWiesbadenTrafficLightVerdict::Broken;
@@ -69,10 +81,19 @@ TArray<FString> FWiesbadenHealthReport::Warnings() const
 	}
 
 	// Ampel-Kopplung: das Drei-Wege-Verdikt liegt zentral in TrafficLightVerdict();
-	// gewarnt wird nur beim echten Defekt (Broken).
+	// gewarnt wird nur beim echten Defekt (Broken). Die MELDUNG unterscheidet die
+	// beiden Broken-Ursachen ehrlich: das verkehrsunabhaengige "nie rot"-Signal
+	// (nicht verdrahtet) vs. genug Anfahrten ohne Halten (Verkehrs-Evidenz).
 	if (TrafficLightVerdict() == EWiesbadenTrafficLightVerdict::Broken)
 	{
-		W.Add(TEXT("ampel-kopplung: viele Anfahrten auf signalisierte Verbindungen, aber KEIN Halten - defekt."));
+		if (bStreamingComplete && !bSignalizedConnectionEverRed)
+		{
+			W.Add(TEXT("ampel-kopplung: KEINE signalisierte Verbindung war je rot - die Verkehrs-Sim ist nicht ans Ampelsystem gekoppelt (SetTrafficLightSystem nie gerufen?)."));
+		}
+		else
+		{
+			W.Add(TEXT("ampel-kopplung: viele Anfahrten auf signalisierte Verbindungen, aber KEIN Halten - defekt."));
+		}
 	}
 
 	// Gebaeude-Kollision: bei fertiger Stadt sollten Koerper um den Spieler aktiv
@@ -116,6 +137,18 @@ TArray<FString> FWiesbadenHealthReport::Warnings() const
 			PerfMeshSectionsWithoutMaterial, PerfMeshSectionsTotal));
 	}
 
+	// Beleuchtung: der abgestimmte Streiflicht-Stand (Pitch ~-24, SkyLight ~1.3)
+	// darf nicht durch einen Re-Bake auf den flachen Zenit-Stand zurueckfallen -
+	// sonst fuellt das Licht die langen Schatten und die Stadt wirkt flach. Der
+	// SkyLight-Wert wird mitgemeldet, weil ein Rueckfall meist beides betrifft.
+	if (bCityLoaded && HasFlatZenithLighting())
+	{
+		W.Add(FString::Printf(
+			TEXT("beleuchtung: Sonne steht flach im Zenit (Pitch %.0f Grad, erwartet ~-24) - ")
+			TEXT("ein Re-Bake hat die Streiflicht-Beleuchtung zurueckgesetzt (SkyLight %.1f)."),
+			SunPitchDegrees, SkyLightIntensity));
+	}
+
 	return W;
 }
 
@@ -139,9 +172,13 @@ FString FWiesbadenHealthReport::ToJson() const
 		TEXT("\"trafficVehiclesVisible\": %d, ")
 		TEXT("\"vehiclesApproachingSignal\": %d, ")
 		TEXT("\"vehiclesHeldAtRed\": %d, ")
+		TEXT("\"signalizedConnectionEverRed\": %s, ")
 		TEXT("\"pedestriansSimulated\": %d, ")
 		TEXT("\"pedestriansDrawn\": %d, ")
 		TEXT("\"buildingCollisionBodies\": %d, ")
+		TEXT("\"lightingPresent\": %s, ")
+		TEXT("\"sunPitchDegrees\": %.1f, ")
+		TEXT("\"skyLightIntensity\": %.2f, ")
 		TEXT("\"perf\": {")
 			TEXT("\"gameThreadMs\": %.1f, ")
 			TEXT("\"primitiveComponents\": %d, ")
@@ -159,7 +196,9 @@ FString FWiesbadenHealthReport::ToJson() const
 		TEXT("}"),
 		B(bCityLoaded), B(bStreamingComplete), TrafficLightCount, ActiveVehicles,
 		TrafficVehiclesVisible, VehiclesApproachingSignal, VehiclesHeldAtRed,
+		B(bSignalizedConnectionEverRed),
 		PedestriansSimulated, PedestriansDrawn, BuildingCollisionBodies,
+		B(bLightingPresent), SunPitchDegrees, SkyLightIntensity,
 		PerfGameThreadMs, PerfPrimitiveComponents, PerfMovableComponents,
 		PerfCollisionComponents, PerfInstanceComponents, PerfInstances,
 		PerfMeshSectionsTotal, PerfMeshSectionsWithoutMaterial,

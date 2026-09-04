@@ -50,11 +50,40 @@ bool FHealthReportVerdictTest::RunTest(const FString& Parameters)
 		MakeLights(1073, 0, 250).TrafficLightVerdict() == EVerdict::Broken);
 
 	// Zu wenige Anfahrten (<20) ohne Halten -> kein Urteil (statistisch normal,
-	// nur ~5% der Kreuzungen sind Ampeln).
+	// nur ~5% der Kreuzungen sind Ampeln). bStreamingComplete ist hier default
+	// FALSE, daher greift das verkehrsunabhaengige "nie rot"-Signal NICHT - das
+	// bildet die Vor-Streaming-Phase ab, in der noch kein Urteil moeglich ist.
 	TestTrue(TEXT("19 Anfahrten, 0 Halte -> Inconclusive (knapp unter Schwelle)"),
 		MakeLights(1073, 0, 19).TrafficLightVerdict() == EVerdict::Inconclusive);
 	TestTrue(TEXT("0 Anfahrten, 0 Halte -> Inconclusive"),
 		MakeLights(1073, 0, 0).TrafficLightVerdict() == EVerdict::Inconclusive);
+
+	// -- EHRLICHES, verkehrsUNABHAENGIGES Signal fuer den "nicht verdrahtet"-Bug -
+	// Bei fertiger Stadt (bStreamingComplete) mit Ampeln entscheidet, ob je eine
+	// signalisierte Verbindung rot war. So wird der historische Bug
+	// (SetTrafficLightSystem nie gerufen) als DEFEKT erkannt, statt als
+	// "unschluessig" durchzurutschen - ganz OHNE dass 20 Fahrzeuge anfahren muessen.
+	auto MakeStreamed = [](int32 Count, int32 Held, int32 Approaching, bool EverRed)
+	{
+		FWiesbadenHealthReport R;
+		R.bStreamingComplete = true;
+		R.TrafficLightCount = Count;
+		R.VehiclesHeldAtRed = Held;
+		R.VehiclesApproachingSignal = Approaching;
+		R.bSignalizedConnectionEverRed = EverRed;
+		return R;
+	};
+
+	TestTrue(TEXT("Fertige Stadt, Ampeln, NIE rot, kein Verkehr -> Broken (nicht verdrahtet)"),
+		MakeStreamed(1073, 0, 0, /*EverRed*/false).TrafficLightVerdict() == EVerdict::Broken);
+	TestTrue(TEXT("Fertige Stadt, Ampeln, NIE rot, wenige Anfahrten -> Broken statt Inconclusive"),
+		MakeStreamed(1073, 0, 5, /*EverRed*/false).TrafficLightVerdict() == EVerdict::Broken);
+	TestTrue(TEXT("Fertige Stadt, Ampeln, schon rot gewesen, kein Verkehr -> Inconclusive (gekoppelt, nur wenig Verkehr)"),
+		MakeStreamed(1073, 0, 0, /*EverRed*/true).TrafficLightVerdict() == EVerdict::Inconclusive);
+	TestTrue(TEXT("Halten schlaegt das 'nie rot'-Signal nicht aus dem Tritt -> Effective"),
+		MakeStreamed(1073, 2, 0, /*EverRed*/true).TrafficLightVerdict() == EVerdict::Effective);
+	TestTrue(TEXT("Keine Ampeln, fertige Stadt, nie rot -> Inconclusive (kein Fehlalarm ohne Ampeln)"),
+		MakeStreamed(0, 0, 0, /*EverRed*/false).TrafficLightVerdict() == EVerdict::Inconclusive);
 
 	// -- Verkehr-Zeichnen-Defekt: simuliert, aber keiner gezeichnet ---------
 	{
@@ -85,6 +114,25 @@ bool FHealthReportVerdictTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Abschnitte ohne Material -> Defekt (Schachbrett)"), R.HasMaterialDrawDefect());
 		R.PerfMeshSectionsWithoutMaterial = 0;
 		TestFalse(TEXT("Alle Abschnitte mit Material -> kein Defekt"), R.HasMaterialDrawDefect());
+	}
+
+	// -- Beleuchtung: flacher Zenit-Stand (Re-Bake-Rueckfall) ---------------
+	// Der abgestimmte Streiflicht-Stand ist Pitch ~-24; ~-88 heisst flach im
+	// Zenit. Die Schwelle -60 trennt beide, ohne den mittleren Stand -42 oder
+	// das Ziel -24 faelschlich zu melden.
+	{
+		FWiesbadenHealthReport R;
+		R.bLightingPresent = true;
+		R.SunPitchDegrees = -24.0f;
+		TestFalse(TEXT("Streiflicht -24 -> kein Zenit-Defekt"), R.HasFlatZenithLighting());
+		R.SunPitchDegrees = -42.0f;
+		TestFalse(TEXT("Mittlerer Stand -42 -> kein Zenit-Defekt"), R.HasFlatZenithLighting());
+		R.SunPitchDegrees = -60.0f;
+		TestTrue(TEXT("Genau -60 -> flach (Grenzfall, <= Schwelle)"), R.HasFlatZenithLighting());
+		R.SunPitchDegrees = -88.0f;
+		TestTrue(TEXT("Flacher Zenit -88 -> Defekt"), R.HasFlatZenithLighting());
+		R.bLightingPresent = false;
+		TestFalse(TEXT("Kein Licht geladen -> kein Fehlalarm trotz Pitch -88"), R.HasFlatZenithLighting());
 	}
 
 	return true;

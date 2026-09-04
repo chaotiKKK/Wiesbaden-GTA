@@ -122,6 +122,17 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSystem
 	 *  Verbindung" von "Ampel steht auf gruen". */
 	bool IsConnectionControlled(int32 ConnectionIndex) const { return ConnectionToLight.Contains(ConnectionIndex); }
 
+	/**
+	 * True, wenn AKTUELL mindestens eine kontrollierte Verbindung rot ist
+	 * (Frueh-Ausstieg beim ersten Rot). VerkehrsUNABHAENGIGE Diagnose-Sonde: die
+	 * Verkehrs-Simulation beobachtet damit ueber ihren eigenen Ampel-Zeiger, ob
+	 * das System ueberhaupt Rot-Phasen erzeugt und an sie durchreicht - so faellt
+	 * der "SetTrafficLightSystem nie gerufen"-Bug auf, auch wenn am stationaeren
+	 * Spawn zu wenige Fahrzeuge eine Ampel anfahren. Bei staffelphasigen Kreuzungen
+	 * (Gruen < Zyklus) ist fast immer irgendeine kontrollierte Verbindung rot.
+	 */
+	bool AnyControlledConnectionRed() const;
+
 	/** Einstellungen (fuer Diagnose/HUD). */
 	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
 	FWiesbadenTrafficLightSettings Settings;

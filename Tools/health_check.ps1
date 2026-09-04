@@ -89,6 +89,10 @@ if ($p) {
     Write-Host ("  perf: verdict={0}  komponenten={1}  instanzen={2}  spielMs={3}  abschnitte-ohne-material={4}" -f `
         $p.verdict, $p.primitiveComponents, $p.instances, $p.gameThreadMs, $p.meshSectionsWithoutMaterial)
 }
+# Beleuchtung: Streiflicht-Stand erwartet ~-24 Grad / SkyLight ~1.3; ein flacher
+# Zenit (~-88) verraet einen Re-Bake-Rueckfall auf die Default-Beleuchtung.
+Write-Host ("  beleuchtung: sonne-pitch={0} grad  skylight={1}  (erwartet ~-24 / ~1.3)" -f `
+    $h.sunPitchDegrees, $h.skyLightIntensity)
 
 # -- Historie: diesen Lauf als eine JSONL-Zeile anhaengen -------------------
 # Flach und kompakt, damit health_trend.ps1 Trends ueber Laeufe rechnen kann.
@@ -107,6 +111,8 @@ $record = [pscustomobject]@{
     pedestriansSimulated            = [int]$h.pedestriansSimulated
     pedestriansDrawn                = [int]$h.pedestriansDrawn
     buildingCollisionBodies         = [int]$h.buildingCollisionBodies
+    sunPitchDegrees                 = [double]$h.sunPitchDegrees
+    skyLightIntensity               = [double]$h.skyLightIntensity
     perfVerdict                     = $perfVerdict
     perfPrimitiveComponents         = $perfPrims
     perfInstances                   = $perfInst

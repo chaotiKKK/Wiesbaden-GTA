@@ -453,6 +453,14 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	int32 GetLifetimeVehiclesHeldAtRed() const { return LifetimeVehiclesHeldAtRed; }
 	int32 GetLifetimeVehiclesApproachingSignal() const { return LifetimeVehiclesApproachingSignal; }
 
+	/** Ehrliches, verkehrsUNABHAENGIGES Signal: war seit Initialize je eine von
+	 *  einer Ampel kontrollierte Verbindung rot? False heisst bei geladener Stadt:
+	 *  die Sim ist gar nicht an das Ampelsystem gekoppelt (SetTrafficLightSystem
+	 *  nie gerufen - der TrafficLights-Zeiger blieb null, der Rot-Block wird
+	 *  uebersprungen). Genau dieser Bug rutschte sonst als "Inconclusive" durch,
+	 *  weil am stationaeren Spawn zu wenige Fahrzeuge eine Ampel anfahren. */
+	bool HasObservedSignalizedRed() const { return bAnySignalizedConnectionEverRed; }
+
 	/** Setzt die Simulation zurueck (kein Netz, keine Fahrzeuge). */
 	void Reset();
 
@@ -669,6 +677,11 @@ private:
 	/** Seit Initialize aufsummierte Kennzahlen fuer die ehrliche Ampel-Diagnose. */
 	int32 LifetimeVehiclesHeldAtRed = 0;
 	int32 LifetimeVehiclesApproachingSignal = 0;
+
+	/** Wurde seit Initialize je eine kontrollierte Verbindung rot beobachtet?
+	 *  Verkehrsunabhaengig ueber den TrafficLights-Zeiger gesetzt; siehe
+	 *  HasObservedSignalizedRed(). Bleibt false, wenn der Zeiger nie gesetzt wurde. */
+	bool bAnySignalizedConnectionEverRed = false;
 	TArray<int32> SpawnLaneIds;
 	TMap<int32, double> ConnectionLengthCm;
 	TMap<int32, TArray<int32>> LaneSuccessorIndices; // LaneId -> Verbindungs-Indizes

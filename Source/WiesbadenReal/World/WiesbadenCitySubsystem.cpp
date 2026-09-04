@@ -33,6 +33,8 @@
 #include "Engine/PostProcessVolume.h"
 #include "Engine/DirectionalLight.h"
 #include "Components/DirectionalLightComponent.h"
+#include "Engine/SkyLight.h"
+#include "Components/SkyLightComponent.h"
 #include "World/WiesbadenCityChunk.h"
 #include "World/WiesbadenStreamingSource.h"
 #include "UnrealClient.h"
@@ -1209,13 +1211,26 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 				break;
 
 			case EWiesbadenTrafficLightVerdict::Broken:
-				// Genug Anfahrten (>=20), aber NIE gehalten: bei ~75% Rot-Anteil je
-				// Kreuzung waere durchgehend Gruen astronomisch unwahrscheinlich ->
-				// echter Kopplungs-Defekt.
-				UE_LOG(LogWbTraffic, Warning,
-					TEXT("Ampeln: %d im Netz, %d Anfahrten auf signalisierte Verbindungen, aber KEIN ")
-					TEXT("Fahrzeug gehalten - die Kopplung greift nicht (echter Defekt)."),
-					R.TrafficLightCount, R.VehiclesApproachingSignal);
+				// Zwei ehrlich getrennte Ursachen: (a) das verkehrsunabhaengige
+				// "nie rot"-Signal (Ampelsystem nicht an die Sim gekoppelt -
+				// SetTrafficLightSystem nie gerufen), oder (b) genug Anfahrten
+				// (>=20) ohne ein einziges Halten (bei ~75% Rot-Anteil je Kreuzung
+				// waere durchgehend Gruen astronomisch unwahrscheinlich).
+				if (R.bStreamingComplete && !R.bSignalizedConnectionEverRed)
+				{
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("Ampeln: %d im Netz, aber KEINE signalisierte Verbindung war je rot - ")
+						TEXT("die Verkehrs-Sim liest das Ampelsystem nicht (SetTrafficLightSystem nie ")
+						TEXT("gerufen?). Echter Kopplungs-Defekt, kein 'unschluessig'."),
+						R.TrafficLightCount);
+				}
+				else
+				{
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("Ampeln: %d im Netz, %d Anfahrten auf signalisierte Verbindungen, aber KEIN ")
+						TEXT("Fahrzeug gehalten - die Kopplung greift nicht (echter Defekt)."),
+						R.TrafficLightCount, R.VehiclesApproachingSignal);
+				}
 				break;
 
 			case EWiesbadenTrafficLightVerdict::Inconclusive:
@@ -3036,9 +3051,34 @@ FWiesbadenHealthReport UWiesbadenCitySubsystem::BuildHealthReport() const
 	R.TrafficVehiclesVisible = CityActor ? CityActor->GetVisibleTrafficVehicleCount() : 0;
 	R.VehiclesApproachingSignal = TrafficSimulation.GetLifetimeVehiclesApproachingSignal();
 	R.VehiclesHeldAtRed = TrafficSimulation.GetLifetimeVehiclesHeldAtRed();
+	R.bSignalizedConnectionEverRed = TrafficSimulation.HasObservedSignalizedRed();
 	R.PedestriansSimulated = PedestrianSimulation.GetReport().SimulatedCount;
 	R.PedestriansDrawn = CityActor ? CityActor->GetVisiblePedestrianCount() : 0;
 	R.BuildingCollisionBodies = BuildingCollision ? BuildingCollision->GetActiveBodyCount() : 0;
+
+	// Beleuchtung der geladenen Karte: Sonnen-Pitch (Streiflicht ~-24, flacher
+	// Zenit-Rueckfall ~-88) und Himmelslicht-Intensitaet (~1.3). Erste Sonne /
+	// erstes SkyLight genuegt - EnsureLightingActors legt je genau eines an. Der
+	// Pitch wird auf (-180,180] normalisiert, damit ein als 272 gespeicherter
+	// Wert nicht am Schwellwert vorbeirutscht.
+	if (const UWorld* LightWorld = GetWorld())
+	{
+		for (TActorIterator<ADirectionalLight> It(LightWorld); It; ++It)
+		{
+			R.bLightingPresent = true;
+			R.SunPitchDegrees = static_cast<float>(
+				FRotator::NormalizeAxis(It->GetActorRotation().Pitch));
+			break;
+		}
+		for (TActorIterator<ASkyLight> It(LightWorld); It; ++It)
+		{
+			if (const USkyLightComponent* SkyComp = It->GetLightComponent())
+			{
+				R.SkyLightIntensity = SkyComp->Intensity;
+			}
+			break;
+		}
+	}
 
 	// Perf: die deterministischen Zaehler aus dem einmaligen Snapshot-Cache
 	// (CachePerfSnapshot, 8-s-Block) - KEIN Actor-Durchlauf hier, damit der

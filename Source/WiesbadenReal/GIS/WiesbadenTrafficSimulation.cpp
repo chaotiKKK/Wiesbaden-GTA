@@ -52,6 +52,7 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 	TotalRemoved = 0;
 	LifetimeVehiclesHeldAtRed = 0;
 	LifetimeVehiclesApproachingSignal = 0;
+	bAnySignalizedConnectionEverRed = false;
 	TotalDistanceCm = 0.0;
 	Report = FWiesbadenTrafficReport();
 
@@ -216,6 +217,7 @@ void FWiesbadenTrafficSimulation::Reset()
 	TotalRemoved = 0;
 	LifetimeVehiclesHeldAtRed = 0;
 	LifetimeVehiclesApproachingSignal = 0;
+	bAnySignalizedConnectionEverRed = false;
 	TotalDistanceCm = 0.0;
 	Report = FWiesbadenTrafficReport();
 }
@@ -1079,6 +1081,18 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 
 	if (TrafficLights && Network)
 	{
+		// Ehrliches, verkehrsUNABHAENGIGES Signal fuer die Diagnose: sobald das
+		// Ampelsystem EINMAL eine kontrollierte Verbindung auf Rot zeigt, ist die
+		// Kopplung nachweislich aktiv. Laeuft ausserhalb der Fahrzeug-Schleife,
+		// also auch bei 0 Fahrzeugen. Ist TrafficLights nie gesetzt worden (der
+		// historische Bug), wird dieser Block nie betreten und das Flag bleibt
+		// false -> die Diagnose meldet "defekt" statt "unschluessig". Sobald das
+		// Flag steht, entfaellt die Abfrage (Frueh-Ausstieg in AnyControlled...).
+		if (!bAnySignalizedConnectionEverRed && TrafficLights->AnyControlledConnectionRed())
+		{
+			bAnySignalizedConnectionEverRed = true;
+		}
+
 		const double StopDistance = FMath::Max(Settings.MinGapCm * 0.5, 100.0);
 		for (FTrafficVehicle& Vehicle : Vehicles)
 		{

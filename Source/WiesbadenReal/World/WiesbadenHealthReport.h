@@ -81,6 +81,16 @@ struct WIESBADENREAL_API FWiesbadenHealthReport
 	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
 	int32 VehiclesHeldAtRed = 0;
 
+	/** Ehrliches, verkehrsUNABHAENGIGES Signal fuer die Ampel-Kopplung: war seit
+	 *  Stadt-Spawn je eine von einer Ampel kontrollierte Verbindung rot? Anders als
+	 *  VehiclesApproachingSignal/HeldAtRed braucht es KEINEN Verkehr - es liest das
+	 *  Ampelsystem ueber den Kopplungs-Zeiger der Sim direkt. False bei fertiger
+	 *  Stadt mit Ampeln = die Sim ist nicht ans Ampelsystem gekoppelt
+	 *  (SetTrafficLightSystem nie gerufen) - der historische Bug, der sonst als
+	 *  Inconclusive durchrutschte. */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	bool bSignalizedConnectionEverRed = false;
+
 	/** Simulierte bzw. tatsaechlich gezeichnete Fussgaenger. Beide getrennt, damit
 	 *  "simuliert aber nicht gezeichnet" evidenzbasiert erkannt wird. */
 	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
@@ -93,6 +103,29 @@ struct WIESBADENREAL_API FWiesbadenHealthReport
 	 *  verdaechtig). */
 	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
 	int32 BuildingCollisionBodies = 0;
+
+	// -- Beleuchtung: Sonnenstand + Himmelslicht der geladenen Karte -----------
+	// Der abgestimmte Streiflicht-Stand ist Sonnen-Pitch ~-24 Grad mit SkyLight
+	// ~1.3 (EnsureLightingActors, dauerhaft verankert). Ein Re-Bake OHNE diese
+	// Verankerung faellt auf den flachen Zenit-Stand (~-88 Grad) zurueck und hebt
+	// das Ambient - das fuellt die langen Schatten und nimmt der Stadt die Tiefe.
+	// Genau diesen Rueckfall soll die Diagnose fangen.
+
+	/** True, wenn eine Sonne (DirectionalLight) gefunden wurde - trennt "kein
+	 *  Licht geladen" von einem echten Pitch von 0. */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	bool bLightingPresent = false;
+
+	/** Pitch der Sonne in Grad, normalisiert auf (-180,180]. Erwartet ~-24
+	 *  (streifend); ~-88 heisst flach im Zenit (Re-Bake-Rueckfall). */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	float SunPitchDegrees = 0.0f;
+
+	/** Intensitaet des Himmelslichts (SkyLight). Erwartet ~1.3; deutlich hoeher =
+	 *  Ambient nicht reduziert (Schatten werden aufgefuellt). WeatherFX taste das
+	 *  SkyLight NICHT an, der Wert ist also stabil ablesbar. */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
+	float SkyLightIntensity = 0.0f;
 
 	/** True, wenn ueberhaupt Stadtdaten geladen sind (sonst sind 0-Werte normal). */
 	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Health")
@@ -140,6 +173,11 @@ struct WIESBADENREAL_API FWiesbadenHealthReport
 	static constexpr int32 PerfMaxPrimitiveComponents = 13000;
 	static constexpr int32 PerfMaxInstances = 800000;
 
+	// Steiler (negativer) als das gilt als "flach im Zenit": der abgestimmte
+	// Streiflicht-Stand ist -24 Grad, der Re-Bake-Rueckfall ~-88. -60 trennt
+	// beide mit reichlich Rand und schlaegt bei -24 nicht faelschlich an.
+	static constexpr float FlatZenithSunPitch = -60.0f;
+
 	/** Verkehr simuliert, aber KEINES gezeichnet (Traeger/Mesh/Cull-Defekt). Reines
 	 *  Zahlen-Praedikat; die Aufrufer setzen ihre eigenen Vorbedingungen (Stadt
 	 *  geladen / Streaming fertig) davor. */
@@ -159,6 +197,11 @@ struct WIESBADENREAL_API FWiesbadenHealthReport
 	/** Mesh-Abschnitte ohne Material -> Zeichnen-Defekt (Schachbrett). Reines
 	 *  Zahlen-Praedikat; Aufrufer setzen ihre Vorbedingungen davor. */
 	bool HasMaterialDrawDefect() const { return PerfMeshSectionsWithoutMaterial > 0; }
+
+	/** Sonne steht flach im Zenit (Streiflicht-Beleuchtung durch Re-Bake verloren)?
+	 *  Reines Zahlen-Praedikat; setzt bLightingPresent voraus, damit ein Pitch von
+	 *  0 ohne geladenes Licht nicht faelschlich anschlaegt. */
+	bool HasFlatZenithLighting() const { return bLightingPresent && SunPitchDegrees <= FlatZenithSunPitch; }
 
 	/** Evidenz-gewichtete Warnungen (leer = gesund). */
 	TArray<FString> Warnings() const;
