@@ -1357,10 +1357,29 @@ void UBuildingGenerator::BuildRoof(
 			Section.Tangents.Add(FProcMeshTangent((EaveB - EaveA).GetSafeNormal(), false));
 		}
 
-		Section.UVs.Add(RoofUV(EaveA.X, EaveA.Y));
-		Section.UVs.Add(RoofUV(EaveB.X, EaveB.Y));
-		Section.UVs.Add(RoofUV(RidgeA.X, RidgeA.Y));
-		Section.UVs.Add(RoofUV(RidgeB.X, RidgeB.Y));
+		// UVs ENTLANG DER DACHFLAECHE, nicht top-down projiziert.
+		//
+		// RoofUV(X, Y) misst nur die WAAGERECHTE Lage. Auf einer Schraege ist
+		// die echte Flaeche aber um 1/cos(Neigung) laenger als ihr Grundriss -
+		// top-down gestaucht wuerden die Ziegel entlang der Falllinie gestreckt.
+		// Stattdessen wird je Dachflaeche lokal abgewickelt: U laeuft entlang
+		// der Traufe (first-parallel), V die Schraege hinauf in ECHTER 3D-Laenge
+		// (senkrechter Anteil in der Flaeche). So behaelt der Ziegel auf jeder
+		// Neigung seine Groesse; jede Flaeche traegt ihr eigenes, an ihrer Traufe
+		// ausgerichtetes Raster - genau wie ein real gedecktes Dach.
+		const FVector EaveDir = (EaveB - EaveA).GetSafeNormal();
+		auto SlopeUV = [&](const FVector& P) -> FVector2D
+		{
+			const FVector Local = P - EaveA;
+			const double U = FVector::DotProduct(Local, EaveDir);
+			const double V = (Local - EaveDir * U).Size();
+			return FVector2D(U / MetersToCm, V / MetersToCm);
+		};
+
+		Section.UVs.Add(SlopeUV(EaveA));
+		Section.UVs.Add(SlopeUV(EaveB));
+		Section.UVs.Add(SlopeUV(RidgeA));
+		Section.UVs.Add(SlopeUV(RidgeB));
 
 		// Dachflaeche zwischen Traufe und First - Vorderseite nach aussen.
 		Section.Triangles.Add(Base + 0);
