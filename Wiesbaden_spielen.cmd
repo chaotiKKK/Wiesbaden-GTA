@@ -1,22 +1,27 @@
 @echo off
-REM Wiesbaden spielen - AKTUELLER Stand, ohne Paketierung.
+REM ===========================================================================
+REM  Wiesbaden spielen - Probespielen des AKTUELLEN Stands (ohne Paketierung)
+REM ===========================================================================
+REM  Startet die gebackene Stadt direkt im Spielmodus mit dem aktuell gebauten
+REM  Modul - also mit allem bisher erreichten Inhalt:
+REM    - weiches Einblenden von Fahrbahn UND Gebaeuden am Streaming-Rand
+REM    - Geschwindigkeits-Vorausladung (Boden-Puffer haelt bei Tempo)
+REM    - Nerobergbahn-Ensemble + Nerotalbahn (zur Laufzeit auf der Trasse)
+REM    - Beleuchtung/Sonnenstand, Verkehr, Fussgaenger, Fuss-HUD
 REM
-REM Startet die Stadt WiesbadenCity_Alkis3 (Neubau vom 31.08. mit
-REM freigehaltenen Fahrbahnen) direkt im Spielmodus.
+REM  KEIN Packaging: ein gekochtes Paket dauert Stunden und veraltet sofort;
+REM  der Direktstart spielt immer den aktuellen Code-/Material-Stand. (Loest die
+REM  frueheren zwei Launcher Wiesbaden_spielen.cmd + Wiesbaden_DevPlay.cmd ab.)
 REM
-REM Warum nicht das Paket unter Saved\Package: das ist vom 30.08. und kennt
-REM weder die Kettensaege, das Fuss-HUD noch die neue Stadt. Ein neues Paket
-REM zu kochen dauert Stunden - und liefe es waehrend des Spielens, wuerde es
-REM die Bildrate verfaelschen, die hier gemessen werden soll.
+REM  Karte optional als 1. Argument (Standard: WiesbadenCity_Alkis3), z. B.:
+REM    Wiesbaden_spielen.cmd WiesbadenCity_Alkis4
 REM
-REM Das Fenster braucht FOKUS: Unreal drosselt Fenster ohne Fokus auf 20
-REM Bilder je Sekunde. Nicht wegklicken, sonst misst das Protokoll die
-REM Drossel statt des Spiels.
-REM
-REM Alle 15 Sekunden schreibt das Spiel Bildzeit, Aussetzer und die
-REM Aufteilung auf Spiel- und Renderer-Strang nach
-REM   Saved\Logs\WiesbadenReal.log
-REM
-REM Steuerung: F1 blendet die Tastenbelegung ein.
+REM  Das Fenster braucht FOKUS: Unreal drosselt Fenster ohne Fokus auf 20 FPS.
+REM  Steuerung einblenden: F1.
+REM  Protokoll (alle 15 s Bildzeit/Aussetzer/Straenge): Saved\Logs\WiesbadenReal.log
+REM ===========================================================================
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
-start "" "C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis3 -game -windowed -ResX=1600 -ResY=900 -nop4
+set EXE=C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe
+set MAP=%~1
+if "%MAP%"=="" set MAP=WiesbadenCity_Alkis3
+start "" "%EXE%" "%PROJ%" /Game/Maps/%MAP% -game -windowed -ResX=1600 -ResY=900 -nop4
