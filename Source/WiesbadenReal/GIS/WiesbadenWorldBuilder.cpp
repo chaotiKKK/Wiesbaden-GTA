@@ -36,6 +36,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "ProceduralMeshComponent.h"
+#include "UObject/GarbageCollection.h"
 #include "UObject/UObjectGlobals.h"
 #include "World/RegionAssetSpawnerComponent.h"
 #include "World/RoadFurnitureSpawnerComponent.h"
@@ -263,6 +264,22 @@ void AWiesbadenWorldBuilder::BuildCity()
 	Context->Tools.TerrainGenerator = PipelineTerrainGenerator;
 	Context->Tools.FurnitureGenerator = PipelineFurnitureGenerator;
 	Context->Tools.PickupSpotGenerator = PipelinePickupSpotGenerator;
+
+	// Garbage Collection waehrend des Worker-Baus SPERREN.
+	//
+	// Der Worker verarbeitet die Stadt (~Zehntausende Gebaeude/Strassen) auf
+	// dem Thread-Pool, waehrend der Game-Thread unten den Fortschrittsdialog
+	// pumpt - und dabei Slate tickt, was eine Garbage Collection ausloesen
+	// kann. Laeuft die GC (immer Game-Thread), gibt sie UObjekte samt der von
+	// ihnen gehaltenen Container frei oder verschiebt sie, waehrend der Worker
+	// sie noch benutzt: eine Use-after-free-Heap-Korruption, die an
+	// WECHSELNDEN, voellig unbeteiligten Stellen einschlaegt (mal beim
+	// TArray-Wachstum in FWiesbadenRoadClearance::Build, mal in
+	// FPolygonUtils::TriangulatePolygon) - der klassische, nicht
+	// reproduzierbare "Background Worker"-Absturz. Der Guard haelt die GC an,
+	// bis der Bau fertig ist und die Ergebnisse auf dem Game-Thread angewandt
+	// wurden; danach holt sie regulaer nach.
+	FGCScopeGuard NoGCWhileBuilding;
 
 	// Schwergewichtige Verarbeitung auf den Thread-Pool auslagern.
 	Async(EAsyncExecution::ThreadPool,
