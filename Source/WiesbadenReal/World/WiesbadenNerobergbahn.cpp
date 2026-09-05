@@ -78,8 +78,11 @@ namespace
 	constexpr double RailClearanceCm = 35.0;
 	constexpr double MaxRailGrade = 0.30;
 
-	// Wagenboden ueber Schienenoberkante.
-	constexpr float CarFloorCm = 45.0f;
+	// Hebung des Wagen-Ursprungs ueber den Gleispunkt. Der Ursprung von
+	// SM_WbNbWagen liegt auf der Schienenkontaktlinie in Wagenmitte, der
+	// Unterrahmen reicht als Keil nach unten - ein kleiner Wert setzt ihn
+	// buendig auf die Schiene.
+	constexpr float CarFloorCm = 12.0f;
 }
 
 AWiesbadenNerobergbahn::AWiesbadenNerobergbahn()
@@ -118,95 +121,56 @@ AWiesbadenNerobergbahn::AWiesbadenNerobergbahn()
 
 	CarA = BuildCar(TEXT("WagenA"));
 	CarB = BuildCar(TEXT("WagenB"));
+
+	// Bauwerke: modelliert in Blender (Tools/Blender/make_nerobergbahn.py),
+	// importiert von Tools/import_nerobergbahn.py. Anfangs versteckt - erst
+	// PlaceStructures() setzt sie auf die aufgeloeste Trasse.
+	auto MakeStructure = [&](const TCHAR* Name, const TCHAR* MeshPath) -> UStaticMeshComponent*
+	{
+		UStaticMeshComponent* Comp = CreateDefaultSubobject<UStaticMeshComponent>(Name);
+		Comp->SetupAttachment(Root);
+		Comp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Comp->SetHiddenInGame(true);
+		ConstructorHelpers::FObjectFinder<UStaticMesh> Finder(MeshPath);
+		if (Finder.Succeeded())
+		{
+			Comp->SetStaticMesh(Finder.Object);
+		}
+		return Comp;
+	};
+
+	Talstation = MakeStructure(TEXT("Talstation"),
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbTalstation.SM_WbNbTalstation"));
+	Bergstation = MakeStructure(TEXT("Bergstation"),
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbBergstation.SM_WbNbBergstation"));
+	Viadukt = MakeStructure(TEXT("Viadukt"),
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbViadukt.SM_WbNbViadukt"));
 }
 
 USceneComponent* AWiesbadenNerobergbahn::BuildCar(const TCHAR* Name)
 {
-	USceneComponent* CarRoot = CreateDefaultSubobject<USceneComponent>(Name);
-	CarRoot->SetupAttachment(Root);
+	// Ein StaticMesh statt des frueheren Wuerfelstapels: der Wagen ist jetzt
+	// das in Blender modellierte, texturierte AAA-Modell (Stufenwagen, blau/
+	// Narzissengelb, cremefarbenes Dach). Materialien liegen im Mesh.
+	UStaticMeshComponent* Car = CreateDefaultSubobject<UStaticMeshComponent>(Name);
+	Car->SetupAttachment(Root);
+	// Kein Kollisionskoerper: der Fahrgast wird ANGEHAENGT, nicht physikalisch
+	// mitgeschoben - ein kollidierender Wagen wuerde den einsteigenden Spieler
+	// wegdruecken.
+	Car->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeFinder(
-		TEXT("/Engine/BasicShapes/Cube.Cube"));
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MatFinder(
-		TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-	if (!CubeFinder.Succeeded())
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> WagenMesh(
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbWagen.SM_WbNbWagen"));
+	if (WagenMesh.Succeeded())
 	{
-		return CarRoot;
+		Car->SetStaticMesh(WagenMesh.Object);
 	}
-
-	struct FPart { const TCHAR* Suffix; FVector Pos; FVector Scale; FLinearColor Colour; };
-	// Nerobergbahn-Wagen: blauer Kasten, cremefarbenes Dach, dunkle
-	// Fensterbaender. Masse nach Vorbild rund 5,2 x 2,2 x 2,6 m.
-	const FPart Parts[] = {
-		{ TEXT("_Kasten"), FVector(0, 0, 90),  FVector(5.2f, 2.2f, 1.3f),
-		  FLinearColor(0.02f, 0.10f, 0.30f) },
-		{ TEXT("_Fenster"), FVector(0, 0, 185), FVector(4.8f, 2.24f, 0.7f),
-		  FLinearColor(0.03f, 0.04f, 0.05f) },
-		{ TEXT("_Dach"), FVector(0, 0, 235),  FVector(5.4f, 2.4f, 0.24f),
-		  FLinearColor(0.75f, 0.72f, 0.62f) },
-		{ TEXT("_Rahmen"), FVector(0, 0, 20), FVector(5.4f, 2.3f, 0.3f),
-		  FLinearColor(0.05f, 0.05f, 0.05f) },
-	};
-
-	for (const FPart& Part : Parts)
-	{
-		UStaticMeshComponent* Piece = CreateDefaultSubobject<UStaticMeshComponent>(
-			*(FString(Name) + Part.Suffix));
-		Piece->SetupAttachment(CarRoot);
-		Piece->SetStaticMesh(CubeFinder.Object);
-		Piece->SetRelativeLocation(Part.Pos);
-		Piece->SetRelativeScale3D(Part.Scale);
-		// Kein Kollisionskoerper: der Fahrgast wird ANGEHAENGT, nicht
-		// physikalisch mitgeschoben - ein kollidierender Wagen wuerde den
-		// einsteigenden Spieler wegdruecken.
-		Piece->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-
-		if (MatFinder.Succeeded())
-		{
-			// Dynamische Instanz erst in BeginPlay - im Konstruktor gibt es
-			// dafuer keinen sicheren Aussenwelt-Zustand. Farbe kommt unten.
-			Piece->SetMaterial(0, MatFinder.Object);
-			Piece->ComponentTags.Add(*FString::Printf(TEXT("Farbe:%s"),
-				*Part.Colour.ToString()));
-		}
-	}
-
-	return CarRoot;
+	return Car;
 }
 
 void AWiesbadenNerobergbahn::BeginPlay()
 {
 	Super::BeginPlay();
-
-	// Wagenfarben: die Farbmarken aus dem Konstruktor in dynamische
-	// Materialinstanzen uebersetzen.
-	for (USceneComponent* Car : { CarA, CarB })
-	{
-		if (!Car) { continue; }
-		// Nicht "Children" nennen: AActor hat einen gleichnamigen Member,
-		// und der Uebersetzer behandelt das Ausblenden als Fehler.
-		TArray<USceneComponent*> CarParts;
-		Car->GetChildrenComponents(false, CarParts);
-		for (USceneComponent* Child : CarParts)
-		{
-			UStaticMeshComponent* Piece = Cast<UStaticMeshComponent>(Child);
-			if (!Piece) { continue; }
-			for (const FName& Tag : Piece->ComponentTags)
-			{
-				const FString TagString = Tag.ToString();
-				if (!TagString.StartsWith(TEXT("Farbe:"))) { continue; }
-				FLinearColor Colour;
-				if (Colour.InitFromString(TagString.Mid(6)))
-				{
-					if (UMaterialInstanceDynamic* Mid =
-						Piece->CreateAndSetMaterialInstanceDynamic(0))
-					{
-						Mid->SetVectorParameterValue(TEXT("Color"), Colour);
-					}
-				}
-			}
-		}
-	}
 
 	BuildTracks();
 	BuildTrackMeshes();
@@ -368,6 +332,7 @@ bool AWiesbadenNerobergbahn::ResolveHeights()
 		}
 
 		BuildTrackMeshes();
+		PlaceStructures();
 #if !UE_BUILD_SHIPPING
 		if (bDebugRailway)
 		{
@@ -497,6 +462,55 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 				TArray<FProcMeshTangent>(), /*bCreateCollision=*/false);
 		}
 	}
+}
+
+void AWiesbadenNerobergbahn::PlaceStructures()
+{
+	if (bStructuresPlaced || TrackA.Points.Num() < 2)
+	{
+		return;
+	}
+	bStructuresPlaced = true;
+
+	auto Heading = [](const FVector& Flat) -> FRotator
+	{
+		return FRotator(0.0, FMath::RadiansToDegrees(FMath::Atan2(Flat.Y, Flat.X)), 0.0);
+	};
+
+	// Die aufgeloeste Gleisposition traegt Schienenhoehe (Gelaende + Abstand +
+	// Bettlift). Bauwerke stehen auf dem Boden - darum diese Summe abziehen.
+	const double GroundDrop = RailClearanceCm + 16.0;
+
+	auto Place = [&](UStaticMeshComponent* Comp, double S,
+		double SideCm, double AlongCm, double ZDrop)
+	{
+		if (!Comp)
+		{
+			return;
+		}
+		FVector Pos, Tangent;
+		SampleTrack(TrackA, S, Pos, Tangent);
+		const FVector Flat = FVector(Tangent.X, Tangent.Y, 0.0).GetSafeNormal();
+		const FVector Right = FVector::CrossProduct(Flat, FVector::UpVector).GetSafeNormal();
+		const FVector World = Pos + Flat * AlongCm + Right * SideCm - FVector(0, 0, ZDrop);
+		Comp->SetWorldLocation(World);
+		Comp->SetWorldRotation(Heading(Flat));
+		Comp->SetHiddenInGame(false);
+	};
+
+	// Tal- und Bergstation an den Streckenenden, seitlich neben dem Gleis,
+	// damit das Perronvordach ueber die Trasse reicht.
+	Place(Talstation, 0.0, 650.0, -150.0, GroundDrop);
+	Place(Bergstation, TrackA.TotalLength, 700.0, 150.0, GroundDrop);
+
+	// Viadukt im unteren Streckendrittel: die Deckoberkante (rund 7,7 m ueber
+	// der Pfeilerbasis) traegt das Gleis, die Boegen ueberspannen den Talgrund.
+	constexpr double ViaduktDeckTopCm = 770.0;
+	Place(Viadukt, FMath::Min(5500.0, TrackA.TotalLength * 0.18),
+		0.0, 0.0, ViaduktDeckTopCm);
+
+	UE_LOG(LogWbStreaming, Log,
+		TEXT("Nerobergbahn: Bauwerke gesetzt (Talstation, Bergstation, Viadukt)."));
 }
 
 void AWiesbadenNerobergbahn::SampleTrack(

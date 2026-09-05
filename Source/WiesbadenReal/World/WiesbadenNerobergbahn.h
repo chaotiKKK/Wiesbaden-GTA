@@ -84,8 +84,16 @@ private:
 	/** Punkt und Richtung bei Bogenlaenge s auf einem Gleis. */
 	void SampleTrack(const FTrack& Track, double S, FVector& OutPos, FVector& OutTangent) const;
 
-	/** Baut einen Wagen aus Grundkoerpern (Kasten, Dach, Fenster). */
+	/** Legt einen Wagen als StaticMesh-Komponente an (SM_WbNbWagen). */
 	USceneComponent* BuildCar(const TCHAR* Name);
+
+	/**
+	 * Setzt Tal-/Bergstation und Viadukt auf die aufgeloeste Trasse.
+	 *
+	 * Erst nach der Gelaendeabtastung: vorher stuenden die Bauwerke auf der
+	 * Rueckfallrampe weit unter dem Hang. Laeuft genau einmal.
+	 */
+	void PlaceStructures();
 
 	/** Kamera des mitfahrenden Spielers ueber das gemeinsame Fahrzeug-Rig. */
 	void CreatePassengerCamera();
@@ -105,6 +113,18 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Bahn")
 	USceneComponent* CarB = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Bahn")
+	UStaticMeshComponent* Talstation = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Bahn")
+	UStaticMeshComponent* Bergstation = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Bahn")
+	UStaticMeshComponent* Viadukt = nullptr;
+
+	/** Bauwerke bereits gesetzt? */
+	bool bStructuresPlaced = false;
 
 	FTrack TrackA;
 	FTrack TrackB;
