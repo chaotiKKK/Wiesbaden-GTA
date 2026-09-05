@@ -855,16 +855,20 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 							// nur die Strecke mit.
 							const double StepCm = DriveKmh / 3.6 * 100.0 * DeltaTime;
 
+							// NUR der echte Chaos-Wagen wird "gefahren" gemessen. Der
+							// kinematische Kaefer wird bewusst DETERMINISTISCH +X
+							// teleportiert (else-Zweig) und per Trace auf Bodenluecken
+							// geprueft: eine gerade Linie ist zwischen zwei Laeufen exakt
+							// gleich, echtes Fahren waere nicht reproduzierbar (und bewegt
+							// den Wagen im Headless-Lauf ohnehin nicht - er blieb bei 0 m).
+							AWiesbadenChaosCar* Car = Cast<AWiesbadenChaosCar>(Pawn);
 							IWiesbadenVehicleControl* Ctrl =
-								Cast<IWiesbadenVehicleControl>(Pawn);
-							if (Ctrl)
+								Car ? Cast<IWiesbadenVehicleControl>(Car) : nullptr;
+							if (Car && Ctrl)
 							{
-								// Fahrbares Fahrzeug (Kaefer kinematisch ODER Chaos):
-								// mit Gas fahren und den TATSAECHLICHEN Karosserie-
-								// Hoehensturz messen (statt nur Bodenpraesenz per Trace).
-								// Der kinematische Wagen faellt jetzt ueber ungeladenen
-								// Zellen (AdvanceFallSpeedCmS), liefert also einen
-								// gueltigen Messwert statt UNGUELTIG.
+								// ECHTER Chaos-Wagen: mit Gas fahren und den TATSAECHLICHEN
+								// Karosserie-Hoehensturz messen (statt nur Bodenpraesenz per
+								// Trace). Faellt auf echter Physik, wenn eine Zelle fehlt.
 								bCarMode = true;
 								FWiesbadenCarControl DriveIn;
 								DriveIn.Throttle = (Ctrl->GetSpeedKmh() < DriveKmh) ? 1.0f : 0.0f;
