@@ -101,14 +101,31 @@ void AWiesbadenStreamingSource::UpdateSource(float DeltaSeconds)
 		return;
 	}
 
+	// Geschwindigkeit aus der Positionsaenderung ableiten - funktioniert auch
+	// beim Teleport-Autopilot (-WbAutoDrive), wo Pawn->GetVelocity() 0 liefert.
+	// Geglaettet gegen Respawn-/Teleport-Spruenge.
+	FVector InstVelocity = FVector::ZeroVector;
+	if (bHasPrevSourceLocation && DeltaSeconds > 0.0f)
+	{
+		InstVelocity = (SourceLocation - PrevSourceLocation) / DeltaSeconds;
+	}
+	PrevSourceLocation = SourceLocation;
+	bHasPrevSourceLocation = true;
+	const float VelAlpha = (DeltaSeconds > 0.0f) ? (1.0f - FMath::Exp(-DeltaSeconds / 0.5f)) : 1.0f;
+	SmoothedVelocity = FMath::Lerp(SmoothedVelocity, InstVelocity, VelAlpha);
+
 	CurrentSource.Name = TEXT("WiesbadenPlayerStreaming");
 	CurrentSource.Location = SourceLocation;
 	CurrentSource.Rotation = SourceRotation;
 	CurrentSource.TargetState = EStreamingSourceTargetState::Activated;
 	CurrentSource.bBlockOnSlowLoading = false;
 	CurrentSource.Priority = EStreamingSourcePriority::High;
-	CurrentSource.Velocity = FVector::ZeroVector;
-	CurrentSource.bUseVelocityContributionToCellsSorting = false;
+	// Velocity-Vorausladung: World Partition sortiert Zellen im FAHRWEG vor und
+	// laedt sie zuerst - so bleibt bei Tempo der Boden-Puffer vor dem Wagen
+	// gefuellt, OHNE den Radius (und damit die Zellenzahl) zu vergroessern. Reine
+	// Prioritaets-Sortierung, keine Bildzeit-Mehrlast wie eine Radius-Weitung.
+	CurrentSource.Velocity = SmoothedVelocity;
+	CurrentSource.bUseVelocityContributionToCellsSorting = true;
 	CurrentSource.DebugColor = FColor::Cyan;
 
 	// Hoehenadaptiver Radius: am Boden eng (schnell), in der Luft weit (Sicht).

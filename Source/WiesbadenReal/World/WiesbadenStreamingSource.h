@@ -95,6 +95,12 @@ private:
 	/** Geglaettete Hoehe ueber Grund (m), gegen Radius-Springen beim Ueberfliegen. */
 	float SmoothedAltitudeMeters = 0.0f;
 
+	/** Vorige Quell-Position + geglaettete Geschwindigkeit (cm/s) fuer die
+	 *  Velocity-Vorausladung (auch beim Teleport-Autopilot, wo GetVelocity 0 ist). */
+	FVector PrevSourceLocation = FVector::ZeroVector;
+	bool bHasPrevSourceLocation = false;
+	FVector SmoothedVelocity = FVector::ZeroVector;
+
 	/** Sekundentakt-Drossel fuer das Diagnose-Log (Hoehe/Radius). */
 	int32 LastRadiusLogSecond = -1;
 
