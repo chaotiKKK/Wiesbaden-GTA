@@ -312,10 +312,4 @@ private:
 	FVector2D CachedWorldMapSize = FVector2D::ZeroVector;
 	/** Netz, aus dem die Linien gebaut wurden (Neubau bei Wechsel). */
 	const struct FRoadNetwork* CachedWorldMapNetwork = nullptr;
-
-	// Automatik-Toggle-Beleg (-WbMapToggleShots): injiziert echte M-Tastendruecke
-	// und schiesst je ein Bild mit offener und geschlossener Karte, um zu belegen,
-	// dass die Umschaltung wirklich auf-/zugeht. Nur mit dem Schalter aktiv.
-	bool bMapAufShotDone = false;
-	bool bMapZuShotDone = false;
 };
