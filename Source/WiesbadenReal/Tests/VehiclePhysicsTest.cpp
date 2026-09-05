@@ -2,6 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 
+#include "Vehicles/WiesbadenCar.h"
 #include "Vehicles/WiesbadenVehiclePhysics.h"
 
 namespace
@@ -458,6 +459,23 @@ bool FVehicleSteeringFalloffTest::RunTest(const FString& Parameters)
 	TestTrue(
 		FString::Printf(TEXT("Bremsverzoegerung nicht laecherlich klein (%.1f m/s^2)"), Decel),
 		Decel > 4.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleFallStepTest,
+	"WiesbadenReal.Vehicles.Physics.FallOverVoid",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FVehicleFallStepTest::RunTest(const FString& Parameters)
+{
+	// Ohne Boden (ungeladene Zelle) beschleunigt der Wagen nach unten.
+	const float V1 = AWiesbadenCar::AdvanceFallSpeedCmS(0.0f, 981.0f, 1.0f);
+	TestTrue(TEXT("Nach 1 s faellt er mit ~981 cm/s"),
+		FMath::IsNearlyEqual(V1, 981.0f, 1.0f));
+
+	const float V2 = AWiesbadenCar::AdvanceFallSpeedCmS(V1, 981.0f, 1.0f);
+	TestTrue(TEXT("Fallgeschwindigkeit waechst monoton"), V2 > V1);
 
 	return true;
 }

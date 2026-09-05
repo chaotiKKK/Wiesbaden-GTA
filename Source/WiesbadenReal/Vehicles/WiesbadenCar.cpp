@@ -486,6 +486,13 @@ void AWiesbadenCar::ReadInput(float DeltaSeconds)
 	bReverseToggleHeld = bReversePressed;
 }
 
+float AWiesbadenCar::AdvanceFallSpeedCmS(float CurrentCmS, float GravityCmS2, float Dt)
+{
+	// Freier Fall, gedeckelt auf eine plausible Endgeschwindigkeit.
+	const float Next = CurrentCmS + FMath::Max(GravityCmS2, 0.0f) * FMath::Max(Dt, 0.0f);
+	return FMath::Min(Next, 20000.0f);
+}
+
 void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 {
 	FWiesbadenVehiclePhysicsInput Input;
@@ -685,6 +692,9 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 
 		if (CarWorld->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params))
 		{
+			// Boden gefunden: der Wagen faellt nicht, Fallgeschwindigkeit zurueck.
+			FallSpeedCmS = 0.0f;
+
 			// Neigung: Hochachse auf die Flaechennormale, Vorwaertsachse so nah
 			// wie moeglich an der bisherigen Fahrtrichtung. Sehr steile oder
 			// senkrechte Treffer (Bordsteinkante, Hauswand) werden ignoriert -
@@ -749,6 +759,14 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 				const float Blend = FMath::Clamp(DeltaSeconds * SuspensionResponse, 0.0f, 1.0f);
 				AddActorWorldOffset(FVector(0.0f, 0.0f, (DesiredZ - CurrentZ) * Blend), true);
 			}
+		}
+		else
+		{
+			// Kein Boden getroffen = ungeladene Zelle oder echtes Loch. Der Wagen
+			// faellt, statt in der Luft zu schweben - so misst die Durchfall-
+			// Regression einen ECHTEN Karosserie-Sturz statt einer Fehl-Null.
+			FallSpeedCmS = AdvanceFallSpeedCmS(FallSpeedCmS, FallGravityCmS2, DeltaSeconds);
+			AddActorWorldOffset(FVector(0.0f, 0.0f, -FallSpeedCmS * DeltaSeconds), false);
 		}
 	}
 }

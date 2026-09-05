@@ -100,6 +100,18 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
 	float GroundClearanceCm = 35.0f;
 
+	/** Fallbeschleunigung, wenn kein Boden gefunden wird (cm/s^2). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
+	float FallGravityCmS2 = 981.0f;
+
+	/**
+	 * Naechste Fallgeschwindigkeit (cm/s), wenn unter dem Wagen kein Boden liegt.
+	 *
+	 * Datenrein und statisch, damit das Fallverhalten ueber einer ungeladenen
+	 * Zelle ohne Welt pruefbar ist (Durchfall-Regression).
+	 */
+	static float AdvanceFallSpeedCmS(float CurrentCmS, float GravityCmS2, float Dt);
+
 	/** Glattung der Steuereingaenge (hoeher = direkter). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.1"))
 	float ControlResponse = 6.0f;
@@ -232,6 +244,9 @@ private:
 
 	/** Akkumulierte Rad-Drehung um die Querachse (Grad, auf 360 normalisiert). */
 	float WheelRotationPitch = 0.0f;
+
+	/** Aktuelle Fallgeschwindigkeit (cm/s), wenn kein Boden unter dem Wagen liegt. */
+	float FallSpeedCmS = 0.0f;
 
 	/** True, solange der Wagen ueber ein Gebaeude hinwegfliegt. */
 	bool bFlyingOverBuilding = false;

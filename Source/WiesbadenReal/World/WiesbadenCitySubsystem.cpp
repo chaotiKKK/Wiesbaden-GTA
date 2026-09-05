@@ -855,25 +855,24 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 							// nur die Strecke mit.
 							const double StepCm = DriveKmh / 3.6 * 100.0 * DeltaTime;
 
-							AWiesbadenChaosCar* Car = Cast<AWiesbadenChaosCar>(Pawn);
-							if (Car)
+							IWiesbadenVehicleControl* Ctrl =
+								Cast<IWiesbadenVehicleControl>(Pawn);
+							if (Ctrl)
 							{
-								// ECHTER Chaos-Wagen: mit Gas fahren und den
-								// TATSAECHLICHEN Karosserie-Hoehensturz messen
-								// (statt nur Bodenpraesenz per Trace). Der Wagen
-								// faellt auf echter Physik, wenn eine Zelle fehlt.
+								// Fahrbares Fahrzeug (Kaefer kinematisch ODER Chaos):
+								// mit Gas fahren und den TATSAECHLICHEN Karosserie-
+								// Hoehensturz messen (statt nur Bodenpraesenz per Trace).
+								// Der kinematische Wagen faellt jetzt ueber ungeladenen
+								// Zellen (AdvanceFallSpeedCmS), liefert also einen
+								// gueltigen Messwert statt UNGUELTIG.
 								bCarMode = true;
-								if (IWiesbadenVehicleControl* Ctrl =
-									Cast<IWiesbadenVehicleControl>(Car))
-								{
-									FWiesbadenCarControl In;
-									In.Throttle = (Ctrl->GetSpeedKmh() < DriveKmh) ? 1.0f : 0.0f;
-									In.Steering = 0.0f;
-									Car->SetExternalControl(In);
-								}
+								FWiesbadenCarControl DriveIn;
+								DriveIn.Throttle = (Ctrl->GetSpeedKmh() < DriveKmh) ? 1.0f : 0.0f;
+								DriveIn.Steering = 0.0f;
+								Ctrl->SetExternalControl(DriveIn);
 
-								const FVector C = Car->GetActorLocation();
-								const FVector Vel = Car->GetVelocity();
+								const FVector C = Pawn->GetActorLocation();
+								const FVector Vel = Pawn->GetVelocity();
 								MaxCarDownSpeedCmS = FMath::Max(
 									MaxCarDownSpeedCmS, static_cast<float>(-Vel.Z));
 								CarDistanceCm = FVector::Dist2D(C, AutoDriveOrigin);
@@ -881,8 +880,6 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 
 								// Sekundentakt-Diagnose: sehen, ob der Wagen faehrt
 								// oder haengt (Tempo/Strecke) und wie tief er faellt.
-								if (IWiesbadenVehicleControl* CtrlLog =
-									Cast<IWiesbadenVehicleControl>(Car))
 								{
 									const int32 CarSec = FMath::FloorToInt(DriveWorld->GetTimeSeconds());
 									if (CarSec != LastCarLogSecond)
@@ -891,14 +888,14 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 										UE_LOG(LogWbStreaming, Log,
 											TEXT("Wagen-Durchfall: Tempo %.0f km/h, Strecke %.0f m, ")
 											TEXT("Sturz max %.1f m, Sink max %.1f m/s."),
-											CtrlLog->GetSpeedKmh(), CarDistanceCm * 0.01,
+											Ctrl->GetSpeedKmh(), CarDistanceCm * 0.01,
 											MaxCarSturzCm * 0.01, MaxCarDownSpeedCmS * 0.01f);
 									}
 								}
 
 								FCollisionQueryParams CarParams(
 									FName(TEXT("WbCarFall")), /*bTraceComplex=*/false);
-								CarParams.AddIgnoredActor(Car);
+								CarParams.AddIgnoredActor(Pawn);
 								FHitResult CarGround;
 								const bool bHit = DriveWorld->LineTraceSingleByChannel(
 									CarGround, C + FVector(0, 0, 200.0),
