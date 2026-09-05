@@ -2,6 +2,8 @@
 
 #include "Misc/AutomationTest.h"
 #include "Vehicles/WiesbadenPowertrainSpec.h"
+#include "Vehicles/WiesbadenChaosCar.h"
+#include "ChaosWheeledVehicleMovementComponent.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPowertrainSpecKaefer1302Test,
     "WiesbadenReal.Vehicles.Powertrain.Spec",
@@ -41,5 +43,36 @@ bool FPowertrainSpecKaefer1302Test::RunTest(const FString& Parameters)
     TestTrue(TEXT("Ueber Drehzahlgrenze = letzter Kurvenpunkt"),
         FMath::IsNearlyEqual(S.TorqueNmAt(9000.0f), 102.0f * 0.62f, 0.5f));
 
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPowertrainSpecFeedsChaosCarTest,
+    "WiesbadenReal.Vehicles.Powertrain.SpecFeedsChaosCar",
+    EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPowertrainSpecFeedsChaosCarTest::RunTest(const FString& Parameters)
+{
+    // Das Class Default Object hat die im Ctor gesetzte Fahrzeug-Konfiguration -
+    // kein Spawn, keine Welt noetig.
+    const AWiesbadenChaosCar* CDO = GetDefault<AWiesbadenChaosCar>();
+    if (!TestNotNull(TEXT("ChaosCar-CDO"), CDO)) { return false; }
+    const UChaosWheeledVehicleMovementComponent* M =
+        Cast<UChaosWheeledVehicleMovementComponent>(CDO->GetVehicleMovementComponent());
+    if (!TestNotNull(TEXT("Chaos-Bewegungskomponente"), M)) { return false; }
+
+    const FWiesbadenPowertrainSpec S = FWiesbadenPowertrainSpec::Kaefer1302();
+    TestEqual(TEXT("Chaos MaxTorque == Spec"), M->EngineSetup.MaxTorque, S.MaxTorqueNm);
+    TestEqual(TEXT("Chaos MaxRPM == Spec"), M->EngineSetup.MaxRPM, S.MaxRpm);
+    TestEqual(TEXT("Chaos FinalRatio == Spec"), M->TransmissionSetup.FinalRatio, S.FinalDriveRatio);
+    TestEqual(TEXT("Chaos Mass == Spec"), M->Mass, S.MassKg);
+    if (TestEqual(TEXT("Gangzahl == Spec"),
+        M->TransmissionSetup.ForwardGearRatios.Num(), S.ForwardGearRatios.Num()))
+    {
+        for (int32 I = 0; I < S.ForwardGearRatios.Num(); ++I)
+        {
+            TestEqual(FString::Printf(TEXT("Gang %d == Spec"), I + 1),
+                M->TransmissionSetup.ForwardGearRatios[I], S.ForwardGearRatios[I]);
+        }
+    }
     return true;
 }

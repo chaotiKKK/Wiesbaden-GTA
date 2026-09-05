@@ -16,6 +16,7 @@
 
 #include "ChaosVehicleWheel.h"
 #include "Vehicles/WiesbadenChaosWheels.h"
+#include "Vehicles/WiesbadenPowertrainSpec.h"
 
 AWiesbadenChaosCar::AWiesbadenChaosCar()
 {
@@ -67,14 +68,20 @@ AWiesbadenChaosCar::AWiesbadenChaosCar()
 	Movement->WheelSetups[3].BoneName = FName(TEXT("Wheel_BR"));
 	Movement->WheelSetups[3].AdditionalOffset = FVector::ZeroVector;
 
-	// -- Motor ---------------------------------------------------------------
+	// -- Antriebsstrang ------------------------------------------------------
+	//
+	// Antriebsstrang aus der geteilten Spec - eine Quelle der Wahrheit fuer
+	// beide Fahrzeuge. Werte sind identisch zu den frueheren Literalen, der
+	// Wagen faehrt byte-gleich; nur die Duplizierung ist weg.
 	//
 	// Kaefer 1302 von 1969, 1,5-Liter-Boxer: 44 PS bei 4000 Umdrehungen,
 	// 102 Nm bei 2600. Die Drehmomentkurve gilt als Vielfaches von MaxTorque,
 	// ihr Hoechstwert liegt deshalb bei 1,0.
-	Movement->EngineSetup.MaxTorque = 102.0f;
-	Movement->EngineSetup.MaxRPM = 4600.0f;
-	Movement->EngineSetup.EngineIdleRPM = 800.0f;
+	const FWiesbadenPowertrainSpec Spec = FWiesbadenPowertrainSpec::Kaefer1302();
+
+	Movement->EngineSetup.MaxTorque = Spec.MaxTorqueNm;
+	Movement->EngineSetup.MaxRPM = Spec.MaxRpm;
+	Movement->EngineSetup.EngineIdleRPM = Spec.IdleRpm;
 	Movement->EngineSetup.EngineBrakeEffect = 0.15f;
 
 	if (FRichCurve* Torque = Movement->EngineSetup.TorqueCurve.GetRichCurve())
@@ -82,12 +89,10 @@ AWiesbadenChaosCar::AWiesbadenChaosCar()
 		Torque->Reset();
 		// Boxermotor mit langem, flachem Verlauf und deutlichem Abfall oben
 		// heraus - der Kaefer dreht nicht gern hoch.
-		Torque->AddKey(800.0f, 0.72f);
-		Torque->AddKey(1600.0f, 0.90f);
-		Torque->AddKey(2600.0f, 1.00f);
-		Torque->AddKey(3400.0f, 0.95f);
-		Torque->AddKey(4000.0f, 0.85f);
-		Torque->AddKey(4600.0f, 0.62f);
+		for (const FVector2D& P : Spec.TorqueCurveNormalized)
+		{
+			Torque->AddKey(static_cast<float>(P.X), static_cast<float>(P.Y));
+		}
 	}
 
 	// -- Getriebe ------------------------------------------------------------
@@ -95,9 +100,9 @@ AWiesbadenChaosCar::AWiesbadenChaosCar()
 	// Vier Gaenge mit den Uebersetzungen des Originals, Achsantrieb 4,375.
 	Movement->TransmissionSetup.bUseAutomaticGears = true;
 	Movement->TransmissionSetup.bUseAutoReverse = true;
-	Movement->TransmissionSetup.FinalRatio = 4.375f;
-	Movement->TransmissionSetup.ForwardGearRatios = { 3.80f, 2.06f, 1.32f, 0.89f };
-	Movement->TransmissionSetup.ReverseGearRatios = { 3.61f };
+	Movement->TransmissionSetup.FinalRatio = Spec.FinalDriveRatio;
+	Movement->TransmissionSetup.ForwardGearRatios = Spec.ForwardGearRatios;
+	Movement->TransmissionSetup.ReverseGearRatios = { Spec.ReverseGearRatio };
 	Movement->TransmissionSetup.GearChangeTime = 0.35f;
 	Movement->TransmissionSetup.TransmissionEfficiency = 0.92f;
 
@@ -138,7 +143,7 @@ AWiesbadenChaosCar::AWiesbadenChaosCar()
 	//
 	// 680 kg zu viel sind kein Schoenheitsfehler: Beschleunigung, Bremsweg und
 	// Seitenneigung haengen unmittelbar daran.
-	Movement->Mass = 820.0f;
+	Movement->Mass = Spec.MassKg;
 
 	// -- Anbauteile ----------------------------------------------------------
 	VehicleCamera = CreateDefaultSubobject<UWiesbadenVehicleCameraComponent>(TEXT("VehicleCamera"));
