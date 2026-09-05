@@ -10,8 +10,11 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialParameterCollection.h"
+#include "Materials/MaterialParameterCollectionInstance.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "UObject/SoftObjectPath.h"
 #include "WorldPartition/WorldPartitionSubsystem.h"
 
 AWiesbadenStreamingSource::AWiesbadenStreamingSource()
@@ -140,16 +143,44 @@ void AWiesbadenStreamingSource::UpdateSource(float DeltaSeconds)
 			GroundRadiusMeters, StreamingRadiusMeters, AdaptiveStartAltitudeMeters, AdaptiveFullAltitudeMeters);
 	}
 
-	// Diagnose-Log im Sekundentakt: laesst die Hoehe->Radius-Kurve im Flug pruefen.
+	// Aktuellen Radius ans Strassen-Material geben (MPC_WbStreaming.FadeRadiusM).
+	//
+	// Das entfernungsbasierte Einblenden im Strassen-Material braucht den
+	// GELEBTEN Radius: am Boden 900 m, im Flug bis 6000 m. Ein festes Band wuerde
+	// im Flug ferne Strassen ausblenden. Die MPC wird bis zum Erfolg NACHGELADEN
+	// (nicht nach einem einzigen Fehlversuch aufgeben, sonst haengt das Material
+	// dauerhaft auf dem Default 900 m); der Wert wird je Bild geschrieben.
+	bool bFadeMpcSet = false;
+	if (!FadeMpc)
+	{
+		FadeMpc = Cast<UMaterialParameterCollection>(FSoftObjectPath(
+			TEXT("/Game/Materials/AAA/MPC_WbStreaming.MPC_WbStreaming")).TryLoad());
+	}
+	if (FadeMpc)
+	{
+		if (UMaterialParameterCollectionInstance* Inst =
+			GetWorld() ? GetWorld()->GetParameterCollectionInstance(FadeMpc) : nullptr)
+		{
+			bFadeMpcSet = Inst->SetScalarParameterValue(
+				FName(TEXT("FadeRadiusM")), EffectiveRadiusMeters);
+		}
+	}
+
+	// Diagnose-Log im Sekundentakt: laesst die Hoehe->Radius-Kurve im Flug
+	// pruefen - UND ob der Radius wirklich in die Fade-MPC geschrieben wurde
+	// (sonst haengt das Strassen-Einblenden still auf dem Default 900 m).
 	if (const UWorld* W = GetWorld())
 	{
 		const int32 Sec = FMath::FloorToInt(W->GetTimeSeconds());
 		if (Sec != LastRadiusLogSecond)
 		{
 			LastRadiusLogSecond = Sec;
-			UE_LOG(LogWbCore, Log, TEXT("WbStreaming: Hoehe %.0f m -> Radius %.0f m%s."),
+			UE_LOG(LogWbCore, Log,
+				TEXT("WbStreaming: Hoehe %.0f m -> Radius %.0f m%s. Fade-MPC: %s"),
 				SmoothedAltitudeMeters, EffectiveRadiusMeters,
-				bForceFixedRadius ? TEXT(" (fest, -WbRadius)") : TEXT(""));
+				bForceFixedRadius ? TEXT(" (fest, -WbRadius)") : TEXT(""),
+				bFadeMpcSet ? TEXT("FadeRadiusM gesetzt")
+				            : (FadeMpc ? TEXT("Instanz fehlt!") : TEXT("MPC nicht geladen!")));
 		}
 	}
 

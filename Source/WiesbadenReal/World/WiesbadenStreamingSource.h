@@ -9,6 +9,7 @@
 #include "WiesbadenStreamingSource.generated.h"
 
 class UWorldPartitionSubsystem;
+class UMaterialParameterCollection;
 
 /**
  * World-Partition-Streaming-Quelle, die dem lokalen Player-Pawn folgt.
@@ -96,6 +97,16 @@ private:
 
 	/** Sekundentakt-Drossel fuer das Diagnose-Log (Hoehe/Radius). */
 	int32 LastRadiusLogSecond = -1;
+
+	/**
+	 * Strassen-Einblenden: MPC, in die je Bild der gelebte Streaming-Radius
+	 * geschrieben wird (build_streaming_fade.py legt sie an). Wird bis zum
+	 * Erfolg nachgeladen - ein einmaliger Ladefehler darf das Material nicht
+	 * dauerhaft auf dem Default-Radius (900 m) haengen lassen, sonst
+	 * verschwaenden ferne Strassen im Flug.
+	 */
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialParameterCollection> FadeMpc = nullptr;
 
 	UPROPERTY(Transient)
 	UWorldPartitionSubsystem* WorldPartitionSubsystem = nullptr;
