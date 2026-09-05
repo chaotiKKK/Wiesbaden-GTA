@@ -7,11 +7,14 @@
 #include "CanvasItem.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "UnrealClient.h"
+#include "Misc/Paths.h"
 #include "Core/WiesbadenDevActions.h"
 #include "Engine/Canvas.h"
 #include "TextureResource.h"
 #include "Engine/Engine.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerInput.h"
 #include "Kismet/GameplayStatics.h"
 #include "Vehicles/WiesbadenCar.h"
 #include "Vehicles/WiesbadenVehicleControl.h"
@@ -594,6 +597,35 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		return;
 	}
 
+	// Automatik-Toggle-Beleg (-WbMapToggleShots): echte M-Tastendruecke
+	// injizieren, damit die Flankenerkennung UNTEN wirklich feuert (nicht nur
+	// bWorldMapOpen setzen), und je ein Bild mit offener/geschlossener Karte
+	// schiessen. Zwei Druck-Los-Paare: ~10 s oeffnen, ~14 s schliessen.
+	if (FParse::Param(FCommandLine::Get(), TEXT("WbMapToggleShots")))
+	{
+		if (APlayerController* TogPC = GetOwningPlayerController())
+		{
+			const float T = ElapsedSeconds;
+			if (T >= 10.00f && T < 10.06f)      { TogPC->InputKey(FInputKeyParams(EKeys::M, IE_Pressed, 1.0, false)); }
+			else if (T >= 10.06f && T < 10.25f) { TogPC->InputKey(FInputKeyParams(EKeys::M, IE_Released, 1.0, false)); }
+			else if (T >= 14.00f && T < 14.06f) { TogPC->InputKey(FInputKeyParams(EKeys::M, IE_Pressed, 1.0, false)); }
+			else if (T >= 14.06f && T < 14.25f) { TogPC->InputKey(FInputKeyParams(EKeys::M, IE_Released, 1.0, false)); }
+
+			if (!bMapAufShotDone && T >= 12.0f)
+			{
+				FScreenshotRequest::RequestScreenshot(
+					FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("MapAuf"), true, true);
+				bMapAufShotDone = true;
+			}
+			if (!bMapZuShotDone && T >= 16.0f)
+			{
+				FScreenshotRequest::RequestScreenshot(
+					FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("MapZu"), true, true);
+				bMapZuShotDone = true;
+			}
+		}
+	}
+
 	// Weltkarte umschalten: M (Tastatur) oder der View/Back/Select-Knopf am
 	// Gamepad. Flanke, damit ein Druck einmal umschaltet. Ist sie offen, liegt
 	// sie als Vollbild ueber dem uebrigen HUD.
@@ -604,6 +636,8 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		if (bMapDown && !bMapKeyHeld)
 		{
 			bWorldMapOpen = !bWorldMapOpen;
+			UE_LOG(LogWbCore, Log, TEXT("Weltkarte-Toggle -> %s (bei %.1f s)"),
+				bWorldMapOpen ? TEXT("AUF") : TEXT("ZU"), ElapsedSeconds);
 		}
 		bMapKeyHeld = bMapDown;
 	}
