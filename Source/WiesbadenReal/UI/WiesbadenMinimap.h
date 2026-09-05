@@ -54,6 +54,39 @@ struct FMinimapSettings
 };
 
 /**
+ * Fit-Projektion fuer die VOLLBILD-Weltkarte (M / Gamepad-Select): das GANZE
+ * Strassennetz in ein Bildschirmrechteck, Norden oben, Seitenverhaeltnis
+ * erhalten. Anders als die Minikarte NICHT spielerzentriert - der Spieler ist
+ * nur ein Punkt an seiner projizierten Position.
+ *
+ * Datenrein, damit die Umrechnung ohne Canvas/Welt pruefbar ist
+ * (Test World.WorldMapProjection).
+ */
+struct WIESBADENREAL_API FWorldMapProjection
+{
+	/** XY-Grenzen des Netzes in Zentimetern (Welt: X=Ost, Y=Nord). */
+	FVector2D WorldMin = FVector2D::ZeroVector;
+	FVector2D WorldMax = FVector2D::ZeroVector;
+
+	/** Mitte des Kartenbereichs in Pixeln. */
+	FVector2D ScreenCentre = FVector2D::ZeroVector;
+
+	/** Gleichmaessiger Massstab Pixel je Zentimeter (fit an die engere Achse). */
+	float ScalePxPerCm = 1.0f;
+
+	/**
+	 * Weltpunkt -> Bildschirm (px). Norden oben: Welt +Y (Nord) wird zu
+	 * kleinerem Bildschirm-Y, Welt +X (Ost) zu groesserem Bildschirm-X.
+	 */
+	FVector2D Project(const FVector& World) const;
+
+	bool IsValid() const
+	{
+		return ScalePxPerCm > 0.0f && WorldMax.X > WorldMin.X && WorldMax.Y > WorldMin.Y;
+	}
+};
+
+/**
  * Baut die Linien der Minikarte aus dem Strassennetz.
  *
  * Bewusst KEIN SceneCapture: Eine zweite Kameraansicht der Stadt zu rendern
@@ -63,6 +96,32 @@ struct FMinimapSettings
  */
 struct WIESBADENREAL_API FWiesbadenMinimap
 {
+	/**
+	 * XY-Huellbox aller Segment-Mittellinienpunkte (cm). Rueckgabe false bei
+	 * leerem Netz (OutMin/OutMax dann unveraendert).
+	 */
+	static bool ComputeNetworkBoundsXY(
+		const FRoadNetwork& Network, FVector2D& OutMin, FVector2D& OutMax);
+
+	/**
+	 * Fit-Projektion: das ganze Netz (WorldMin..WorldMax) in ein Rechteck der
+	 * Groesse ScreenSizePx um ScreenCentre, Seitenverhaeltnis erhalten.
+	 * MarginFrac < 1 laesst einen Rand (0.88 = 6 % Rand je Seite).
+	 */
+	static FWorldMapProjection MakeWorldMapProjection(
+		const FVector2D& WorldMin, const FVector2D& WorldMax,
+		const FVector2D& ScreenCentre, const FVector2D& ScreenSizePx, float MarginFrac);
+
+	/**
+	 * Projiziert das ganze Netz in Bildschirmlinien: Nebenstrassen zuerst,
+	 * Hauptstrassen zuletzt (liegen oben). Segmente, die kuerzer als
+	 * MinSegmentPx projizieren, werden uebersprungen (bei Stadt-Zoom unsichtbar);
+	 * das haelt die Zahl der Canvas-Aufrufe unter MaxLines.
+	 */
+	static void BuildWorldMapLines(
+		const FRoadNetwork& Network, const FWorldMapProjection& Proj,
+		int32 MaxLines, float MinSegmentPx, TArray<FMinimapLine>& OutLines);
+
 	/**
 	 * Waehlt die Segmente im Umkreis und rechnet sie in Bildschirmkoordinaten
 	 * um. Center ist die Mitte der Karte in Pixeln.

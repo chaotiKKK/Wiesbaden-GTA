@@ -171,6 +171,18 @@ private:
 	 */
 	void DrawMinimap(float CenterX, float CenterY, float Diameter);
 
+	/**
+	 * Vollbild-Weltkarte des ganzen Strassennetzes (M / Gamepad-Select).
+	 *
+	 * Wie die Minikarte aus den Mittellinien gezeichnet (kein SceneCapture), aber
+	 * das GANZE Netz norden-oben ins Bild eingepasst statt spielerzentriert. Der
+	 * Spieler ist ein Richtungspfeil an seiner projizierten Position. Die Linien
+	 * werden EINMAL beim Oeffnen gebaut (bzw. bei Groessen-/Netzwechsel) und je
+	 * Bild nur nachgezeichnet - das Projizieren von ~125.000 Segmenten je Bild
+	 * waere sonst der teuerste Posten des HUD.
+	 */
+	void DrawWorldMap(float Width, float Height);
+
 	/** Strassenname, auf der sich der Spieler befindet - Balken oben mittig. */
 	void DrawStreetName(float CenterX, float Y);
 
@@ -286,4 +298,18 @@ private:
 	/** Umschaltzustand und Halte-Flanke der F1-Taste. */
 	bool bShowControlLegend = true;
 	bool bLegendKeyHeld = false;
+
+	// -- Weltkarte (M / Gamepad-Select) --------------------------------------
+	/** True, solange die Vollbild-Weltkarte offen ist. */
+	bool bWorldMapOpen = false;
+	/** Halte-Flanke der Karten-Taste, damit ein Druck einmal umschaltet. */
+	bool bMapKeyHeld = false;
+	/** Einmal gebaute Weltkarten-Linien (ganzes Netz projiziert). */
+	TArray<FMinimapLine> CachedWorldMapLines;
+	/** Projektion fuer den je Bild neu projizierten Spielerpunkt. */
+	FWorldMapProjection CachedWorldMapProj;
+	/** Bildgroesse, fuer die die Linien gebaut wurden (Neubau bei Aenderung). */
+	FVector2D CachedWorldMapSize = FVector2D::ZeroVector;
+	/** Netz, aus dem die Linien gebaut wurden (Neubau bei Wechsel). */
+	const struct FRoadNetwork* CachedWorldMapNetwork = nullptr;
 };

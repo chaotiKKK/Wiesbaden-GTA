@@ -592,6 +592,25 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		return;
 	}
 
+	// Weltkarte umschalten: M (Tastatur) oder der View/Back/Select-Knopf am
+	// Gamepad. Flanke, damit ein Druck einmal umschaltet. Ist sie offen, liegt
+	// sie als Vollbild ueber dem uebrigen HUD.
+	if (APlayerController* MapPC = GetOwningPlayerController())
+	{
+		const bool bMapDown = MapPC->IsInputKeyDown(EKeys::M)
+			|| MapPC->IsInputKeyDown(EKeys::Gamepad_Special_Left);
+		if (bMapDown && !bMapKeyHeld)
+		{
+			bWorldMapOpen = !bWorldMapOpen;
+		}
+		bMapKeyHeld = bMapDown;
+	}
+	if (bWorldMapOpen)
+	{
+		DrawWorldMap(Width, Height);
+		return;
+	}
+
 	// F1 schaltet die Legende um (Flanke, damit ein Tastendruck einmal zaehlt).
 	if (APlayerController* PC = GetOwningPlayerController())
 	{
@@ -1142,6 +1161,94 @@ void AWiesbadenVehicleHUD::DrawMinimap(float CenterX, float CenterY, float Diame
 	const FString ScaleText = FString::Printf(TEXT("%.0f m"), Settings.RangeCm / 100.0);
 	DrawText(ScaleText, DialScale, CenterX - Radius + 8.0f, CenterY + Radius - 20.0f,
 		GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
+}
+
+void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
+{
+	if (!Canvas)
+	{
+		return;
+	}
+
+	// Abgedunkelter Vollbild-Hintergrund - halbtransparent, damit klar ist, dass
+	// die Karte ein Overlay ist (das Spiel laeuft dahinter weiter).
+	DrawRect(FLinearColor(0.02f, 0.03f, 0.05f, 0.88f), 0.0f, 0.0f, Width, Height);
+
+	const FRoadNetwork* Network = FindRoadNetwork();
+	if (!Network)
+	{
+		DrawText(TEXT("Karte laedt..."), DialText, Width * 0.5f - 48.0f, Height * 0.5f,
+			GEngine ? GEngine->GetMediumFont() : nullptr, 1.3f);
+		return;
+	}
+
+	const FVector2D ScreenCentre(Width * 0.5f, Height * 0.5f);
+	const FVector2D ScreenSize(Width, Height);
+
+	// Das ganze Netz EINMAL projizieren (bzw. bei Groessen-/Netzwechsel neu). Je
+	// Bild ueber ~125.000 Segmente zu laufen waere der teuerste HUD-Posten.
+	if (CachedWorldMapNetwork != Network
+		|| !CachedWorldMapSize.Equals(ScreenSize, 1.0f)
+		|| CachedWorldMapLines.Num() == 0)
+	{
+		FVector2D WMin, WMax;
+		if (FWiesbadenMinimap::ComputeNetworkBoundsXY(*Network, WMin, WMax))
+		{
+			CachedWorldMapProj = FWiesbadenMinimap::MakeWorldMapProjection(
+				WMin, WMax, ScreenCentre, ScreenSize, /*MarginFrac=*/0.88f);
+			FWiesbadenMinimap::BuildWorldMapLines(
+				*Network, CachedWorldMapProj, /*MaxLines=*/12000, /*MinSegmentPx=*/1.5f,
+				CachedWorldMapLines);
+			CachedWorldMapNetwork = Network;
+			CachedWorldMapSize = ScreenSize;
+		}
+	}
+
+	for (const FMinimapLine& Line : CachedWorldMapLines)
+	{
+		DrawLine(Line.Start.X, Line.Start.Y, Line.End.X, Line.End.Y,
+			Line.bMajor ? MapMajorRoad : MapMinorRoad, Line.Thickness);
+	}
+
+	// Spielerpunkt + Fahrtrichtung (je Bild neu projiziert - billig).
+	if (CachedWorldMapProj.IsValid())
+	{
+		const APlayerController* PC = GetOwningPlayerController();
+		const APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+		if (Pawn)
+		{
+			const FVector2D P = CachedWorldMapProj.Project(Pawn->GetActorLocation());
+			const double YawRad = FMath::DegreesToRadians(Pawn->GetActorRotation().Yaw);
+			// Welt +X (Ost) -> Bildschirm +X, Welt +Y (Nord) -> Bildschirm -Y.
+			const FVector2D Fwd(FMath::Cos(YawRad), -FMath::Sin(YawRad));
+			const FVector2D Right(-Fwd.Y, Fwd.X);
+			constexpr float S = 12.0f;
+			const FVector2D Tip = P + Fwd * S;
+			const FVector2D L = P - Fwd * (S * 0.6f) + Right * (S * 0.6f);
+			const FVector2D R = P - Fwd * (S * 0.6f) - Right * (S * 0.6f);
+			DrawLine(Tip.X, Tip.Y, L.X, L.Y, MapPlayer, 2.8f);
+			DrawLine(Tip.X, Tip.Y, R.X, R.Y, MapPlayer, 2.8f);
+			DrawLine(L.X, L.Y, R.X, R.Y, MapPlayer, 2.8f);
+		}
+	}
+
+	// Titel, Nordzeiger und Schliess-Hinweis.
+	DrawText(TEXT("WIESBADEN"), DialText, 24.0f, 20.0f,
+		GEngine ? GEngine->GetMediumFont() : nullptr, 1.7f);
+	DrawLine(Width * 0.5f, 42.0f, Width * 0.5f, 66.0f, MapMajorRoad, 2.0f);
+	DrawText(TEXT("N"), DialScale, Width * 0.5f - 5.0f, 22.0f,
+		GEngine ? GEngine->GetMediumFont() : nullptr, 1.3f);
+	DrawText(TEXT("M / Select: schliessen"), DialScale, 24.0f, Height - 32.0f,
+		GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
+
+	// Massstab: Kartenbreite in Kilometern.
+	if (CachedWorldMapProj.IsValid())
+	{
+		const double WorldWkm =
+			(CachedWorldMapProj.WorldMax.X - CachedWorldMapProj.WorldMin.X) / 100000.0;
+		DrawText(FString::Printf(TEXT("Breite: %.1f km"), WorldWkm), DialScale,
+			Width - 170.0f, Height - 32.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
+	}
 }
 
 void AWiesbadenVehicleHUD::DrawStreetName(float CenterX, float Y)

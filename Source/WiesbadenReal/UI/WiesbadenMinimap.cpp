@@ -2,6 +2,114 @@
 
 #include "UI/WiesbadenMinimap.h"
 
+FVector2D FWorldMapProjection::Project(const FVector& World) const
+{
+	const FVector2D WorldCentre = (WorldMin + WorldMax) * 0.5;
+	return FVector2D(
+		ScreenCentre.X + (World.X - WorldCentre.X) * ScalePxPerCm,
+		ScreenCentre.Y - (World.Y - WorldCentre.Y) * ScalePxPerCm);  // -Y: Norden oben
+}
+
+bool FWiesbadenMinimap::ComputeNetworkBoundsXY(
+	const FRoadNetwork& Network, FVector2D& OutMin, FVector2D& OutMax)
+{
+	bool bAny = false;
+	FVector2D Min(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
+	FVector2D Max(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());
+	for (const FRoadSegment& Segment : Network.Segments)
+	{
+		const TArray<FVector>& Line = Segment.Centerline.Num() >= 2
+			? Segment.Centerline
+			: Segment.TrimmedCenterline;
+		for (const FVector& P : Line)
+		{
+			Min.X = FMath::Min(Min.X, P.X);
+			Min.Y = FMath::Min(Min.Y, P.Y);
+			Max.X = FMath::Max(Max.X, P.X);
+			Max.Y = FMath::Max(Max.Y, P.Y);
+			bAny = true;
+		}
+	}
+	if (bAny)
+	{
+		OutMin = Min;
+		OutMax = Max;
+	}
+	return bAny;
+}
+
+FWorldMapProjection FWiesbadenMinimap::MakeWorldMapProjection(
+	const FVector2D& WorldMin, const FVector2D& WorldMax,
+	const FVector2D& ScreenCentre, const FVector2D& ScreenSizePx, float MarginFrac)
+{
+	FWorldMapProjection Proj;
+	Proj.WorldMin = WorldMin;
+	Proj.WorldMax = WorldMax;
+	Proj.ScreenCentre = ScreenCentre;
+
+	const double WorldW = FMath::Max(WorldMax.X - WorldMin.X, 1.0);
+	const double WorldH = FMath::Max(WorldMax.Y - WorldMin.Y, 1.0);
+	const float Margin = FMath::Clamp(MarginFrac, 0.1f, 1.0f);
+
+	// Gleichmaessig: der Massstab, der auf BEIDE Achsen passt (die engere begrenzt).
+	const double SxPerCm = (ScreenSizePx.X * Margin) / WorldW;
+	const double SyPerCm = (ScreenSizePx.Y * Margin) / WorldH;
+	Proj.ScalePxPerCm = static_cast<float>(FMath::Min(SxPerCm, SyPerCm));
+	return Proj;
+}
+
+void FWiesbadenMinimap::BuildWorldMapLines(
+	const FRoadNetwork& Network, const FWorldMapProjection& Proj,
+	int32 MaxLines, float MinSegmentPx, TArray<FMinimapLine>& OutLines)
+{
+	OutLines.Reset();
+	if (!Proj.IsValid())
+	{
+		return;
+	}
+
+	const float MinPxSq = MinSegmentPx * MinSegmentPx;
+
+	// Zwei Durchgaenge: Nebenstrassen zuerst, Hauptstrassen zuletzt (oben drueber).
+	for (int32 Pass = 0; Pass < 2 && OutLines.Num() < MaxLines; ++Pass)
+	{
+		const bool bWantMajor = (Pass == 1);
+		for (const FRoadSegment& Segment : Network.Segments)
+		{
+			if (OutLines.Num() >= MaxLines)
+			{
+				break;
+			}
+			const bool bMajor = IsMajorRoad(Segment.HighwayType);
+			if (bMajor != bWantMajor)
+			{
+				continue;
+			}
+			const TArray<FVector>& Line = Segment.Centerline.Num() >= 2
+				? Segment.Centerline
+				: Segment.TrimmedCenterline;
+			if (Line.Num() < 2)
+			{
+				continue;
+			}
+			for (int32 Index = 1; Index < Line.Num() && OutLines.Num() < MaxLines; ++Index)
+			{
+				const FVector2D A = Proj.Project(Line[Index - 1]);
+				const FVector2D B = Proj.Project(Line[Index]);
+				if (FVector2D::DistSquared(A, B) < MinPxSq)
+				{
+					continue;  // bei Stadt-Zoom unter einem Pixel - unsichtbar
+				}
+				FMinimapLine& L = OutLines.AddDefaulted_GetRef();
+				L.Start = A;
+				L.End = B;
+				L.bMajor = bMajor;
+				L.Thickness = bMajor ? 2.2f : 1.0f;
+			}
+		}
+	}
+}
+
 bool FWiesbadenMinimap::IsMajorRoad(EOSMHighwayType Type)
 {
 	switch (Type)

@@ -201,3 +201,55 @@ bool FVehicleHUDControlLegendTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+// Weltkarte: die datenreine Fit-Projektion (ganzes Netz -> Bildschirm, Norden
+// oben). Ohne Canvas/Welt pruefbar - das Zeichnen selbst ist der triviale Teil.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldMapProjectionTest,
+	"WiesbadenReal.World.WorldMapProjection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FWorldMapProjectionTest::RunTest(const FString& Parameters)
+{
+	// Netz-Grenzen 0..1000 (Ost) x 0..500 (Nord) cm; Bild 800x600, Mitte (400,300).
+	const FVector2D WMin(0.0, 0.0);
+	const FVector2D WMax(1000.0, 500.0);
+	const FWorldMapProjection Proj = FWiesbadenMinimap::MakeWorldMapProjection(
+		WMin, WMax, FVector2D(400.0, 300.0), FVector2D(800.0, 600.0), /*MarginFrac=*/1.0f);
+
+	// Gleichmaessiger Massstab, begrenzt durch die WEITE Achse (Ost): 800/1000 = 0.8.
+	TestTrue(TEXT("Massstab an der engeren Passung (0.8 px/cm)"),
+		FMath::IsNearlyEqual(Proj.ScalePxPerCm, 0.8f, 0.001f));
+
+	// Weltmitte -> Bildschirmmitte.
+	const FVector2D C = Proj.Project(FVector(500.0, 250.0, 0.0));
+	TestTrue(TEXT("Weltmitte -> Bildschirmmitte"), C.Equals(FVector2D(400.0, 300.0), 0.01));
+
+	// Norden oben: weiter noerdlich (groesseres Welt-Y) -> HOEHER (kleineres Bild-Y).
+	const FVector2D North = Proj.Project(FVector(500.0, 500.0, 0.0));
+	TestTrue(TEXT("Norden ist oben"), North.Y < C.Y);
+
+	// Osten rechts: groesseres Welt-X -> groesseres Bild-X; Rand bei +400 px (250cm*0.8... 500cm*0.8=400).
+	const FVector2D East = Proj.Project(FVector(1000.0, 250.0, 0.0));
+	TestTrue(TEXT("Osten ist rechts"), East.X > C.X);
+	TestTrue(TEXT("Ostrand bei 800 px (500 cm * 0.8)"),
+		FMath::IsNearlyEqual(East.X, 800.0, 0.01));
+
+	// Huellbox aus einem Mini-Netz.
+	FRoadNetwork Net;
+	FRoadSegment Seg;
+	Seg.Centerline = { FVector(10.0, 20.0, 0.0), FVector(110.0, 220.0, 0.0) };
+	Net.Segments.Add(Seg);
+	FVector2D BMin, BMax;
+	TestTrue(TEXT("Huellbox gefunden"),
+		FWiesbadenMinimap::ComputeNetworkBoundsXY(Net, BMin, BMax));
+	TestTrue(TEXT("Huellbox Min"), BMin.Equals(FVector2D(10.0, 20.0), 0.01));
+	TestTrue(TEXT("Huellbox Max"), BMax.Equals(FVector2D(110.0, 220.0), 0.01));
+
+	// Leeres Netz -> keine Huellbox.
+	FRoadNetwork Empty;
+	FVector2D E1, E2;
+	TestFalse(TEXT("Leeres Netz -> keine Huellbox"),
+		FWiesbadenMinimap::ComputeNetworkBoundsXY(Empty, E1, E2));
+
+	return true;
+}
