@@ -323,6 +323,47 @@ void FWiesbadenMinimap::BuildLines(
 	}
 }
 
+FMinimapWaypoint FWiesbadenMinimap::ProjectWaypointToMinimap(
+	const FVector& PlayerLocation,
+	double PlayerYawDegrees,
+	const FVector& WaypointLocation,
+	const FVector2D& CenterPx,
+	const FMinimapSettings& Settings)
+{
+	FMinimapWaypoint Out;
+
+	const double DX = WaypointLocation.X - PlayerLocation.X;
+	const double DY = WaypointLocation.Y - PlayerLocation.Y;
+	Out.DistanceCm = FMath::Sqrt(DX * DX + DY * DY);
+
+	const double RangeCm = FMath::Max(Settings.RangeCm, 100.0);
+	const float Radius = FMath::Max(Settings.DiameterPx, 10.0f) * 0.5f;
+	const double PixelsPerCm = Radius / RangeCm;
+
+	// Gleiche Dreh-/Abbildung wie BuildLines, damit der Marker auf den Strassen sitzt.
+	const double RotationDeg = Settings.bRotateWithPlayer ? -PlayerYawDegrees : 0.0;
+	const double RotationRad = FMath::DegreesToRadians(RotationDeg);
+	const double CosR = FMath::Cos(RotationRad);
+	const double SinR = FMath::Sin(RotationRad);
+
+	const double RX = DX * CosR - DY * SinR;
+	const double RY = DX * SinR + DY * CosR;
+	FVector2D Offset(RY * PixelsPerCm, -RX * PixelsPerCm);
+
+	// Ausserhalb der Reichweite: richtungserhaltend an den Kartenrand klemmen.
+	const float Len = static_cast<float>(Offset.Size());
+	if (Len > Radius)
+	{
+		Out.bOffMap = true;
+		if (Len > KINDA_SMALL_NUMBER)
+		{
+			Offset *= (Radius / Len);
+		}
+	}
+	Out.ScreenPos = CenterPx + Offset;
+	return Out;
+}
+
 FString FWiesbadenMinimap::FindStreetName(
 	const FRoadNetwork& Network,
 	const FVector& PlayerLocation,

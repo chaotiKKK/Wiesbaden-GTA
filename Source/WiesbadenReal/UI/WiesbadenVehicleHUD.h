@@ -317,6 +317,24 @@ private:
 	 *  zurueckgelesen wurde; davor wird nicht geschwenkt. Beim Oeffnen zurueckgesetzt. */
 	bool bMapCentreInit = false;
 
+	// -- Wegpunkt ------------------------------------------------------------
+	/** Gesetzter Wegpunkt in Welt-cm (Z ist ohne Belang; Richtung/Distanz sind planar). */
+	FVector WaypointWorld = FVector::ZeroVector;
+	/** True, solange ein Wegpunkt gesetzt ist. */
+	bool bWaypointSet = false;
+	/** Halte-Flanken der Setz-/Loesch-Taste, damit ein Druck einmal wirkt. */
+	bool bWaypointSetKeyHeld = false;
+	bool bWaypointClearKeyHeld = false;
+
+public:
+	/**
+	 * Entfernung fuer die Karten-Anzeige: unter 1 km in Metern ("340 m"), darueber
+	 * in Kilometern mit einer Nachkommastelle ("1.2 km"). Datenrein/testbar.
+	 */
+	static FString FormatMapDistance(double DistanceCm);
+
+private:
+
 	/** Render-Ziel-Ansicht: rendert Strassen+Gebaeude EINMAL ins RenderTarget,
 	 *  statt sie je Bild aus ~16.000 Linien neu zu zeichnen. */
 	UPROPERTY(Transient)

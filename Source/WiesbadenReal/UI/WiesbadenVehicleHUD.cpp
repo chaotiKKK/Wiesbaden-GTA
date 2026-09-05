@@ -58,6 +58,17 @@ namespace
 	const FLinearColor MapMajorRoad(0.95f, 0.82f, 0.35f, 1.0f);
 	const FLinearColor MapPlayer(0.95f, 0.25f, 0.20f, 1.0f);
 	const FLinearColor MapBorder(0.55f, 0.57f, 0.62f, 0.85f);
+	const FLinearColor MapWaypoint(0.25f, 0.90f, 0.55f, 1.0f);
+}
+
+FString AWiesbadenVehicleHUD::FormatMapDistance(double DistanceCm)
+{
+	const double Metres = DistanceCm / 100.0;
+	if (Metres < 1000.0)
+	{
+		return FString::Printf(TEXT("%.0f m"), Metres);
+	}
+	return FString::Printf(TEXT("%.1f km"), Metres / 1000.0);
 }
 
 AWiesbadenVehicleHUD::AWiesbadenVehicleHUD()
@@ -1176,6 +1187,37 @@ void AWiesbadenVehicleHUD::DrawMinimap(float CenterX, float CenterY, float Diame
 	DrawLine(CenterX - ArrowSize * 0.6f, CenterY + ArrowSize * 0.6f,
 		CenterX + ArrowSize * 0.6f, CenterY + ArrowSize * 0.6f, MapPlayer, 2.5f);
 
+	// Wegpunkt: Richtung (Marker, am Rand geklemmt wenn ausserhalb) + Distanz.
+	if (bWaypointSet)
+	{
+		const FMinimapWaypoint WP = FWiesbadenMinimap::ProjectWaypointToMinimap(
+			MapCentre, MapYaw, WaypointWorld, FVector2D(CenterX, CenterY), Settings);
+		const FVector2D M = WP.ScreenPos;
+
+		// Bei Rand-Klemmung ein kurzer Richtungsstrich von innen zum Marker.
+		if (WP.bOffMap)
+		{
+			FVector2D Dir = M - FVector2D(CenterX, CenterY);
+			if (!Dir.IsNearlyZero())
+			{
+				Dir.Normalize();
+				DrawLine(M.X - Dir.X * 12.0f, M.Y - Dir.Y * 12.0f, M.X, M.Y, MapWaypoint, 2.2f);
+			}
+		}
+
+		// Diamant-Marker.
+		constexpr float D = 6.0f;
+		DrawLine(M.X, M.Y - D, M.X + D, M.Y, MapWaypoint, 2.2f);
+		DrawLine(M.X + D, M.Y, M.X, M.Y + D, MapWaypoint, 2.2f);
+		DrawLine(M.X, M.Y + D, M.X - D, M.Y, MapWaypoint, 2.2f);
+		DrawLine(M.X - D, M.Y, M.X, M.Y - D, MapWaypoint, 2.2f);
+
+		// Distanz rechts unten an der Karte.
+		DrawText(FString::Printf(TEXT("WP %s"), *FormatMapDistance(WP.DistanceCm)),
+			MapWaypoint, CenterX + Radius - 66.0f, CenterY + Radius - 20.0f,
+			GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
+	}
+
 	// Massstab: Der Umkreis in Metern, damit die Karte lesbar bleibt.
 	const FString ScaleText = FString::Printf(TEXT("%.0f m"), Settings.RangeCm / 100.0);
 	DrawText(ScaleText, DialScale, CenterX - Radius + 8.0f, CenterY + Radius - 20.0f,
@@ -1279,12 +1321,70 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 		}
 	}
 
+	// Wegpunkt setzen/loeschen: Fadenkreuz in der Bildmitte anvisieren (mit Zoom
+	// + Pan darueberfahren), Enter / A / Linksklick setzt, Rueck / B / Rechtsklick
+	// loescht. Flanken, damit ein Druck einmal wirkt.
+	if (MapPC && Proj.IsValid())
+	{
+		const bool bSet = MapPC->IsInputKeyDown(EKeys::Enter)
+			|| MapPC->IsInputKeyDown(EKeys::LeftMouseButton)
+			|| MapPC->IsInputKeyDown(EKeys::Gamepad_FaceButton_Bottom);
+		if (bSet && !bWaypointSetKeyHeld)
+		{
+			const FVector2D W = Proj.Unproject(FVector2D(Width * 0.5f, Height * 0.5f));
+			WaypointWorld = FVector(W.X, W.Y, 0.0);
+			bWaypointSet = true;
+		}
+		bWaypointSetKeyHeld = bSet;
+
+		const bool bClear = MapPC->IsInputKeyDown(EKeys::BackSpace)
+			|| MapPC->IsInputKeyDown(EKeys::Delete)
+			|| MapPC->IsInputKeyDown(EKeys::RightMouseButton)
+			|| MapPC->IsInputKeyDown(EKeys::Gamepad_FaceButton_Right);
+		if (bClear && !bWaypointClearKeyHeld)
+		{
+			bWaypointSet = false;
+		}
+		bWaypointClearKeyHeld = bClear;
+	}
+
+	// Ziel-Fadenkreuz in der Bildmitte (der Setz-Punkt).
+	{
+		const float Cx = Width * 0.5f;
+		const float Cy = Height * 0.5f;
+		DrawLine(Cx - 10.0f, Cy, Cx + 10.0f, Cy, DialScale, 1.4f);
+		DrawLine(Cx, Cy - 10.0f, Cx, Cy + 10.0f, DialScale, 1.4f);
+	}
+
+	// Wegpunkt-Marker (Diamant) an seiner projizierten Stelle + Distanz zum Spieler.
+	if (bWaypointSet && Proj.IsValid())
+	{
+		const FVector2D M = Proj.Project(WaypointWorld);
+		constexpr float D = 8.0f;
+		DrawLine(M.X, M.Y - D, M.X + D, M.Y, MapWaypoint, 2.6f);
+		DrawLine(M.X + D, M.Y, M.X, M.Y + D, MapWaypoint, 2.6f);
+		DrawLine(M.X, M.Y + D, M.X - D, M.Y, MapWaypoint, 2.6f);
+		DrawLine(M.X - D, M.Y, M.X, M.Y - D, MapWaypoint, 2.6f);
+
+		const APawn* WpPawn = MapPC ? MapPC->GetPawn() : nullptr;
+		if (WpPawn)
+		{
+			const double Dist = FVector2D::Distance(
+				FVector2D(WaypointWorld.X, WaypointWorld.Y),
+				FVector2D(WpPawn->GetActorLocation().X, WpPawn->GetActorLocation().Y));
+			DrawText(FString::Printf(TEXT("Wegpunkt  %s"), *FormatMapDistance(Dist)),
+				MapWaypoint, M.X + 12.0f, M.Y - 8.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
+		}
+	}
+
 	// Chrome.
 	DrawText(TEXT("WIESBADEN"), DialText, 24.0f, 20.0f,
 		GEngine ? GEngine->GetMediumFont() : nullptr, 1.7f);
 	DrawLine(Width * 0.5f, 42.0f, Width * 0.5f, 66.0f, MapMajorRoad, 2.0f);
 	DrawText(TEXT("N"), DialScale, Width * 0.5f - 5.0f, 22.0f,
 		GEngine ? GEngine->GetMediumFont() : nullptr, 1.3f);
+	DrawText(TEXT("Enter / A / Klick: Wegpunkt setzen   Rueck / B: loeschen"),
+		DialScale, 24.0f, Height - 50.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
 	DrawText(TEXT("M / Select: schliessen   +/- / Rad: Zoom   Pfeile / Stick: schwenken"),
 		DialScale, 24.0f, Height - 32.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
 	if (Proj.IsValid())

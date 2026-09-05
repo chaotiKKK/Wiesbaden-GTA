@@ -37,6 +37,24 @@ struct FMinimapLine
 	bool bMajor = false;
 };
 
+/**
+ * Wegpunkt, auf die Minikarte projiziert.
+ *
+ * Datenrein, damit sich die Richtung/Randklemmung ohne Canvas pruefen laesst
+ * (Test World.MinimapWaypoint).
+ */
+struct FMinimapWaypoint
+{
+	/** Bildschirmposition des Markers in Pixeln (am Kartenrand geklemmt, wenn ausserhalb). */
+	FVector2D ScreenPos = FVector2D::ZeroVector;
+
+	/** True, wenn der Wegpunkt ausserhalb der Kartenreichweite liegt (Marker am Rand). */
+	bool bOffMap = false;
+
+	/** Planare Entfernung Spieler -> Wegpunkt in Zentimetern. */
+	double DistanceCm = 0.0;
+};
+
 /** Einstellungen der Minikarte. */
 struct FMinimapSettings
 {
@@ -180,6 +198,19 @@ struct WIESBADENREAL_API FWiesbadenMinimap
 		const FVector2D& CenterPx,
 		const FMinimapSettings& Settings,
 		TArray<FMinimapLine>& OutLines);
+
+	/**
+	 * Projiziert einen Wegpunkt in die Minikarte - dieselbe Dreh-/Massstab-Abbildung
+	 * wie BuildLines, damit der Marker deckungsgleich mit den Strassen liegt. Liegt
+	 * er weiter weg als die Reichweite, wird der Marker richtungserhaltend an den
+	 * Kartenrand geklemmt (bOffMap = true). Die Entfernung ist planar (XY).
+	 */
+	static FMinimapWaypoint ProjectWaypointToMinimap(
+		const FVector& PlayerLocation,
+		double PlayerYawDegrees,
+		const FVector& WaypointLocation,
+		const FVector2D& CenterPx,
+		const FMinimapSettings& Settings);
 
 	/**
 	 * Name der Strasse, auf der sich der Spieler befindet.

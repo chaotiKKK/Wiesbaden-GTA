@@ -388,6 +388,69 @@ bool FWorldMapZoomPanTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// Wegpunkt auf der Minikarte: dieselbe Dreh-/Massstab-Abbildung wie die Strassen,
+// Randklemmung ausserhalb der Reichweite, planare Distanz. Ohne Canvas pruefbar.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMinimapWaypointTest,
+	"WiesbadenReal.World.MinimapWaypoint",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMinimapWaypointTest::RunTest(const FString& Parameters)
+{
+	FMinimapSettings S;
+	S.RangeCm = 25000.0;          // 250 m Umkreis
+	S.DiameterPx = 260.0f;        // Radius 130 px -> 0.0052 px/cm
+	S.bRotateWithPlayer = true;
+	const FVector2D Centre(500.0, 400.0);
+	const FVector Player(0.0, 0.0, 0.0);
+
+	// Yaw 0: Fahrzeug-Vorwaerts (+X) zeigt nach oben. Wegpunkt 50 m voraus (+X)
+	// -> ueber der Mitte (kleineres Bild-Y), in Reichweite.
+	{
+		const FMinimapWaypoint W = FWiesbadenMinimap::ProjectWaypointToMinimap(
+			Player, 0.0, FVector(5000.0, 0.0, 0.0), Centre, S);
+		TestFalse(TEXT("In Reichweite -> nicht am Rand"), W.bOffMap);
+		TestTrue(TEXT("Distanz 50 m"), FMath::IsNearlyEqual(W.DistanceCm, 5000.0, 1.0));
+		TestTrue(TEXT("Voraus = ueber der Mitte"), W.ScreenPos.Y < Centre.Y);
+		TestTrue(TEXT("Voraus: gleiche Bild-X wie Mitte"), FMath::IsNearlyEqual(W.ScreenPos.X, Centre.X, 0.5));
+	}
+
+	// Weit ausserhalb (500 m > 250 m): am Rand geklemmt, Richtung erhalten.
+	{
+		const FMinimapWaypoint W = FWiesbadenMinimap::ProjectWaypointToMinimap(
+			Player, 0.0, FVector(50000.0, 0.0, 0.0), Centre, S);
+		TestTrue(TEXT("Ausserhalb -> am Rand"), W.bOffMap);
+		const float RadiusFromCentre = FVector2D::Distance(W.ScreenPos, Centre);
+		TestTrue(TEXT("Marker sitzt auf dem Kartenradius (130 px)"),
+			FMath::IsNearlyEqual(RadiusFromCentre, 130.0f, 0.5f));
+		TestTrue(TEXT("Distanz 500 m"), FMath::IsNearlyEqual(W.DistanceCm, 50000.0, 1.0));
+	}
+
+	// Drehung: bei 90 Grad Yaw dreht sich derselbe Wegpunkt mit (nicht mehr
+	// exakt ueber der Mitte).
+	{
+		const FMinimapWaypoint W = FWiesbadenMinimap::ProjectWaypointToMinimap(
+			Player, 90.0, FVector(5000.0, 0.0, 0.0), Centre, S);
+		TestFalse(TEXT("Gedreht: kein exaktes Voraus mehr"),
+			FMath::IsNearlyEqual(W.ScreenPos.X, Centre.X, 0.5) && W.ScreenPos.Y < Centre.Y);
+	}
+
+	return true;
+}
+
+// Karten-Distanzformat: unter 1 km in Metern, darueber in Kilometern.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMapDistanceFormatTest,
+	"WiesbadenReal.Vehicles.HUD.MapDistance",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMapDistanceFormatTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("340 m"), AWiesbadenVehicleHUD::FormatMapDistance(34000.0), FString(TEXT("340 m")));
+	TestEqual(TEXT("999 m knapp unter 1 km"), AWiesbadenVehicleHUD::FormatMapDistance(99900.0), FString(TEXT("999 m")));
+	TestEqual(TEXT("1.0 km ab 1000 m"), AWiesbadenVehicleHUD::FormatMapDistance(100000.0), FString(TEXT("1.0 km")));
+	TestEqual(TEXT("2.5 km"), AWiesbadenVehicleHUD::FormatMapDistance(250000.0), FString(TEXT("2.5 km")));
+	return true;
+}
+
 // Weltkarten-RenderTarget: der eine datenreine Teil der Render-Orchestrierung -
 // "muss neu gerendert werden?" (Zeichnen ins RT selbst ist nicht unit-testbar).
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldMapViewNeedsRerenderTest,
