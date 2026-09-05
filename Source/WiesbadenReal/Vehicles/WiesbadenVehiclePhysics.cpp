@@ -13,18 +13,20 @@ void FWiesbadenVehiclePhysics::Reset()
 {
 	SpeedMetersPerS = 0.0f;
 	Gear = 1;
-	EngineRpm = EngineIdleRpm;
+	EngineRpm = Powertrain.IdleRpm;
+	FuelLiters = TankCapacityLiters;
 }
 
 float FWiesbadenVehiclePhysics::GetTotalGearRatio() const
 {
 	if (Gear <= 0)
 	{
-		// Rueckwaertsgang: feste, niedrige Uebersetzung.
-		return 3.9f * FinalDriveRatio;
+		// Rueckwaertsgang: Uebersetzung aus der geteilten Spec.
+		return Powertrain.ReverseGearRatio * Powertrain.FinalDriveRatio;
 	}
-	const int32 Index = FMath::Clamp(Gear - 1, 0, FMath::Max(0, GearRatios.Num() - 1));
-	return GearRatios[Index] * FinalDriveRatio;
+	const int32 Count = Powertrain.ForwardGearRatios.Num();
+	const int32 Index = FMath::Clamp(Gear - 1, 0, FMath::Max(0, Count - 1));
+	return Powertrain.ForwardGearRatios[Index] * Powertrain.FinalDriveRatio;
 }
 
 float FWiesbadenVehiclePhysics::RpmFromSpeed(float Speed) const
@@ -36,29 +38,9 @@ float FWiesbadenVehiclePhysics::RpmFromSpeed(float Speed) const
 
 float FWiesbadenVehiclePhysics::MotorTorqueAt(float Rpm) const
 {
-	// Drehmoment aus der Leistung am Leistungsgipfel: T_max = P / omega.
-	const float OmegaAtPeak = EngineMaxPowerRpm * (2.0f * PI / 60.0f);
-	const float MaxTorque = (EngineMaxPowerKw * 1000.0f) / FMath::Max(OmegaAtPeak, 0.1f);
-
-	// Normierte Kurve: 0.55 am Leerlauf, 1.0 am Leistungsgipfel, 0.55 an der
-	// Drehzahlgrenze - dazwischen linear (ausreichend fuer ein Spielmodell).
-	float Factor = 1.0f;
-	if (Rpm <= EngineIdleRpm)
-	{
-		Factor = 0.55f;
-	}
-	else if (Rpm < EngineMaxPowerRpm)
-	{
-		Factor = FMath::Lerp(0.55f, 1.0f,
-			(Rpm - EngineIdleRpm) / FMath::Max(EngineMaxPowerRpm - EngineIdleRpm, 1.0f));
-	}
-	else if (Rpm > EngineMaxPowerRpm)
-	{
-		Factor = FMath::Lerp(1.0f, 0.55f,
-			(Rpm - EngineMaxPowerRpm) / FMath::Max(EngineMaxRpm - EngineMaxPowerRpm, 1.0f));
-	}
-
-	return MaxTorque * Factor;
+	// Motor auf die echte, geteilte Drehmomentkurve vereinheitlicht - kein
+	// aus der Leistung abgeleitetes Ersatzmodell mehr.
+	return Powertrain.TorqueNmAt(Rpm);
 }
 
 void FWiesbadenVehiclePhysics::ShiftGear(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds)
@@ -82,7 +64,7 @@ void FWiesbadenVehiclePhysics::ShiftGear(const FWiesbadenVehiclePhysicsInput& In
 	}
 
 	// Automatik: Hoch-/Runterschalten ueber Drehzahlschwellen.
-	const int32 LastGear = FMath::Max(1, GearRatios.Num());
+	const int32 LastGear = FMath::Max(1, Powertrain.ForwardGearRatios.Num());
 	if (EngineRpm > ShiftUpRpm && Gear < LastGear)
 	{
 		Gear += 1;
@@ -101,7 +83,7 @@ float FWiesbadenVehiclePhysics::GetDriveForce(float Throttle) const
 	// Traktionslimit: Die Reifen koennen nicht mehr Kraft uebertragen als
 	// mu * Gewicht - jenseits davon drehen die Raeder durch (vereinfacht:
 	// Kraft wird begrenzt statt Schlupf zu modellieren).
-	const float MaxTractiveForce = MuTraction * MassKg * GravityMetersPerS2;
+	const float MaxTractiveForce = MuTraction * Powertrain.MassKg * GravityMetersPerS2;
 	return FMath::Clamp(WheelForce, -MaxTractiveForce, MaxTractiveForce) * FMath::Clamp(Throttle, 0.0f, 1.0f);
 }
 
@@ -190,29 +172,34 @@ void FWiesbadenVehiclePhysics::Tick(
 	// Drehzahl, Gas im Stand hebt sie leicht an.
 	if (FMath::Abs(SpeedMetersPerS) < 0.05f)
 	{
-		EngineRpm = EngineIdleRpm * (1.0f + 0.3f * Throttle);
+		EngineRpm = Powertrain.IdleRpm * (1.0f + 0.3f * Throttle);
 	}
 	else
 	{
 		EngineRpm = RpmFromSpeed(SpeedMetersPerS);
 	}
-	EngineRpm = FMath::Clamp(EngineRpm, EngineIdleRpm * 0.5f, EngineMaxRpm * 1.05f);
+	EngineRpm = FMath::Clamp(EngineRpm, Powertrain.IdleRpm * 0.5f, Powertrain.MaxRpm * 1.05f);
 
 	// Antriebskraft: vorwaerts positiv, rueckwaerts negativ.
+	// Ohne Treibstoff liefert der Motor keine Kraft - der Wagen rollt nur
+	// noch aus (Roll-/Luftwiderstand), Bremse und Lenkung bleiben wirksam.
 	float DriveForce = 0.0f;
-	if (bReverse)
+	if (HasFuel())
 	{
-		DriveForce = -GetDriveForce(Throttle);
-	}
-	else
-	{
-		DriveForce = GetDriveForce(Throttle);
+		if (bReverse)
+		{
+			DriveForce = -GetDriveForce(Throttle);
+		}
+		else
+		{
+			DriveForce = GetDriveForce(Throttle);
+		}
 	}
 
 	// Widerstaende wirken gegen die Bewegungsrichtung.
 	const float Speed = SpeedMetersPerS;
 	const float RollResistance = (FMath::Abs(Speed) > 0.1f)
-		? RollCoeff * MassKg * GravityMetersPerS2 * FMath::Sign(Speed)
+		? RollCoeff * Powertrain.MassKg * GravityMetersPerS2 * FMath::Sign(Speed)
 		: 0.0f;
 	const float AirResistance = AirDensityKgM3 * 0.5f * DragCoeffAreaM2 * Speed * FMath::Abs(Speed);
 	const float BrakeForce = (Brake * BrakeForceN + (Input.bHandbrake ? BrakeForceN * 0.6f : 0.0f))
@@ -227,7 +214,7 @@ void FWiesbadenVehiclePhysics::Tick(
 	float EngineBrakeForce = 0.0f;
 	if (Throttle < 0.05f && FMath::Abs(Speed) > 0.5f && Gear != 0)
 	{
-		const float RpmFraction = FMath::Clamp(EngineRpm / FMath::Max(EngineMaxRpm, 1.0f), 0.0f, 1.2f);
+		const float RpmFraction = FMath::Clamp(EngineRpm / FMath::Max(Powertrain.MaxRpm, 1.0f), 0.0f, 1.2f);
 		const float TorqueNm = EngineBrakeTorqueNm * RpmFraction;
 		EngineBrakeForce = TorqueNm * FMath::Abs(GetTotalGearRatio())
 			/ FMath::Max(WheelRadiusM, 0.01f) * FMath::Sign(Speed);
@@ -237,13 +224,13 @@ void FWiesbadenVehiclePhysics::Tick(
 	float NetForce = DriveForce - RollResistance - AirResistance - BrakeForce - EngineBrakeForce;
 
 	// Haften: Im Stillstand ohne Zugkraft bleibt das Fahrzeug stehen.
-	if (FMath::Abs(Speed) < 0.1f && FMath::Abs(NetForce) < RollCoeff * MassKg * GravityMetersPerS2 * 0.5f)
+	if (FMath::Abs(Speed) < 0.1f && FMath::Abs(NetForce) < RollCoeff * Powertrain.MassKg * GravityMetersPerS2 * 0.5f)
 	{
 		NetForce = 0.0f;
 		SpeedMetersPerS = 0.0f;
 	}
 
-	const float Acceleration = NetForce / FMath::Max(MassKg, 1.0f);
+	const float Acceleration = NetForce / FMath::Max(Powertrain.MassKg, 1.0f);
 	SpeedMetersPerS += Acceleration * DeltaSeconds;
 
 	// Vorzeichenwechsel ohne Antriebskraft (Bremsen/Rollen bis zum Stillstand):
@@ -264,7 +251,7 @@ void FWiesbadenVehiclePhysics::Tick(
 	// Drehzahl nach der Geschwindigkeitsaenderung aktualisieren (nur in Fahrt).
 	if (FMath::Abs(SpeedMetersPerS) > 0.05f)
 	{
-		EngineRpm = FMath::Clamp(RpmFromSpeed(SpeedMetersPerS), EngineIdleRpm * 0.5f, EngineMaxRpm * 1.05f);
+		EngineRpm = FMath::Clamp(RpmFromSpeed(SpeedMetersPerS), Powertrain.IdleRpm * 0.5f, Powertrain.MaxRpm * 1.05f);
 	}
 
 	// Ausgabe fuellen.
@@ -281,4 +268,14 @@ void FWiesbadenVehiclePhysics::Tick(
 	Out.YawRateRadPerS = ComputeYawRate(SteerAngleNorm, Acceleration);
 	Out.SteerAngleNorm = SteerAngleNorm;
 	Out.ForwardAccelerationMetersPerS2 = Acceleration;
+
+	// Verbrauch: Arbeit aus der Antriebskraft (P = F * v) plus Grundverbrauch
+	// des laufenden Motors. Energiegehalt Benzin: ~8,9 kWh/l.
+	if (HasFuel())
+	{
+		const float WheelPowerKw = FMath::Abs(DriveForce * SpeedMetersPerS) / 1000.0f;
+		const float IdleLiters = IdleConsumptionLitersPerHour * (DeltaSeconds / 3600.0f);
+		const float DriveLiters = (WheelPowerKw * (DeltaSeconds / 3600.0f)) * ConsumptionLitersPerKWh;
+		FuelLiters = FMath::Max(0.0f, FuelLiters - IdleLiters - DriveLiters);
+	}
 }

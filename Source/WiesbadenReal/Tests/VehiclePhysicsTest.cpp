@@ -45,7 +45,7 @@ bool FVehiclePhysicsStandstillTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Ohne Gas steht das Fahrzeug"), Out.ForwardSpeedMetersPerS, 0.0f);
 	TestEqual(TEXT("Gang 1 im Stand"), Out.Gear, 1);
 	TestEqual(TEXT("Keine Gierrate im Stand"), Out.YawRateRadPerS, 0.0f);
-	TestTrue(TEXT("Drehzahl am Leerlauf"), Out.EngineRpm >= Vehicle.EngineIdleRpm * 0.9f);
+	TestTrue(TEXT("Drehzahl am Leerlauf"), Out.EngineRpm >= Vehicle.Powertrain.IdleRpm * 0.9f);
 
 	// Selbst mit voller Lenkung dreht sich ein stehendes Fahrzeug nicht.
 	In.Steering = 1.0f;
@@ -66,21 +66,30 @@ bool FVehiclePhysicsAccelerationTest::RunTest(const FString& Parameters)
 
 	FWiesbadenVehiclePhysicsInput In;
 	In.Throttle = 1.0f;
-
 	FWiesbadenVehiclePhysicsOutput Out;
-	SimulateTo(Vehicle, In, 60.0f, Out);
 
-	// Die Vorgabewerte beschreiben einen VW Kaefer 1300 von 1969: 32 kW,
-	// 4600 U/min, vier Gaenge, 820 kg. Der faehrt laut Werksangabe rund
-	// 125 km/h. Zuvor standen hier 180..260 km/h - das passte zu den frueheren
-	// Vorgaben eines modernen Autos (110 kW, sechs Gaenge) und war der Grund,
-	// warum das Fahrzeug im Spiel 155 km/h erreichte.
-	TestTrue(TEXT("Beschleunigt vorwaerts"), Out.ForwardSpeedMetersPerS > 20.0f);
-	TestTrue(TEXT("Hoechstgeschwindigkeit wie ein Kaefer 1300 (105..145 km/h)"),
-		Out.SpeedKmh > 105.0f && Out.SpeedKmh < 145.0f);
+	// Vollgas aus dem Stand; Zeit bis 100 km/h messen.
+	float TimeTo100 = -1.0f;
+	for (float T = 0.0f; T < 60.0f; T += VehicleDt)
+	{
+		Vehicle.Tick(In, VehicleDt, Out);
+		if (TimeTo100 < 0.0f && Out.SpeedKmh >= 100.0f)
+		{
+			TimeTo100 = T;
+		}
+	}
+
+	// Kaefer 1302 (44 PS, 102 Nm @ 2600, 820 kg): 0-100 rund 23 s, Spitze rund
+	// 130 km/h. Mit der jetzt geteilten, echten Drehmomentkurve statt des
+	// frueheren Leistungsmodells (32 kW) beschleunigt der Wagen realistischer.
+	TestTrue(TEXT("0-100 km/h erreicht"), TimeTo100 > 0.0f);
+	TestTrue(TEXT("0-100 im Kaefer-Bereich (15..30 s)"),
+		TimeTo100 > 15.0f && TimeTo100 < 30.0f);
+	TestTrue(TEXT("Hoechstgeschwindigkeit wie Kaefer 1302 (125..140 km/h)"),
+		Out.SpeedKmh > 125.0f && Out.SpeedKmh < 140.0f);
 	TestTrue(TEXT("Automatik schaltet in den hoechsten Gang"), Out.Gear >= 4);
 
-	// Konvergenz: in den letzten 5 Sekunden aendert sich die Geschwindigkeit kaum.
+	// Konvergenz: am Limit aendert sich die Geschwindigkeit kaum.
 	Vehicle.Tick(In, VehicleDt, Out);
 	const float SpeedAfter = Out.ForwardSpeedMetersPerS;
 	Vehicle.Tick(In, VehicleDt, Out);
@@ -434,7 +443,7 @@ bool FVehicleSteeringFalloffTest::RunTest(const FString& Parameters)
 
 	// Bremsverzoegerung im physikalisch Moeglichen: Reifen uebertragen auf
 	// trockenem Asphalt hoechstens rund 1 g.
-	const float Decel = Defaults.BrakeForceN / FMath::Max(Defaults.MassKg, 1.0f);
+	const float Decel = Defaults.BrakeForceN / FMath::Max(Defaults.Powertrain.MassKg, 1.0f);
 	TestTrue(
 		FString::Printf(TEXT("Bremsverzoegerung unter 1 g (%.1f m/s^2)"), Decel),
 		Decel < 9.81f);

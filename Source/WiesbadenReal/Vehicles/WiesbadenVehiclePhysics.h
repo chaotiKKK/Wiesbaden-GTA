@@ -4,6 +4,8 @@
 
 #include "CoreMinimal.h"
 
+#include "Vehicles/WiesbadenPowertrainSpec.h"
+
 #include "WiesbadenVehiclePhysics.generated.h"
 
 /**
@@ -104,40 +106,16 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	GENERATED_BODY()
 
 	// -- Grunddaten -------------------------------------------------------
-	/** Fahrzeugmasse (kg). */
-	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "100.0"))
-	float MassKg = 820.0f;
-
 	/** Erdbeschleunigung (m/s^2) - fuer Gewicht und Traktionslimit. */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.1"))
 	float GravityMetersPerS2 = 9.81f;
 
-	// -- Motor ------------------------------------------------------------
-	/** Maximale Motorleistung (kW) - definiert das Drehmoment am Leistungsgipfel. */
-	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "1.0"))
-	float EngineMaxPowerKw = 32.0f;
-
-	/** Drehzahlgrenze des Motors (U/min). */
-	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "1000.0"))
-	float EngineMaxRpm = 4600.0f;
-
-	/** Leerlaufdrehzahl (U/min). */
-	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "100.0"))
-	float EngineIdleRpm = 800.0f;
-
-	/** Drehzahl des Leistungsgipfels (U/min) - dort liegt das T_Max. */
-	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "1000.0"))
-	float EngineMaxPowerRpm = 4100.0f;
+	// -- Antriebsstrang (geteilte Quelle der Wahrheit) --------------------
+	/** Motor, Getriebe, Achsantrieb und Masse - identisch zum Chaos-Wagen. */
+	UPROPERTY(EditAnywhere, Category = "Vehicle")
+	FWiesbadenPowertrainSpec Powertrain = FWiesbadenPowertrainSpec::Kaefer1302();
 
 	// -- Getriebe ---------------------------------------------------------
-	/** Gangverhaeltnisse (Gang 1 = Index 0). Automatik schaltet ueber Drehzahl. */
-	UPROPERTY(EditAnywhere, Category = "Vehicle")
-	TArray<float> GearRatios = { 3.80f, 2.06f, 1.32f, 0.89f };
-
-	/** Achsantriebs-Uebersetzung. */
-	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.5"))
-	float FinalDriveRatio = 4.375f;
-
 	/** Hochschalten oberhalb dieser Drehzahl (U/min). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "1000.0"))
 	float ShiftUpRpm = 4200.0f;
@@ -157,11 +135,57 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	// -- Laengswiderstand -------------------------------------------------
 	/** Luftwiderstand: Cd * Stirnflaeche (m^2). F_air = 0.5 * rho * CdA * v^2. */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
-	float DragCoeffAreaM2 = 0.62f;
+	// 1.05 statt 0.62: mit der echten Drehmomentkurve (102 Nm statt der frueher
+	// aus 32 kW abgeleiteten ~74 Nm) triebe der Wagen sonst auf ~150 km/h. Der
+	// hoehere CdA bringt die Spitze zurueck auf die ~130 km/h des Kaefer 1302.
+	float DragCoeffAreaM2 = 1.05f;
 
 	/** Rollwiderstandsbeiwert (dimensionslos). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
 	float RollCoeff = 0.012f;
+
+	// -- Treibstoff -------------------------------------------------------
+	/** Tankgroesse in Litern. */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Treibstoff", meta = (ClampMin = "1.0"))
+	float TankCapacityLiters = 42.0f;
+
+	/**
+	 * Aktueller Tankinhalt in Litern (Zustand).
+	 *
+	 * 42 l entsprechen dem Tank eines Kaefer 1300. Bei Verbrauch im
+	 * zweistelligen Literbereich auf 100 km reicht der Tank fuer die
+	 * halbe Karte - die Tankstellen-Pickups machen ihn zur Ressource.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Treibstoff")
+	float FuelLiters = 42.0f;
+
+	/** Grundverbrauch laufender Motor im Leerlauf (Liter je Stunde). */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Treibstoff", meta = (ClampMin = "0.0"))
+	float IdleConsumptionLitersPerHour = 1.5f;
+
+	/** Verbrauch je mechanischer Arbeit (Liter je Kilowattstunde). */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Treibstoff", meta = (ClampMin = "0.0"))
+	float ConsumptionLitersPerKWh = 0.35f;
+
+	/** True, solange Treibstoff da ist; ein leerer Motor liefert keine Kraft. */
+	bool HasFuel() const { return FuelLiters > 0.0f; }
+
+	/** Tankfuellstand 0..1 (fuer HUD). */
+	float GetFuelFraction() const { return TankCapacityLiters > 0.0f ? FMath::Clamp(FuelLiters / TankCapacityLiters, 0.0f, 1.0f) : 0.0f; }
+
+	/**
+	 * Tankt nach.
+	 * @return false, wenn der Tank bereits voll war (das Pickup bleibt dann liegen).
+	 */
+	bool Refuel(float Liters)
+	{
+		if (FuelLiters >= TankCapacityLiters - 0.01f)
+		{
+			return false;
+		}
+		FuelLiters = FMath::Min(FuelLiters + FMath::Max(Liters, 0.0f), TankCapacityLiters);
+		return true;
+	}
 
 	/** Bremskraft bei vollem Bremspedal (N). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
@@ -302,7 +326,7 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 
 	void Tick(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds, FWiesbadenVehiclePhysicsOutput& Out);
 
-	/** Setzt das Fahrzeug in den Ruhezustand zurueck (Stand, 1. Gang). */
+	/** Setzt das Fahrzeug in den Ruhezustand zurueck (Stand, 1. Gang, voller Tank). */
 	void Reset();
 
 private:

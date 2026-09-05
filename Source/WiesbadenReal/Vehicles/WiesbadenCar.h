@@ -68,8 +68,8 @@ public:
 	virtual float GetEngineRpm() const override;
 
 	/** Leerlauf-/Hoechstdrehzahl (U/min) fuer die HUD-Drehzahlband-Skala. */
-	virtual float GetEngineIdleRpm() const override { return VehiclePhysics.EngineIdleRpm; }
-	virtual float GetEngineMaxRpm() const override { return VehiclePhysics.EngineMaxRpm; }
+	virtual float GetEngineIdleRpm() const override { return VehiclePhysics.Powertrain.IdleRpm; }
+	virtual float GetEngineMaxRpm() const override { return VehiclePhysics.Powertrain.MaxRpm; }
 
 	/**
 	 * Externe Steuerung setzen (KI/Zwischensequenz/Test): umgeht die Tastenabfrage
