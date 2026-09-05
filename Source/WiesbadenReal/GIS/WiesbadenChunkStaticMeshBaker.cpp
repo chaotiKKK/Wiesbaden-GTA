@@ -51,19 +51,25 @@ UStaticMesh* BakeFromProcMesh(UProceduralMeshComponent* Source, const FString& P
 	TVertexInstanceAttributesRef<FVector3f> VinNormal = Attr.GetVertexInstanceNormals();
 	TVertexInstanceAttributesRef<FVector2f> VinUV = Attr.GetVertexInstanceUVs();
 	TVertexInstanceAttributesRef<FVector4f> VinColor = Attr.GetVertexInstanceColors();
+	// Slot-Namen der PolygonGroups: BuildFromMeshDescriptions ordnet die Render-
+	// Sections den Material-Slots UEBER DIESE NAMEN zu. Ohne sie fielen alle
+	// Sections auf einen Slot -> die per-Section-Materialzuweisung waere kaputt.
+	TPolygonGroupAttributesRef<FName> SlotNames = Attr.GetPolygonGroupMaterialSlotNames();
 
 	int32 ValidSections = 0;
 	for (int32 S = 0; S < NumSections; ++S)
 	{
+		const FName SlotName(*FString::Printf(TEXT("Slot%d"), S));
 		const FProcMeshSection* Sec = Source->GetProcMeshSection(S);
 		if (!Sec || Sec->ProcIndexBuffer.Num() < 3 || Sec->ProcVertexBuffer.Num() == 0)
 		{
-			// Leere Section trotzdem als Slot fuehren, damit die Indizes passen.
-			MeshDesc.CreatePolygonGroup();
+			// Leere Section trotzdem als benannten Slot fuehren, damit die Indizes passen.
+			SlotNames[MeshDesc.CreatePolygonGroup()] = SlotName;
 			continue;
 		}
 
 		const FPolygonGroupID PolyGroup = MeshDesc.CreatePolygonGroup();
+		SlotNames[PolyGroup] = SlotName;
 
 		// Vertices dieser Section anlegen; lokale -> globale ID-Abbildung.
 		TArray<FVertexID> VertIds;

@@ -27,18 +27,25 @@ bool FChunkStaticMeshBakerTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// Ein Quad in der XY-Ebene.
-	const TArray<FVector> Verts = {
-		FVector(0, 0, 0), FVector(100, 0, 0), FVector(100, 100, 0), FVector(0, 100, 0) };
-	const TArray<int32> Tris = { 0, 1, 2, 0, 2, 3 };
-	const TArray<FVector> Normals = {
-		FVector::UpVector, FVector::UpVector, FVector::UpVector, FVector::UpVector };
-	const TArray<FVector2D> UVs = {
-		FVector2D(0, 0), FVector2D(1, 0), FVector2D(1, 1), FVector2D(0, 1) };
-	const TArray<FColor> Colors = {
-		FColor::White, FColor::White, FColor::White, FColor::White };
-	const TArray<FProcMeshTangent> Tangents;
-	Pm->CreateMeshSection(0, Verts, Tris, Normals, UVs, Colors, Tangents, /*bCreateCollision=*/true);
+	// Zwei getrennte Quads = zwei Sections. So laesst sich pruefen, dass jede
+	// Section ihren EIGENEN Material-Slot behaelt (Slot-Namen-Zuordnung).
+	auto AddQuad = [&](int32 Section, double OffsetX)
+	{
+		const TArray<FVector> Verts = {
+			FVector(OffsetX, 0, 0), FVector(OffsetX + 100, 0, 0),
+			FVector(OffsetX + 100, 100, 0), FVector(OffsetX, 100, 0) };
+		const TArray<int32> Tris = { 0, 1, 2, 0, 2, 3 };
+		const TArray<FVector> Normals = {
+			FVector::UpVector, FVector::UpVector, FVector::UpVector, FVector::UpVector };
+		const TArray<FVector2D> UVs = {
+			FVector2D(0, 0), FVector2D(1, 0), FVector2D(1, 1), FVector2D(0, 1) };
+		const TArray<FColor> Colors = {
+			FColor::White, FColor::White, FColor::White, FColor::White };
+		const TArray<FProcMeshTangent> Tangents;
+		Pm->CreateMeshSection(Section, Verts, Tris, Normals, UVs, Colors, Tangents, /*bCreateCollision=*/true);
+	};
+	AddQuad(0, 0.0);
+	AddQuad(1, 300.0);
 
 	const FString PackagePath = TEXT("/Game/Generated/Test/SM_ChunkBakerTest");
 	FString Err;
@@ -54,7 +61,14 @@ bool FChunkStaticMeshBakerTest::RunTest(const FString& Parameters)
 	// Render-Daten serialisiert (der teure Laufzeit-Proxy-Aufbau entfaellt damit).
 	TestTrue(TEXT("RenderData mit LOD vorhanden"),
 		Mesh->GetRenderData() != nullptr && Mesh->GetRenderData()->LODResources.Num() > 0);
-	TestTrue(TEXT("Material-Slot vorhanden"), Mesh->GetStaticMaterials().Num() >= 1);
+	// Jede Section behaelt ihren eigenen Material-Slot (Slot-Namen-Zuordnung):
+	// zwei Eingabe-Sections -> zwei Material-Slots -> zwei Render-Sections.
+	TestEqual(TEXT("Zwei Material-Slots (je Section einer)"), Mesh->GetStaticMaterials().Num(), 2);
+	if (Mesh->GetRenderData() && Mesh->GetRenderData()->LODResources.Num() > 0)
+	{
+		TestEqual(TEXT("Zwei Render-Sections"),
+			Mesh->GetRenderData()->LODResources[0].Sections.Num(), 2);
+	}
 
 	// Kollision vorgekocht als Complex-as-Simple-Trimesh.
 	UBodySetup* BS = Mesh->GetBodySetup();
