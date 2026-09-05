@@ -4,6 +4,7 @@
 
 #include "UI/WiesbadenVehicleHUD.h"
 #include "GIS/BuildingGenerator.h"
+#include "UI/WiesbadenWorldMapView.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleHUDTest,
@@ -336,6 +337,37 @@ bool FWorldMapBuildingsTest::RunTest(const FString& Parameters)
 	TArray<FWorldMapQuad> TinyQuads;
 	FWiesbadenMinimap::BuildWorldMapBuildings(TinyList, Proj, /*MaxQuads=*/100, /*MinAreaPx=*/0.0f, TinyQuads);
 	TestEqual(TEXT("Winziges Gebaeude uebersprungen"), TinyQuads.Num(), 0);
+
+	return true;
+}
+
+
+// Weltkarten-RenderTarget: der eine datenreine Teil der Render-Orchestrierung -
+// "muss neu gerendert werden?" (Zeichnen ins RT selbst ist nicht unit-testbar).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldMapViewNeedsRerenderTest,
+	"WiesbadenReal.World.WorldMapView.NeedsRerender",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FWorldMapViewNeedsRerenderTest::RunTest(const FString& Parameters)
+{
+	FRoadNetwork NetA, NetB;
+	const FVector2D Size(1600.0, 900.0);
+
+	// Kein Ziel -> immer neu rendern.
+	TestTrue(TEXT("Ohne Ziel: neu rendern"),
+		UWiesbadenWorldMapView::NeedsRerender(false, &NetA, Size, &NetA, Size));
+
+	// Ziel da, gleiches Netz + gleiche Groesse -> NICHT neu rendern.
+	TestFalse(TEXT("Gleiche Sicht: kein Neu-Render"),
+		UWiesbadenWorldMapView::NeedsRerender(true, &NetA, Size, &NetA, Size));
+
+	// Netz gewechselt -> neu rendern.
+	TestTrue(TEXT("Netzwechsel: neu rendern"),
+		UWiesbadenWorldMapView::NeedsRerender(true, &NetA, Size, &NetB, Size));
+
+	// Bildgroesse gewechselt -> neu rendern.
+	TestTrue(TEXT("Groessenwechsel: neu rendern"),
+		UWiesbadenWorldMapView::NeedsRerender(true, &NetA, Size, &NetA, FVector2D(1280.0, 720.0)));
 
 	return true;
 }

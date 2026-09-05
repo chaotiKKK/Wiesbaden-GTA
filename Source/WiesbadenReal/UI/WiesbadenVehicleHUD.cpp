@@ -22,6 +22,8 @@
 #include "GIS/WiesbadenWorldBuilder.h"
 #include "World/WiesbadenCitySubsystem.h"
 #include "UI/WiesbadenMinimap.h"
+#include "UI/WiesbadenWorldMapView.h"
+#include "Engine/TextureRenderTarget2D.h"
 
 namespace
 {
@@ -1180,73 +1182,42 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 		return;
 	}
 
-	// Opaker Vollbild-Hintergrund: eine Weltkarte ERSETZT die Sicht (GTA-Stil),
-	// sonst waschen die duennen Strassenlinien in der 3D-Szene aus.
-	DrawRect(FLinearColor(0.04f, 0.05f, 0.07f, 1.0f), 0.0f, 0.0f, Width, Height);
-
 	const FRoadNetwork* Network = FindRoadNetwork();
 	if (!Network)
 	{
+		DrawRect(FLinearColor(0.04f, 0.05f, 0.07f, 1.0f), 0.0f, 0.0f, Width, Height);
 		DrawText(TEXT("Karte laedt..."), DialText, Width * 0.5f - 48.0f, Height * 0.5f,
 			GEngine ? GEngine->GetMediumFont() : nullptr, 1.3f);
 		return;
 	}
 
-	const FVector2D ScreenCentre(Width * 0.5f, Height * 0.5f);
-	const FVector2D ScreenSize(Width, Height);
-
-	// Das ganze Netz EINMAL projizieren (bzw. bei Groessen-/Netzwechsel neu). Je
-	// Bild ueber ~125.000 Segmente zu laufen waere der teuerste HUD-Posten.
-	if (CachedWorldMapNetwork != Network
-		|| !CachedWorldMapSize.Equals(ScreenSize, 1.0f)
-		|| CachedWorldMapLines.Num() == 0)
+	// Statische Ebene (Strassen + Gebaeude) EINMAL ins RenderTarget rendern und je
+	// Bild nur das fertige Texture blitten - statt je Bild 16.000 Linien zu ziehen.
+	if (!WorldMapView)
 	{
-		FVector2D WMin, WMax;
-		if (FWiesbadenMinimap::ComputeNetworkBoundsXY(*Network, WMin, WMax))
-		{
-			CachedWorldMapProj = FWiesbadenMinimap::MakeWorldMapProjection(
-				WMin, WMax, ScreenCentre, ScreenSize, /*MarginFrac=*/0.88f);
-			FWiesbadenMinimap::BuildWorldMapLines(
-				*Network, CachedWorldMapProj, /*MaxLines=*/16000, /*MinSegmentPx=*/2.0f,
-				CachedWorldMapLines);
-			if (CachedBuildings)
-			{
-				FWiesbadenMinimap::BuildWorldMapBuildings(
-					*CachedBuildings, CachedWorldMapProj, /*MaxQuads=*/12000,
-					/*MinAreaPx=*/0.4f, CachedWorldMapBuildings);
-			}
-			CachedWorldMapNetwork = Network;
-			CachedWorldMapSize = ScreenSize;
-		}
+		WorldMapView = NewObject<UWiesbadenWorldMapView>(this);
+	}
+	UTextureRenderTarget2D* MapRT = WorldMapView->EnsureRendered(
+		GetWorld(), *Network, CachedBuildings, FVector2D(Width, Height));
+	if (MapRT)
+	{
+		DrawTexture(MapRT, 0.0f, 0.0f, Width, Height, 0.0f, 0.0f, 1.0f, 1.0f);
+	}
+	else
+	{
+		DrawRect(FLinearColor(0.04f, 0.05f, 0.07f, 1.0f), 0.0f, 0.0f, Width, Height);
 	}
 
-	// Gebaeude als dezente Flaechen UNTER den Strassen - zeigt das bebaute
-	// Gebiet (bei Stadt-Zoom lesen die Einzelgrundrisse als Flaeche).
-	{
-		const FLinearColor MapBuildingCol(0.13f, 0.14f, 0.16f, 1.0f);
-		for (const FWorldMapQuad& Q : CachedWorldMapBuildings)
-		{
-			DrawFilledTri(Q.A, Q.B, Q.C, MapBuildingCol);
-			DrawFilledTri(Q.A, Q.C, Q.D, MapBuildingCol);
-		}
-	}
-
-	for (const FMinimapLine& Line : CachedWorldMapLines)
-	{
-		DrawLine(Line.Start.X, Line.Start.Y, Line.End.X, Line.End.Y,
-			Line.bMajor ? MapMajorRoad : MapMinorRoad, Line.Thickness);
-	}
-
-	// Spielerpunkt + Fahrtrichtung (je Bild neu projiziert - billig).
-	if (CachedWorldMapProj.IsValid())
+	// Spielerpunkt + Fahrtrichtung LIVE ueber dem Texture (bewegt sich je Bild).
+	const FWorldMapProjection& Proj = WorldMapView->GetProjection();
+	if (Proj.IsValid())
 	{
 		const APlayerController* PC = GetOwningPlayerController();
 		const APawn* Pawn = PC ? PC->GetPawn() : nullptr;
 		if (Pawn)
 		{
-			const FVector2D P = CachedWorldMapProj.Project(Pawn->GetActorLocation());
+			const FVector2D P = Proj.Project(Pawn->GetActorLocation());
 			const double YawRad = FMath::DegreesToRadians(Pawn->GetActorRotation().Yaw);
-			// Welt +X (Ost) -> Bildschirm +X, Welt +Y (Nord) -> Bildschirm -Y.
 			const FVector2D Fwd(FMath::Cos(YawRad), -FMath::Sin(YawRad));
 			const FVector2D Right(-Fwd.Y, Fwd.X);
 			constexpr float S = 12.0f;
@@ -1259,7 +1230,7 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 		}
 	}
 
-	// Titel, Nordzeiger und Schliess-Hinweis.
+	// Chrome.
 	DrawText(TEXT("WIESBADEN"), DialText, 24.0f, 20.0f,
 		GEngine ? GEngine->GetMediumFont() : nullptr, 1.7f);
 	DrawLine(Width * 0.5f, 42.0f, Width * 0.5f, 66.0f, MapMajorRoad, 2.0f);
@@ -1267,12 +1238,9 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 		GEngine ? GEngine->GetMediumFont() : nullptr, 1.3f);
 	DrawText(TEXT("M / Select: schliessen"), DialScale, 24.0f, Height - 32.0f,
 		GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
-
-	// Massstab: Kartenbreite in Kilometern.
-	if (CachedWorldMapProj.IsValid())
+	if (Proj.IsValid())
 	{
-		const double WorldWkm =
-			(CachedWorldMapProj.WorldMax.X - CachedWorldMapProj.WorldMin.X) / 100000.0;
+		const double WorldWkm = (Proj.WorldMax.X - Proj.WorldMin.X) / 100000.0;
 		DrawText(FString::Printf(TEXT("Breite: %.1f km"), WorldWkm), DialScale,
 			Width - 170.0f, Height - 32.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
 	}

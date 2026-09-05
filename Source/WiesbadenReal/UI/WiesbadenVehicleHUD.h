@@ -10,6 +10,7 @@
 class AWiesbadenCar;
 class IWiesbadenVehicleControl;
 class AWiesbadenHelicopter;
+class UWiesbadenWorldMapView;
 
 /**
  * Fahrzeug-HUD: Tacho, Drehzahl, Gang und Kontrollleuchten.
@@ -304,17 +305,11 @@ private:
 	bool bWorldMapOpen = false;
 	/** Halte-Flanke der Karten-Taste, damit ein Druck einmal umschaltet. */
 	bool bMapKeyHeld = false;
-	/** Einmal gebaute Weltkarten-Linien (ganzes Netz projiziert). */
-	TArray<FMinimapLine> CachedWorldMapLines;
-	/** Projektion fuer den je Bild neu projizierten Spielerpunkt. */
-	FWorldMapProjection CachedWorldMapProj;
-	/** Bildgroesse, fuer die die Linien gebaut wurden (Neubau bei Aenderung). */
-	FVector2D CachedWorldMapSize = FVector2D::ZeroVector;
-	/** Netz, aus dem die Linien gebaut wurden (Neubau bei Wechsel). */
-	const struct FRoadNetwork* CachedWorldMapNetwork = nullptr;
-
 	/** Gebaeude-Metadaten der Stadt (einmal gesucht, mit dem Netz gemerkt). */
 	const TArray<struct FGeneratedBuilding>* CachedBuildings = nullptr;
-	/** Einmal gebaute Gebaeude-Vierecke der Weltkarte (bebautes-Gebiet-Schattierung). */
-	TArray<struct FWorldMapQuad> CachedWorldMapBuildings;
+
+	/** Render-Ziel-Ansicht: rendert Strassen+Gebaeude EINMAL ins RenderTarget,
+	 *  statt sie je Bild aus ~16.000 Linien neu zu zeichnen. */
+	UPROPERTY(Transient)
+	TObjectPtr<UWiesbadenWorldMapView> WorldMapView = nullptr;
 };
