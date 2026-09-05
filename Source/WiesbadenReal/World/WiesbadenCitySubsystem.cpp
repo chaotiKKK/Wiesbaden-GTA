@@ -108,11 +108,64 @@ void UWiesbadenCitySubsystem::DumpStreetNetwork(const FString& Path) const
 void UWiesbadenCitySubsystem::WriteFallThroughSummary()
 {
 	// Nur nach einer tatsaechlich gefahrenen Strecke (-WbAutoDrive) sinnvoll.
-	if (FallTestMovingTicks <= 0 || bFallTestSummaryWritten)
+	if ((FallTestMovingTicks <= 0 && CarDriveTicks <= 0) || bFallTestSummaryWritten)
 	{
 		return;
 	}
 	bFallTestSummaryWritten = true;
+
+	const FString Path = FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("Durchfall.txt");
+
+	// Wagen-Modus (-WbChaosCar): TATSAECHLICHER Karosserie-Hoehensturz statt
+	// Bodenpraesenz per Trace.
+	if (bCarMode)
+	{
+		const double AirPct = (CarDriveTicks > 0)
+			? 100.0 * static_cast<double>(CarAirborneTicks) / static_cast<double>(CarDriveTicks)
+			: 0.0;
+		// Ein echter Durchfall = Karosserie sinkt merklich unter die Strasse
+		// (> 1 m; darunter sind es Bordsteine/Federung/Gelaendewellen).
+		const bool bPassCar = (MaxCarSturzCm <= 100.0);
+		// Ohne echte Strecke ist ein "Bestanden" wertlos: der Wagen muss die
+		// gestreamten Zellen auch befahren haben (> 50 m), sonst UNGUELTIG.
+		const bool bMoved = (CarDistanceCm > 5000.0);
+
+		TArray<FString> CarLines;
+		CarLines.Add(TEXT("Durchfall-Test (echter Chaos-Wagen): faellt die Karosserie bei Tempo durch eine ungeladene Zelle?"));
+		CarLines.Add(FString::Printf(TEXT("Gefahrene Strecke: %.0f m ab (%.0f, %.0f)."),
+			CarDistanceCm * 0.01, AutoDriveOrigin.X, AutoDriveOrigin.Y));
+		CarLines.Add(FString::Printf(TEXT("Bewegte Messpunkte: %d."), CarDriveTicks));
+		CarLines.Add(FString::Printf(
+			TEXT("Punkte OHNE Boden nah unter der Karosserie: %d (%.2f %% der Fahrt)."),
+			CarAirborneTicks, AirPct));
+		CarLines.Add(FString::Printf(
+			TEXT("Spitzen-Sinkgeschwindigkeit der Karosserie: %.1f m/s."),
+			MaxCarDownSpeedCmS * 0.01f));
+		CarLines.Add(FString::Printf(
+			TEXT("Groesster Karosserie-Hoehensturz: %.1f m (ab X=%.0f)."),
+			MaxCarSturzCm * 0.01, MaxCarSturzX));
+		if (!bMoved)
+		{
+			CarLines.Add(FString::Printf(
+				TEXT("ERGEBNIS: UNGUELTIG - der Wagen kam kaum vom Fleck (%.0f m); ohne Lenkung/Route ")
+				TEXT("bleibt er am Start haengen, die Strecke wurde nie befahren."),
+				CarDistanceCm * 0.01));
+		}
+		else
+		{
+			CarLines.Add(bPassCar
+				? TEXT("ERGEBNIS: BESTANDEN - die Karosserie blieb auf der Strasse, kein Durchfallen.")
+				: TEXT("ERGEBNIS: DURCHGEFALLEN - die Karosserie stuerzte durch eine ungeladene Zelle."));
+		}
+
+		FFileHelper::SaveStringArrayToFile(CarLines, *Path);
+		for (const FString& L : CarLines)
+		{
+			UE_LOG(LogWbStreaming, Log, TEXT("%s"), *L);
+		}
+		UE_LOG(LogWbStreaming, Log, TEXT("Durchfall-Test-Ergebnis (Wagen) geschrieben: %s"), *Path);
+		return;
+	}
 
 	// Eine am Streckenende noch offene Luecke mitzaehlen.
 	if (bFallTestInVoid)
@@ -149,7 +202,6 @@ void UWiesbadenCitySubsystem::WriteFallThroughSummary()
 		? TEXT("ERGEBNIS: BESTANDEN - unter dem Wagen lag jederzeit geladene Kollision, kein Durchfallen.")
 		: TEXT("ERGEBNIS: DURCHGEFALLEN - es gab Stellen ohne geladenen Boden; ein Wagen waere dort ins Leere gefahren."));
 
-	const FString Path = FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("Durchfall.txt");
 	FFileHelper::SaveStringArrayToFile(Lines, *Path);
 
 	for (const FString& L : Lines)
@@ -803,15 +855,86 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 							// nur die Strecke mit.
 							const double StepCm = DriveKmh / 3.6 * 100.0 * DeltaTime;
 
-							if (!Pawn->IsA(AWiesbadenChaosCar::StaticClass()))
+							AWiesbadenChaosCar* Car = Cast<AWiesbadenChaosCar>(Pawn);
+							if (Car)
+							{
+								// ECHTER Chaos-Wagen: mit Gas fahren und den
+								// TATSAECHLICHEN Karosserie-Hoehensturz messen
+								// (statt nur Bodenpraesenz per Trace). Der Wagen
+								// faellt auf echter Physik, wenn eine Zelle fehlt.
+								bCarMode = true;
+								if (IWiesbadenVehicleControl* Ctrl =
+									Cast<IWiesbadenVehicleControl>(Car))
+								{
+									FWiesbadenCarControl In;
+									In.Throttle = (Ctrl->GetSpeedKmh() < DriveKmh) ? 1.0f : 0.0f;
+									In.Steering = 0.0f;
+									Car->SetExternalControl(In);
+								}
+
+								const FVector C = Car->GetActorLocation();
+								const FVector Vel = Car->GetVelocity();
+								MaxCarDownSpeedCmS = FMath::Max(
+									MaxCarDownSpeedCmS, static_cast<float>(-Vel.Z));
+								CarDistanceCm = FVector::Dist2D(C, AutoDriveOrigin);
+								++CarDriveTicks;
+
+								// Sekundentakt-Diagnose: sehen, ob der Wagen faehrt
+								// oder haengt (Tempo/Strecke) und wie tief er faellt.
+								if (IWiesbadenVehicleControl* CtrlLog =
+									Cast<IWiesbadenVehicleControl>(Car))
+								{
+									const int32 CarSec = FMath::FloorToInt(DriveWorld->GetTimeSeconds());
+									if (CarSec != LastCarLogSecond)
+									{
+										LastCarLogSecond = CarSec;
+										UE_LOG(LogWbStreaming, Log,
+											TEXT("Wagen-Durchfall: Tempo %.0f km/h, Strecke %.0f m, ")
+											TEXT("Sturz max %.1f m, Sink max %.1f m/s."),
+											CtrlLog->GetSpeedKmh(), CarDistanceCm * 0.01,
+											MaxCarSturzCm * 0.01, MaxCarDownSpeedCmS * 0.01f);
+									}
+								}
+
+								FCollisionQueryParams CarParams(
+									FName(TEXT("WbCarFall")), /*bTraceComplex=*/false);
+								CarParams.AddIgnoredActor(Car);
+								FHitResult CarGround;
+								const bool bHit = DriveWorld->LineTraceSingleByChannel(
+									CarGround, C + FVector(0, 0, 200.0),
+									C - FVector(0, 0, 30000.0), ECC_WorldStatic, CarParams);
+								// Boden < 5 m unter der Karosserie = auf/nahe der
+								// Strasse; sonst faellt der Wagen (Zelle fehlt).
+								const bool bGroundNear = bHit
+									&& (C.Z - CarGround.ImpactPoint.Z) < 500.0;
+								if (!bGroundNear)
+								{
+									++CarAirborneTicks;
+									if (!bCarAirborne)
+									{
+										bCarAirborne = true;
+										CarFallStartZ = C.Z;
+									}
+									const double Sturz = CarFallStartZ - C.Z;
+									if (Sturz > MaxCarSturzCm)
+									{
+										MaxCarSturzCm = Sturz;
+										MaxCarSturzX = C.X;
+									}
+								}
+								else
+								{
+									bCarAirborne = false;
+								}
+							}
+							else
 							{
 								FVector Next = Pawn->GetActorLocation();
 								Next.X += StepCm;
 								Pawn->SetActorLocation(Next, /*bSweep=*/false, nullptr,
 									ETeleportType::TeleportPhysics);
+								AutoDriveDistanceCm += StepCm;
 							}
-
-							AutoDriveDistanceCm += StepCm;
 
 							// Durchfall-Waechter: Liegt unter dem fahrenden Pawn
 							// ueberhaupt geladene WorldStatic-Kollision? Ein
@@ -821,6 +944,10 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 							// Totalausfall ueber die ganze 2-km-Spalte heisst:
 							// die Zelle ist noch nicht gestreamt, ein Wagen wuerde
 							// hier ins Leere fallen.
+							// Nur der Teleport-Fuss-Pawn wird per Trace geprueft; ein
+							// echter Wagen misst oben seinen realen Hoehensturz.
+							if (!bCarMode)
+							{
 							const FVector P = Pawn->GetActorLocation();
 							FCollisionQueryParams FallParams(
 								FName(TEXT("WbFallTest")), /*bTraceComplex=*/false);
@@ -870,6 +997,7 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 							{
 								++FallTestLeadVoidTicks;
 							}
+							}   // Ende if (!bCarMode): nur Fuss-Pawn-Trace
 						}
 					}
 				}

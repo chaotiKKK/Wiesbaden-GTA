@@ -350,6 +350,30 @@ private:
 	/** Das Ergebnis wurde bereits geschrieben (nur einmal). */
 	bool bFallTestSummaryWritten = false;
 
+	// Durchfall-Test mit ECHTEM Chaos-Wagen (-WbChaosCar + -WbAutoDrive): statt
+	// Bodenpraesenz per Trace wird der TATSAECHLICHE Karosserie-Hoehensturz
+	// gemessen - der Wagen faehrt auf Chaos-Physik und faellt real, wenn eine
+	// Zelle fehlt.
+	/** Ein Chaos-Wagen faehrt (echte Physik) statt des teleportierten Pawns. */
+	bool bCarMode = false;
+	/** Fahr-Ticks im Wagen-Modus. */
+	int32 CarDriveTicks = 0;
+	/** Ticks, in denen kein Boden nah unter dem Wagen liegt (Wagen faellt/fliegt). */
+	int32 CarAirborneTicks = 0;
+	/** Der Wagen ist gerade im freien Fall (kein Boden nah). */
+	bool bCarAirborne = false;
+	/** Karosserie-Z zu Beginn des laufenden Sturzes (cm). */
+	double CarFallStartZ = 0.0;
+	/** Groesster gemessener Karosserie-Hoehensturz (cm) und sein Ort. */
+	double MaxCarSturzCm = 0.0;
+	double MaxCarSturzX = 0.0;
+	/** Spitzen-Sinkgeschwindigkeit der Karosserie (cm/s). */
+	float MaxCarDownSpeedCmS = 0.0f;
+	/** Tatsaechlich gefahrene Luftlinie des Wagens ab Start (cm). */
+	double CarDistanceCm = 0.0;
+	/** Sekundentakt-Drossel fuer das Wagen-Diagnose-Log. */
+	int32 LastCarLogSecond = -1;
+
 	/** Schreibt das Durchfall-Test-Ergebnis nach Saved/Diagnose/Durchfall.txt. */
 	void WriteFallThroughSummary();
 
