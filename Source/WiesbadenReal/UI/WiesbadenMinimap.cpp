@@ -70,10 +70,13 @@ void FWiesbadenMinimap::BuildWorldMapLines(
 
 	const float MinPxSq = MinSegmentPx * MinSegmentPx;
 
-	// Zwei Durchgaenge: Nebenstrassen zuerst, Hauptstrassen zuletzt (oben drueber).
+	// Hauptstrassen ZUERST: bei begrenztem Linien-Budget (MaxLines) muss das
+	// erkennbare Skelett garantiert gezeichnet werden, sonst verbrauchen die
+	// zahlreichen Nebenstrassen das Budget und die Hauptachsen fehlen ganz.
+	// Sie sind dicker + gelb, also auch unter den duennen Nebenstrassen sichtbar.
 	for (int32 Pass = 0; Pass < 2 && OutLines.Num() < MaxLines; ++Pass)
 	{
-		const bool bWantMajor = (Pass == 1);
+		const bool bWantMajor = (Pass == 0);
 		for (const FRoadSegment& Segment : Network.Segments)
 		{
 			if (OutLines.Num() >= MaxLines)
@@ -92,19 +95,27 @@ void FWiesbadenMinimap::BuildWorldMapLines(
 			{
 				continue;
 			}
+			// DEZIMIEREN statt je Teilsegment cullen: bei Stadt-Zoom liegen die
+			// Mittellinienpunkte dichter als ein Pixel beisammen. Wuerde man jedes
+			// Teilsegment einzeln gegen MinSegmentPx pruefen, faellt JEDES weg und
+			// die ganze Strasse verschwindet (genau der Fehler im ersten Wurf: 0
+			// Linien aus 125.000 Segmenten). Stattdessen dicht liegende Punkte zu
+			// einer sichtbaren Linie zusammenfassen: erst zeichnen, wenn der
+			// naechste Punkt >= MinSegmentPx vom zuletzt gezeichneten entfernt ist.
+			FVector2D LastPt = Proj.Project(Line[0]);
 			for (int32 Index = 1; Index < Line.Num() && OutLines.Num() < MaxLines; ++Index)
 			{
-				const FVector2D A = Proj.Project(Line[Index - 1]);
-				const FVector2D B = Proj.Project(Line[Index]);
-				if (FVector2D::DistSquared(A, B) < MinPxSq)
+				const FVector2D P = Proj.Project(Line[Index]);
+				if (FVector2D::DistSquared(P, LastPt) < MinPxSq)
 				{
-					continue;  // bei Stadt-Zoom unter einem Pixel - unsichtbar
+					continue;  // noch zu nah - Punkt sammeln, nicht zeichnen
 				}
 				FMinimapLine& L = OutLines.AddDefaulted_GetRef();
-				L.Start = A;
-				L.End = B;
+				L.Start = LastPt;
+				L.End = P;
 				L.bMajor = bMajor;
 				L.Thickness = bMajor ? 2.2f : 1.0f;
+				LastPt = P;
 			}
 		}
 	}

@@ -5,6 +5,8 @@
 #include "WiesbadenReal.h"
 
 #include "CanvasItem.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Core/WiesbadenDevActions.h"
 #include "Engine/Canvas.h"
 #include "TextureResource.h"
@@ -605,6 +607,13 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		}
 		bMapKeyHeld = bMapDown;
 	}
+	// Headless-Sichtprobe: -WbShowMap erzwingt die offene Karte. Die HUD pollt
+	// echte Tasten, die im automatisierten Aufnahmelauf nicht feuern - ohne den
+	// Schalter liesse sich das Rendern der Karte nie belegen.
+	if (FParse::Param(FCommandLine::Get(), TEXT("WbShowMap")))
+	{
+		bWorldMapOpen = true;
+	}
 	if (bWorldMapOpen)
 	{
 		DrawWorldMap(Width, Height);
@@ -1170,9 +1179,9 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 		return;
 	}
 
-	// Abgedunkelter Vollbild-Hintergrund - halbtransparent, damit klar ist, dass
-	// die Karte ein Overlay ist (das Spiel laeuft dahinter weiter).
-	DrawRect(FLinearColor(0.02f, 0.03f, 0.05f, 0.88f), 0.0f, 0.0f, Width, Height);
+	// Opaker Vollbild-Hintergrund: eine Weltkarte ERSETZT die Sicht (GTA-Stil),
+	// sonst waschen die duennen Strassenlinien in der 3D-Szene aus.
+	DrawRect(FLinearColor(0.04f, 0.05f, 0.07f, 1.0f), 0.0f, 0.0f, Width, Height);
 
 	const FRoadNetwork* Network = FindRoadNetwork();
 	if (!Network)
@@ -1197,7 +1206,7 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 			CachedWorldMapProj = FWiesbadenMinimap::MakeWorldMapProjection(
 				WMin, WMax, ScreenCentre, ScreenSize, /*MarginFrac=*/0.88f);
 			FWiesbadenMinimap::BuildWorldMapLines(
-				*Network, CachedWorldMapProj, /*MaxLines=*/12000, /*MinSegmentPx=*/1.5f,
+				*Network, CachedWorldMapProj, /*MaxLines=*/16000, /*MinSegmentPx=*/2.0f,
 				CachedWorldMapLines);
 			CachedWorldMapNetwork = Network;
 			CachedWorldMapSize = ScreenSize;

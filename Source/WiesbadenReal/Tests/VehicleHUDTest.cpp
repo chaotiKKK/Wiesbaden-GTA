@@ -253,3 +253,43 @@ bool FWorldMapProjectionTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+// Regression: eine lange Strasse mit DICHT liegenden Punkten muss bei
+// Stadt-Zoom Linien ergeben, nicht null. Der erste Wurf cullte je Teilsegment
+// und lieferte aus 125.000 Segmenten 0 Linien - die Karte war leer.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldMapDecimationTest,
+	"WiesbadenReal.World.WorldMapDecimation",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FWorldMapDecimationTest::RunTest(const FString& Parameters)
+{
+	// Diagonale ~1-km-Strasse mit einem Punkt je ~104 cm = 1000 dicht liegende
+	// Punkte (wie im echten Netz nach dem Resampling). Diagonal, damit die
+	// Huellbox in BEIDEN Achsen Ausdehnung hat (eine flache Strasse haette
+	// Nullhoehe und die Projektion waere ungueltig - kein Netz-Fall).
+	FRoadNetwork Net;
+	FRoadSegment Seg;
+	Seg.HighwayType = EOSMHighwayType::Residential;
+	for (int32 I = 0; I <= 1000; ++I)
+	{
+		Seg.Centerline.Add(FVector(I * 100.0, I * 30.0, 0.0));
+	}
+	Net.Segments.Add(Seg);
+
+	FVector2D WMin, WMax;
+	FWiesbadenMinimap::ComputeNetworkBoundsXY(Net, WMin, WMax);
+	// Massstab wie bei der Ganzstadt-Ansicht: 1 km auf ~400 px.
+	const FWorldMapProjection Proj = FWiesbadenMinimap::MakeWorldMapProjection(
+		WMin, WMax, FVector2D(200.0, 300.0), FVector2D(800.0, 600.0), 1.0f);
+
+	TArray<FMinimapLine> Lines;
+	FWiesbadenMinimap::BuildWorldMapLines(Net, Proj, /*MaxLines=*/16000, /*MinSegmentPx=*/2.0f, Lines);
+
+	// Kern der Regression: NICHT null trotz dicht liegender Teilsegmente.
+	TestTrue(TEXT("Dichte Punkte ergeben Linien (nicht null)"), Lines.Num() > 0);
+	// Und nicht je Teilsegment eine Linie (Dezimierung greift): deutlich unter
+	// den 1000 Eingabe-Teilsegmenten.
+	TestTrue(TEXT("Dezimiert (deutlich unter 1000 Teilsegmenten)"), Lines.Num() < 600);
+
+	return true;
+}
