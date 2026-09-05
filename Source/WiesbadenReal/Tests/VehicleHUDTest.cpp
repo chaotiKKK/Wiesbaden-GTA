@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "UI/WiesbadenVehicleHUD.h"
+#include "GIS/BuildingGenerator.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleHUDTest,
@@ -290,6 +291,51 @@ bool FWorldMapDecimationTest::RunTest(const FString& Parameters)
 	// Und nicht je Teilsegment eine Linie (Dezimierung greift): deutlich unter
 	// den 1000 Eingabe-Teilsegmenten.
 	TestTrue(TEXT("Dezimiert (deutlich unter 1000 Teilsegmenten)"), Lines.Num() < 600);
+
+	return true;
+}
+
+
+// Weltkarte: die datenreine Projektion der gedrehten Gebaeude-Grundriss-Boxen
+// in Bildschirm-Vierecke (bebautes-Gebiet-Schattierung).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldMapBuildingsTest,
+	"WiesbadenReal.World.WorldMapBuildings",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FWorldMapBuildingsTest::RunTest(const FString& Parameters)
+{
+	// Projektion: 1 px/cm, Weltmitte (0,0) auf Bildschirm (400,300).
+	FWorldMapProjection Proj;
+	Proj.WorldMin = FVector2D(-1000.0, -1000.0);
+	Proj.WorldMax = FVector2D(1000.0, 1000.0);
+	Proj.ScreenCentre = FVector2D(400.0, 300.0);
+	Proj.ScalePxPerCm = 1.0f;
+
+	// Ein Gebaeude bei (0,0), Halbmasse (100,50) cm, Yaw 0.
+	FGeneratedBuilding B;
+	B.FootprintCenterCm = FVector2D(0.0, 0.0);
+	B.FootprintExtentCm = FVector2D(100.0, 50.0);
+	B.FootprintYawDegrees = 0.0f;
+	B.FootprintAreaSqm = 2.0;
+	TArray<FGeneratedBuilding> Buildings; Buildings.Add(B);
+
+	TArray<FWorldMapQuad> Quads;
+	FWiesbadenMinimap::BuildWorldMapBuildings(Buildings, Proj, /*MaxQuads=*/100, /*MinAreaPx=*/0.0f, Quads);
+	if (TestEqual(TEXT("Ein Viereck"), Quads.Num(), 1))
+	{
+		// Yaw 0: Box-X=+X(Ost)->Bildschirm +X, Box-Y=+Y(Nord)->Bildschirm -Y (Norden oben).
+		TestTrue(TEXT("Ecke (+ex,+ey) rechts-oben (500,250)"), Quads[0].A.Equals(FVector2D(500.0, 250.0), 0.01));
+		TestTrue(TEXT("Ecke (-ex,-ey) links-unten (300,350)"), Quads[0].C.Equals(FVector2D(300.0, 350.0), 0.01));
+	}
+
+	// Entartetes/winziges Gebaeude (Halbmasse ~0) -> kein Viereck.
+	FGeneratedBuilding Tiny;
+	Tiny.FootprintExtentCm = FVector2D(0.5, 0.5);
+	Tiny.FootprintAreaSqm = 0.1;
+	TArray<FGeneratedBuilding> TinyList; TinyList.Add(Tiny);
+	TArray<FWorldMapQuad> TinyQuads;
+	FWiesbadenMinimap::BuildWorldMapBuildings(TinyList, Proj, /*MaxQuads=*/100, /*MinAreaPx=*/0.0f, TinyQuads);
+	TestEqual(TEXT("Winziges Gebaeude uebersprungen"), TinyQuads.Num(), 0);
 
 	return true;
 }

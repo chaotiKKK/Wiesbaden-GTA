@@ -7,6 +7,16 @@
 #include "GIS/RoadNetworkTypes.h"
 
 class UCanvas;
+struct FGeneratedBuilding;
+
+/** Ein projiziertes Gebaeude-Viereck der Weltkarte (Bildschirm-Eckpunkte). */
+struct FWorldMapQuad
+{
+	FVector2D A = FVector2D::ZeroVector;
+	FVector2D B = FVector2D::ZeroVector;
+	FVector2D C = FVector2D::ZeroVector;
+	FVector2D D = FVector2D::ZeroVector;
+};
 
 /**
  * Eine Linie der Minikarte, bereits in Bildschirmkoordinaten.
@@ -121,6 +131,16 @@ struct WIESBADENREAL_API FWiesbadenMinimap
 	static void BuildWorldMapLines(
 		const FRoadNetwork& Network, const FWorldMapProjection& Proj,
 		int32 MaxLines, float MinSegmentPx, TArray<FMinimapLine>& OutLines);
+
+	/**
+	 * Projiziert die gedrehten Grundriss-Boxen der Gebaeude in Bildschirm-Vierecke.
+	 * Groesste zuerst (kleine sind bei Stadt-Zoom sub-pixel), gedeckelt auf
+	 * MaxQuads; Vierecke unter MinAreaPx werden uebersprungen. Als bebautes-Gebiet-
+	 * Schattierung unter den Strassen gedacht.
+	 */
+	static void BuildWorldMapBuildings(
+		const TArray<FGeneratedBuilding>& Buildings, const FWorldMapProjection& Proj,
+		int32 MaxQuads, float MinAreaPx, TArray<FWorldMapQuad>& OutQuads);
 
 	/**
 	 * Waehlt die Segmente im Umkreis und rechnet sie in Bildschirmkoordinaten

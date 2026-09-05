@@ -2,6 +2,8 @@
 
 #include "UI/WiesbadenMinimap.h"
 
+#include "GIS/BuildingGenerator.h"
+
 FVector2D FWorldMapProjection::Project(const FVector& World) const
 {
 	const FVector2D WorldCentre = (WorldMin + WorldMax) * 0.5;
@@ -347,4 +349,59 @@ FString FWiesbadenMinimap::FindStreetName(
 	}
 
 	return BestName;
+}
+
+
+void FWiesbadenMinimap::BuildWorldMapBuildings(
+	const TArray<FGeneratedBuilding>& Buildings, const FWorldMapProjection& Proj,
+	int32 MaxQuads, float MinAreaPx, TArray<FWorldMapQuad>& OutQuads)
+{
+	OutQuads.Reset();
+	if (!Proj.IsValid() || Buildings.Num() == 0)
+	{
+		return;
+	}
+
+	// Groesste zuerst: unter dem Deckel sollen die sichtbaren grossen Bauten/
+	// Bloecke landen (kleine sind bei Stadt-Zoom ohnehin sub-pixel). Sortierte
+	// Index-Liste, damit die Buildings-Array selbst unangetastet bleibt.
+	TArray<int32> Order;
+	Order.Reserve(Buildings.Num());
+	for (int32 I = 0; I < Buildings.Num(); ++I) { Order.Add(I); }
+	Order.Sort([&Buildings](int32 A, int32 B)
+	{
+		return Buildings[A].FootprintAreaSqm > Buildings[B].FootprintAreaSqm;
+	});
+
+	const float MinArea = FMath::Max(MinAreaPx, 0.0f);
+	for (int32 Idx : Order)
+	{
+		if (OutQuads.Num() >= MaxQuads) { break; }
+		const FGeneratedBuilding& B = Buildings[Idx];
+		const double Ex = B.FootprintExtentCm.X;   // Halbmasse entlang Box-X
+		const double Ey = B.FootprintExtentCm.Y;   // Halbmasse entlang Box-Y
+		if (Ex <= 1.0 || Ey <= 1.0) { continue; }
+
+		// Grob projizierte Flaeche; degenerierte/unsichtbare ueberspringen.
+		const double ScrArea = (2.0 * Ex * Proj.ScalePxPerCm) * (2.0 * Ey * Proj.ScalePxPerCm);
+		if (ScrArea < MinArea) { continue; }
+
+		const double Yaw = FMath::DegreesToRadians(B.FootprintYawDegrees);
+		const FVector2D Fwd(FMath::Cos(Yaw), FMath::Sin(Yaw));   // Box-X in Welt
+		const FVector2D Right(-Fwd.Y, Fwd.X);                    // Box-Y in Welt
+		const FVector2D Cc = B.FootprintCenterCm;
+
+		auto Corner = [&](double Sx, double Sy)
+		{
+			const FVector2D W = Cc + Fwd * (Sx * Ex) + Right * (Sy * Ey);
+			return Proj.Project(FVector(W.X, W.Y, 0.0));
+		};
+
+		FWorldMapQuad Q;
+		Q.A = Corner(+1.0, +1.0);
+		Q.B = Corner(+1.0, -1.0);
+		Q.C = Corner(-1.0, -1.0);
+		Q.D = Corner(-1.0, +1.0);
+		OutQuads.Add(Q);
+	}
 }

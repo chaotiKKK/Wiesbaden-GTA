@@ -1059,6 +1059,7 @@ const FRoadNetwork* AWiesbadenVehicleHUD::FindRoadNetwork()
 		if (!It->RoadNetwork.Segments.IsEmpty())
 		{
 			CachedRoadNetwork = &It->RoadNetwork;
+			CachedBuildings = &It->Buildings;   // Gebaeude vom selben Actor mitnehmen
 			break;
 		}
 	}
@@ -1208,8 +1209,25 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 			FWiesbadenMinimap::BuildWorldMapLines(
 				*Network, CachedWorldMapProj, /*MaxLines=*/16000, /*MinSegmentPx=*/2.0f,
 				CachedWorldMapLines);
+			if (CachedBuildings)
+			{
+				FWiesbadenMinimap::BuildWorldMapBuildings(
+					*CachedBuildings, CachedWorldMapProj, /*MaxQuads=*/12000,
+					/*MinAreaPx=*/0.4f, CachedWorldMapBuildings);
+			}
 			CachedWorldMapNetwork = Network;
 			CachedWorldMapSize = ScreenSize;
+		}
+	}
+
+	// Gebaeude als dezente Flaechen UNTER den Strassen - zeigt das bebaute
+	// Gebiet (bei Stadt-Zoom lesen die Einzelgrundrisse als Flaeche).
+	{
+		const FLinearColor MapBuildingCol(0.13f, 0.14f, 0.16f, 1.0f);
+		for (const FWorldMapQuad& Q : CachedWorldMapBuildings)
+		{
+			DrawFilledTri(Q.A, Q.B, Q.C, MapBuildingCol);
+			DrawFilledTri(Q.A, Q.C, Q.D, MapBuildingCol);
 		}
 	}
 

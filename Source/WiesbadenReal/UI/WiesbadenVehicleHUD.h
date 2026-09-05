@@ -312,4 +312,9 @@ private:
 	FVector2D CachedWorldMapSize = FVector2D::ZeroVector;
 	/** Netz, aus dem die Linien gebaut wurden (Neubau bei Wechsel). */
 	const struct FRoadNetwork* CachedWorldMapNetwork = nullptr;
+
+	/** Gebaeude-Metadaten der Stadt (einmal gesucht, mit dem Netz gemerkt). */
+	const TArray<struct FGeneratedBuilding>* CachedBuildings = nullptr;
+	/** Einmal gebaute Gebaeude-Vierecke der Weltkarte (bebautes-Gebiet-Schattierung). */
+	TArray<struct FWorldMapQuad> CachedWorldMapBuildings;
 };
