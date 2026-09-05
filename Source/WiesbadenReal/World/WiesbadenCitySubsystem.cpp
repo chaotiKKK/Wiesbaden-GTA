@@ -105,6 +105,60 @@ void UWiesbadenCitySubsystem::DumpStreetNetwork(const FString& Path) const
 	}
 }
 
+void UWiesbadenCitySubsystem::WriteFallThroughSummary()
+{
+	// Nur nach einer tatsaechlich gefahrenen Strecke (-WbAutoDrive) sinnvoll.
+	if (FallTestMovingTicks <= 0 || bFallTestSummaryWritten)
+	{
+		return;
+	}
+	bFallTestSummaryWritten = true;
+
+	// Eine am Streckenende noch offene Luecke mitzaehlen.
+	if (bFallTestInVoid)
+	{
+		const double OpenLenCm = (AutoDriveOrigin.X + AutoDriveDistanceCm) - FallTestVoidStartX;
+		if (OpenLenCm > FallTestWorstVoidLenCm)
+		{
+			FallTestWorstVoidLenCm = OpenLenCm;
+			FallTestWorstVoidX = FallTestVoidStartX;
+		}
+	}
+
+	const double VoidPct = 100.0 * static_cast<double>(FallTestVoidTicks)
+		/ static_cast<double>(FallTestMovingTicks);
+	const double LeadPct = 100.0 * static_cast<double>(FallTestLeadVoidTicks)
+		/ static_cast<double>(FallTestMovingTicks);
+	const bool bPass = (FallTestVoidTicks == 0);
+
+	TArray<FString> Lines;
+	Lines.Add(TEXT("Durchfall-Test: laden die gestreamten Zellen schnell genug fuer eine schnelle Fahrt?"));
+	Lines.Add(FString::Printf(TEXT("Gefahrene Strecke: %.0f m nach Osten ab (%.0f, %.0f)."),
+		AutoDriveDistanceCm * 0.01, AutoDriveOrigin.X, AutoDriveOrigin.Y));
+	Lines.Add(FString::Printf(TEXT("Bewegte Messpunkte: %d."), FallTestMovingTicks));
+	Lines.Add(FString::Printf(
+		TEXT("Punkte OHNE geladene Kollision unter dem Pawn: %d (%.2f %% der Fahrt)."),
+		FallTestVoidTicks, VoidPct));
+	Lines.Add(FString::Printf(
+		TEXT("Punkte OHNE Kollision eine Sekunde voraus (Leading-Edge): %d (%.2f %%)."),
+		FallTestLeadVoidTicks, LeadPct));
+	Lines.Add(FString::Printf(
+		TEXT("Laengste zusammenhaengende Bodenluecke: %.1f m (ab X=%.0f)."),
+		FallTestWorstVoidLenCm * 0.01, FallTestWorstVoidX));
+	Lines.Add(bPass
+		? TEXT("ERGEBNIS: BESTANDEN - unter dem Wagen lag jederzeit geladene Kollision, kein Durchfallen.")
+		: TEXT("ERGEBNIS: DURCHGEFALLEN - es gab Stellen ohne geladenen Boden; ein Wagen waere dort ins Leere gefahren."));
+
+	const FString Path = FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("Durchfall.txt");
+	FFileHelper::SaveStringArrayToFile(Lines, *Path);
+
+	for (const FString& L : Lines)
+	{
+		UE_LOG(LogWbStreaming, Log, TEXT("%s"), *L);
+	}
+	UE_LOG(LogWbStreaming, Log, TEXT("Durchfall-Test-Ergebnis geschrieben: %s"), *Path);
+}
+
 void UWiesbadenCitySubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -758,6 +812,64 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 							}
 
 							AutoDriveDistanceCm += StepCm;
+
+							// Durchfall-Waechter: Liegt unter dem fahrenden Pawn
+							// ueberhaupt geladene WorldStatic-Kollision? Ein
+							// Abwaerts-Trace aus 500 m Hoehe trifft, sobald die
+							// Zelle geladen ist (Dach, Strasse oder Gelaende) -
+							// unabhaengig von der festen Teleport-Hoehe. Ein
+							// Totalausfall ueber die ganze 2-km-Spalte heisst:
+							// die Zelle ist noch nicht gestreamt, ein Wagen wuerde
+							// hier ins Leere fallen.
+							const FVector P = Pawn->GetActorLocation();
+							FCollisionQueryParams FallParams(
+								FName(TEXT("WbFallTest")), /*bTraceComplex=*/false);
+							FallParams.AddIgnoredActor(Pawn);
+
+							const FVector ProbeStart(
+								P.X, P.Y, AutoDriveOrigin.Z + 50000.0);   // 500 m ueber Start
+							const FVector ProbeEnd(
+								P.X, P.Y, AutoDriveOrigin.Z - 200000.0);  // 2 km abwaerts
+							FHitResult GroundHit;
+							const bool bGround = DriveWorld->LineTraceSingleByChannel(
+								GroundHit, ProbeStart, ProbeEnd, ECC_WorldStatic, FallParams);
+
+							++FallTestMovingTicks;
+							if (!bGround)
+							{
+								++FallTestVoidTicks;
+								if (!bFallTestInVoid)
+								{
+									bFallTestInVoid = true;
+									FallTestVoidStartX = P.X;
+								}
+							}
+							else if (bFallTestInVoid)
+							{
+								bFallTestInVoid = false;
+								const double LenCm = P.X - FallTestVoidStartX;
+								if (LenCm > FallTestWorstVoidLenCm)
+								{
+									FallTestWorstVoidLenCm = LenCm;
+									FallTestWorstVoidX = FallTestVoidStartX;
+								}
+							}
+
+							// Vorausschau: eine Sekunde Fahrweg voraus. Weil die
+							// Streaming-Quelle NICHT nach Geschwindigkeit vorablaedt,
+							// zeigt ein Leading-Edge-Loch, dass die Zelle beim
+							// Eintreffen noch fehlen kann.
+							const FVector LeadStart(
+								P.X + DriveKmh / 3.6 * 100.0, P.Y,
+								AutoDriveOrigin.Z + 50000.0);
+							const FVector LeadEnd(
+								LeadStart.X, LeadStart.Y, AutoDriveOrigin.Z - 200000.0);
+							FHitResult LeadHit;
+							if (!DriveWorld->LineTraceSingleByChannel(
+								LeadHit, LeadStart, LeadEnd, ECC_WorldStatic, FallParams))
+							{
+								++FallTestLeadVoidTicks;
+							}
 						}
 					}
 				}
@@ -883,6 +995,9 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			{
 				UE_LOG(LogWbStreaming, Log,
 					TEXT("Messlauf beendet nach %.0f Sekunden (-WbQuitAfter)."), QuitAfterElapsed);
+
+				// Durchfall-Test-Ergebnis sichern, bevor der Prozess endet.
+				WriteFallThroughSummary();
 
 				if (UWorld* QuitWorld = GetWorld())
 				{
@@ -1392,18 +1507,73 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			if (IsCityReady())
 			{
 				bShotWhenReadyArmed = true;
-				// Optionale Fassaden-Nahaufnahme: -WbCamHeight=<Meter> setzt die
-				// Kamera aus dieser Hoehe ueber dem Spieler (mit -WbYaw/-WbPitch,
-				// optional -WbAtX/-WbAtY) - so nimmt der 2x-HighResShot eine
-				// sonnenbeschienene Hauswand gross ins Bild statt der Spielkamera
-				// im Schatten. Ohne das Flag bleibt die Spielkamera unveraendert.
-				float CamHeight = 0.0f;
-				if (FParse::Value(FCommandLine::Get(), TEXT("WbCamHeight="), CamHeight) && CamHeight > 0.0f)
+
+				// Optionale Posen-Serie: -WbShotPoseFile=<Pfad> faehrt eine Liste
+				// von Ansichten ab (eine Pose je Zeile), je Pose ein nummeriertes
+				// Bild. Leerzeilen und '#'-Kommentare werden ignoriert.
+				FString PoseFile;
+				if (FParse::Value(FCommandLine::Get(), TEXT("WbShotPoseFile="), PoseFile))
 				{
-					SetupAerialView(CamHeight);
+					FString FileContent;
+					if (FFileHelper::LoadFileToString(FileContent, *PoseFile))
+					{
+						TArray<FString> Lines;
+						FileContent.ParseIntoArrayLines(Lines);
+						for (const FString& Line : Lines)
+						{
+							const FString Trimmed = Line.TrimStartAndEnd();
+							if (!Trimmed.IsEmpty() && !Trimmed.StartsWith(TEXT("#")))
+							{
+								ShotPoseLines.Add(Trimmed);
+							}
+						}
+						UE_LOG(LogWbStreaming, Log,
+							TEXT("WbShotWhenReady: Posen-Serie mit %d Ansichten geladen (%s)."),
+							ShotPoseLines.Num(), *PoseFile);
+					}
+					else
+					{
+						UE_LOG(LogWbStreaming, Warning,
+							TEXT("WbShotWhenReady: Posendatei nicht lesbar: %s"), *PoseFile);
+					}
 				}
+
+				FParse::Value(FCommandLine::Get(), TEXT("WbPoseSettle="), ShotPoseSettle);
+				ShotPoseIndex = 0;
+				bShotCapturing = false;
+
+				if (ShotPoseLines.Num() > 0)
+				{
+					ApplyShotPose(ShotPoseLines[0]);
+				}
+				else
+				{
+					// -WbGotoFacade=<brick|sandstone>: sucht in den geladenen
+					// Chunks eine Relief-Fassade (M_WbFacade_Backstein/Sandstein)
+					// und teleportiert die Aufnahme-Kamera nah davor - fuer
+					// Nah-Aufnahmen ohne bekannte Weltkoordinaten. Vorrang vor
+					// -WbCamHeight.
+					FString FacadeVariant;
+					if (FParse::Value(FCommandLine::Get(), TEXT("WbGotoFacade="), FacadeVariant))
+					{
+						SetupFacadeCloseup(FacadeVariant);
+					}
+					else
+					{
+						// Einzelbild: optionale Aufnahme-Kamera -WbCamHeight=<Meter>
+						// (mit -WbYaw/-WbPitch/-WbAtX/-WbAtY). Ohne das Flag bleibt die
+						// Spielkamera unveraendert.
+						float CamHeight = 0.0f;
+						if (FParse::Value(FCommandLine::Get(), TEXT("WbCamHeight="), CamHeight) && CamHeight > 0.0f)
+						{
+							SetupAerialView(CamHeight);
+						}
+					}
+				}
+
 				// Genug Zeit fuer Streaming-Nachladen, Shader-Kompilierung und
-				// Belichtungs-Adaption (und den Kamerawechsel), bevor das Bild steht.
+				// Belichtungs-Adaption (und den Kamerawechsel), bevor das erste
+				// Bild steht.
 				ShotWhenReadyDelay = 6.0f;
 				FParse::Value(FCommandLine::Get(), TEXT("WbShotDelay="), ShotWhenReadyDelay);
 			}
@@ -1413,8 +1583,38 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			ShotWhenReadyDelay -= DeltaTime;
 			if (ShotWhenReadyDelay <= 0.0f)
 			{
-				FireReadyHighResShot();
-				bShotWhenReadyFired = true;
+				const bool bSeries = ShotPoseLines.Num() > 0;
+				if (!bShotCapturing)
+				{
+					// Settle fertig -> Bild fuer die aktuelle Pose ausloesen.
+					FireReadyHighResShot(bSeries ? ShotPoseIndex : -1);
+					bShotCapturing = true;
+					// Dem HighResShot ein paar Frames zum Rendern lassen, BEVOR
+					// die Kamera zur naechsten Pose springt - sonst faengt das Bild
+					// die schon bewegte Kamera ein.
+					ShotWhenReadyDelay = 0.6f;
+				}
+				else
+				{
+					// Bild gerendert -> naechste Pose oder Ende der Serie.
+					bShotCapturing = false;
+					++ShotPoseIndex;
+					if (bSeries && ShotPoseIndex < ShotPoseLines.Num())
+					{
+						ApplyShotPose(ShotPoseLines[ShotPoseIndex]);
+						ShotWhenReadyDelay = ShotPoseSettle;
+					}
+					else
+					{
+						bShotWhenReadyFired = true;
+						// Letztes Bild fertig schreiben lassen, dann beenden -
+						// ausser -WbShotNoQuit.
+						if (!FParse::Param(FCommandLine::Get(), TEXT("WbShotNoQuit")))
+						{
+							ScreenshotQuitDelay = 8.0f;
+						}
+					}
+				}
 			}
 		}
 	}
@@ -2928,6 +3128,37 @@ void UWiesbadenCitySubsystem::RequestDiagnosticScreenshot()
 
 bool UWiesbadenCitySubsystem::SetupAerialView(float HeightMeters)
 {
+	// Einzelbild-Weg: alle Kamera-Parameter aus der Kommandozeile lesen und an
+	// den gemeinsamen Kern reichen. -WbAtX/-WbAtY (cm) = absoluter Zielort,
+	// sonst ueber dem Spieler; -WbYaw/-WbPitch Blick, -WbCamForward Vorwaerts-
+	// Versatz, -WbLookYaw/-WbLookPitch entkoppeln Blick von Fahrtrichtung.
+	// Die Posen-Serie ruft SetupAerialViewParams direkt mit Werten je Zeile.
+	float AtX = 0.0f;
+	float AtY = 0.0f;
+	const bool bHasX = FParse::Value(FCommandLine::Get(), TEXT("WbAtX="), AtX);
+	const bool bHasY = FParse::Value(FCommandLine::Get(), TEXT("WbAtY="), AtY);
+
+	float Pitch = -70.0f;
+	float Yaw = 0.0f;
+	FParse::Value(FCommandLine::Get(), TEXT("WbPitch="), Pitch);
+	FParse::Value(FCommandLine::Get(), TEXT("WbYaw="), Yaw);
+
+	float ForwardMeters = 0.0f;
+	FParse::Value(FCommandLine::Get(), TEXT("WbCamForward="), ForwardMeters);
+
+	float LookYaw = Yaw;
+	float LookPitch = Pitch;
+	FParse::Value(FCommandLine::Get(), TEXT("WbLookYaw="), LookYaw);
+	FParse::Value(FCommandLine::Get(), TEXT("WbLookPitch="), LookPitch);
+
+	return SetupAerialViewParams(HeightMeters, bHasX && bHasY, AtX, AtY,
+		Yaw, Pitch, ForwardMeters, LookYaw, LookPitch);
+}
+
+bool UWiesbadenCitySubsystem::SetupAerialViewParams(float HeightMeters, bool bHasAt,
+	float AtX, float AtY, float Yaw, float Pitch, float ForwardMeters,
+	float LookYaw, float LookPitch)
+{
 	UWorld* World = GetWorld();
 	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
 	if (!PC)
@@ -2941,18 +3172,8 @@ bool UWiesbadenCitySubsystem::SetupAerialView(float HeightMeters)
 	FRotator ViewRotation = FRotator::ZeroRotator;
 	PC->GetPlayerViewPoint(ViewLocation, ViewRotation);
 
-	// Optionaler Zielort: -WbAtX=<cm> -WbAtY=<cm>.
-	//
-	// Ohne ihn steht die Kamera immer ueber dem Spielerstart. Eine Meldung wie
-	// "die Platter Strasse sieht kaputt aus" laesst sich damit nicht pruefen -
-	// man kommt gar nicht hin. Die Weltkoordinaten stammen aus den OSM-Daten
-	// ueber denselben Konverter, den auch der Aufbau benutzt.
-	float AtX = 0.0f;
-	float AtY = 0.0f;
-	const bool bHasX = FParse::Value(FCommandLine::Get(), TEXT("WbAtX="), AtX);
-	const bool bHasY = FParse::Value(FCommandLine::Get(), TEXT("WbAtY="), AtY);
-
-	if (bHasX && bHasY)
+	// Absoluter Zielort (cm) oder ueber dem Spieler.
+	if (bHasAt)
 	{
 		ViewLocation.X = AtX;
 		ViewLocation.Y = AtY;
@@ -2962,19 +3183,7 @@ bool UWiesbadenCitySubsystem::SetupAerialView(float HeightMeters)
 			AtX, AtY, HeightMeters);
 	}
 
-	// Blickrichtung fuer den optionalen Vorwaerts-Versatz vorab lesen.
-	float Pitch = -70.0f;
-	float Yaw = 0.0f;
-	FParse::Value(FCommandLine::Get(), TEXT("WbPitch="), Pitch);
-	FParse::Value(FCommandLine::Get(), TEXT("WbYaw="), Yaw);
-
-	// Optionaler horizontaler Vorwaerts-Versatz entlang der Blickrichtung:
-	// -WbCamForward=<Meter>. Der Spielerstart liegt im beschatteten Innenhof;
-	// die sonnenbeschienenen Fronten stehen im Nachbarblock. Ohne bekannte
-	// Weltkoordinaten schiebt dieser Versatz die Kamera "mit der Sonne im
-	// Ruecken" bis vor eine besonnte Wand - die Hoehe (Traufniveau) bleibt.
-	float ForwardMeters = 0.0f;
-	FParse::Value(FCommandLine::Get(), TEXT("WbCamForward="), ForwardMeters);
+	// Vorwaerts-Versatz entlang WbYaw, Hoehe bleibt; Blick per LookYaw/LookPitch.
 	const FVector Forward = FRotator(0.0f, Yaw, 0.0f).Vector();
 
 	const FVector CameraLocation = ViewLocation
@@ -2983,21 +3192,6 @@ bool UWiesbadenCitySubsystem::SetupAerialView(float HeightMeters)
 
 	FActorSpawnParameters Params;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	// Blickrichtung: standardmaessig leicht geneigt nach unten (Luftaufnahme -
-	// so bleibt der Horizont im Bild und die Hoehenlage ist beurteilbar). Fuer
-	// FASSADEN-Aufnahmen laesst sie sich frei setzen: -WbPitch=<Grad> (0 = waag-
-	// recht) und -WbYaw=<Grad> (oben bereits gelesen).
-	//
-	// Blick UND Fahrt entkoppeln: -WbLookYaw/-WbLookPitch ueberschreiben allein
-	// die Blickrichtung, waehrend -WbYaw weiter die Richtung des Vorwaerts-
-	// Versatzes bestimmt. So faehrt die Kamera z. B. "zur Sonne hinaus" aus dem
-	// Innenhof (Yaw 145) und blickt dann zurueck (LookYaw -35) auf die nun
-	// besonnte Aussenwand. Ohne die Flags gilt Blick = Fahrtrichtung wie bisher.
-	float LookYaw = Yaw;
-	float LookPitch = Pitch;
-	FParse::Value(FCommandLine::Get(), TEXT("WbLookYaw="), LookYaw);
-	FParse::Value(FCommandLine::Get(), TEXT("WbLookPitch="), LookPitch);
 
 	ACameraActor* Camera = World->SpawnActor<ACameraActor>(
 		CameraLocation, FRotator(LookPitch, LookYaw, 0.0f), Params);
@@ -3014,6 +3208,168 @@ bool UWiesbadenCitySubsystem::SetupAerialView(float HeightMeters)
 	return true;
 }
 
+bool UWiesbadenCitySubsystem::SetupFacadeCloseup(const FString& Variant)
+{
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!PC)
+	{
+		return false;
+	}
+
+	const FString V = Variant.ToLower();
+	FString MatKey;
+	if (V.Contains(TEXT("brick")) || V.Contains(TEXT("backstein")) || V.Contains(TEXT("klinker")))
+	{
+		MatKey = TEXT("M_WbFacade_Backstein");
+	}
+	else if (V.Contains(TEXT("sand")))
+	{
+		MatKey = TEXT("M_WbFacade_Sandstein");
+	}
+	else
+	{
+		UE_LOG(LogWbStreaming, Warning,
+			TEXT("WbGotoFacade: unbekannte Variante '%s' (brick|sandstone)."), *Variant);
+		return false;
+	}
+
+	// Sonnenrichtung: eine Wand, deren Normale ZUR Sonne zeigt, ist besonnt -
+	// nur dort ist das Relief lesbar, nicht auf der Schattenseite. SunToward ist
+	// die horizontale Richtung zur Sonne (= entgegen dem Lichteinfall).
+	FVector SunToward(1.0, 0.0, 0.0);
+	for (TActorIterator<ADirectionalLight> LightIt(World); LightIt; ++LightIt)
+	{
+		const FVector Back = -LightIt->GetActorForwardVector();
+		const FVector Horizontal = FVector(Back.X, Back.Y, 0.0).GetSafeNormal();
+		if (!Horizontal.IsNearlyZero())
+		{
+			SunToward = Horizontal;
+		}
+		break;
+	}
+
+	// Chunks nach einer Wandflaeche mit dem Zielmaterial absuchen. Die Gebaeude-
+	// Geometrie ist je Chunk nach Materialkanal zusammengelegt (eine Sektion je
+	// Variante), also traegt EINE Sektion alle Ziegel-/Sandstein-Waende eines
+	// Chunks. Gesucht wird ueber alle Chunks die am besten BESONNTE senkrechte
+	// Wand (|Normal.Z| klein) ein paar Meter ueber dem Sockel.
+	FVector BestWallPos = FVector::ZeroVector;
+	FVector BestWallNormal = FVector::ZeroVector;
+	float BestAlign = -2.0f;
+
+	for (TActorIterator<AWiesbadenCityChunk> It(World); It && BestAlign < 0.9f; ++It)
+	{
+		UProceduralMeshComponent* Building = It->GetBuildingMesh();
+		if (!Building)
+		{
+			continue;
+		}
+		const int32 NumSections = Building->GetNumSections();
+		for (int32 SectionIndex = 0; SectionIndex < NumSections; ++SectionIndex)
+		{
+			const UMaterialInterface* Mat = Building->GetMaterial(SectionIndex);
+			if (!Mat || !Mat->GetName().Contains(MatKey))
+			{
+				continue;
+			}
+			const FProcMeshSection* Section = Building->GetProcMeshSection(SectionIndex);
+			if (!Section || Section->ProcVertexBuffer.Num() < 3)
+			{
+				continue;
+			}
+
+			double MinZ = TNumericLimits<double>::Max();
+			for (const FProcMeshVertex& Vtx : Section->ProcVertexBuffer)
+			{
+				MinZ = FMath::Min(MinZ, Vtx.Position.Z);
+			}
+
+			// Jeden 8. Vertex abtasten - die zusammengelegten Sektionen sind gross,
+			// eine besonnte Wand findet sich auch stichprobenartig.
+			const TArray<FProcMeshVertex>& Verts = Section->ProcVertexBuffer;
+			for (int32 Vi = 0; Vi < Verts.Num(); Vi += 8)
+			{
+				const FProcMeshVertex& Vtx = Verts[Vi];
+				if (FMath::Abs(Vtx.Normal.Z) >= 0.4f || Vtx.Position.Z <= MinZ + 400.0)
+				{
+					continue;
+				}
+				const FVector HN = FVector(Vtx.Normal.X, Vtx.Normal.Y, 0.0).GetSafeNormal();
+				const float Align = static_cast<float>(FVector::DotProduct(HN, SunToward));
+				if (Align > BestAlign)
+				{
+					BestAlign = Align;
+					BestWallPos = Vtx.Position;
+					BestWallNormal = HN;
+				}
+			}
+		}
+	}
+
+	if (BestAlign < -1.0f)
+	{
+		UE_LOG(LogWbStreaming, Warning,
+			TEXT("WbGotoFacade: keine geladene %s-Wandflaeche gefunden."), *MatKey);
+		return false;
+	}
+	if (BestWallNormal.IsNearlyZero())
+	{
+		BestWallNormal = FVector(1.0, 0.0, 0.0);
+	}
+
+	// Kamera ~16 m vor der besonnten Wand, Blick leicht nach oben auf die Fassade.
+	const FVector Target = BestWallPos + FVector(0.0, 0.0, 300.0);
+	const FVector CamLoc = BestWallPos + BestWallNormal * 1600.0 + FVector(0.0, 0.0, 400.0);
+
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ACameraActor* Camera = World->SpawnActor<ACameraActor>(
+		CamLoc, (Target - CamLoc).Rotation(), Params);
+	if (!Camera)
+	{
+		return false;
+	}
+	PC->SetViewTarget(Camera);
+
+	UE_LOG(LogWbStreaming, Log,
+		TEXT("WbGotoFacade %s: besonnte Fassade bei (%.0f, %.0f, %.0f) (Sonnen-Ausrichtung %.2f), Kamera davor."),
+		*MatKey, BestWallPos.X, BestWallPos.Y, BestWallPos.Z, BestAlign);
+	return true;
+}
+
+void UWiesbadenCitySubsystem::ApplyShotPose(const FString& PoseLine)
+{
+	// "Hoehe_m, AtX_cm, AtY_cm, Yaw, Pitch, Vorwaerts_m, LookYaw, LookPitch"
+	// Fehlende/leere Felder = Default. AtX UND AtY noetig fuer einen absoluten
+	// Zielort; sonst ueber dem Spieler.
+	TArray<FString> Fields;
+	PoseLine.ParseIntoArray(Fields, TEXT(","), false);
+
+	auto Field = [&Fields](int32 Index) -> FString
+	{
+		return Fields.IsValidIndex(Index) ? Fields[Index].TrimStartAndEnd() : FString();
+	};
+	auto Num = [&Field](int32 Index, float Default) -> float
+	{
+		const FString F = Field(Index);
+		return F.IsEmpty() ? Default : FCString::Atof(*F);
+	};
+
+	const float Height = Num(0, 40.0f);
+	const bool bHasAt = !Field(1).IsEmpty() && !Field(2).IsEmpty();
+	const float AtX = Num(1, 0.0f);
+	const float AtY = Num(2, 0.0f);
+	const float Yaw = Num(3, 0.0f);
+	const float Pitch = Num(4, -70.0f);
+	const float ForwardMeters = Num(5, 0.0f);
+	const float LookYaw = Num(6, Yaw);
+	const float LookPitch = Num(7, Pitch);
+
+	SetupAerialViewParams(Height, bHasAt, AtX, AtY, Yaw, Pitch,
+		ForwardMeters, LookYaw, LookPitch);
+}
+
 void UWiesbadenCitySubsystem::CaptureDiagnosticScreenshot()
 {
 	const FString Path = FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("Stadt");
@@ -3026,7 +3382,7 @@ void UWiesbadenCitySubsystem::CaptureDiagnosticScreenshot()
 	ScreenshotQuitDelay = 3.0f;
 }
 
-void UWiesbadenCitySubsystem::FireReadyHighResShot()
+void UWiesbadenCitySubsystem::FireReadyHighResShot(int32 SeriesIndex)
 {
 	// WICHTIG: HighResShot wird von UGameViewportClient::Exec behandelt
 	// (HandleHighresScreenshotCommand), NICHT von GEngine->Exec - der Umweg ueber
@@ -3049,22 +3405,21 @@ void UWiesbadenCitySubsystem::FireReadyHighResShot()
 	// den Kommando-Wert bzw. leer) - deshalb den Zielpfad DANACH setzen.
 	if (Config.ParseConsoleCommand(FString::Printf(TEXT("%g"), Scale), *GLog))
 	{
-		// Vorhersagbarer Zielpfad statt Saved/Screenshots/Windows/HighresScreenshotNNNN.
-		const FString ShotPath = FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("WbReadyShot");
+		// Vorhersagbarer Zielpfad. In der Serie nummeriert (WbSeries_000, _001,
+		// ...), sonst das Einzelbild WbReadyShot.
+		const FString ShotName = SeriesIndex >= 0
+			? FString::Printf(TEXT("WbSeries_%03d"), SeriesIndex)
+			: FString(TEXT("WbReadyShot"));
+		const FString ShotPath = FPaths::ProjectSavedDir() / TEXT("Diagnose") / ShotName;
 		Config.FilenameOverride = ShotPath;
 
 		Viewport->Viewport->TakeHighResScreenShot();
 
 		UE_LOG(LogWbStreaming, Log,
-			TEXT("WbShotWhenReady: HighResShot %gx ausgeloest (Stadt bereit), Ziel '%s.png'."),
+			TEXT("WbShotWhenReady: HighResShot %gx ausgeloest, Ziel '%s.png'."),
 			Scale, *ShotPath);
 
-		// Nach dem Schreiben beenden (automatisierter Ablauf) - ausser -WbShotNoQuit.
-		// Der HighResShot rendert ueber die naechsten Frames; Zeit zum Schreiben lassen.
-		if (!FParse::Param(FCommandLine::Get(), TEXT("WbShotNoQuit")))
-		{
-			ScreenshotQuitDelay = 8.0f;
-		}
+		// Das Beenden steuert der Aufrufer (Tick) - erst nach der letzten Pose.
 	}
 	else
 	{

@@ -330,6 +330,29 @@ private:
 	/** Zurueckgelegte Strecke der gleichmaessigen Fahrt in cm. */
 	double AutoDriveDistanceCm = 0.0;
 
+	// Durchfall-Waechter (-WbAutoDrive): Liegt unter dem schnell fahrenden Pawn
+	// jederzeit geladene WorldStatic-Kollision? Die Streaming-Quelle laedt ohne
+	// Geschwindigkeits-Vorausladung und ohne Blockieren; bei Tempo koennte der
+	// Wagen eine noch nicht gestreamte Zelle erreichen und ins Leere fallen.
+	/** Bewegte Ticks der Fahrt (Nenner fuer die Loch-Quote). */
+	int32 FallTestMovingTicks = 0;
+	/** Ticks ohne geladene Kollision unter dem Pawn. */
+	int32 FallTestVoidTicks = 0;
+	/** Ticks ohne geladene Kollision eine Sekunde Fahrweg voraus (Leading-Edge). */
+	int32 FallTestLeadVoidTicks = 0;
+	/** Der Pawn steht gerade ueber einem Loch (laufende Luecke). */
+	bool bFallTestInVoid = false;
+	/** X-Beginn der laufenden Luecke (cm). */
+	double FallTestVoidStartX = 0.0;
+	/** Laengste zusammenhaengende Luecke ohne Boden (cm) und ihr Beginn. */
+	double FallTestWorstVoidLenCm = 0.0;
+	double FallTestWorstVoidX = 0.0;
+	/** Das Ergebnis wurde bereits geschrieben (nur einmal). */
+	bool bFallTestSummaryWritten = false;
+
+	/** Schreibt das Durchfall-Test-Ergebnis nach Saved/Diagnose/Durchfall.txt. */
+	void WriteFallThroughSummary();
+
 	/** Laufzeit bis zum Bild der Messstelle (-WbShot=<Sekunden>). */
 	float ShotElapsed = 0.0f;
 
@@ -379,8 +402,25 @@ private:
 	/** Settle-Countdown, damit Rendering/Streaming/Shader eingeschwungen sind. */
 	float ShotWhenReadyDelay = -1.0f;
 
-	/** Loest den 2x-HighResShot aus (einmalig, wenn die Stadt bereit ist). */
-	void FireReadyHighResShot();
+	// Optionale Posen-Serie: -WbShotPoseFile=<Pfad> faehrt in EINEM Lauf eine
+	// Liste von Kamera-Posen ab und schreibt je Pose einen nummerierten
+	// 2x-HighResShot (WbSeries_000.png, _001.png, ...). Eine Pose je Zeile:
+	//   Hoehe_m, AtX_cm, AtY_cm, Yaw, Pitch, Vorwaerts_m, LookYaw, LookPitch
+	/** Geladene Posenzeilen der Serie (leer = Einzelbild wie bisher). */
+	TArray<FString> ShotPoseLines;
+	/** Aktuelle Pose in der Serie. */
+	int32 ShotPoseIndex = 0;
+	/** true = Bild ausgeloest, wartet aufs Rendern, bevor die Kamera weiterzieht. */
+	bool bShotCapturing = false;
+	/** Settle-Zeit je Folge-Pose (Streaming/Belichtung), -WbPoseSettle=<s>. */
+	float ShotPoseSettle = 5.0f;
+
+	/** Loest den 2x-HighResShot aus. SeriesIndex >= 0 nummeriert (WbSeries_NNN),
+	 *  < 0 schreibt das Einzelbild WbReadyShot. */
+	void FireReadyHighResShot(int32 SeriesIndex);
+
+	/** Setzt die Aufnahme-Kamera aus einer Posenzeile der Serie. */
+	void ApplyShotPose(const FString& PoseLine);
 
 	// -- Kreuzungs-Rundgang ---------------------------------------------------
 	//
@@ -474,6 +514,18 @@ private:
 	 * ein einziges Bild beides.
 	 */
 	bool SetupAerialView(float HeightMeters);
+
+	/**
+	 * Sucht in den geladenen Chunks eine Relief-Fassade (Backstein/Sandstein)
+	 * und stellt die Aufnahme-Kamera nah davor. Fuer -WbGotoFacade=<brick|
+	 * sandstone>: Nah-Aufnahmen der neuen Fassaden ohne bekannte Koordinaten.
+	 */
+	bool SetupFacadeCloseup(const FString& Variant);
+
+	/** Setzt die Aufnahme-Kamera aus expliziten Werten (Serie und Einzelbild
+	 *  teilen sich diesen Kern). bHasAt = absolute Zielkoordinaten AtX/AtY. */
+	bool SetupAerialViewParams(float HeightMeters, bool bHasAt, float AtX, float AtY,
+		float Yaw, float Pitch, float ForwardMeters, float LookYaw, float LookPitch);
 
 	/** Loest den Screenshot aus und startet den Countdown zum Beenden. */
 	void CaptureDiagnosticScreenshot();
