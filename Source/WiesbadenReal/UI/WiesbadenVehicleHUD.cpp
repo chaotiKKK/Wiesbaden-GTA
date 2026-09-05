@@ -605,22 +605,29 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	{
 		if (APlayerController* TogPC = GetOwningPlayerController())
 		{
+			// -WbMapTogglePad: statt Tastatur-M den Gamepad-Select-Knopf
+			// (View/Back, Gamepad_Special_Left) injizieren - belegt den ZWEITEN
+			// benannten Oeffnungsweg ueber denselben IsInputKeyDown-Pfad.
+			const bool bPad = FParse::Param(FCommandLine::Get(), TEXT("WbMapTogglePad"));
+			const FKey ToggleKey = bPad ? EKeys::Gamepad_Special_Left : EKeys::M;
 			const float T = ElapsedSeconds;
-			if (T >= 10.00f && T < 10.06f)      { TogPC->InputKey(FInputKeyParams(EKeys::M, IE_Pressed, 1.0, false)); }
-			else if (T >= 10.06f && T < 10.25f) { TogPC->InputKey(FInputKeyParams(EKeys::M, IE_Released, 1.0, false)); }
-			else if (T >= 14.00f && T < 14.06f) { TogPC->InputKey(FInputKeyParams(EKeys::M, IE_Pressed, 1.0, false)); }
-			else if (T >= 14.06f && T < 14.25f) { TogPC->InputKey(FInputKeyParams(EKeys::M, IE_Released, 1.0, false)); }
+			if (T >= 10.00f && T < 10.06f)      { TogPC->InputKey(FInputKeyParams(ToggleKey, IE_Pressed, 1.0, bPad)); }
+			else if (T >= 10.06f && T < 10.25f) { TogPC->InputKey(FInputKeyParams(ToggleKey, IE_Released, 1.0, bPad)); }
+			else if (T >= 14.00f && T < 14.06f) { TogPC->InputKey(FInputKeyParams(ToggleKey, IE_Pressed, 1.0, bPad)); }
+			else if (T >= 14.06f && T < 14.25f) { TogPC->InputKey(FInputKeyParams(ToggleKey, IE_Released, 1.0, bPad)); }
 
+			const TCHAR* AufName = bPad ? TEXT("MapPadAuf") : TEXT("MapAuf");
+			const TCHAR* ZuName = bPad ? TEXT("MapPadZu") : TEXT("MapZu");
 			if (!bMapAufShotDone && T >= 12.0f)
 			{
 				FScreenshotRequest::RequestScreenshot(
-					FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("MapAuf"), true, true);
+					FPaths::ProjectSavedDir() / TEXT("Diagnose") / AufName, true, true);
 				bMapAufShotDone = true;
 			}
 			if (!bMapZuShotDone && T >= 16.0f)
 			{
 				FScreenshotRequest::RequestScreenshot(
-					FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("MapZu"), true, true);
+					FPaths::ProjectSavedDir() / TEXT("Diagnose") / ZuName, true, true);
 				bMapZuShotDone = true;
 			}
 		}
