@@ -156,13 +156,24 @@ void AWiesbadenStreamingSource::UpdateSource(float DeltaSeconds)
 		FadeMpc = Cast<UMaterialParameterCollection>(FSoftObjectPath(
 			TEXT("/Game/Materials/AAA/MPC_WbStreaming.MPC_WbStreaming")).TryLoad());
 	}
+	// Diagnose-Override -WbFadeRadiusOverride=<m>: setzt den ans Material
+	// gegebenen Fade-Radius fest. Ein sehr grosser Wert schiebt das Fade-Band
+	// hinter alles Geladene -> Fade faktisch AUS (harte Kante am Zellrand) - so
+	// laesst sich der Vorher-Zustand (Aufpoppen) gegen das Einblenden vergleichen.
+	float FadeValueM = EffectiveRadiusMeters;
+	float FadeOverrideM = 0.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("WbFadeRadiusOverride="), FadeOverrideM)
+		&& FadeOverrideM > 0.0f)
+	{
+		FadeValueM = FadeOverrideM;
+	}
 	if (FadeMpc)
 	{
 		if (UMaterialParameterCollectionInstance* Inst =
 			GetWorld() ? GetWorld()->GetParameterCollectionInstance(FadeMpc) : nullptr)
 		{
 			bFadeMpcSet = Inst->SetScalarParameterValue(
-				FName(TEXT("FadeRadiusM")), EffectiveRadiusMeters);
+				FName(TEXT("FadeRadiusM")), FadeValueM);
 		}
 	}
 
