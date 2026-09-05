@@ -6,10 +6,20 @@
 
 FVector2D FWorldMapProjection::Project(const FVector& World) const
 {
-	const FVector2D WorldCentre = (WorldMin + WorldMax) * 0.5;
 	return FVector2D(
-		ScreenCentre.X + (World.X - WorldCentre.X) * ScalePxPerCm,
-		ScreenCentre.Y - (World.Y - WorldCentre.Y) * ScalePxPerCm);  // -Y: Norden oben
+		ScreenCentre.X + (World.X - ViewCentreWorld.X) * ScalePxPerCm,
+		ScreenCentre.Y - (World.Y - ViewCentreWorld.Y) * ScalePxPerCm);  // -Y: Norden oben
+}
+
+FVector2D FWorldMapProjection::Unproject(const FVector2D& Screen) const
+{
+	if (ScalePxPerCm <= 0.0f)
+	{
+		return ViewCentreWorld;
+	}
+	return FVector2D(
+		ViewCentreWorld.X + (Screen.X - ScreenCentre.X) / ScalePxPerCm,
+		ViewCentreWorld.Y - (Screen.Y - ScreenCentre.Y) / ScalePxPerCm);  // -Y: Norden oben
 }
 
 bool FWiesbadenMinimap::ComputeNetworkBoundsXY(
@@ -48,6 +58,7 @@ FWorldMapProjection FWiesbadenMinimap::MakeWorldMapProjection(
 	Proj.WorldMin = WorldMin;
 	Proj.WorldMax = WorldMax;
 	Proj.ScreenCentre = ScreenCentre;
+	Proj.ViewCentreWorld = (WorldMin + WorldMax) * 0.5;   // Voll-Fit: Netzmitte in der Bildmitte
 
 	const double WorldW = FMath::Max(WorldMax.X - WorldMin.X, 1.0);
 	const double WorldH = FMath::Max(WorldMax.Y - WorldMin.Y, 1.0);
@@ -57,6 +68,34 @@ FWorldMapProjection FWiesbadenMinimap::MakeWorldMapProjection(
 	const double SxPerCm = (ScreenSizePx.X * Margin) / WorldW;
 	const double SyPerCm = (ScreenSizePx.Y * Margin) / WorldH;
 	Proj.ScalePxPerCm = static_cast<float>(FMath::Min(SxPerCm, SyPerCm));
+	return Proj;
+}
+
+FWorldMapProjection FWiesbadenMinimap::MakeZoomedProjection(
+	const FWorldMapProjection& Fit, float ZoomFactor, const FVector2D& DesiredCentreWorld)
+{
+	FWorldMapProjection Proj = Fit;
+	const float Zoom = FMath::Clamp(ZoomFactor, WorldMapMinZoom, WorldMapMaxZoom);
+	Proj.ScalePxPerCm = Fit.ScalePxPerCm * Zoom;
+
+	// Sichtbare Welt-Halbausdehnung bei diesem Massstab (Pixel-Mitte / Pixel-je-cm).
+	const double HalfVisX = (Proj.ScalePxPerCm > 0.0f) ? (Proj.ScreenCentre.X / Proj.ScalePxPerCm) : 0.0;
+	const double HalfVisY = (Proj.ScalePxPerCm > 0.0f) ? (Proj.ScreenCentre.Y / Proj.ScalePxPerCm) : 0.0;
+
+	const FVector2D NetCentre = (Fit.WorldMin + Fit.WorldMax) * 0.5;
+
+	// Blickzentrum je Achse klemmen: das Sichtfenster darf die Netzgrenzen nicht
+	// verlassen. Ist das Fenster breiter als das Netz (Zoom 1 bzw. schmale Achse),
+	// gibt es kein gueltiges Intervall -> auf die Netzmitte zentrieren.
+	auto ClampAxis = [](double C, double Lo, double Hi, double Half, double NetC) -> double
+	{
+		const double Min = Lo + Half;
+		const double Max = Hi - Half;
+		return (Min > Max) ? NetC : FMath::Clamp(C, Min, Max);
+	};
+	Proj.ViewCentreWorld = FVector2D(
+		ClampAxis(DesiredCentreWorld.X, Fit.WorldMin.X, Fit.WorldMax.X, HalfVisX, NetCentre.X),
+		ClampAxis(DesiredCentreWorld.Y, Fit.WorldMin.Y, Fit.WorldMax.Y, HalfVisY, NetCentre.Y));
 	return Proj;
 }
 

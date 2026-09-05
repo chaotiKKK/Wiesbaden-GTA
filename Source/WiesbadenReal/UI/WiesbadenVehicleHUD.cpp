@@ -606,6 +606,13 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		if (bMapDown && !bMapKeyHeld)
 		{
 			bWorldMapOpen = !bWorldMapOpen;
+			if (bWorldMapOpen)
+			{
+				// Frisch eingepasst oeffnen: Zoom 1, Zentrum aus der ersten
+				// Projektion (Netzmitte) zuruecklesen lassen.
+				MapZoom = 1.0f;
+				bMapCentreInit = false;
+			}
 		}
 		bMapKeyHeld = bMapDown;
 	}
@@ -1191,14 +1198,56 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 		return;
 	}
 
-	// Statische Ebene (Strassen + Gebaeude) EINMAL ins RenderTarget rendern und je
-	// Bild nur das fertige Texture blitten - statt je Bild 16.000 Linien zu ziehen.
+	// Statische Ebene (Strassen + Gebaeude) ins RenderTarget rendern und je Bild nur
+	// das fertige Texture blitten - neu gerendert nur bei Sichtaenderung (Zoom/Pan).
 	if (!WorldMapView)
 	{
 		WorldMapView = NewObject<UWiesbadenWorldMapView>(this);
 	}
+
+	// --- Zoom & Pan aus den Eingaben (die Sicht aendern -> Neu-Render) ---
+	APlayerController* MapPC = GetOwningPlayerController();
+	const float Dt = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.0f;
+	if (MapPC)
+	{
+		// Zoom: +/- (Tastatur), Mausrad, Gamepad-Schultertasten. Stetig ueber
+		// e^(Rate*dt), dazu diskrete Radschritte.
+		float ZoomDir = 0.0f;
+		if (MapPC->IsInputKeyDown(EKeys::Add) || MapPC->IsInputKeyDown(EKeys::Equals)
+			|| MapPC->IsInputKeyDown(EKeys::Gamepad_RightShoulder)) { ZoomDir += 1.0f; }
+		if (MapPC->IsInputKeyDown(EKeys::Subtract) || MapPC->IsInputKeyDown(EKeys::Hyphen)
+			|| MapPC->IsInputKeyDown(EKeys::Gamepad_LeftShoulder)) { ZoomDir -= 1.0f; }
+		const float Wheel = MapPC->GetInputAnalogKeyState(EKeys::MouseWheelAxis);
+		MapZoom *= FMath::Exp(ZoomDir * 2.2f * Dt) * FMath::Pow(1.15f, Wheel);
+		MapZoom = FMath::Clamp(MapZoom, FWiesbadenMinimap::WorldMapMinZoom, FWiesbadenMinimap::WorldMapMaxZoom);
+
+		// Pan: Pfeiltasten + rechter Stick. Umrechnung px->Welt ueber den aktuellen
+		// Massstab, damit das Schwenken bei jedem Zoom gleich schnell wirkt.
+		FVector2D PanPx(0.0f, 0.0f);
+		if (MapPC->IsInputKeyDown(EKeys::Left))  { PanPx.X -= 1.0f; }
+		if (MapPC->IsInputKeyDown(EKeys::Right)) { PanPx.X += 1.0f; }
+		if (MapPC->IsInputKeyDown(EKeys::Up))    { PanPx.Y -= 1.0f; }
+		if (MapPC->IsInputKeyDown(EKeys::Down))  { PanPx.Y += 1.0f; }
+		PanPx.X += MapPC->GetInputAnalogKeyState(EKeys::Gamepad_RightX);
+		PanPx.Y -= MapPC->GetInputAnalogKeyState(EKeys::Gamepad_RightY);
+		if (bMapCentreInit && !PanPx.IsNearlyZero())
+		{
+			const float Scale = FMath::Max(WorldMapView->GetProjection().ScalePxPerCm, KINDA_SMALL_NUMBER);
+			constexpr float PanPxPerSec = 900.0f;
+			MapCentreWorld.X += PanPx.X * PanPxPerSec * Dt / Scale;
+			MapCentreWorld.Y -= PanPx.Y * PanPxPerSec * Dt / Scale;   // Bild runter = Welt -Y
+		}
+	}
+
 	UTextureRenderTarget2D* MapRT = WorldMapView->EnsureRendered(
-		GetWorld(), *Network, CachedBuildings, FVector2D(Width, Height));
+		GetWorld(), *Network, CachedBuildings, FVector2D(Width, Height),
+		MapZoom, MapCentreWorld, bMapCentreInit);
+
+	// Geklemmtes Zentrum zuruecklesen: verhindert das Weglaufen der Pan-Akkumulation
+	// und setzt beim ersten Bild das Startzentrum (Netzmitte).
+	MapCentreWorld = WorldMapView->GetProjection().ViewCentreWorld;
+	bMapCentreInit = true;
+
 	if (MapRT)
 	{
 		DrawTexture(MapRT, 0.0f, 0.0f, Width, Height, 0.0f, 0.0f, 1.0f, 1.0f);
@@ -1236,13 +1285,16 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 	DrawLine(Width * 0.5f, 42.0f, Width * 0.5f, 66.0f, MapMajorRoad, 2.0f);
 	DrawText(TEXT("N"), DialScale, Width * 0.5f - 5.0f, 22.0f,
 		GEngine ? GEngine->GetMediumFont() : nullptr, 1.3f);
-	DrawText(TEXT("M / Select: schliessen"), DialScale, 24.0f, Height - 32.0f,
-		GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
+	DrawText(TEXT("M / Select: schliessen   +/- / Rad: Zoom   Pfeile / Stick: schwenken"),
+		DialScale, 24.0f, Height - 32.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
 	if (Proj.IsValid())
 	{
-		const double WorldWkm = (Proj.WorldMax.X - Proj.WorldMin.X) / 100000.0;
-		DrawText(FString::Printf(TEXT("Breite: %.1f km"), WorldWkm), DialScale,
-			Width - 170.0f, Height - 32.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
+		// Sichtbare Breite bei diesem Zoom (ganze Bildbreite / Massstab).
+		const double VisWkm = (Proj.ScalePxPerCm > 0.0f)
+			? (Width / Proj.ScalePxPerCm) / 100000.0
+			: 0.0;
+		DrawText(FString::Printf(TEXT("Zoom %.1fx   Sicht %.1f km"), MapZoom, VisWkm), DialScale,
+			Width - 210.0f, Height - 32.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
 	}
 }
 

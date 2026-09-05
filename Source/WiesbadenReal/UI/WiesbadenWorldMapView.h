@@ -35,13 +35,24 @@ class WIESBADENREAL_API UWiesbadenWorldMapView : public UObject
 public:
 	/**
 	 * Stellt sicher, dass Strassen+Gebaeude fuer die aktuelle Sicht im
-	 * RenderTarget stehen (Neu-Render nur bei Netz-/Groessenwechsel) und gibt das
-	 * Texture zum Blitten zurueck - oder nullptr, wenn nichts gerendert werden
-	 * konnte.
+	 * RenderTarget stehen und gibt das Texture zum Blitten zurueck - oder nullptr,
+	 * wenn nichts gerendert werden konnte.
+	 *
+	 * Neu gerendert wird bei Netz-/Groessenwechsel ODER bei Sichtaenderung (Zoom
+	 * bzw. verschobenes Blickzentrum). Solange die Sicht steht, wird nur das
+	 * fertige Texture weiterverwendet.
+	 *
+	 * @param ZoomFactor        1 = ganzes Netz eingepasst; groesser = naeher heran.
+	 * @param DesiredCentreWorld Blick-Mittelpunkt in Welt-cm (wird auf die
+	 *                           Netzgrenzen geklemmt).
+	 * @param bCentreValid      false auf dem ersten Bild nach dem Oeffnen: dann
+	 *                           wird auf die Netzmitte zentriert (GetProjection()
+	 *                           liefert das geklemmte Zentrum zum Zuruecklesen).
 	 */
 	UTextureRenderTarget2D* EnsureRendered(
 		UWorld* World, const FRoadNetwork& Network,
-		const TArray<FGeneratedBuilding>* Buildings, const FVector2D& ScreenSize);
+		const TArray<FGeneratedBuilding>* Buildings, const FVector2D& ScreenSize,
+		float ZoomFactor, const FVector2D& DesiredCentreWorld, bool bCentreValid);
 
 	/** Projektion der zuletzt gerenderten Sicht (fuer die Overlays der HUD). */
 	const FWorldMapProjection& GetProjection() const { return Projection; }
@@ -63,7 +74,15 @@ private:
 	/** Projektion der zuletzt gerenderten Sicht. */
 	FWorldMapProjection Projection;
 
+	/** Voll-Einpassung (Netzmitte + Fit-Massstab); nur bei Netz-/Groessenwechsel neu
+	 *  berechnet - ComputeNetworkBoundsXY laeuft ueber alle Mittellinienpunkte. */
+	FWorldMapProjection BaseFit;
+
 	/** Netz + Bildgroesse, fuer die zuletzt gerendert wurde (Neu-Render-Erkennung). */
 	const FRoadNetwork* CachedNetwork = nullptr;
 	FVector2D CachedSize = FVector2D::ZeroVector;
+
+	/** Zoom + Blickzentrum der zuletzt gerenderten Sicht (Sichtwechsel-Erkennung). */
+	float CachedZoom = -1.0f;
+	FVector2D CachedCentre = FVector2D(FLT_MAX, FLT_MAX);
 };

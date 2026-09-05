@@ -342,6 +342,52 @@ bool FWorldMapBuildingsTest::RunTest(const FString& Parameters)
 }
 
 
+// Weltkarte: Zoom + Pan der Projektion. Der Massstab skaliert mit dem Zoom, das
+// Blickzentrum wird auf die Netzgrenzen geklemmt, und Project/Unproject sind
+// zueinander invers. Ohne Canvas/Welt pruefbar.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldMapZoomPanTest,
+	"WiesbadenReal.World.WorldMapZoomPan",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FWorldMapZoomPanTest::RunTest(const FString& Parameters)
+{
+	// Fit: Netz 0..1000 x 0..500 cm, Bild 800x600, Mitte (400,300), voller Rand.
+	const FWorldMapProjection Fit = FWiesbadenMinimap::MakeWorldMapProjection(
+		FVector2D(0.0, 0.0), FVector2D(1000.0, 500.0),
+		FVector2D(400.0, 300.0), FVector2D(800.0, 600.0), /*MarginFrac=*/1.0f);
+	TestTrue(TEXT("Fit-Zentrum ist die Netzmitte"),
+		Fit.ViewCentreWorld.Equals(FVector2D(500.0, 250.0), 0.01));
+
+	// Zoom 2 um die Netzmitte: Massstab verdoppelt (0.8 -> 1.6), Zentrum bleibt.
+	const FWorldMapProjection Z2 = FWiesbadenMinimap::MakeZoomedProjection(Fit, 2.0f, FVector2D(500.0, 250.0));
+	TestTrue(TEXT("Zoom 2: Massstab 1.6 px/cm"), FMath::IsNearlyEqual(Z2.ScalePxPerCm, 1.6f, 0.001f));
+	TestTrue(TEXT("Zoom 2: Zentrum bleibt Netzmitte"), Z2.ViewCentreWorld.Equals(FVector2D(500.0, 250.0), 0.01));
+
+	// Zoom 1: das Sichtfenster ist groesser als das Netz -> auf die Netzmitte
+	// zurueckzentriert, auch wenn ein Eck-Zentrum gewuenscht war.
+	const FWorldMapProjection Z1 = FWiesbadenMinimap::MakeZoomedProjection(Fit, 1.0f, FVector2D(900.0, 480.0));
+	TestTrue(TEXT("Zoom 1: auf Netzmitte zentriert"), Z1.ViewCentreWorld.Equals(FVector2D(500.0, 250.0), 0.01));
+
+	// Zoom 4, Eck-Zentrum: geklemmt auf [min+halbeSicht .. max-halbeSicht].
+	// HalbSichtX = 400/(0.8*4)=125 -> X in [125,875]; HalbSichtY = 300/3.2=93.75 -> Y in [93.75,406.25].
+	const FWorldMapProjection Z4 = FWiesbadenMinimap::MakeZoomedProjection(Fit, 4.0f, FVector2D(900.0, 400.0));
+	TestTrue(TEXT("Zoom 4: X auf 875 geklemmt"), FMath::IsNearlyEqual(Z4.ViewCentreWorld.X, 875.0, 0.01));
+	TestTrue(TEXT("Zoom 4: Y (400) unveraendert"), FMath::IsNearlyEqual(Z4.ViewCentreWorld.Y, 400.0, 0.01));
+
+	// Zoom ueber das Maximum wird geklemmt (WorldMapMaxZoom).
+	const FWorldMapProjection Zmax = FWiesbadenMinimap::MakeZoomedProjection(Fit, 999.0f, FVector2D(500.0, 250.0));
+	TestTrue(TEXT("Zoom geklemmt auf Max"),
+		FMath::IsNearlyEqual(Zmax.ScalePxPerCm, Fit.ScalePxPerCm * FWiesbadenMinimap::WorldMapMaxZoom, 0.001f));
+
+	// Project/Unproject sind invers (bei gezoomter, verschobener Sicht).
+	const FVector2D Screen(123.0, 456.0);
+	const FVector2D World = Z4.Unproject(Screen);
+	const FVector2D Back = Z4.Project(FVector(World.X, World.Y, 0.0));
+	TestTrue(TEXT("Project(Unproject(s)) == s"), Back.Equals(Screen, 0.01));
+
+	return true;
+}
+
 // Weltkarten-RenderTarget: der eine datenreine Teil der Render-Orchestrierung -
 // "muss neu gerendert werden?" (Zeichnen ins RT selbst ist nicht unit-testbar).
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldMapViewNeedsRerenderTest,

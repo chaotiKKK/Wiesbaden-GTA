@@ -85,10 +85,22 @@ struct WIESBADENREAL_API FWorldMapProjection
 	float ScalePxPerCm = 1.0f;
 
 	/**
+	 * Weltpunkt (cm), der auf ScreenCentre abgebildet wird - der "Blick-Mittelpunkt".
+	 *
+	 * Bei der Voll-Einpassung ist das die Netzmitte; Zoom/Pan verschieben ihn.
+	 * Frueher zentrierte Project() fest auf (WorldMin+WorldMax)/2; ueber dieses
+	 * Feld wird die Ansicht schwenkbar, ohne die Netzgrenzen zu veraendern.
+	 */
+	FVector2D ViewCentreWorld = FVector2D::ZeroVector;
+
+	/**
 	 * Weltpunkt -> Bildschirm (px). Norden oben: Welt +Y (Nord) wird zu
 	 * kleinerem Bildschirm-Y, Welt +X (Ost) zu groesserem Bildschirm-X.
 	 */
 	FVector2D Project(const FVector& World) const;
+
+	/** Bildschirm (px) -> Weltpunkt (cm), die Umkehrung von Project (fuer Pan/Zoom). */
+	FVector2D Unproject(const FVector2D& Screen) const;
 
 	bool IsValid() const
 	{
@@ -121,6 +133,21 @@ struct WIESBADENREAL_API FWiesbadenMinimap
 	static FWorldMapProjection MakeWorldMapProjection(
 		const FVector2D& WorldMin, const FVector2D& WorldMax,
 		const FVector2D& ScreenCentre, const FVector2D& ScreenSizePx, float MarginFrac);
+
+	/** Kleinste/groesste Zoomstufe der Weltkarte (1 = ganzes Netz eingepasst). */
+	static constexpr float WorldMapMinZoom = 1.0f;
+	static constexpr float WorldMapMaxZoom = 8.0f;
+
+	/**
+	 * Zoomt/verschiebt eine Voll-Einpass-Projektion (Fit) auf ZoomFactor
+	 * (geklemmt auf [WorldMapMinZoom..WorldMapMaxZoom]) um DesiredCentreWorld.
+	 *
+	 * Das Blickzentrum wird so geklemmt, dass das Sichtfenster die Netzgrenzen
+	 * nicht verlaesst; ist das Fenster groesser als das Netz (u. a. bei Zoom 1),
+	 * wird auf die Netzmitte zentriert. Datenrein/testbar (Test World.WorldMapZoomPan).
+	 */
+	static FWorldMapProjection MakeZoomedProjection(
+		const FWorldMapProjection& Fit, float ZoomFactor, const FVector2D& DesiredCentreWorld);
 
 	/**
 	 * Projiziert das ganze Netz in Bildschirmlinien: Nebenstrassen zuerst,

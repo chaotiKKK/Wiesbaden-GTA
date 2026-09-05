@@ -308,6 +308,15 @@ private:
 	/** Gebaeude-Metadaten der Stadt (einmal gesucht, mit dem Netz gemerkt). */
 	const TArray<struct FGeneratedBuilding>* CachedBuildings = nullptr;
 
+	// -- Zoom & Pan der Weltkarte --------------------------------------------
+	/** Zoomstufe: 1 = ganzes Netz eingepasst, groesser = naeher heran. */
+	float MapZoom = 1.0f;
+	/** Blick-Mittelpunkt der Karte in Welt-cm (per Pan verschoben). */
+	FVector2D MapCentreWorld = FVector2D::ZeroVector;
+	/** Erst wahr, sobald das Zentrum aus der ersten (netz-zentrierten) Projektion
+	 *  zurueckgelesen wurde; davor wird nicht geschwenkt. Beim Oeffnen zurueckgesetzt. */
+	bool bMapCentreInit = false;
+
 	/** Render-Ziel-Ansicht: rendert Strassen+Gebaeude EINMAL ins RenderTarget,
 	 *  statt sie je Bild aus ~16.000 Linien neu zu zeichnen. */
 	UPROPERTY(Transient)

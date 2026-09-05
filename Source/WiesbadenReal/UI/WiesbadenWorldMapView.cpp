@@ -39,7 +39,8 @@ bool UWiesbadenWorldMapView::NeedsRerender(
 
 UTextureRenderTarget2D* UWiesbadenWorldMapView::EnsureRendered(
 	UWorld* World, const FRoadNetwork& Network,
-	const TArray<FGeneratedBuilding>* Buildings, const FVector2D& ScreenSize)
+	const TArray<FGeneratedBuilding>* Buildings, const FVector2D& ScreenSize,
+	float ZoomFactor, const FVector2D& DesiredCentreWorld, bool bCentreValid)
 {
 	if (!World)
 	{
@@ -57,20 +58,39 @@ UTextureRenderTarget2D* UWiesbadenWorldMapView::EnsureRendered(
 		CachedNetwork = nullptr;   // Neu-Render erzwingen
 	}
 
-	if (!NeedsRerender(RenderTarget != nullptr, CachedNetwork, CachedSize, &Network, ScreenSize))
+	// Voll-Einpassung nur bei Netz-/Groessenwechsel neu berechnen (die Netzgrenzen
+	// aus allen Mittellinienpunkten sind der teure Teil).
+	const bool bBaseStale = NeedsRerender(RenderTarget != nullptr, CachedNetwork, CachedSize, &Network, ScreenSize);
+	if (bBaseStale)
 	{
-		return RenderTarget;   // schon aktuell - kein Neu-Render
+		FVector2D WMin, WMax;
+		if (!FWiesbadenMinimap::ComputeNetworkBoundsXY(Network, WMin, WMax))
+		{
+			return RenderTarget;
+		}
+		const FVector2D SC(ScreenSize.X * 0.5, ScreenSize.Y * 0.5);
+		BaseFit = FWiesbadenMinimap::MakeWorldMapProjection(WMin, WMax, SC, ScreenSize, 0.88f);
 	}
-
-	// --- Geometrie (datenrein, aus FWiesbadenMinimap) ---
-	FVector2D WMin, WMax;
-	if (!FWiesbadenMinimap::ComputeNetworkBoundsXY(Network, WMin, WMax))
+	if (!BaseFit.IsValid())
 	{
 		return RenderTarget;
 	}
-	const FVector2D SC(ScreenSize.X * 0.5, ScreenSize.Y * 0.5);
-	Projection = FWiesbadenMinimap::MakeWorldMapProjection(WMin, WMax, SC, ScreenSize, 0.88f);
 
+	// Gezoomte/verschobene Sicht bauen (Zentrum wird auf die Netzgrenzen geklemmt).
+	// Ohne gueltiges Zentrum (erstes Bild nach dem Oeffnen) auf die Netzmitte.
+	const float Zoom = FMath::Clamp(ZoomFactor, FWiesbadenMinimap::WorldMapMinZoom, FWiesbadenMinimap::WorldMapMaxZoom);
+	const FVector2D Desired = bCentreValid ? DesiredCentreWorld : BaseFit.ViewCentreWorld;
+	Projection = FWiesbadenMinimap::MakeZoomedProjection(BaseFit, Zoom, Desired);
+
+	// Neu rendern bei Netz-/Groessenwechsel ODER Sichtaenderung (Zoom/Zentrum).
+	const bool bViewChanged = !FMath::IsNearlyEqual(Zoom, CachedZoom, 0.001f)
+		|| !Projection.ViewCentreWorld.Equals(CachedCentre, 1.0);   // 1-cm-Schwelle
+	if (!bBaseStale && !bViewChanged)
+	{
+		return RenderTarget;   // Sicht steht - fertiges Texture weiterverwenden
+	}
+
+	// --- Geometrie (datenrein, aus FWiesbadenMinimap) mit der gezoomten Projektion ---
 	TArray<FMinimapLine> Lines;
 	FWiesbadenMinimap::BuildWorldMapLines(Network, Projection, /*MaxLines=*/16000, /*MinSegmentPx=*/2.0f, Lines);
 	TArray<FWorldMapQuad> Quads;
@@ -112,5 +132,7 @@ UTextureRenderTarget2D* UWiesbadenWorldMapView::EnsureRendered(
 
 	CachedNetwork = &Network;
 	CachedSize = ScreenSize;
+	CachedZoom = Zoom;
+	CachedCentre = Projection.ViewCentreWorld;
 	return RenderTarget;
 }
