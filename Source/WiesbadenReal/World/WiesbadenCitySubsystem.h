@@ -10,6 +10,7 @@
 #include "GIS/WiesbadenPedestrianSimulation.h"
 #include "World/WiesbadenHealthReport.h"
 #include "World/WiesbadenFrameProfiler.h"
+#include "World/WiesbadenFallThroughMonitor.h"
 #include "GIS/WiesbadenTrafficLights.h"
 #include "GIS/WiesbadenTrafficSimulation.h"
 #include "World/WiesbadenWeatherSystem.h"
@@ -299,50 +300,13 @@ private:
 	/** Startpunkt der Fahrt - fuer die zurueckgelegte Strecke im Protokoll. */
 	FVector AutoDriveOrigin = FVector::ZeroVector;
 
-	/** Zurueckgelegte Strecke der gleichmaessigen Fahrt in cm. */
-	double AutoDriveDistanceCm = 0.0;
-
 	// Durchfall-Waechter (-WbAutoDrive): Liegt unter dem schnell fahrenden Pawn
-	// jederzeit geladene WorldStatic-Kollision? Die Streaming-Quelle laedt ohne
-	// Geschwindigkeits-Vorausladung und ohne Blockieren; bei Tempo koennte der
-	// Wagen eine noch nicht gestreamte Zelle erreichen und ins Leere fallen.
-	/** Bewegte Ticks der Fahrt (Nenner fuer die Loch-Quote). */
-	int32 FallTestMovingTicks = 0;
-	/** Ticks ohne geladene Kollision unter dem Pawn. */
-	int32 FallTestVoidTicks = 0;
-	/** Ticks ohne geladene Kollision eine Sekunde Fahrweg voraus (Leading-Edge). */
-	int32 FallTestLeadVoidTicks = 0;
-	/** Der Pawn steht gerade ueber einem Loch (laufende Luecke). */
-	bool bFallTestInVoid = false;
-	/** X-Beginn der laufenden Luecke (cm). */
-	double FallTestVoidStartX = 0.0;
-	/** Laengste zusammenhaengende Luecke ohne Boden (cm) und ihr Beginn. */
-	double FallTestWorstVoidLenCm = 0.0;
-	double FallTestWorstVoidX = 0.0;
+	// jederzeit geladene WorldStatic-Kollision? Die Mess-/Verdikt-Logik liegt
+	// datenrein + getestet im FWbFallThroughMonitor (World.FallThroughMonitor);
+	// das Subsystem faehrt den Pawn und speist ihn ueber einen Welt-Bodenprobe.
+	FWbFallThroughMonitor FallMonitor;
 	/** Das Ergebnis wurde bereits geschrieben (nur einmal). */
-	bool bFallTestSummaryWritten = false;
-
-	// Durchfall-Test mit ECHTEM Chaos-Wagen (-WbChaosCar + -WbAutoDrive): statt
-	// Bodenpraesenz per Trace wird der TATSAECHLICHE Karosserie-Hoehensturz
-	// gemessen - der Wagen faehrt auf Chaos-Physik und faellt real, wenn eine
-	// Zelle fehlt.
-	/** Ein Chaos-Wagen faehrt (echte Physik) statt des teleportierten Pawns. */
-	bool bCarMode = false;
-	/** Fahr-Ticks im Wagen-Modus. */
-	int32 CarDriveTicks = 0;
-	/** Ticks, in denen kein Boden nah unter dem Wagen liegt (Wagen faellt/fliegt). */
-	int32 CarAirborneTicks = 0;
-	/** Der Wagen ist gerade im freien Fall (kein Boden nah). */
-	bool bCarAirborne = false;
-	/** Karosserie-Z zu Beginn des laufenden Sturzes (cm). */
-	double CarFallStartZ = 0.0;
-	/** Groesster gemessener Karosserie-Hoehensturz (cm) und sein Ort. */
-	double MaxCarSturzCm = 0.0;
-	double MaxCarSturzX = 0.0;
-	/** Spitzen-Sinkgeschwindigkeit der Karosserie (cm/s). */
-	float MaxCarDownSpeedCmS = 0.0f;
-	/** Tatsaechlich gefahrene Luftlinie des Wagens ab Start (cm). */
-	double CarDistanceCm = 0.0;
+	bool bFallSummaryWritten = false;
 	/** Sekundentakt-Drossel fuer das Wagen-Diagnose-Log. */
 	int32 LastCarLogSecond = -1;
 
