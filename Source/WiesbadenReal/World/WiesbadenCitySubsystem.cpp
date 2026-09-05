@@ -346,7 +346,7 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 	const double SubsystemStart = FPlatformTime::Seconds();
 	ON_SCOPE_EXIT
 	{
-		SubsystemTimeMs += (FPlatformTime::Seconds() - SubsystemStart) * 1000.0;
+		FrameProfiler.AddSubsystemTime((FPlatformTime::Seconds() - SubsystemStart) * 1000.0);
 	};
 
 	// Tageszeit von der Kommandozeile: -WbTime=<Stunden>, einmalig beim
@@ -1146,73 +1146,33 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 	// laufen Streaming, Shader-Kompilierung und der Aufbau der Ausstattung.
 	// Ohne diesen Schnitt misst man den Ladevorgang, nicht den Spielbetrieb -
 	// die erste Messung meldete 7 Bilder/s und war damit wertlos.
-	MeasurementDelay += DeltaTime;
-
-	// Alle 15 Sekunden neu melden statt nur einmal.
-	//
-	// Die Einmal-Messung im Diagnoselauf ist nicht belastbar: Sie laeuft in
-	// einem Fenster OHNE FOKUS, und Unreal drosselt solche Fenster. Der
-	// schlechteste Wert lag in jedem Lauf bei exakt 400,0 ms - ein exakt
-	// gleicher Extremwert ueber alle Laeufe ist keine Messung, sondern eine
-	// Begrenzung. Belastbar ist die Zahl nur aus einer echten Spielsitzung,
-	// und dafuer muss sie wiederholt erscheinen.
-	if (bMeasurementStarted && FrameCount > 0 && MeasurementDelay > 15.0f)
+	// Alle 15 Sekunden neu melden statt nur einmal: die Einmal-Messung laeuft in
+	// einem Fenster OHNE Fokus (Unreal drosselt das) und ist nicht belastbar -
+	// belastbar wird die Zahl nur, wenn sie WIEDERHOLT erscheint.
+	if (FrameProfiler.AdvanceWindow(DeltaTime))
 	{
-		const double AverageMs = FrameTimeSumMs / FrameCount;
+		const FWbFrameReport Frame = FrameProfiler.Report();
 		UE_LOG(LogWbStreaming, Log,
 			TEXT("Bildzeit (%d Bilder): Mittel %.1f ms (%.0f Bilder/s), schlechtestes %.1f ms, ")
 			TEXT("%d Ausreisser ueber dem Doppelten des Mittels, %d ueber 50 ms. ")
 			TEXT("Simulationen: Ampeln %.1f, Verkehr %.1f, Fussgaenger %.1f ms."),
-			FrameCount, AverageMs, 1000.0 / FMath::Max(AverageMs, 0.01), WorstFrameMs,
-			SpikeCount, HitchCount,
-			LightTimeMs / FrameCount, TrafficTimeMs / FrameCount, PedestrianTimeMs / FrameCount);
+			Frame.FrameCount, Frame.MeanMs, Frame.Fps, Frame.WorstMs,
+			Frame.SpikeCount, Frame.HitchCount,
+			Frame.MeanLightMs, Frame.MeanTrafficMs, Frame.MeanPedestrianMs);
 
-		// Aufteilung auf die Straenge - und auf die Grafikkarte.
-		//
-		// Ohne sie laesst sich nicht sagen, WO die Zeit hingeht. Das Ausblenden
-		// von Gelaende, Strassen, Gebaeuden und Ausstattung aenderte die
-		// Bildzeit auf die Nachkommastelle nicht (119,8 ms in allen Faellen) -
-		// ein unbewegter Wert misst nicht das, was er zu messen scheint.
-		//
-		// Die GPU-Zeit kam spaeter dazu, und ihr Fehlen hat mich eine
-		// Fehldiagnose gekostet: Aus "Renderer 8,8 ms bei einfarbigen
-		// Materialien" gegen "142 ms bei normalen" habe ich geschlossen, die
-		// Materialien seien die Last. Der Renderer-Zaehler misst aber die
-		// Arbeit des RENDER-STRANGS, nicht die der Grafikkarte. Ist die Karte
-		// der Engpass, schiebt der Strang seine Befehle billig weg und wartet -
-		// die Wartezeit taucht in keinem der beiden Zaehler auf. Ein Beleg
-		// dafuer stand in der Messung selbst: Bei einfarbigen Materialien
-		// waren Spiel-Strang (7,6 ms) und Render-Strang (8,8 ms) beide klein,
-		// die Bildzeit lag trotzdem bei 70-99 ms. Die Differenz kann dann nur
-		// von der Karte kommen.
+		// FRISCHE Momentaufnahme der Straenge (Spiel/Renderer/Karte): die
+		// Engine-Globalzeiten sind die des LETZTEN Bildes - hier bewusst als
+		// Momentaufnahme geloggt (die gemittelten Werte stehen im Report).
 		UE_LOG(LogWbStreaming, Log,
 			TEXT("Straenge: Spiel %.1f ms, Renderer %.1f ms, Grafikkarte %.1f ms."),
 			FPlatformTime::ToMilliseconds(GGameThreadTime),
 			FPlatformTime::ToMilliseconds(GRenderThreadTime),
 			FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles()));
 
-		// Hoehenlage von Fahrbahn und Gelaende.
-		//
-		// "Auf der Platter Strasse steht die Fahrbahn in der Luft" braucht
-		// eine Zahl, sonst bleibt es Beobachtung. Die Messung gibt es laengst
-		// (LogHeightStackNearPlayer vergleicht Fahrbahn-Vertices mit der
-		// Gelaendehoehe an DERSELBEN Stelle) - sie hing nur im Block der
-		// einmaligen Geometrie-Bilanz und lief deshalb genau ein Mal, acht
-		// Sekunden nach dem Start, an der Startposition. Wo der Spieler
-		// spaeter faehrt, wurde nie gemessen.
+		// Hoehenlage von Fahrbahn und Gelaende an der AKTUELLEN Spielerposition.
 		LogHeightStackNearPlayer();
 
-		// Verkehrsfluss: Steher, Tempo, Rotphasen.
-		//
-		// "Die Autos stauen sich" laesst sich ohne Zahl nicht pruefen. Ein
-		// hoher Steher-Anteil heisst Stau, viele Spurwechsel heissen, dass
-		// der Verkehr sich selbst wieder aufloest.
-		//
-		// Der Bericht stand bis hierher im Block der EINMALIGEN Geometrie-
-		// Bilanz und erschien deshalb genau ein Mal, acht Sekunden nach dem
-		// Start. Ein Stau, der eine Viertelstunde spaeter entsteht, kam darin
-		// nie vor - und war damit nur als Beobachtung vorhanden, nicht als
-		// Messwert. Hier laeuft er alle 15 Sekunden mit.
+		// Verkehrsfluss: Steher, Tempo, Rotphasen - alle 15 s mit.
 		if (TrafficSimulation.Vehicles.Num() > 0)
 		{
 			const FWiesbadenTrafficReport& Traffic = TrafficSimulation.Report;
@@ -1226,73 +1186,11 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 				Traffic.LaneChangesThisTick);
 		}
 
-		MeasurementDelay = 0.0f;
-		FrameTimeSumMs = 0.0;
-		WorstFrameMs = 0.0;
-		FrameCount = 0;
-		HitchCount = 0;
-		SpikeCount = 0;
-		LightTimeMs = 0.0;
-		TrafficTimeMs = 0.0;
-		PedestrianTimeMs = 0.0;
-		SubsystemTimeMs = 0.0;
-		GameThreadTimeMs = 0.0;
-		RenderThreadTimeMs = 0.0;
-		GpuTimeMs = 0.0;
+		FrameProfiler.BeginWindow();
 	}
 
-	if (!bMeasurementStarted && MeasurementDelay > 4.0f)
-	{
-		bMeasurementStarted = true;
-		MeasurementDelay = 0.0f;
-		FrameTimeSumMs = 0.0;
-		WorstFrameMs = 0.0;
-		FrameCount = 0;
-		HitchCount = 0;
-		SpikeCount = 0;
-		LightTimeMs = 0.0;
-		TrafficTimeMs = 0.0;
-		PedestrianTimeMs = 0.0;
-		SubsystemTimeMs = 0.0;
-		GameThreadTimeMs = 0.0;
-		RenderThreadTimeMs = 0.0;
-		GpuTimeMs = 0.0;
-	}
-
-	if (FrameCount > 0 || DeltaTime < 0.5f)
-	{
-		const double FrameMs = DeltaTime * 1000.0;
-
-		// Ausreisser RELATIV zaehlen, nicht gegen eine feste Schranke.
-		//
-		// Die 50-ms-Schranke unten ist wertlos geworden, sobald die mittlere
-		// Bildzeit selbst in ihre Naehe kommt: Bei 46 ms Mittel meldete der
-		// Zaehler 0 Aussetzer, bei 51 ms Mittel 168 - obwohl sich am
-		// Ruckelverhalten nichts geaendert hatte. Beinahe jedes Bild lag knapp
-		// darueber. Ich habe diesen Sprung erst fuer eine Verschlechterung
-		// gehalten; er war eine Eigenschaft der Schranke.
-		//
-		// Als Ruckeln wahrgenommen wird ein Bild, das deutlich laenger dauert
-		// als seine Nachbarn. Der Vergleich laeuft deshalb gegen das laufende
-		// Mittel des aktuellen Fensters.
-		if (FrameCount > 10)
-		{
-			const double RunningMean = FrameTimeSumMs / FrameCount;
-			if (FrameMs > RunningMean * 2.0)
-			{
-				++SpikeCount;
-			}
-		}
-
-		FrameTimeSumMs += FrameMs;
-		WorstFrameMs = FMath::Max(WorstFrameMs, FrameMs);
-		++FrameCount;
-		if (FrameMs > 50.0)
-		{
-			++HitchCount;
-		}
-	}
-
+	// Bildzeit dieses Bildes einrechnen (Vorlauf/Reset/Ausreisser stecken im Profiler).
+	FrameProfiler.SampleFrame(DeltaTime * 1000.0);
 	// Kreuzungs-Rundgang treiben (nur mit -WbTour aktiv).
 	TickJunctionTour(DeltaTime);
 
@@ -1358,13 +1256,14 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		// 428,9 und 212,1 ms, innerhalb eines Laufes aber auf die
 		// Nachkommastelle identische Werte fuer verschiedene Konfigurationen.
 		// Das war kein Vergleich, sondern zweimal dasselbe Bild.
-		GameThreadTimeMs += FPlatformTime::ToMilliseconds(GGameThreadTime);
-		RenderThreadTimeMs += FPlatformTime::ToMilliseconds(GRenderThreadTime);
-		GpuTimeMs += FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles());
-
-		LightTimeMs += (TrafficStart - LightStart) * 1000.0;
-		TrafficTimeMs += (PedestrianStart - TrafficStart) * 1000.0;
-		PedestrianTimeMs += (End - PedestrianStart) * 1000.0;
+		FWbStrandTimes Strands;
+		Strands.GameThreadMs = FPlatformTime::ToMilliseconds(GGameThreadTime);
+		Strands.RenderThreadMs = FPlatformTime::ToMilliseconds(GRenderThreadTime);
+		Strands.GpuMs = FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles());
+		Strands.LightMs = (TrafficStart - LightStart) * 1000.0;
+		Strands.TrafficMs = (PedestrianStart - TrafficStart) * 1000.0;
+		Strands.PedestrianMs = (End - PedestrianStart) * 1000.0;
+		FrameProfiler.AddStrands(Strands);
 	}
 
 	// Sichtbare Fahrzeuge (ISM-Pool am CityActor) aus der Simulation speisen.
@@ -1578,22 +1477,20 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			CachePerfSnapshot();
 			const FWiesbadenHealthReport PerfReport = BuildHealthReport();
 
-			if (FrameCount > 10)
+			const FWbFrameReport AvgFrame = FrameProfiler.Report();
+			if (AvgFrame.FrameCount > 10)
 			{
-				const double AverageMs = FrameTimeSumMs / FrameCount;
 				UE_LOG(LogWbStreaming, Log,
 					TEXT("Bildzeit ueber %d Bilder: Mittel %.1f ms (%.0f Bilder/s), ")
 					TEXT("schlechtestes %.1f ms, %d Aussetzer ueber 50 ms."),
-					FrameCount, AverageMs, 1000.0 / FMath::Max(AverageMs, 0.01),
-					WorstFrameMs, HitchCount);
+					AvgFrame.FrameCount, AvgFrame.MeanMs, AvgFrame.Fps,
+					AvgFrame.WorstMs, AvgFrame.HitchCount);
 
 				UE_LOG(LogWbStreaming, Log,
 					TEXT("Davon je Bild: Ampeln %.1f ms, Verkehr %.1f ms, Fussgaenger %.1f ms ")
 					TEXT("(zusammen %.1f ms von %.1f ms)."),
-					LightTimeMs / FrameCount, TrafficTimeMs / FrameCount,
-					PedestrianTimeMs / FrameCount,
-					(LightTimeMs + TrafficTimeMs + PedestrianTimeMs) / FrameCount,
-					AverageMs);
+					AvgFrame.MeanLightMs, AvgFrame.MeanTrafficMs, AvgFrame.MeanPedestrianMs,
+					AvgFrame.MeanLightMs + AvgFrame.MeanTrafficMs + AvgFrame.MeanPedestrianMs, AvgFrame.MeanMs);
 
 				// Spiel-Strang-ms aus dem Report (einziger Owner der Perf-Zahl);
 				// Renderer/GPU/Subsystem sind reiner Kontext -> lokal.
@@ -1601,9 +1498,9 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					TEXT("Straenge im Mittel: Spiel %.1f ms, Renderer %.1f ms, ")
 					TEXT("Grafikkarte %.1f ms. Davon dieses Subsystem %.1f ms."),
 					PerfReport.PerfGameThreadMs,
-					RenderThreadTimeMs / FrameCount,
-					GpuTimeMs / FrameCount,
-					SubsystemTimeMs / FrameCount);
+					AvgFrame.MeanRenderThreadMs,
+					AvgFrame.MeanGpuMs,
+					AvgFrame.MeanSubsystemMs);
 			}
 
 			LogGeometryBalance(PerfReport);
@@ -3601,7 +3498,7 @@ FWiesbadenHealthReport UWiesbadenCitySubsystem::BuildHealthReport() const
 	// Perf: die deterministischen Zaehler aus dem einmaligen Snapshot-Cache
 	// (CachePerfSnapshot, 8-s-Block) - KEIN Actor-Durchlauf hier, damit der
 	// Report-Bau auf dem Hot-Path billig bleibt. Die Bildzeit ist live und billig.
-	R.PerfGameThreadMs = (FrameCount > 0) ? static_cast<float>(GameThreadTimeMs / FrameCount) : 0.0f;
+	R.PerfGameThreadMs = static_cast<float>(FrameProfiler.Report().MeanGameThreadMs);
 	R.PerfPrimitiveComponents = PerfPrimComps;
 	R.PerfMovableComponents = PerfMovableComps;
 	R.PerfCollisionComponents = PerfCollisionComps;

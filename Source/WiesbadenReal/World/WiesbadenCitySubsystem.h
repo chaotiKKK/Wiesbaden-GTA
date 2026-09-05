@@ -9,6 +9,7 @@
 #include "GIS/WiesbadenBuildSummary.h"
 #include "GIS/WiesbadenPedestrianSimulation.h"
 #include "World/WiesbadenHealthReport.h"
+#include "World/WiesbadenFrameProfiler.h"
 #include "GIS/WiesbadenTrafficLights.h"
 #include "GIS/WiesbadenTrafficSimulation.h"
 #include "World/WiesbadenWeatherSystem.h"
@@ -254,43 +255,14 @@ private:
 	bool bLoadingRangeApplied = false;
 
 	// -- Bildzeit-Messung ----------------------------------------------------
-	//
-	// "Es ruckelt" ist keine Groesse, mit der sich arbeiten laesst. Diese
-	// Zaehler liefern eine: mittlere Bildzeit, schlechteste Bildzeit und die
-	// Zahl der Aussetzer ueber 50 ms. Ein hoher Mittelwert heisst
-	// durchgaengige Last, ein niedriger Mittelwert mit Aussetzern heisst
-	// Nachladen - das sind zwei voellig verschiedene Ursachen.
-	double FrameTimeSumMs = 0.0;
-	double WorstFrameMs = 0.0;
-	int32 FrameCount = 0;
-	int32 HitchCount = 0;
-
-	/** Bilder, die mehr als doppelt so lange dauerten wie das laufende Mittel. */
-	int32 SpikeCount = 0;
-
-	/** Vorlauf, bis die Messung beginnt (Streaming und Shader sind dann durch). */
-	float MeasurementDelay = 0.0f;
+	// Die gefensterte Statistik (Mittel/Worst/Ausreisser/Aussetzer + Strangzeiten)
+	// liegt datenrein + getestet im FWbFrameProfiler; das Subsystem speist ihn und
+	// liest Report() ab. Frueher standen hier ~14 Felder mit ZWEIMAL wortgleicher
+	// Reset-Logik im Tick.
+	FWbFrameProfiler FrameProfiler;
 
 	/** Verstrichene Zeit fuer -WbQuitAfter. */
 	float QuitAfterElapsed = 0.0f;
-	bool bMeasurementStarted = false;
-
-	/** Aufsummierte Zeit je Simulation, fuer die Aufteilung der Bildzeit. */
-	double LightTimeMs = 0.0;
-	double TrafficTimeMs = 0.0;
-	double PedestrianTimeMs = 0.0;
-	double SubsystemTimeMs = 0.0;
-	double GameThreadTimeMs = 0.0;
-	double RenderThreadTimeMs = 0.0;
-
-	/** Summierte Zeit der Grafikkarte je Bild.
-	 *
-	 * Getrennt von RenderThreadTimeMs, weil beide etwas anderes messen:
-	 * Der Render-Strang schiebt Befehle weg, die Karte arbeitet sie ab.
-	 * Ist die Karte der Engpass, bleibt der Strang klein und die Bildzeit
-	 * trotzdem gross - genau diese Luecke hat mich einmal zu der falschen
-	 * Aussage gebracht, die Materialien seien die Last. */
-	double GpuTimeMs = 0.0;
 
 	// -- Perf-Snapshot-Cache ------------------------------------------------
 	// EINMAL in CachePerfSnapshot() erhoben (8-s-Block), danach von
