@@ -38,10 +38,39 @@ PARAM = "FadeRadiusM"
 # gelebten Radius (per-Bild-Nachweis: Log "Fade-MPC: FadeRadiusM gesetzt").
 DEFAULT_RADIUS_M = 900.0
 
-# Strassen-Materialien: Laufzeit (AAA, aus DefaultGame.ini) UND gebacken (City).
-ROAD_MATERIALS = [
+# Alle Zell-gestreamten Oberflaechen eines Chunks bekommen dasselbe Einblenden,
+# damit Haeuser UND Fahrbahn am Streaming-Rand konsistent weich erscheinen.
+# Je Satz gebacken (M_Wb*, City) UND Laufzeit (M_AAA_). AUSGENOMMEN: Terrain -
+# die Landscape ist immer resident (nicht per Zelle gestreamt), ein Radius-Fade
+# wuerde ferne Wiesen faelschlich ausblenden. Transluzentes (z. B. Glas) wird in
+# apply_fade uebersprungen, weil Masked es zerstoeren wuerde.
+FADE_MATERIALS = [
+    # Fahrbahn
     "/Game/Materials/AAA/M_AAA_RoadAsphalt",
     "/Game/Materials/City/M_WbRoad",
+    # Gebaeude: Waende / Fassaden-Varianten
+    "/Game/Materials/City/M_WbBuildingWall",
+    "/Game/Materials/City/M_WbFacade_Putz",
+    "/Game/Materials/City/M_WbFacade_Backstein",
+    "/Game/Materials/City/M_WbFacade_Sandstein",
+    "/Game/Materials/City/M_WbFacade_Beton",
+    "/Game/Materials/City/M_WbFacade_Glas",
+    "/Game/Materials/City/M_WbFacade_Fachwerk",
+    "/Game/Materials/AAA/M_AAA_FacadePlaster",
+    "/Game/Materials/AAA/M_AAA_FacadeBrick",
+    "/Game/Materials/AAA/M_AAA_FacadeStone",
+    "/Game/Materials/AAA/M_AAA_FacadeConcrete",
+    # Gebaeude: Daecher
+    "/Game/Materials/City/M_WbBuildingRoof",
+    "/Game/Materials/AAA/M_AAA_RoofClay",
+    "/Game/Materials/AAA/M_AAA_RoofVaried",
+    # Uebrige Chunk-Bodenflaechen (Gehweg/Bordstein/Pflaster/unbefestigt) - KEIN Terrain
+    "/Game/Materials/City/M_WbSidewalk",
+    "/Game/Materials/City/M_WbKerb",
+    "/Game/Materials/City/M_WbPavedStone",
+    "/Game/Materials/City/M_WbUnpaved",
+    "/Game/Materials/AAA/M_AAA_Paving",
+    "/Game/Materials/AAA/M_AAA_GroundDirt",
 ]
 
 
@@ -82,6 +111,14 @@ def apply_fade(mat_path, mpc):
     if already_faded(mat):
         unreal.log("Fade: schon vorhanden, uebersprungen: " + mat_path)
         return "schon"
+
+    # Nur opake/maskierte Materialien: das Fade setzt Blend=Masked und haengt an
+    # die Opacity-Mask. Ein transluzentes Material (Glas) hat bereits einen
+    # Opacity-Pfad - Masked wuerde es zerstoeren -> ueberspringen.
+    bm = mat.get_editor_property("blend_mode")
+    if bm not in (unreal.BlendMode.BLEND_OPAQUE, unreal.BlendMode.BLEND_MASKED):
+        unreal.log("Fade: nicht-opak (%s), uebersprungen: %s" % (bm, mat_path))
+        return "nicht-opak"
 
     # dist = |Kamera - Weltposition|
     cam = ex(mat, unreal.MaterialExpressionCameraPositionWS, -2200, 900)
@@ -169,7 +206,7 @@ def connect_dither(mat, clamp, dither):
 def main():
     results = {}
     mpc = ensure_mpc()
-    for p in ROAD_MATERIALS:
+    for p in FADE_MATERIALS:
         try:
             results[p] = apply_fade(p, mpc)
         except Exception as e:
