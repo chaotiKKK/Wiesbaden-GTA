@@ -227,6 +227,35 @@ def stripe_and_decal_nodes(nt, albedo_node, roundel_img):
 
     colour_out = albedo_node.outputs["Color"]
 
+    # Herbie-Weiss: die verwitterte Lackflaeche zu Cremeweiss aufhellen.
+    #
+    # Die Quell-Albedo ist ein schwerer Patina-Fotoscan (Rost, graue Flecken,
+    # Radial-Artefakte) - der Wagen sah damit nach Schrottfund aus, nicht nach
+    # Herbie. Hier werden die LACK-Flaechen zu Cremeweiss aufgehellt, BEVOR die
+    # Streifen darueber kommen. Ausgenommen bleiben Glas (kuehl, b>r), dunkle
+    # Trim-/Reifen-/Innenraum-Flaechen (niedrige Helligkeit -> bright=0) und
+    # damit alles, was kein Blech ist. Teilstark, damit feine Struktur (Kratzer,
+    # Blechkanten) durchscheint und der Lack nicht wie Plastik wirkt.
+    not_glass = nodes.new("ShaderNodeMapRange")
+    not_glass.inputs["From Min"].default_value = -0.05   # sehr kuehl = Glas -> 0
+    not_glass.inputs["From Max"].default_value = -0.01
+    not_glass.clamp = True
+    links.new(r_minus_b.outputs[0], not_glass.inputs["Value"])
+
+    whiten_mask = nodes.new("ShaderNodeMath"); whiten_mask.operation = 'MULTIPLY'
+    links.new(bright.outputs[0], whiten_mask.inputs[0])
+    links.new(not_glass.outputs[0], whiten_mask.inputs[1])
+    whiten_str = nodes.new("ShaderNodeMath"); whiten_str.operation = 'MULTIPLY'
+    links.new(whiten_mask.outputs[0], whiten_str.inputs[0])
+    whiten_str.inputs[1].default_value = 0.82
+
+    white_mix = nodes.new("ShaderNodeMix")
+    white_mix.data_type = 'RGBA'
+    links.new(whiten_str.outputs[0], white_mix.inputs["Factor"])
+    links.new(colour_out, white_mix.inputs[6])
+    white_mix.inputs[7].default_value = (0.88, 0.86, 0.82, 1.0)
+    colour_out = white_mix.outputs[2]
+
     # Flaechennormale - der Schluessel gegen den lackierten INNENRAUM.
     #
     # Sitze, Bodenblech und Tuerinnenseiten liegen raeumlich mitten im
@@ -287,11 +316,21 @@ def stripe_and_decal_nodes(nt, albedo_node, roundel_img):
         mix.inputs[7].default_value = (*rgb, 1.0)
         colour_out = mix.outputs[2]
 
-    # Plaketten: NICHT mehr hier. Der Knotenpfad hat sie nach einer
-    # Umbaurunde stumm verschluckt (Streifen liefen weiter, Plaketten nie
-    # wieder), und ein Knotengraph laesst sich nicht schrittweise pruefen.
-    # Sie werden jetzt NACH dem Backen direkt in die Bilddateien gerastert -
-    # apply_decals(), Dreieck fuer Dreieck, mit nachlesbaren Zwischenzahlen.
+    # KEINE Tuer-Plakette (xz) mehr - weder hier noch per Dreieck-Rastern.
+    #
+    # Die Tuer wickelt in ueber das ganze Tile VERSTREUTE und mit anderen
+    # sichtbaren Blechen GETEILTE UV-Inseln ab (gemessen: 590 Tuer-Dreiecke,
+    # UV-Spanne u[0,15..0,97] v[0,00..0,88] ueber die Kacheln 1002+1004). Wird
+    # die 53 in diese Texel gebacken, erscheint sie zwangslaeufig auch auf den
+    # Blechen, die sich dieselben Texel teilen (Kotfluegel/Seitenwand) - als
+    # Geisterkreise und Radialstreifen ueber die ganze Seite. Das gilt fuer
+    # BEIDE Backwege (Dreieck-Rastern wie Knotengraph, beide gemessen): ein
+    # SAUBERES, gebackenes Tuer-Emblem ist auf dieser Abwicklung nicht moeglich.
+    #
+    # Die Herbie-Identitaet tragen die Mittelstreifen und die Hauben-53 (deren
+    # UV-Insel ist kompakt und ungeteilt). Ein Tuer-53 gehoert - wenn ueberhaupt
+    # - als projizierter Decal-Actor/-Component IN DER WELT auf die Tuer, nicht
+    # in die geteilte Textur (Folgeaufgabe).
     for decal in []:
         cx, cy, cz = decal["centre"]
         half = decal["half"]
@@ -403,6 +442,11 @@ def apply_decals(body, slot_offset, bake_jobs, roundel_path):
 
     total_px = 0
     for decal in DECALS:
+        # NUR die Haube (xy) rastert Python. Die Tuer (xz) laeuft ueber den
+        # Knotengraphen (stripe_and_decal_nodes) - ihr geteiltes/verstreutes
+        # UV liess das Dreieck-Rastern ueber die ganze Seite verschmieren.
+        if decal["axes"] != "xy":
+            continue
         cx, cy, cz = decal["centre"]
         half = decal["half"]
         axes = decal["axes"]
