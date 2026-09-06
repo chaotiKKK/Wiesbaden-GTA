@@ -188,9 +188,17 @@ private:
 	UFUNCTION()
 	void HandleCityStatus(FString Status, bool bSuccess);
 
-	/** Aktuell eingesetztes Spielerfahrzeug. */
+	/** Aktuell eingesetztes KINEMATISCHES Spielerfahrzeug (Kaefer). Bleibt nullptr,
+	 *  wenn das Chaos-Physik-Auto faehrt; Kaefer-spezifische Pfade (Verkehr
+	 *  uebernehmen) haengen weiter hieran. */
 	UPROPERTY(Transient)
 	class AWiesbadenCar* PlayerCar = nullptr;
+
+	/** Das tatsaechlich besessene Spielerauto - Chaos-Physik-Auto ODER Kaefer.
+	 *  Fahrzeug-typ-unabhaengige Pfade (Helikopter-Bezug, Wiedereinstieg,
+	 *  Idempotenz des Einsetzens) nutzen diesen Zeiger statt PlayerCar. */
+	UPROPERTY(Transient)
+	TObjectPtr<APawn> PlayerVehicle = nullptr;
 
 	/** Helikopter am Startpunkt. */
 	UPROPERTY(Transient)

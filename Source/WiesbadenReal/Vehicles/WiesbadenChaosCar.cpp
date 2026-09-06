@@ -6,6 +6,7 @@
 
 #include "ChaosWheeledVehicleMovementComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Materials/MaterialInterface.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/PlayerController.h"
@@ -252,6 +253,44 @@ void AWiesbadenChaosCar::BeginPlay()
 	{
 		UE_LOG(LogWbCore, Error,
 			TEXT("Chaos-Fahrzeug: keine Fahrzeugkomponente - es wird stehen bleiben."));
+	}
+
+	// Herbie-Lackierung auf das SKELETT-Mesh - dieselbe Zuordnung wie beim
+	// kinematischen Kaefer (AWiesbadenCar), nur ueber die Skelettmesh-Komponente.
+	// Ueber den KACHELNAMEN im Slot (1001-1004), nicht den Index: die Slot-
+	// Reihenfolge haengt am FBX-Import und aendert sich beim Reimport still.
+	if (USkeletalMeshComponent* Body = GetMesh())
+	{
+		static const TCHAR* Tiles[] = { TEXT("1001"), TEXT("1002"), TEXT("1003"), TEXT("1004") };
+		const TArray<FName> SlotNames = Body->GetMaterialSlotNames();
+		int32 Swapped = 0;
+		for (const FName& SlotName : SlotNames)
+		{
+			const FString Name = SlotName.ToString();
+			for (const TCHAR* Tile : Tiles)
+			{
+				if (!Name.Contains(Tile))
+				{
+					continue;
+				}
+				const FString Path = FString::Printf(
+					TEXT("/Game/Vehicles/Beetle/MI_VWBeetleHerbie_%s.MI_VWBeetleHerbie_%s"),
+					Tile, Tile);
+				if (UMaterialInterface* Herbie = LoadObject<UMaterialInterface>(nullptr, *Path))
+				{
+					const int32 Index = Body->GetMaterialIndex(SlotName);
+					if (Index != INDEX_NONE)
+					{
+						Body->SetMaterial(Index, Herbie);
+						++Swapped;
+					}
+				}
+				break;
+			}
+		}
+		UE_LOG(LogWbCore, Log,
+			TEXT("Chaos-Fahrzeug: Herbie-Lackierung auf %d von %d Schlitzen."),
+			Swapped, SlotNames.Num());
 	}
 }
 

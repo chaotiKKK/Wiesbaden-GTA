@@ -194,34 +194,26 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 	// Die Strahlen trafen sein DACH statt der Strasse und setzten es zwei
 	// Meter hoeher: gemessen erst Z 11359, dann Z 11520, Raeder 224 bis 262 cm
 	// ueber dem Boden.
-	if (FParse::Param(FCommandLine::Get(), TEXT("WbChaosCar")))
+	// Steht schon ein Spielerauto (Chaos ODER Kaefer)? Dann NICHT neu einsetzen
+	// (Platzsuche uebersprungen), aber sicherstellen, dass es BESESSEN ist: der
+	// erste Durchlauf kann es gespawnt haben, bevor ein PlayerController existierte
+	// - dann erreichte WbDrive es nicht. Der zweite Durchlauf holt das nach.
+	if (PlayerVehicle)
 	{
-		// Steht schon ein ChaosCar? Dann NICHT neu spawnen (Platzsuche uebersprungen),
-		// aber sicherstellen, dass er auch BESESSEN ist: der erste Durchlauf kann ihn
-		// gespawnt haben, bevor ein PlayerController existierte - dann haette WbDrive
-		// keinen Zugriff. Der zweite Durchlauf (nach City-Ready) holt das nach.
-		for (TActorIterator<AWiesbadenChaosCar> It(World); It; ++It)
+		if (APlayerController* PC = World->GetFirstPlayerController())
 		{
-			AWiesbadenChaosCar* Existing = *It;
-			if (APlayerController* PC = World->GetFirstPlayerController())
+			if (PC->GetPawn() != PlayerVehicle)
 			{
-				if (PC->GetPawn() != Existing)
+				if (APawn* Other = PC->GetPawn())
 				{
-					if (APawn* Other = PC->GetPawn())
-					{
-						PC->UnPossess();
-						Other->Destroy();
-					}
-					PC->Possess(Existing);
-					UE_LOG(LogWbCore, Log,
-						TEXT("Spielerfahrzeug (Chaos): vorhandenes Fahrzeug nachtraeglich uebernommen."));
+					PC->UnPossess();
+					Other->Destroy();
 				}
+				PC->Possess(PlayerVehicle);
+				UE_LOG(LogWbCore, Log,
+					TEXT("Spielerfahrzeug: vorhandenes Fahrzeug nachtraeglich uebernommen."));
 			}
-			return true;
 		}
-	}
-	else if (PlayerCar)
-	{
 		return true;
 	}
 
@@ -355,18 +347,19 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	Params.Owner = this;
 
-	// Echte Fahrzeugphysik statt des eigenen Modells: -WbChaosCar.
+	// STANDARD: echte Fahrzeugphysik. AWiesbadenChaosCar faehrt auf Unreals Chaos
+	// Vehicles - Reifenmodell je Rad, Getriebe, Differential, Federung. Der alte
+	// kinematische Kaefer (AWiesbadenCar, faehrt "wie auf Schienen") bleibt ueber
+	// -WbKinematicCar als Rueckfall erhalten und wird NICHT geloescht: der
+	// Verkehr-uebernehmen-Pfad (CommandeerTrafficVehicle) und einige Tests haengen
+	// weiter an ihm.
 	//
-	// AWiesbadenChaosCar faehrt auf Unreals Chaos Vehicles - Reifenmodell je
-	// Rad, Getriebe, Differential, Federung. Es steht NEBEN dem bisherigen
-	// Fahrzeug und ersetzt es nicht: HUD, Waffe und mehrere Tests haengen an
-	// AWiesbadenCar, und ein Austausch in einem Zug waere ein Umbau ohne
-	// Rueckweg, falls sich die Physik nicht bewaehrt.
-	//
-	// Beide werden ueber die Basisklasse APawn gehalten; PlayerCar bleibt
-	// nullptr, wenn das Chaos-Fahrzeug faehrt - das HUD zeichnet dann keinen
-	// Tacho, und genau das ist der noch offene Teil.
-	if (FParse::Param(FCommandLine::Get(), TEXT("WbChaosCar")))
+	// Beide Autos implementieren IWiesbadenVehicleControl - HUD-Tacho und WbDrive
+	// erreichen beide ueber dieselbe Steuernaht. Das tatsaechlich besessene Auto
+	// steht in PlayerVehicle; fahrzeug-typ-unabhaengige Pfade (Helikopter-Bezug,
+	// Wiedereinstieg, Idempotenz) nutzen diesen Zeiger.
+	const bool bUseChaosCar = !FParse::Param(FCommandLine::Get(), TEXT("WbKinematicCar"));
+	if (bUseChaosCar)
 	{
 		APawn* ChaosCar = World->SpawnActor<AWiesbadenChaosCar>(
 			AWiesbadenChaosCar::StaticClass(), SpawnLocation, SpawnRotation, Params);
@@ -377,6 +370,7 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 				TEXT("Spielerfahrzeug (Chaos): SpawnActor fehlgeschlagen."));
 			return false;
 		}
+		PlayerVehicle = ChaosCar;
 
 		if (APlayerController* ChaosPC = World->GetFirstPlayerController())
 		{
@@ -397,7 +391,7 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 			if (ChaosPC->GetPawn() == ChaosCar)
 			{
 				UE_LOG(LogWbCore, Log,
-					TEXT("Spielerfahrzeug: Chaos Vehicles aktiv (-WbChaosCar) bei (%.0f, %.0f)."),
+					TEXT("Spielerfahrzeug: echte Chaos-Physik aktiv (Standard) bei (%.0f, %.0f)."),
 					SpawnLocation.X, SpawnLocation.Y);
 			}
 			else
@@ -414,6 +408,7 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 		return true;
 	}
 
+	// Rueckfall (-WbKinematicCar): der alte kinematische Kaefer.
 	PlayerCar = World->SpawnActor<AWiesbadenCar>(
 		AWiesbadenCar::StaticClass(), SpawnLocation, SpawnRotation, Params);
 
@@ -422,6 +417,7 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 		UE_LOG(LogWbCore, Error, TEXT("Spielerfahrzeug: SpawnActor fehlgeschlagen."));
 		return false;
 	}
+	PlayerVehicle = PlayerCar;
 
 	if (APlayerController* PC = World->GetFirstPlayerController())
 	{
@@ -516,7 +512,7 @@ APawn* AWiesbadenGameMode::FindNearbyVehicle(const FVector& Location) const
 		}
 	};
 
-	Consider(PlayerCar);
+	Consider(PlayerVehicle);   // das aktuelle Auto (Chaos ODER Kaefer)
 	Consider(PlayerHelicopter);
 	return Best;
 }
@@ -581,8 +577,10 @@ APawn* AWiesbadenGameMode::CommandeerTrafficVehicle(const FVector& Location)
 	}
 
 	// Das uebernommene Auto ist ab jetzt DAS Spielerfahrzeug: HUD, Tacho und
-	// die Hindernismeldung an den Verkehr haengen alle an PlayerCar.
+	// die Hindernismeldung an den Verkehr haengen alle an PlayerCar; PlayerVehicle
+	// verweist ebenfalls darauf (Helikopter-Bezug, Wiedereinstieg).
 	PlayerCar = Taken;
+	PlayerVehicle = Taken;
 
 	UE_LOG(LogWbVehicles, Log,
 		TEXT("Verkehrsfahrzeug uebernommen bei (%.0f, %.0f), %d Fahrzeuge verbleiben."),
@@ -680,7 +678,7 @@ void AWiesbadenGameMode::TogglePlayerVehicle()
 bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 {
 	UWorld* World = GetWorld();
-	if (!World || !PlayerCar)
+	if (!World || !PlayerVehicle)
 	{
 		return false;
 	}
@@ -696,15 +694,15 @@ bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 	// Seitlich vom Fahrzeug absetzen und per Trace auf den Boden stellen.
 	// VOR das Fahrzeug setzen, nicht daneben: seitlich liegt er ausserhalb des
 	// Blickfelds der Verfolgerkamera und war schlicht nicht zu finden.
-	const FVector Base = PlayerCar->GetActorLocation()
-		+ PlayerCar->GetActorForwardVector() * (HelicopterDistanceMeters * 100.0)
-		+ PlayerCar->GetActorRightVector() * 600.0;
+	const FVector Base = PlayerVehicle->GetActorLocation()
+		+ PlayerVehicle->GetActorForwardVector() * (HelicopterDistanceMeters * 100.0)
+		+ PlayerVehicle->GetActorRightVector() * 600.0;
 
 	FVector SpawnLocation = Base + FVector(0.0, 0.0, 200.0);
 
 	FHitResult Hit;
 	FCollisionQueryParams Params;
-	Params.AddIgnoredActor(PlayerCar);
+	Params.AddIgnoredActor(PlayerVehicle);
 	if (World->LineTraceSingleByChannel(Hit,
 		Base + FVector(0.0, 0.0, 20000.0), Base - FVector(0.0, 0.0, 20000.0),
 		ECC_Visibility, Params))
@@ -719,7 +717,7 @@ bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 	// Verzoegert spawnen und die Selbstuebernahme abschalten: der Helikopter
 	// steht wie das Auto auf AutoPossessPlayer = Player0 und riss den Spieler
 	// sonst beim Absetzen aus dem Fahrzeug - man startete mitten in der Luft.
-	const FTransform SpawnTransform(PlayerCar->GetActorRotation(), SpawnLocation);
+	const FTransform SpawnTransform(PlayerVehicle->GetActorRotation(), SpawnLocation);
 
 	PlayerHelicopter = World->SpawnActorDeferred<AWiesbadenHelicopter>(
 		AWiesbadenHelicopter::StaticClass(), SpawnTransform, this);
@@ -845,7 +843,7 @@ void AWiesbadenGameMode::HandleCityStatus(FString Status, bool bSuccess)
 	// Wird die Stadt erst zur Laufzeit erzeugt, gibt es beim Start noch kein
 	// Strassennetz. Sobald sie bereitsteht, wird der Einsatz nachgeholt -
 	// SpawnPlayerCarAtStartAddress ist idempotent.
-	if (bSuccess && bSpawnPlayerCar && !PlayerCar)
+	if (bSuccess && bSpawnPlayerCar && !PlayerVehicle)
 	{
 		// Helikopter direkt mit absetzen - er braucht die Fahrzeugposition als
 		// Bezug und war bisher ueberhaupt nicht in der Welt vorhanden.
