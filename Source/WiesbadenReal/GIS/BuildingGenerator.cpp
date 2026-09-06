@@ -439,19 +439,20 @@ FString UBuildingGenerator::ResolvePromptLandmarkKey(
 	return FString();
 }
 
-FBuildingMeshSection& UBuildingGenerator::FindOrAddSection(
+int32 UBuildingGenerator::FindOrAddSection(
 	FBuildingMeshData& MeshData,
 	EBuildingMeshChannel Channel,
 	int32 MaterialVariant,
 	const FString& FacadeOverrideKey)
 {
-	for (FBuildingMeshSection& Section : MeshData.Sections)
+	for (int32 Index = 0; Index < MeshData.Sections.Num(); ++Index)
 	{
+		const FBuildingMeshSection& Section = MeshData.Sections[Index];
 		if (Section.Channel == Channel
 			&& Section.MaterialVariant == MaterialVariant
 			&& Section.FacadeOverrideKey == FacadeOverrideKey)
 		{
-			return Section;
+			return Index;
 		}
 	}
 
@@ -459,8 +460,7 @@ FBuildingMeshSection& UBuildingGenerator::FindOrAddSection(
 	NewSection.Channel = Channel;
 	NewSection.MaterialVariant = MaterialVariant;
 	NewSection.FacadeOverrideKey = FacadeOverrideKey;
-	const int32 Index = MeshData.Sections.Add(MoveTemp(NewSection));
-	return MeshData.Sections[Index];
+	return MeshData.Sections.Add(MoveTemp(NewSection));
 }
 
 FBuildingGenerationReport UBuildingGenerator::Generate(
@@ -1047,11 +1047,22 @@ void UBuildingGenerator::BuildWalls(
 	const bool bSplitGroundFloor = Settings.bSeparateGroundFloor && LevelCount > 1;
 	const double GroundFloorTopZ = bSplitGroundFloor ? (BaseZ + LevelHeight) : BaseZ;
 
-	FBuildingMeshSection& WallSection = FindOrAddSection(
+	// Erst BEIDE Sections anfordern (jede kann OutMeshData.Sections neu allozieren),
+	// DANN die Referenzen binden. Frueher hielt WallSection eine Referenz, die das
+	// GroundFloor-FindOrAddSection beim Realloc entwertete; das anschliessende
+	// Schreiben durch die haengende Referenz (AddQuad -> Section.Vertices.Add)
+	// korrumpierte den Heap (per Stomp-Allocator dort lokalisiert; der Absturz trat
+	// erst spaeter in RemoveDuplicatePoints auf). Im Rest von BuildWalls waechst
+	// OutMeshData.Sections nicht mehr, daher bleiben die Referenzen ab hier gueltig.
+	const int32 WallSectionIndex = FindOrAddSection(
 		OutMeshData, EBuildingMeshChannel::Wall, MaterialVariant, FacadeOverrideKey);
+	const int32 GroundSectionIndex = bSplitGroundFloor
+		? FindOrAddSection(OutMeshData, EBuildingMeshChannel::GroundFloor, MaterialVariant, FacadeOverrideKey)
+		: INDEX_NONE;
 
-	FBuildingMeshSection* GroundSection = bSplitGroundFloor
-		? &FindOrAddSection(OutMeshData, EBuildingMeshChannel::GroundFloor, MaterialVariant, FacadeOverrideKey)
+	FBuildingMeshSection& WallSection = OutMeshData.Sections[WallSectionIndex];
+	FBuildingMeshSection* GroundSection = (GroundSectionIndex != INDEX_NONE)
+		? &OutMeshData.Sections[GroundSectionIndex]
 		: nullptr;
 
 	const int32 PointCount = Ring.Num();
@@ -1146,8 +1157,9 @@ void UBuildingGenerator::BuildRoof(
 		return;
 	}
 
-	FBuildingMeshSection& Section = FindOrAddSection(
+	const int32 SectionIndex = FindOrAddSection(
 		OutMeshData, EBuildingMeshChannel::Roof, MaterialVariant, FacadeOverrideKey);
+	FBuildingMeshSection& Section = OutMeshData.Sections[SectionIndex];
 
 	// Dach-UVs GEBAeUDE-LOKAL statt weltbezogen. Die georeferenzierten
 	// Weltkoordinaten sind in Wiesbaden riesig (Tausende Meter). Als per-Vertex-

@@ -448,8 +448,16 @@ private:
 		TArray<TArray<FVector2D>>& OutOuterRings,
 		TArray<TArray<FVector2D>>& OutInnerRings) const;
 
-	/** Sucht oder erzeugt den Mesh-Abschnitt fuer Kanal, Variante und Override-Key. */
-	static FBuildingMeshSection& FindOrAddSection(
+	/**
+	 * Sucht oder erzeugt den Mesh-Abschnitt fuer Kanal, Variante und Override-Key
+	 * und liefert seinen INDEX in MeshData.Sections.
+	 *
+	 * Bewusst KEINE Referenz: Ein spaeteres FindOrAddSection kann MeshData.Sections
+	 * neu allozieren und eine gehaltene Referenz entwerten (Use-after-Realloc). Der
+	 * Index bleibt stabil; der Aufrufer bindet die Referenz erst NACH allen
+	 * Section-Anforderungen.
+	 */
+	static int32 FindOrAddSection(
 		FBuildingMeshData& MeshData,
 		EBuildingMeshChannel Channel,
 		int32 MaterialVariant,
