@@ -286,6 +286,48 @@ void URegionAssetSpawnerComponent::SpawnVaried(const TArray<FPlacedRegionAsset>&
 	}
 }
 
+void URegionAssetSpawnerComponent::AnchorEmptyInstanceComponents(const FVector& AnchorLocation)
+{
+	// Klassen-Sweep ueber den Besitzer statt Arrays: Auf einer GELADENEN,
+	// leeren Zelle existieren die serialisierten Varianten-Komponenten
+	// (Trees_01..06, Bushes_01..06), ohne dass ein Laufzeit-Array sie kennt -
+	// VariedInstances wird nur beim Bau gefuellt, und BeginPlay ruft bei 0
+	// Regionsobjekten SpawnRegionAssets gar nicht erst (Genau das liess den
+	// ersten Re-Bake 502 Zellen unheilen: Basis-HISMs wanderten, Varianten
+	// blieben am Ursprung). Der Sweep deckt Basis- und Varianten-Komponenten
+	// auf jedem Pfad ab.
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+
+	TArray<UHierarchicalInstancedStaticMeshComponent*> Components;
+	Owner->GetComponents<UHierarchicalInstancedStaticMeshComponent>(Components);
+
+	for (UHierarchicalInstancedStaticMeshComponent* Component : Components)
+	{
+		if (!Component)
+		{
+			continue;
+		}
+		if (Component->GetInstanceCount() > 0)
+		{
+			// Mit Instanzen gilt wieder die echte Geometrie; die
+			// Rueck-Ankerung stellt den Ausgangszustand her.
+			Component->SetRelativeLocation(FVector::ZeroVector);
+		}
+		else
+		{
+			// Ankerung am Zell-Inhalt statt am Actor-Ursprung: Der Punkt
+			// waehlt die Streaming-Zelle, in der diese (leere) Komponente
+			// landet - nicht den Ursprung der Karte.
+			Component->SetWorldLocation(AnchorLocation);
+		}
+		Component->MarkRenderStateDirty();
+	}
+}
+
 void URegionAssetSpawnerComponent::SpawnRegionAssets(const FRegionAssetLayout& Layout)
 {
 	ClearRegionAssets();

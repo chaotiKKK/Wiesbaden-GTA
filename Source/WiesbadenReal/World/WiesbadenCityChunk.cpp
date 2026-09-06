@@ -64,6 +64,10 @@ void AWiesbadenCityChunk::SetRegionAssets(const TArray<FPlacedRegionAsset>& InAs
 	FRegionAssetLayout Layout;
 	Layout.Assets = RegionAssets;
 	RegionAssetSpawner->SpawnRegionAssets(Layout);
+
+	// Nachtraegliche Verteilung kann Zellen geleert oder gefuellt haben -
+	// die Ankerung darf dem nicht hinterherhaengen.
+	AnchorStreamingBounds();
 }
 
 void AWiesbadenCityChunk::BeginPlay()
@@ -77,6 +81,90 @@ void AWiesbadenCityChunk::BeginPlay()
 		FRegionAssetLayout Layout;
 		Layout.Assets = RegionAssets;
 		RegionAssetSpawner->SpawnRegionAssets(Layout);
+	}
+
+	// Nach dem Instanz-Aufbau neu verankern: SpawnRegionAssets legt die
+	// Varianten-Komponenten (Trees_01..) NEU an - im Konstruktor sitzen sie
+	// am Actor-Ursprung, und genau dieser Ursprungspunkt war die 3x4-km-
+	// Bounds-Falle. Auch leere Zellen (0 Regionsobjekte) brauchen den
+	// Aufruf, weil ihre Basis-HISMs aus der Karte leer und am Ursprung sind.
+	AnchorStreamingBounds();
+}
+
+void AWiesbadenCityChunk::AnchorStreamingBounds()
+{
+	// Packetschmutz VOR den Aenderungen: Programmatische Transforms rufen
+	// (anders als Gizmo-Zuege) kein PostEditMove auf - ohne Modify(true)
+	// bliebe das External-Actor-Package sauber, save_dirty_packages haette
+	// nichts zu speichern und der Re-Bake wuerde laut "erfolgreich" laufen,
+	// aber nichts schreiben. bAlwaysMarkDirty=true greift auch im
+	// Commandlet (dort existiert keine Undo-Transaktion mehr).
+	// Anker: Mittelpunkt des Zell-Inhalts. Zuerst die Mesh-Geometrie (die
+	// Sections tragen Weltkoordinaten, CalcBounds liefert deren Welt-Box),
+	// sonst die Regions-Assets. Voellig leere Zellen behalten den Ursprung -
+	// sie tragen nur Punkt-Bounds und druecken die Actor-Bounds nicht auf.
+	FVector Anchor = FVector::ZeroVector;
+	bool bHasAnchor = false;
+	for (const UProceduralMeshComponent* Mesh : { RoadMesh, BuildingMesh })
+	{
+		if (Mesh && Mesh->GetNumSections() > 0)
+		{
+			// IDENTITY, NICHT GetComponentTransform(): die Section-Vertices tragen
+			// bereits WELT-Koordinaten, ihr Identity-Schwerpunkt IST der Welt-
+			// mittelpunkt der Zelle. Im Build-Pfad hat CALL 1 (SetRegionAssets, vor
+			// dem Section-Aufbau) das noch leere Mesh an den Zellmittelpunkt C
+			// gezogen; mit GetComponentTransform() wuerde CALL 2 hier C + C = 2C
+			// sampeln und alle leeren Komponenten faelschlich nach 2C ankern ->
+			// Bounds wieder ueber km aufgeblaeht. Identity zaehlt den transienten
+			// Komponentenversatz nicht doppelt (Re-Bake-Pfad: Mesh ohnehin am
+			// Ursprung -> gleiches Ergebnis C).
+			Anchor = Mesh->CalcBounds(FTransform::Identity).Origin;
+			bHasAnchor = true;
+			break;
+		}
+	}
+	if (!bHasAnchor && RegionAssets.Num() > 0)
+	{
+		FBox AssetBounds(ForceInit);
+		for (const FPlacedRegionAsset& Asset : RegionAssets)
+		{
+			AssetBounds += Asset.Location;
+		}
+		Anchor = AssetBounds.GetCenter();
+		bHasAnchor = true;
+	}
+	if (!bHasAnchor)
+	{
+		return;
+	}
+
+	Modify(true);
+
+	// Mesh-Komponenten: volle Geometrie steckt in WELT-Koordinaten, ihre
+	// Komponente gehoert daher an die Actor-Position (Identitaet). Das Pin
+	// ist noetig, weil SetRegionAssets VOR dem Section-Aufbau laeuft und
+	// dort noch leere Meshes an den Asset-Schwerpunkt gezogen haette - die
+	// danach erzeugten Sections wuerden verschoben rendern. Leere Meshes
+	// dagegen an den Inhalt; nur sie tragen Punkt-Bounds.
+	for (UProceduralMeshComponent* Mesh : { RoadMesh, BuildingMesh })
+	{
+		if (!Mesh)
+		{
+			continue;
+		}
+		if (Mesh->GetNumSections() > 0)
+		{
+			Mesh->SetWorldLocation(GetActorLocation());
+		}
+		else
+		{
+			Mesh->SetWorldLocation(Anchor);
+		}
+		Mesh->MarkRenderStateDirty();
+	}
+	if (RegionAssetSpawner)
+	{
+		RegionAssetSpawner->AnchorEmptyInstanceComponents(Anchor);
 	}
 }
 
@@ -172,6 +260,12 @@ void AWiesbadenCityChunk::ApplyChunk(const FCityChunkMesh& Chunk, bool bRoadColl
 
 	BuildingMesh->SetCollisionEnabled(
 		bBuildingCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+
+	// Der Chunk-Actor spawnt am Ursprung; ohne diese Ankerung wuerden die
+	// leeren Komponenten (BuildingMesh ohne Gebaeude, ungenutzte Basis-HISMs)
+	// Punkt-Bounds bei (0,0,0) beitragen und die Actor-Bounds bis zum Ursprung
+	// spannen - World Partition koennte die Zelle nicht raeumlich trennen.
+	AnchorStreamingBounds();
 }
 
 void AWiesbadenCityChunk::SetRoadSectionMaterial(int32 SectionIndex, UMaterialInterface* Material)

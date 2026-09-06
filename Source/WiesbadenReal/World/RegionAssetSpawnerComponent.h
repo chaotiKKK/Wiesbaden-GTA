@@ -50,6 +50,23 @@ public:
 	/** Entfernt alle Instanzen. */
 	void ClearRegionAssets();
 
+	/**
+	 * Verankert LEERE Instanz-Komponenten am uebergebenen Punkt.
+	 *
+	 * Eine ISM ohne Instanzen hat Punkt-Bounds an ihrer eigenen Position
+	 * (UE 5.8, InstancedStaticMesh.cpp CalcBoundsImpl); sitzt sie am
+	 * Chunk-Actor am Ursprung, zieht sie die Actor-Bounds auf 0,0,0 und
+	 * World Partition kann die Zelle nicht raeumlich trennen. Der Aufruf
+	 * verschiebt NUR Komponenten mit 0 Instanzen an den Mittelpunkt des
+	 * Zell-Inhalts; sobald eine Komponente wieder Instanzen traegt, kehrt
+	 * sie beim naechsten Aufruf an ihre Ursprungsposition zurueck.
+	 *
+	 * Erfasst die drei festen Komponenten (Trees/Waterfront/Industrial)
+	 * UND die der Arten-Verteilung (Trees_01../Bushes_01..): SpawnVaried
+	 * erzeugt je Modell eine Komponente, auch wenn es leer bleibt.
+	 */
+	void AnchorEmptyInstanceComponents(const FVector& AnchorLocation);
+
 	// -- Kategorie-Assets -----------------------------------------------------
 
 	/**

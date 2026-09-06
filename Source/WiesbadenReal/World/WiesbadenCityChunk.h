@@ -86,6 +86,31 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Chunk")
 	int32 GetRegionAssetCount() const { return RegionAssets.Num(); }
 
+	/**
+	 * Haelt die Actor-Bounds auf dem Zell-Inhalt.
+	 *
+	 * Ohne Inhalt traegt der Chunk nur LEERE Komponenten (RoadMesh/
+	 * BuildingMesh ohne Section, ISMs ohne Instanz). Die haben Punkt-Bounds
+	 * an ihrer eigenen Position (UE 5.8: SceneComponent.cpp CalcBounds,
+	 * InstancedStaticMesh.cpp CalcBoundsImpl) - und der Chunk-Actor spawnt
+	 * am Ursprung. GetComponentsBoundingBox vereinigt diese Ursprungs-Punkte
+	 * mit der Geometrie voller Zellen: Die Actor-Bounds spannen vom Ursprung
+	 * BIS zur Zelle (gemessen 3 x 4 km), World Partition kann die Zelle nicht
+	 * raeumlich trennen und laedt sie mit jedem geladenen Chunk mit.
+	 *
+	 * Der Aufruf setzt leere Komponenten auf den Mittelpunkt des Zell-
+	 * Inhalts (Mesh-Sections oder Regions-Assets), so vorhanden. ApplyChunk
+	 * und die nachtraegliche Verteilung (SetRegionAssets) rufen ihn auf;
+	 * ist die Zelle voellig leer, bleibt es bei der Ursprungs-Ankerung.
+	 *
+	 * BlueprintCallable, damit der Re-Bake der gebackenen Karte ohne
+	 * Neubau aus einem Editor-Skript laufen kann: Karte oeffnen, je Chunk
+	 * ankeren, speichern - die WP-Zellzuordnung folgt den Bounds der
+	 * ActorDescs, die beim Speichern neu geschrieben werden.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Chunk")
+	void AnchorStreamingBounds();
+
 protected:
 	virtual void BeginPlay() override;
 
