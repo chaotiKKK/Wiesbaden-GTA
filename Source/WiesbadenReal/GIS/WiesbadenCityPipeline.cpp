@@ -481,6 +481,25 @@ namespace WiesbadenCityPipeline
 			}
 		}
 
+		if (Cancelled()) { return EBuildResult::Cancelled; }
+
+		// Pickup-Standorte (Treibstoff an Tankstellen, Gesundheit an Apotheken
+		// und Krankenhaeusern). Ebenfalls nicht-fatal: Fehlende oder leere
+		// OSM-Amenity-Daten duerfen den Stadt-Build nicht scheitern lassen.
+		if (Input.bGeneratePickupSpots && Tools.PickupSpotGenerator)
+		{
+			Report(96, EBuildStage::PickupSpots);
+			OutData.PickupSpotReport = Tools.PickupSpotGenerator->Generate(
+				OutData.OSMData, *Tools.Converter, &OutData.RoadNetwork, HeightSampler,
+				Input.PickupSpotSettings, OutData.PickupSpots);
+
+			if (!OutData.PickupSpotReport.bSuccess)
+			{
+				UE_LOG(LogWbCore, Warning, TEXT("Pickup-Spots: %s"),
+					*OutData.PickupSpotReport.ErrorMessage);
+			}
+		}
+
 		// Terrain-Qualitaetswarnung in den Status einhaengen, damit sie auch
 		// ueber GetCityStatus()/Blueprint abrufbar ist (nicht nur im Log).
 		OutData.Status = OutData.TerrainQuality.AppendToStatus(FString::Printf(TEXT("%s; %s"),

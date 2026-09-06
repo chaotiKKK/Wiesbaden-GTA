@@ -12,6 +12,7 @@
 #include "GIS/RoadNetworkGenerator.h"
 #include "GIS/TerrainGenerator.h"
 #include "GIS/WiesbadenBuildSummary.h"
+#include "GIS/WiesbadenPickupSpots.h"
 #include "GIS/WiesbadenRegion.h"
 #include "GIS/WiesbadenRegionAssets.h"
 #include "GIS/WiesbadenTrafficSimulation.h"
@@ -56,6 +57,7 @@ struct WIESBADENREAL_API FWiesbadenCityData
 	FRegionAssetReport RegionAssetReport;
 	FTerrainGenerationReport TerrainReport;
 	FRoadFurnitureReport FurnitureReport;
+	FPickupSpotReport PickupSpotReport;
 
 	/**
 	 * Ergebnis der Terrain-Qualitaetskontrolle (leer = ok): Warnt, wenn das
@@ -113,6 +115,13 @@ struct WIESBADENREAL_API FWiesbadenCityData
 
 	/** Platzierungsdaten der Strassenausstattung (Schilder, Leitpfosten, Markierungen). */
 	FRoadFurnitureLayout FurnitureLayout;
+
+	/**
+	 * Platzierungsdaten der Pickup-Standorte (Treibstoff an Tankstellen,
+	 * Gesundheit an Apotheken/Krankenhaeusern). Der Spawner am CityActor
+	 * konsumiert das Layout und bindet die Wirkung an Fahrzeug/Fuss-Pawn.
+	 */
+	FWiesbadenPickupSpotLayout PickupSpots;
 
 	// -- Zustand ---------------------------------------------------------------
 

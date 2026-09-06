@@ -6,6 +6,7 @@
 
 #include "Core/WiesbadenCityData.h"
 #include "GIS/RoadFurnitureGenerator.h"
+#include "GIS/WiesbadenPickupSpots.h"
 #include "GIS/WiesbadenRegionAssets.h"
 
 class UBuildingGenerator;
@@ -16,6 +17,7 @@ class URoadFurnitureGenerator;
 class URoadNetworkGenerator;
 class URoadTypeLibrary;
 class UTerrainGenerator;
+class UWiesbadenPickupSpotGenerator;
 class UWiesbadenRegionAssetGenerator;
 class UWiesbadenRegionGenerator;
 
@@ -47,7 +49,8 @@ namespace WiesbadenCityPipeline
 		Terrain = 6,
 		RegionAssets = 7,
 		Furniture = 8,
-		Done = 9,
+		PickupSpots = 9,
+		Done = 10,
 	};
 
 	/** Ergebnis der Datenverarbeitung. */
@@ -95,6 +98,14 @@ namespace WiesbadenCityPipeline
 		bool bGenerateFurniture = true;
 
 		/**
+		 * Pickup-Standorte aus OSM-Amenities (Tankstellen -> Treibstoff,
+		 * Apotheken/Krankenhaeuser -> Gesundheit). Zur Abschaltung setzen,
+		 * wenn ein Gameplay-Modus ohne Sammelobjekte laeuft.
+		 */
+		bool bGeneratePickupSpots = true;
+		FWiesbadenPickupSpotSettings PickupSpotSettings;
+
+		/**
 		 * Gebaeude, deren Schwerpunkt in einer Wasser-Region liegt, entfernen
 		 * (WorldClaw-Schritt 3: Objekte logisch platzieren - kein Haus im See).
 		 */
@@ -128,6 +139,7 @@ namespace WiesbadenCityPipeline
 		UWiesbadenRegionAssetGenerator* RegionAssetGenerator = nullptr;
 		UTerrainGenerator* TerrainGenerator = nullptr;
 		URoadFurnitureGenerator* FurnitureGenerator = nullptr;
+		UWiesbadenPickupSpotGenerator* PickupSpotGenerator = nullptr;
 	};
 
 	/** Meldet Fortschritt (0..100) und Stufe. */

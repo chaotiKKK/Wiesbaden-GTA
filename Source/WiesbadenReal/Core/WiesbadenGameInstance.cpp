@@ -161,6 +161,7 @@ void UWiesbadenGameInstance::CreatePipelineObjects()
 	PipelineRegionAssetGenerator = NewObject<UWiesbadenRegionAssetGenerator>(GetTransientPackage());
 	PipelineTerrainGenerator = NewObject<UTerrainGenerator>(GetTransientPackage());
 	PipelineFurnitureGenerator = NewObject<URoadFurnitureGenerator>(GetTransientPackage());
+	PipelinePickupSpotGenerator = NewObject<UWiesbadenPickupSpotGenerator>(GetTransientPackage());
 
 	// Rooten schuetzt die Objekte waehrend des Hintergrund-Builds vor GC - der
 	// Worker haelt nur rohe Zeiger (FBuildTools), die der GC nicht sieht. Die
@@ -176,6 +177,7 @@ void UWiesbadenGameInstance::CreatePipelineObjects()
 	PipelineRegionAssetGenerator->AddToRoot();
 	PipelineTerrainGenerator->AddToRoot();
 	PipelineFurnitureGenerator->AddToRoot();
+	PipelinePickupSpotGenerator->AddToRoot();
 }
 
 void UWiesbadenGameInstance::ReleasePipelineObjects()
@@ -190,6 +192,7 @@ void UWiesbadenGameInstance::ReleasePipelineObjects()
 	if (PipelineRegionAssetGenerator) { PipelineRegionAssetGenerator->RemoveFromRoot(); PipelineRegionAssetGenerator = nullptr; }
 	if (PipelineTerrainGenerator) { PipelineTerrainGenerator->RemoveFromRoot(); PipelineTerrainGenerator = nullptr; }
 	if (PipelineFurnitureGenerator) { PipelineFurnitureGenerator->RemoveFromRoot(); PipelineFurnitureGenerator = nullptr; }
+	if (PipelinePickupSpotGenerator) { PipelinePickupSpotGenerator->RemoveFromRoot(); PipelinePickupSpotGenerator = nullptr; }
 }
 
 void UWiesbadenGameInstance::LoadCityDataAsync()
@@ -264,6 +267,7 @@ void UWiesbadenGameInstance::LoadCityDataAsync()
 	Context->Input.bGenerateTerrain = bGenerateTerrain;
 	Context->Input.bGenerateFurniture = bGenerateFurniture;
 	Context->Input.bGenerateRegionAssets = bGenerateRegionAssets;
+	Context->Input.bGeneratePickupSpots = bGeneratePickupSpots;
 	Context->Input.VerticalReferenceMeters = VerticalReferenceMeters;
 	Context->Input.RoadTypeConfigPath = RoadTypeConfigPath;
 	Context->Input.RoadSettings = FRoadGenerationSettings();
@@ -272,6 +276,7 @@ void UWiesbadenGameInstance::LoadCityDataAsync()
 	Context->Input.TerrainSettings = FTerrainGenerationSettings();
 	Context->Input.FurnitureSettings = FRoadFurnitureSettings();
 	Context->Input.RegionAssetSettings = FRegionAssetSettings();
+	Context->Input.PickupSpotSettings = FWiesbadenPickupSpotSettings();
 
 	Context->Tools.Converter = PipelineConverter;
 	Context->Tools.Parser = PipelineParser;
@@ -281,6 +286,7 @@ void UWiesbadenGameInstance::LoadCityDataAsync()
 	Context->Tools.BuildingGenerator = PipelineBuildingGenerator;
 	Context->Tools.RegionGenerator = PipelineRegionGenerator;
 	Context->Tools.RegionAssetGenerator = PipelineRegionAssetGenerator;
+	Context->Tools.PickupSpotGenerator = PipelinePickupSpotGenerator;
 	Context->Tools.TerrainGenerator = PipelineTerrainGenerator;
 	Context->Tools.FurnitureGenerator = PipelineFurnitureGenerator;
 	Context->Owner = this;
@@ -335,9 +341,10 @@ void UWiesbadenGameInstance::RunCityLoadPipeline(const TSharedRef<FCityLoadConte
 				case WiesbadenCityPipeline::EBuildStage::Terrain:	Name = TEXT("Landscape generieren"); break;
 				case WiesbadenCityPipeline::EBuildStage::RegionAssets:Name = TEXT("Regionen-Assets platzieren"); break;
 				case WiesbadenCityPipeline::EBuildStage::Furniture:	Name = TEXT("Strassenausstattung platzieren"); break;
+				case WiesbadenCityPipeline::EBuildStage::PickupSpots:Name = TEXT("Pickup-Standorte platzieren"); break;
 				case WiesbadenCityPipeline::EBuildStage::Done:		Name = TEXT("Fertig"); break;
 				}
-				UE_LOG(LogWbCore, Log, TEXT("Laufzeit-Build: [%d/10] %s"), Index, Name);
+				UE_LOG(LogWbCore, Log, TEXT("Laufzeit-Build: [%d/11] %s"), Index, Name);
 			}
 		},		[Context]() { return Context->bCancel.load(); });
 

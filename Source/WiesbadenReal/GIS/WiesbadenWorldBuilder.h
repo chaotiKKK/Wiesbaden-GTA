@@ -28,6 +28,7 @@ struct FLandscapeImportLayerInfo;
 class UProceduralMeshComponent;
 class UBillboardComponent;
 class UMaterialInterface;
+class UWiesbadenPickupSpotGenerator;
 class UMaterialInstanceDynamic;
 class UTexture2D;
 class ALandscape;
@@ -275,6 +276,14 @@ public:
 	/** Parameter des Regionen-Asset-Passes. */
 	UPROPERTY(EditAnywhere, Category = "GIS|Ausgabe", meta = (EditCondition = "bGenerateRegionAssets"))
 	FRegionAssetSettings RegionAssetSettings;
+
+	/** Pickup-Standorte (Treibstoff/Gesundheit an OSM-Amenities) erzeugen. */
+	UPROPERTY(EditAnywhere, Category = "GIS|Ausgabe")
+	bool bGeneratePickupSpots = true;
+
+	/** Parameter des Pickup-Spot-Passes. */
+	UPROPERTY(EditAnywhere, Category = "GIS|Ausgabe", meta = (EditCondition = "bGeneratePickupSpots"))
+	FWiesbadenPickupSpotSettings PickupSpotSettings;
 
 	/**
 	 * Kollision fuer die FAHRBAHN-Meshes.
@@ -815,6 +824,10 @@ public:
 
 	UPROPERTY(Transient)
 	UTerrainGenerator* PipelineTerrainGenerator = nullptr;
+
+	/** Pipeline-Objekt fuer den Pickup-Spot-Pass (Treibstoff/Gesundheit). */
+	UPROPERTY(Transient)
+	UWiesbadenPickupSpotGenerator* PipelinePickupSpotGenerator = nullptr;
 
 	UPROPERTY(Transient)
 	URoadFurnitureGenerator* PipelineFurnitureGenerator = nullptr;

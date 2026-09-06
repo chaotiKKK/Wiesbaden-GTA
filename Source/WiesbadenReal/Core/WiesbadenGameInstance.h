@@ -23,6 +23,7 @@ class UOSMDataParser;
 class URoadNetworkGenerator;
 class URoadTypeLibrary;
 class UTerrainGenerator;
+class UWiesbadenPickupSpotGenerator;
 class URoadFurnitureGenerator;
 
 /**
@@ -90,6 +91,10 @@ public:
 	/** Regionen-abhaengige Assets (Baeume, Ufer, Industrie) erzeugen. */
 	UPROPERTY(EditAnywhere, Config, Category = "Wiesbaden|Ausgabe")
 	bool bGenerateRegionAssets = true;
+
+	/** Pickup-Standorte (Treibstoff/Gesundheit an OSM-Amenities) erzeugen. */
+	UPROPERTY(EditAnywhere, Config, Category = "Wiesbaden|Ausgabe")
+	bool bGeneratePickupSpots = true;
 
 	/**
 	 * Stadt zur Laufzeit aus OSM/DEM erzeugen.
@@ -292,6 +297,10 @@ private:
 
 	UPROPERTY(Transient)
 	URoadFurnitureGenerator* PipelineFurnitureGenerator = nullptr;
+
+	/** Pipeline-Objekt fuer den Pickup-Spot-Pass (Treibstoff/Gesundheit). */
+	UPROPERTY(Transient)
+	UWiesbadenPickupSpotGenerator* PipelinePickupSpotGenerator = nullptr;
 
 	/** Die Stadt-Daten dieser Session (bleiben ueber Levelwechsel erhalten). */
 	TSharedPtr<FWiesbadenCityData> CityData;

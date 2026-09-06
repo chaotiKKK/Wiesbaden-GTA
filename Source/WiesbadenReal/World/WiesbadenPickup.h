@@ -73,6 +73,9 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Wiesbaden|Pickup")
 	FOnWiesbadenPickupCollected OnCollected;
 
+	/** Sichtbares Mesh - fuer Spawner, die Aussehen/Farbe setzen wollen. */
+	UStaticMeshComponent* GetStaticMeshComponent() const { return Mesh; }
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;

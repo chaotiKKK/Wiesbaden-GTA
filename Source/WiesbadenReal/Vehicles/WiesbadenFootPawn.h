@@ -47,6 +47,37 @@ public:
 	 */
 	void SetRiding(bool bInRiding) { bRiding = bInRiding; }
 
+	// -- Gesundheit ---------------------------------------------------------
+	/**
+	 * Gesundheit der Figur in Punkten.
+	 *
+	 * Bewusst hier und nicht in einem allgemeinen Health-Component: das
+	 * Projekt hat keine Treffer-Physik gegen den Spieler - die Quelle fuer
+	 * Schaden/Heilung sind heute ausschliesslich die Pickups. Sobald echte
+	 * Gesundheitsmechanik dazukommt, gehoert das in eine Komponente.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Wiesbaden|Gesundheit", meta = (ClampMin = "1.0"))
+	float MaxHealthPoints = 100.0f;
+
+	/** Aktueller Gesundheitszustand in Punkten. */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Gesundheit")
+	float HealthPoints = 100.0f;
+
+	/**
+	 * Heilt die Figur.
+	 * @return false, wenn bereits volle Gesundheit bestand (das Pickup bleibt dann liegen).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Gesundheit")
+	bool Heal(float Points)
+	{
+		if (HealthPoints >= MaxHealthPoints - 0.01f)
+		{
+			return false;
+		}
+		HealthPoints = FMath::Min(HealthPoints + FMath::Max(Points, 0.0f), MaxHealthPoints);
+		return true;
+	}
+
 	/** Gehgeschwindigkeit in km/h. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fuss", meta = (ClampMin = "1.0"))
 	float WalkSpeedKmh = 6.0f;
