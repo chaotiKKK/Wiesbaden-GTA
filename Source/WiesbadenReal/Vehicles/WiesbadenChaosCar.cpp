@@ -255,6 +255,44 @@ void AWiesbadenChaosCar::BeginPlay()
 			TEXT("Chaos-Fahrzeug: keine Fahrzeugkomponente - es wird stehen bleiben."));
 	}
 
+	// Spawn-Hoehe korrigieren - die WURZEL des "faehrt nicht"-Fehlers.
+	//
+	// Die Platzsuche im GameMode traced die Starthoehe, BEVOR die Fahrbahn-
+	// Kollision der Zelle gestreamt ist: der Strahl faellt durch die kommende
+	// Strasse und trifft das ~1,5 m tiefere Gelaende. Der Wagen spawnt damit UNTER
+	// der Fahrbahn (gemessen: Ursprung 154 cm unter Grund). Die Radknochen liegen
+	// 34,3 cm ueber dem Ursprung, also weit unter dem Asphalt - die Aufhaengung
+	// findet nach UNTEN keinen Boden ("alle vier Raeder Luft"), der Motor dreht
+	// lastlos gegen den Begrenzer, und der Rumpf-Koerper wird aus dem Boden
+	// geschleudert (das Springen). Der kinematische Kaefer merkt davon nichts
+	// (SetActorLocation ueber alles hinweg); erst die echte Physik legt es offen.
+	//
+	// Hier, im BeginPlay, ist die Zelle geladen (der Bodenstrahl trifft die
+	// Fahrbahn). Den Wagen auf die Fahrbahn setzen, dann tragen die Raeder.
+	if (UWorld* W = GetWorld())
+	{
+		const FVector Origin = GetActorLocation();
+		FCollisionQueryParams TraceParams(SCENE_QUERY_STAT(WbChaosSpawnZ), false);
+		TraceParams.AddIgnoredActor(this);
+		FHitResult Hit;
+		if (W->LineTraceSingleByChannel(Hit, Origin + FVector(0, 0, 500),
+				Origin - FVector(0, 0, 3000), ECC_Visibility, TraceParams))
+		{
+			// Ursprung = Radunterkante (Radknochen 34,3 cm hoch, Radius 34,3);
+			// knapp ueber die Fahrbahn setzen, damit die Raeder auffallen und tragen.
+			const double TargetZ = Hit.Location.Z + 20.0;
+			const double Correction = TargetZ - Origin.Z;
+			if (FMath::Abs(Correction) > 15.0)
+			{
+				SetActorLocation(FVector(Origin.X, Origin.Y, TargetZ), false, nullptr,
+					ETeleportType::TeleportPhysics);
+				UE_LOG(LogWbCore, Log,
+					TEXT("Chaos-Fahrzeug: Spawn-Hoehe um %.0f cm korrigiert (Fahrbahn Z %.1f, war %.0f cm darunter)."),
+					Correction, Hit.Location.Z, Origin.Z - Hit.Location.Z);
+			}
+		}
+	}
+
 	// Herbie-Lackierung auf das SKELETT-Mesh - dieselbe Zuordnung wie beim
 	// kinematischen Kaefer (AWiesbadenCar), nur ueber die Skelettmesh-Komponente.
 	// Ueber den KACHELNAMEN im Slot (1001-1004), nicht den Index: die Slot-
@@ -297,6 +335,8 @@ void AWiesbadenChaosCar::BeginPlay()
 void AWiesbadenChaosCar::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	TickSettleOntoRoad(DeltaSeconds);
 
 	TickSelfTest(DeltaSeconds);
 	if (bSelfTestActive)
@@ -347,6 +387,49 @@ void AWiesbadenChaosCar::ApplyExternalControl()
 	if (ExternalControl.bReverse)
 	{
 		Movement->SetTargetGear(-1, /*bImmediate=*/true);
+	}
+}
+
+void AWiesbadenChaosCar::TickSettleOntoRoad(float DeltaSeconds)
+{
+	// Nur die ersten Sekunden aktiv - danach faehrt der Wagen und darf nicht mehr
+	// versetzt werden.
+	if (SettleElapsed > 3.0f)
+	{
+		return;
+	}
+	SettleElapsed += DeltaSeconds;
+
+	UWorld* W = GetWorld();
+	if (!W)
+	{
+		return;
+	}
+
+	// Von deutlich UEBER dem Wagen nach unten tasten: der erste Treffer ist die
+	// HOECHSTE Flaeche - die Fahrbahn, sobald ihre Zelle gestreamt ist, statt des
+	// tiefer liegenden Gelaendes, auf dem der Wagen sonst im Graben neben der
+	// Strasse stehen bliebe. Liegt der Asphalt deutlich ueber dem Wagen, hebt ihn
+	// dieser Nachschlag hinauf; steht er schon oben, aendert sich nichts.
+	const FVector Loc = GetActorLocation();
+	FCollisionQueryParams TraceParams(SCENE_QUERY_STAT(WbChaosSettle), false);
+	TraceParams.AddIgnoredActor(this);
+	FHitResult Hit;
+	if (W->LineTraceSingleByChannel(Hit, Loc + FVector(0, 0, 700), Loc - FVector(0, 0, 200),
+			ECC_Visibility, TraceParams))
+	{
+		const double TargetZ = Hit.Location.Z + 25.0;
+		if (TargetZ > Loc.Z + 40.0)
+		{
+			SetActorLocation(FVector(Loc.X, Loc.Y, TargetZ), false, nullptr, ETeleportType::TeleportPhysics);
+			if (UChaosWheeledVehicleMovementComponent* Movement = GetChaosMovement())
+			{
+				Movement->SetSleeping(false);
+			}
+			UE_LOG(LogWbCore, Log,
+				TEXT("Chaos-Fahrzeug: auf spaeter geladene Fahrbahn gehoben (+%.0f cm, Fahrbahn Z %.1f)."),
+				TargetZ - Loc.Z, Hit.Location.Z);
+		}
 	}
 }
 

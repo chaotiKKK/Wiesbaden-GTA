@@ -347,18 +347,25 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	Params.Owner = this;
 
-	// STANDARD: echte Fahrzeugphysik. AWiesbadenChaosCar faehrt auf Unreals Chaos
-	// Vehicles - Reifenmodell je Rad, Getriebe, Differential, Federung. Der alte
-	// kinematische Kaefer (AWiesbadenCar, faehrt "wie auf Schienen") bleibt ueber
-	// -WbKinematicCar als Rueckfall erhalten und wird NICHT geloescht: der
-	// Verkehr-uebernehmen-Pfad (CommandeerTrafficVehicle) und einige Tests haengen
-	// weiter an ihm.
+	// STANDARD ist (vorerst wieder) der kinematische Kaefer, weil er FAEHRT.
+	//
+	// AWiesbadenChaosCar (echte Chaos-Physik: Reifenmodell, Getriebe, Federung)
+	// war kurz der Standard, ist es aber NICHT mehr: der Wagen kommt am Start nicht
+	// vom Fleck. Ursache MESSTECHNISCH belegt - nicht Reifen/Physik-Asset, sondern
+	// die SPAWN-PLATZIERUNG: die Platzsuche traced die Starthoehe, bevor die
+	// Fahrbahn-Kollision der World-Partition-Zelle gestreamt ist, trifft das
+	// ~1,5 m tiefere Gelaende und setzt den Wagen UNTER/NEBEN die Strasse. Die
+	// echte Physik bleibt dann im Graben stecken; der kinematische Kaefer merkt
+	// davon nichts (SetActorLocation ueber alles hinweg). Bis die Zelle VOR dem
+	// Einsetzen verlaesslich geladen ist (Block-Load der Spawn-Zelle), faehrt der
+	// Chaos-Wagen nur als Opt-in (-WbChaosCar); ein undrivable Standard waere
+	// schlechter als der "auf Schienen"-Kaefer.
 	//
 	// Beide Autos implementieren IWiesbadenVehicleControl - HUD-Tacho und WbDrive
 	// erreichen beide ueber dieselbe Steuernaht. Das tatsaechlich besessene Auto
 	// steht in PlayerVehicle; fahrzeug-typ-unabhaengige Pfade (Helikopter-Bezug,
 	// Wiedereinstieg, Idempotenz) nutzen diesen Zeiger.
-	const bool bUseChaosCar = !FParse::Param(FCommandLine::Get(), TEXT("WbKinematicCar"));
+	const bool bUseChaosCar = FParse::Param(FCommandLine::Get(), TEXT("WbChaosCar"));
 	if (bUseChaosCar)
 	{
 		APawn* ChaosCar = World->SpawnActor<AWiesbadenChaosCar>(
@@ -391,7 +398,7 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 			if (ChaosPC->GetPawn() == ChaosCar)
 			{
 				UE_LOG(LogWbCore, Log,
-					TEXT("Spielerfahrzeug: echte Chaos-Physik aktiv (Standard) bei (%.0f, %.0f)."),
+					TEXT("Spielerfahrzeug: echte Chaos-Physik aktiv (-WbChaosCar, Opt-in) bei (%.0f, %.0f)."),
 					SpawnLocation.X, SpawnLocation.Y);
 			}
 			else
@@ -408,7 +415,7 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 		return true;
 	}
 
-	// Rueckfall (-WbKinematicCar): der alte kinematische Kaefer.
+	// STANDARD: der kinematische Kaefer (fahrbar). Chaos-Physik via -WbChaosCar.
 	PlayerCar = World->SpawnActor<AWiesbadenCar>(
 		AWiesbadenCar::StaticClass(), SpawnLocation, SpawnRotation, Params);
 

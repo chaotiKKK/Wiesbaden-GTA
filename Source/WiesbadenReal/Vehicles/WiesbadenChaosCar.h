@@ -144,6 +144,17 @@ private:
 	 */
 	void TickSelfTest(float DeltaSeconds);
 
+	/**
+	 * Hebt den Wagen in den ersten Sekunden auf die Fahrbahn, sobald deren
+	 * Kollision gestreamt ist. Die Platzsuche/BeginPlay koennen den Wagen aufs
+	 * ~1,5 m tiefere Gelaende setzen, wenn die Fahrbahn-Zelle noch nicht geladen
+	 * ist; dieser Fenster-Nachschlag holt ihn auf den Asphalt.
+	 */
+	void TickSettleOntoRoad(float DeltaSeconds);
+
+	/** Laufzeit des Fahrbahn-Nachschlags (aktiv fuer die ersten Sekunden). */
+	float SettleElapsed = 0.0f;
+
 	/** Laufzeit der Selbstpruefung in Sekunden. */
 	float SelfTestElapsed = 0.0f;
 
