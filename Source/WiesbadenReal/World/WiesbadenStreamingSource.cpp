@@ -228,6 +228,16 @@ void AWiesbadenStreamingSource::UpdateSource(float DeltaSeconds)
 	bHasValidSource = true;
 }
 
+void AWiesbadenStreamingSource::PinSourceToLocation(const FVector& WorldLocation)
+{
+	bFollowPlayerPawn = false;
+	SetActorLocation(WorldLocation);
+	// CurrentSource SOFORT neu berechnen (GetStreamingSource liefert den Cache):
+	// ohne das laege die Quelle bis zum naechsten Tick am alten Ort und der
+	// Block-Load-Flush wuerde die falschen Zellen laden.
+	UpdateSource(0.0f);
+}
+
 float AWiesbadenStreamingSource::ComputeAdaptiveRadiusMeters(float AltitudeMeters, float GroundRadiusM,
 	float AirRadiusM, float StartAltM, float FullAltM)
 {

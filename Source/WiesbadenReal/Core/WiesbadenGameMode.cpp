@@ -18,6 +18,9 @@
 #include "Vehicles/WiesbadenFootPawn.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 #include "UI/WiesbadenVehicleHUD.h"
+#include "World/WiesbadenStreamingSource.h"
+#include "WorldPartition/WorldPartitionSubsystem.h"
+#include "Engine/World.h"
 #include "World/WiesbadenCitySubsystem.h"
 #include "World/WiesbadenNerobergbahn.h"
 #include "World/WiesbadenNerotalbahn.h"
@@ -123,6 +126,53 @@ void AWiesbadenGameMode::BeginPlay()
 	}
 }
 
+bool AWiesbadenGameMode::BlockLoadSpawnCell(UWorld* World, const FVector& Location)
+{
+	UWorldPartitionSubsystem* WorldPartition =
+		World ? World->GetSubsystem<UWorldPartitionSubsystem>() : nullptr;
+	if (!WorldPartition)
+	{
+		// Nicht partitioniert (z. B. Laufzeit-Stadtbuild) - kein Block-Load noetig.
+		return true;
+	}
+
+	// Die vorhandene Streaming-Quelle folgt sonst dem (hier noch fehlenden) Pawn
+	// und bliebe inaktiv. Fest an den Startort heften, damit WP diese Zelle laedt.
+	AWiesbadenStreamingSource* Source = nullptr;
+	for (TActorIterator<AWiesbadenStreamingSource> It(World); It; ++It)
+	{
+		Source = *It;
+		break;
+	}
+	if (Source)
+	{
+		Source->PinSourceToLocation(Location);
+	}
+
+	// Blockierend streamen, bis WP die Zellen um den Startort geladen hat. Begrenzt,
+	// damit ein haengendes Streaming den Start nicht ewig blockiert.
+	bool bComplete = false;
+	for (int32 Iter = 0; Iter < 48 && !bComplete; ++Iter)
+	{
+		World->UpdateLevelStreaming();
+		World->FlushLevelStreaming(EFlushLevelStreamingType::Full);
+		bComplete = WorldPartition->IsStreamingCompleted();
+	}
+
+	// Folge-dem-Pawn wieder einschalten: der zwischengespeicherte CurrentSource
+	// bleibt bis zum naechsten Tick am Startort (kein Tick vor dem Spawn), die
+	// Zellen bleiben also geladen; ab dann folgt die Quelle dem Fahrzeug.
+	if (Source)
+	{
+		Source->bFollowPlayerPawn = true;
+	}
+
+	UE_LOG(LogWbCore, Log,
+		TEXT("Spawn-Zelle Block-Load bei (%.0f, %.0f): Streaming %s."),
+		Location.X, Location.Y, bComplete ? TEXT("abgeschlossen") : TEXT("Zeitlimit erreicht"));
+	return bComplete;
+}
+
 bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 {
 	if (PlayerCar)
@@ -216,6 +266,17 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 		}
 		return true;
 	}
+
+	// Fahrbahn-Zelle am Startort ZUERST laden (Block-Load), DANN den Boden messen.
+	//
+	// Die Wurzel des "Chaos-Wagen faehrt nicht": die Platzsuche unten traced die
+	// Starthoehe, bevor die World-Partition-Zelle mit der Fahrbahn-Kollision
+	// gestreamt ist - der Strahl faellt durch die kommende Strasse und trifft das
+	// ~1,5 m tiefere Gelaende. Der Wagen spawnt dann unter/neben der Strasse; die
+	// echte Physik bleibt stecken (der kinematische Kaefer merkt davon nichts).
+	// Hier blockierend streamen, bis die Zelle da ist - danach trifft der Strahl
+	// den Asphalt.
+	BlockLoadSpawnCell(World, SpawnLocation);
 
 	// Startplatz pruefen: frei UND eben.
 	//

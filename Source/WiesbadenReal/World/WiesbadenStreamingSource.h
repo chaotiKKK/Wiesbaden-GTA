@@ -67,6 +67,15 @@ public:
 	virtual bool GetStreamingSource(FWorldPartitionStreamingSource& OutStreamingSource) const override;
 
 	/**
+	 * Heftet die Quelle FEST an einen Ort (Pawn-unabhaengig) und aktualisiert sie
+	 * SOFORT. Fuer den Block-Load der Spawn-Zelle im GameMode VOR dem Fahrzeug-
+	 * Einsatz: dort existiert noch kein Pawn, dem die Quelle sonst folgt, also
+	 * bliebe sie inaktiv und World Partition wuesste nichts vom Startort.
+	 * bFollowPlayerPawn wird abgeschaltet - nach dem Einsatz mit true zuruecksetzen.
+	 */
+	void PinSourceToLocation(const FVector& WorldLocation);
+
+	/**
 	 * Reine Radius-Kurve (m) aus der Hoehe ueber Grund - ohne Weltzugriff,
 	 * damit testbar. Unter Start -> GroundRadius, ueber Full -> AirRadius,
 	 * dazwischen smoothstep-geblendet. Degeneriert (Full<=Start) -> harte Stufe.

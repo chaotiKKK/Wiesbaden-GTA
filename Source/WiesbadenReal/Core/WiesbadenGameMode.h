@@ -110,6 +110,21 @@ protected:
 	bool SpawnPlayerCarAtStartAddress();
 
 	/**
+	 * Streamt VOR der Startplatz-Bodensuche die World-Partition-Zellen um den
+	 * Startort blockierend ein (Kollision der Fahrbahn), damit der Boden-Trace
+	 * die Asphalt-Kollision trifft und nicht das ~1,5 m tiefere Terrain.
+	 *
+	 * Ursache des "auf Schienen / im Boden"-Problems: Die Platzsuche tracete den
+	 * Boden, bevor die Fahrbahn-Zelle gestreamt war, und setzte das Auto aufs
+	 * Terrain darunter. Der Chaos-Kaefer sackte damit unter die Strasse und kam
+	 * nicht ueber 6 km/h. Block-Load raeumt die Rennbedingung an der Wurzel aus.
+	 *
+	 * @return true, wenn das Streaming abgeschlossen ist (oder Welt nicht
+	 *         partitioniert); false bei Zeitlimit.
+	 */
+	bool BlockLoadSpawnCell(UWorld* World, const FVector& Location);
+
+	/**
 	 * Setzt den Helikopter neben dem Startpunkt ab.
 	 *
 	 * Die Klasse AWiesbadenHelicopter war samt Rotorphysik, Audio und Tests
