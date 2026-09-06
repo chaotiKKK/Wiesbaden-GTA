@@ -2,7 +2,11 @@
 
 #include "World/WiesbadenCityChunk.h"
 
+#include "WiesbadenReal.h"
 #include "ProceduralMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "GIS/WiesbadenChunkStaticMeshBaker.h"
 #include "World/RegionAssetSpawnerComponent.h"
 
 AWiesbadenCityChunk::AWiesbadenCityChunk()
@@ -17,6 +21,15 @@ AWiesbadenCityChunk::AWiesbadenCityChunk()
 
 	BuildingMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("BuildingMesh"));
 	BuildingMesh->SetupAttachment(Root);
+
+	// Ziel der Bake-Umstellung: vorgekochte StaticMeshes, die beim Stream-in nur
+	// GELADEN werden (kein ProcMesh-Proxy-Neuaufbau, kein Kollisions-Cook). Auf der
+	// gebackenen Karte tragen sie die Geometrie; die ProcMeshes bleiben leer.
+	RoadStaticMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RoadStaticMesh"));
+	RoadStaticMesh->SetupAttachment(Root);
+
+	BuildingStaticMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BuildingStaticMesh"));
+	BuildingStaticMesh->SetupAttachment(Root);
 
 	// Kollision NEBENHER kochen, nicht im Spiel-Strang.
 	//
@@ -123,6 +136,20 @@ void AWiesbadenCityChunk::AnchorStreamingBounds()
 			break;
 		}
 	}
+	// Nach dem Bake tragen die StaticMesh-Komponenten die (welt-koordinierte)
+	// Geometrie; ihre Bounds liefern denselben Zellmittelpunkt wie die ProcMeshes.
+	if (!bHasAnchor)
+	{
+		for (const UStaticMeshComponent* SM : { RoadStaticMesh, BuildingStaticMesh })
+		{
+			if (SM && SM->GetStaticMesh())
+			{
+				Anchor = SM->CalcBounds(FTransform::Identity).Origin;
+				bHasAnchor = true;
+				break;
+			}
+		}
+	}
 	if (!bHasAnchor && RegionAssets.Num() > 0)
 	{
 		FBox AssetBounds(ForceInit);
@@ -161,6 +188,24 @@ void AWiesbadenCityChunk::AnchorStreamingBounds()
 			Mesh->SetWorldLocation(Anchor);
 		}
 		Mesh->MarkRenderStateDirty();
+	}
+	// StaticMesh-Komponenten ebenso: mit Geometrie an die Actor-Position (Welt-
+	// koordinaten), leere an den Zell-Inhalt (nur sie tragen Punkt-Bounds).
+	for (UStaticMeshComponent* SM : { RoadStaticMesh, BuildingStaticMesh })
+	{
+		if (!SM)
+		{
+			continue;
+		}
+		if (SM->GetStaticMesh())
+		{
+			SM->SetWorldLocation(GetActorLocation());
+		}
+		else
+		{
+			SM->SetWorldLocation(Anchor);
+		}
+		SM->MarkRenderStateDirty();
 	}
 	if (RegionAssetSpawner)
 	{
@@ -268,9 +313,63 @@ void AWiesbadenCityChunk::ApplyChunk(const FCityChunkMesh& Chunk, bool bRoadColl
 	AnchorStreamingBounds();
 }
 
+void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoadCollision, bool bBuildingCollision)
+{
+#if WITH_EDITOR
+	// Ein ProcMesh -> ein vorgekochtes StaticMesh (Render + Kollision serialisiert),
+	// an die StaticMesh-Komponente gehaengt; danach den ProcMesh-Puffer leeren, damit
+	// die gebackene Karte zur Laufzeit keine ProcMesh-Geometrie neu aufbauen/kochen muss.
+	auto BakeOne = [&](UProceduralMeshComponent* Src, UStaticMeshComponent* Dst,
+		const TCHAR* Kind, bool bCollision)
+	{
+		if (!Src || !Dst || Src->GetNumSections() == 0)
+		{
+			return;
+		}
+		const FString Path = FString::Printf(TEXT("/Game/Generated/Chunks/SM_%s_%d_%d"), Kind, CellX, CellY);
+		FString Err;
+		UStaticMesh* Baked = WiesbadenChunkStaticMeshBaker::BakeFromProcMesh(Src, Path, bCollision, Err);
+		if (!Baked)
+		{
+			UE_LOG(LogWbCore, Warning, TEXT("BakeToStaticMeshes %s (%d,%d): %s"), Kind, CellX, CellY, *Err);
+			return;
+		}
+		Dst->SetStaticMesh(Baked);
+		Dst->SetWorldLocation(GetActorLocation());   // Geometrie steckt in Weltkoordinaten
+		Dst->SetCollisionEnabled(bCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+		if (bCollision)
+		{
+			// Wie im ProcMesh-Pfad: die Fahrbahn blockiert Fahrzeuge, aber NICHT die
+			// Verfolgerkamera (sonst zuckt der Arm an jeder Kuppe).
+			Dst->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+		}
+		Src->ClearAllMeshSections();   // ProcMesh-Puffer leeren -> serialisiert leer
+	};
+
+	BakeOne(RoadMesh, RoadStaticMesh, TEXT("Road"), bRoadCollision);
+	BakeOne(BuildingMesh, BuildingStaticMesh, TEXT("Building"), bBuildingCollision);
+
+	bBakedToStaticMesh = true;
+
+	// Bounds neu auf den Zell-Inhalt ankern - jetzt tragen die StaticMesh-
+	// Komponenten die Geometrie, die (geleerten) ProcMeshes nur Punkt-Bounds.
+	AnchorStreamingBounds();
+#endif
+}
+
 void AWiesbadenCityChunk::SetRoadSectionMaterial(int32 SectionIndex, UMaterialInterface* Material)
 {
-	if (RoadMesh && Material)
+	if (!Material)
+	{
+		return;
+	}
+	// Nach dem Bake zielen die echten Materialien auf die StaticMesh-Slots (ein Slot
+	// je ProcMesh-Section, Reihenfolge erhalten); davor auf das ProcMesh.
+	if (bBakedToStaticMesh)
+	{
+		if (RoadStaticMesh) { RoadStaticMesh->SetMaterial(SectionIndex, Material); }
+	}
+	else if (RoadMesh)
 	{
 		RoadMesh->SetMaterial(SectionIndex, Material);
 	}
@@ -278,7 +377,15 @@ void AWiesbadenCityChunk::SetRoadSectionMaterial(int32 SectionIndex, UMaterialIn
 
 void AWiesbadenCityChunk::SetBuildingSectionMaterial(int32 SectionIndex, UMaterialInterface* Material)
 {
-	if (BuildingMesh && Material)
+	if (!Material)
+	{
+		return;
+	}
+	if (bBakedToStaticMesh)
+	{
+		if (BuildingStaticMesh) { BuildingStaticMesh->SetMaterial(SectionIndex, Material); }
+	}
+	else if (BuildingMesh)
 	{
 		BuildingMesh->SetMaterial(SectionIndex, Material);
 	}

@@ -1029,6 +1029,13 @@ void AWiesbadenWorldBuilder::SpawnCityChunks(const FRoadMeshData& RoadMesh, cons
 #endif
 		Chunk->ApplyChunk(ChunkMesh, bCreateRoadCollision, bCreateCollision);
 
+		// Chunk als vorgekochte StaticMeshes ablegen (Render + Kollision serialisiert):
+		// beim Stream-in wird nur geladen, kein ProcMesh-Render-Proxy neu aufgebaut und
+		// keine Trimesh-Kollision gekocht - genau die 736-848-ms-ProcessLoadedPackages-
+		// Aussetzer beim Fahren. Nur im Editor/Bake-Pfad wirksam; danach zielen die
+		// Material-Setter auf die StaticMesh-Slots.
+		Chunk->BakeToStaticMeshes(Cell.X, Cell.Y, bCreateRoadCollision, bCreateCollision);
+
 		// Materialien: Die Resolve-Pfade haengen an den WorldBuilder-Material-Maps
 		// (AddressFacadeMaterials/PromptFacadeMaterials ueber FacadeOverrideKey).
 		int32 SectionIndex = 0;

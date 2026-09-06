@@ -10,6 +10,7 @@
 #include "WiesbadenCityChunk.generated.h"
 
 class UProceduralMeshComponent;
+class UStaticMeshComponent;
 class URegionAssetSpawnerComponent;
 
 /**
@@ -49,6 +50,22 @@ public:
 	 * Gebaeude-Abschnitte waere unbezahlbar.
 	 */
 	void ApplyChunk(const FCityChunkMesh& Chunk, bool bRoadCollision, bool bBuildingCollision);
+
+	/**
+	 * Backt die gefuellten Road-/Building-ProcMeshes in serialisierte StaticMeshes
+	 * mit VORGEKOCHTER Kollision (WiesbadenChunkStaticMeshBaker) und haengt sie an
+	 * die StaticMesh-Komponenten; danach werden die ProcMesh-Sections geleert.
+	 *
+	 * Zweck: Beim Stream-in wird ein StaticMesh nur GELADEN - kein ProcMesh-Render-
+	 * Proxy-Neuaufbau (~40-50 ms/Chunk) und kein Kollisions-Cook (die 736-848-ms-
+	 * ProcessLoadedPackages-Aussetzer). Nur im Editor/Bake-Pfad; ausserhalb No-op.
+	 *
+	 * MVP-Grenze: Die Road-Kollision wird als EIN Complex-as-Simple-Trimesh ueber
+	 * das ganze Road-Mesh gekocht - inkl. Boeschungen, die im ProcMesh-Pfad KEINE
+	 * Kollision trugen. Das ist Laufzeit-Physik-Speicher, NICHT der Ladeaussetzer;
+	 * die feinere Kanal-Trennung ist ein Folgeschritt.
+	 */
+	void BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoadCollision, bool bBuildingCollision);
 
 	/** Setzt das Material einer Road-Section (Index wie in ApplyChunk). */
 	void SetRoadSectionMaterial(int32 SectionIndex, UMaterialInterface* Material);
@@ -142,9 +159,28 @@ private:
 	UPROPERTY()
 	TArray<uint8> RoadSectionChannels;
 
+	/**
+	 * ProcMesh-Puffer NUR fuer den Bake-Pfad (Editor): ApplyChunk fuellt sie,
+	 * BakeToStaticMeshes backt sie in die StaticMeshes und LEERT sie danach.
+	 * Auf der gebackenen Karte tragen sie zur Laufzeit keine Geometrie -> kein
+	 * Proxy-Neuaufbau, kein Kollisions-Cook beim Stream-in.
+	 */
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Chunk")
 	UProceduralMeshComponent* RoadMesh = nullptr;
 
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Chunk")
 	UProceduralMeshComponent* BuildingMesh = nullptr;
+
+	/** Gebackene, vorgekochte StaticMeshes (Render + Kollision serialisiert). Ein
+	 *  Material-Slot je ProcMesh-Section; SetRoadSectionMaterial/-Building setzen
+	 *  die echten Materialien als Komponenten-Override je Slot. */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Chunk")
+	UStaticMeshComponent* RoadStaticMesh = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Chunk")
+	UStaticMeshComponent* BuildingStaticMesh = nullptr;
+
+	/** True, sobald BakeToStaticMeshes gelaufen ist: die Material-Setter zielen
+	 *  dann auf die StaticMesh-Slots statt auf die (geleerten) ProcMeshes. */
+	bool bBakedToStaticMesh = false;
 };
