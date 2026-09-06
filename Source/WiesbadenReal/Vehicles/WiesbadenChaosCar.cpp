@@ -8,6 +8,10 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "PhysicsEngine/PhysicsAsset.h"
+#include "PhysicsEngine/BodyInstance.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "PhysicsEngine/SkeletalBodySetup.h"
+#include "PhysicsEngine/AggregateGeom.h"
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
@@ -234,6 +238,81 @@ void AWiesbadenChaosCar::BeginPlay()
 		Var->Set(1, ECVF_SetByCode);
 	}
 
+	// Gebatchte Radabtastung ABSCHALTEN - die WURZEL des "alle Raeder Luft".
+	//
+	// Chaos tastet die Fahrbahn vorgabegemaess GEBATCHT ab: erst ein
+	// OverlapMultiByChannel mit einer Box ueber alle Raeder, dann ein Strahl nur
+	// gegen die so gefundenen Komponenten (ChaosWheeledVehicleMovementComponent
+	// PerformSuspensionTraces, Pfad GVehicleDebugParams.BatchQueries). Unsere
+	// Strassen - gebacken (SM_RoadCol, CTF_UseComplexAsSimple) wie zur Laufzeit
+	// (ProceduralMesh) - haben AUSSCHLIESSLICH Trimesh-Kollision. Ein Trimesh hat
+	// kein Volumen und wird von OVERLAP-Abfragen NICHT gefunden; der gebatchte
+	// Pfad liefert damit keine Komponente, der Strahl laeuft ins Leere, alle vier
+	// Raeder melden "Luft" (mit absurd negativer Federkraft ausser Kontakt).
+	// Der DIREKTE Pfad (SweepSingleByChannel/LineTraceSingleByChannel) trifft das
+	// Trimesh dagegen - gemessen: mit BatchQueries=0 melden sofort alle vier
+	// Raeder KONTAKT, die Federn laden positiv, der Wagen faehrt an.
+	//
+	// Globale Diagnosestruktur wie DisableVehicleSleep -> nur ueber die cvar
+	// erreichbar. Betrifft alle Chaos-Fahrzeuge; der Spieler ist das einzige.
+	if (IConsoleVariable* BatchVar = IConsoleManager::Get().FindConsoleVariable(
+			TEXT("p.Vehicle.BatchQueries")))
+	{
+		BatchVar->Set(0, ECVF_SetByCode);
+	}
+
+	// GROUND TRUTH: die WAHRE Kollisionskoerper-Ausdehnung (nicht die Mesh-Bounds).
+	//
+	// Die Fahrprobe-Zeile "Kollisionskoerper ..." liest GetBodyBounds und damit
+	// die MESH-Ausdehnung, nicht die Physik-Shapes - daher der wiederkehrende
+	// Widerspruch "+25-Proxy vs -37". Hier die ECHTEN Body-Setups des
+	// Physik-Assets abfragen: je Koerper die AABB seiner AggGeom, lokal zum
+	// Knochen. So steht fest, ob der +25..+145-Proxy greift oder ein Koerper bis
+	// unter den Radaufstand (0) reicht und beim Spawn die Fahrbahn durchdringt.
+	if (const USkeletalMeshComponent* Body = GetMesh())
+	{
+		if (const UPhysicsAsset* PA = Body->GetPhysicsAsset())
+		{
+			for (const USkeletalBodySetup* BS : PA->SkeletalBodySetups)
+			{
+				if (!BS)
+				{
+					continue;
+				}
+				const FBox AABB = BS->AggGeom.CalcAABB(FTransform::Identity);
+				UE_LOG(LogWbCore, Log,
+					TEXT("Chassis-Body '%s': Z %.1f bis %.1f (lokal), %d Box/%d Sphyl/%d Convex/%d Sphere."),
+					*BS->BoneName.ToString(), AABB.Min.Z, AABB.Max.Z,
+					BS->AggGeom.BoxElems.Num(), BS->AggGeom.SphylElems.Num(),
+					BS->AggGeom.ConvexElems.Num(), BS->AggGeom.SphereElems.Num());
+			}
+		}
+
+		// TRAEGHEIT: der eigentliche Verdacht hinter dem Sofort-Durchdrehen.
+		//
+		// Der Kollisionskoerper ist ein winziger Sphyl (Z +-0,8 cm) -> die aus
+		// Masse x Form berechnete Traegheit ist um Groessenordnungen zu klein.
+		// Chaos rechnet die Reifenlast/Grip mit der Koerper-Traegheit; ist die
+		// degeneriert, bricht der Grip sofort zusammen (Sofort-Wheelspin). Hier
+		// die IST-Werte messen, bevor ueberschrieben wird. Ziel-Groessenordnung
+		// fuer 820 kg / 4,15x1,54x1,50 m (Box): ~3e6 / 1,3e7 / 1,3e7 kg*cm^2.
+		if (FBodyInstance* BI = Body->GetBodyInstance())
+		{
+			UE_LOG(LogWbCore, Log,
+				TEXT("Chassis-Traegheit IST: Masse %.1f kg, Tensor (%.0f, %.0f, %.0f) kg*cm^2."),
+				BI->GetBodyMass(), BI->GetBodyInertiaTensor().X,
+				BI->GetBodyInertiaTensor().Y, BI->GetBodyInertiaTensor().Z);
+			// HYPOTHESE WIDERLEGT: Die Traegheit ist bereits fahrzeug-gross
+			// (820 kg, ~8e6 kg*cm^2), NICHT degeneriert. Ein Test-Override auf die
+			// korrekte Fahrzeug-Box (3,16e6 / 1,33e7 / 1,34e7) nahm zwar (gemessen),
+			// stellte die Traktion aber NICHT her: die Hinterreifen brechen weiter
+			// sofort aus (Wheelspin, Spitze ~8 km/h, kein 0-50). Die Ursache liegt
+			// also NICHT in der Traegheit, sondern im Chaos-Reifen-Laengskraft-/
+			// Schlupfmodell (Grip bricht trotz gesunder Radlast zusammen). Override
+			// wieder entfernt - kein bestaetigter Fix.
+		}
+	}
+
 	// Die Zahlen einmal ins Protokoll. Ein Fahrzeug, das sich nicht bewegt,
 	// hat entweder keine Raeder (Knochennamen falsch), keine Masse oder kein
 	// Drehmoment - und welches davon, sieht man sonst nicht.
@@ -255,43 +334,19 @@ void AWiesbadenChaosCar::BeginPlay()
 			TEXT("Chaos-Fahrzeug: keine Fahrzeugkomponente - es wird stehen bleiben."));
 	}
 
-	// Spawn-Hoehe korrigieren - die WURZEL des "faehrt nicht"-Fehlers.
+	// KEINE Spawn-Hoehen-Teleportkorrektur mehr.
 	//
-	// Die Platzsuche im GameMode traced die Starthoehe, BEVOR die Fahrbahn-
-	// Kollision der Zelle gestreamt ist: der Strahl faellt durch die kommende
-	// Strasse und trifft das ~1,5 m tiefere Gelaende. Der Wagen spawnt damit UNTER
-	// der Fahrbahn (gemessen: Ursprung 154 cm unter Grund). Die Radknochen liegen
-	// 34,3 cm ueber dem Ursprung, also weit unter dem Asphalt - die Aufhaengung
-	// findet nach UNTEN keinen Boden ("alle vier Raeder Luft"), der Motor dreht
-	// lastlos gegen den Begrenzer, und der Rumpf-Koerper wird aus dem Boden
-	// geschleudert (das Springen). Der kinematische Kaefer merkt davon nichts
-	// (SetActorLocation ueber alles hinweg); erst die echte Physik legt es offen.
-	//
-	// Hier, im BeginPlay, ist die Zelle geladen (der Bodenstrahl trifft die
-	// Fahrbahn). Den Wagen auf die Fahrbahn setzen, dann tragen die Raeder.
-	if (UWorld* W = GetWorld())
-	{
-		const FVector Origin = GetActorLocation();
-		FCollisionQueryParams TraceParams(SCENE_QUERY_STAT(WbChaosSpawnZ), false);
-		TraceParams.AddIgnoredActor(this);
-		FHitResult Hit;
-		if (W->LineTraceSingleByChannel(Hit, Origin + FVector(0, 0, 500),
-				Origin - FVector(0, 0, 3000), ECC_Visibility, TraceParams))
-		{
-			// Ursprung = Radunterkante (Radknochen 34,3 cm hoch, Radius 34,3);
-			// knapp ueber die Fahrbahn setzen, damit die Raeder auffallen und tragen.
-			const double TargetZ = Hit.Location.Z + 20.0;
-			const double Correction = TargetZ - Origin.Z;
-			if (FMath::Abs(Correction) > 15.0)
-			{
-				SetActorLocation(FVector(Origin.X, Origin.Y, TargetZ), false, nullptr,
-					ETeleportType::TeleportPhysics);
-				UE_LOG(LogWbCore, Log,
-					TEXT("Chaos-Fahrzeug: Spawn-Hoehe um %.0f cm korrigiert (Fahrbahn Z %.1f, war %.0f cm darunter)."),
-					Correction, Hit.Location.Z, Origin.Z - Hit.Location.Z);
-			}
-		}
-	}
+	// Diese Korrektur (und TickSettleOntoRoad) waren Pflaster gegen das alte
+	// "faehrt nicht": Als die Radabtastung wegen des gebatchten Overlap-Pfades
+	// KEINEN Trimesh-Boden fand (siehe BatchQueries oben), stand der Wagen auf
+	// seinem Rumpf und wurde per Teleport auf die Fahrbahn gezwungen. Jetzt tastet
+	// die Aufhaengung den Boden korrekt ab und traegt den Wagen selbst; der
+	// Kollisionskoerper ist ein winziger Sphyl am Ursprung (Z +-0,8 cm, gemessen),
+	// durchdringt also nichts. Das GameMode setzt den Wagen bereits knapp ueber
+	// die Fahrbahn (Radunterkante ~5 cm ueber Grund) - die Federn setzen ihn ab.
+	// Der Teleport war sogar schaedlich: TickSettleOntoRoad tastete von 7 m UEBER
+	// dem Wagen nach unten, traf ueberhaengende Geometrie (Dach/Schild/Leitung)
+	// und riss den Wagen dorthin hoch -> ~1,9 m Katapultstart und Dauerhuepfen.
 
 	// Herbie-Lackierung auf das SKELETT-Mesh - dieselbe Zuordnung wie beim
 	// kinematischen Kaefer (AWiesbadenCar), nur ueber die Skelettmesh-Komponente.
@@ -335,8 +390,6 @@ void AWiesbadenChaosCar::BeginPlay()
 void AWiesbadenChaosCar::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-
-	TickSettleOntoRoad(DeltaSeconds);
 
 	TickSelfTest(DeltaSeconds);
 	if (bSelfTestActive)
@@ -387,49 +440,6 @@ void AWiesbadenChaosCar::ApplyExternalControl()
 	if (ExternalControl.bReverse)
 	{
 		Movement->SetTargetGear(-1, /*bImmediate=*/true);
-	}
-}
-
-void AWiesbadenChaosCar::TickSettleOntoRoad(float DeltaSeconds)
-{
-	// Nur die ersten Sekunden aktiv - danach faehrt der Wagen und darf nicht mehr
-	// versetzt werden.
-	if (SettleElapsed > 3.0f)
-	{
-		return;
-	}
-	SettleElapsed += DeltaSeconds;
-
-	UWorld* W = GetWorld();
-	if (!W)
-	{
-		return;
-	}
-
-	// Von deutlich UEBER dem Wagen nach unten tasten: der erste Treffer ist die
-	// HOECHSTE Flaeche - die Fahrbahn, sobald ihre Zelle gestreamt ist, statt des
-	// tiefer liegenden Gelaendes, auf dem der Wagen sonst im Graben neben der
-	// Strasse stehen bliebe. Liegt der Asphalt deutlich ueber dem Wagen, hebt ihn
-	// dieser Nachschlag hinauf; steht er schon oben, aendert sich nichts.
-	const FVector Loc = GetActorLocation();
-	FCollisionQueryParams TraceParams(SCENE_QUERY_STAT(WbChaosSettle), false);
-	TraceParams.AddIgnoredActor(this);
-	FHitResult Hit;
-	if (W->LineTraceSingleByChannel(Hit, Loc + FVector(0, 0, 700), Loc - FVector(0, 0, 200),
-			ECC_Visibility, TraceParams))
-	{
-		const double TargetZ = Hit.Location.Z + 25.0;
-		if (TargetZ > Loc.Z + 40.0)
-		{
-			SetActorLocation(FVector(Loc.X, Loc.Y, TargetZ), false, nullptr, ETeleportType::TeleportPhysics);
-			if (UChaosWheeledVehicleMovementComponent* Movement = GetChaosMovement())
-			{
-				Movement->SetSleeping(false);
-			}
-			UE_LOG(LogWbCore, Log,
-				TEXT("Chaos-Fahrzeug: auf spaeter geladene Fahrbahn gehoben (+%.0f cm, Fahrbahn Z %.1f)."),
-				TargetZ - Loc.Z, Hit.Location.Z);
-		}
 	}
 }
 
@@ -499,8 +509,9 @@ void AWiesbadenChaosCar::TickSelfTest(float DeltaSeconds)
 				Movement->UpdatedComponent ? *Movement->UpdatedComponent->GetName() : TEXT("KEINES"));
 		}
 		UE_LOG(LogWbCore, Log,
-			TEXT("Fahrprobe %3d s: %6.1f km/h, %5.0f 1/min, Gang %d, hoechste %.1f km/h."),
-			Second, Kmh, GetEngineRpm(), GetCurrentGear(), SelfTestTopKmh);
+			TEXT("Fahrprobe %3d s: %6.1f km/h, %5.0f 1/min, Gang %d, hoechste %.1f km/h, Gas %.2f."),
+			Second, Kmh, GetEngineRpm(), GetCurrentGear(), SelfTestTopKmh,
+			Movement->GetThrottleInput());
 
 		// Radkontakt und Lage des Fahrgestell-Koerpers.
 		//
@@ -577,6 +588,73 @@ void AWiesbadenChaosCar::TickSelfTest(float DeltaSeconds)
 					bHitDyn ? *FString::Printf(TEXT("%.0f"), WheelWorld.Z - HitDyn.Location.Z)
 							: TEXT("NICHTS"));
 			}
+
+			// ENGINE-WAHRHEIT: was die Chaos-Federung SELBST getastet hat.
+			//
+			// GetWheelState(i) liefert das ERGEBNIS der echten Aufhaengungs-
+			// Abtastung (FWheelStatus): bInContact (hat die Feder Boden gefunden?),
+			// HitLocation, die normierte Federlaenge (1,00 = voll ausgefedert =
+			// kein Kontakt) und die Federkraft (0 = keine Last). Daneben die
+			// REICHWEITE der Abtastung, rekonstruiert aus der Radgeometrie
+			// (SuspensionMaxDrop + Radius unter der Ruhelage). Damit steht schwarz
+			// auf weiss, WARUM ein Rad "Luft" meldet:
+			//   - Reichweite < eigener Dyn-Bodenabstand -> Abtastung zu kurz
+			//     (Geometrie/Ruhelage), ODER
+			//   - Reichweite > Dyn-Bodenabstand, aber KONTAKT nein -> die
+			//     Aufhaengung verfehlt TREFFBAREN Boden (Sweep-Form, async-
+			//     Physik-Pfad, Kollisions-Antwort) - dann NICHT chassisseitig
+			//     suchen.
+			FString TraceState;
+			for (int32 Index = 0; Index < Movement->Wheels.Num() && Index < Movement->GetNumWheels(); ++Index)
+			{
+				const UChaosVehicleWheel* Wheel = Movement->Wheels[Index];
+				if (!Wheel || !Body)
+				{
+					continue;
+				}
+				const FWheelStatus& WS = Movement->GetWheelState(Index);
+				const FVector WheelWorld =
+					Body->GetBoneLocation(Movement->WheelSetups[Index].BoneName);
+				const float Reach = Wheel->SuspensionMaxDrop + Wheel->WheelRadius;
+				const double HitBelow = WS.bInContact ? (WheelWorld.Z - WS.HitLocation.Z) : -1.0;
+				TraceState += FString::Printf(
+					TEXT("%d:%s Feder%.2f Kraft%.0f Treffer%.0f Reichw%.0f | "),
+					Index,
+					WS.bInContact ? TEXT("KONTAKT") : TEXT("keinKontakt"),
+					WS.NormalizedSuspensionLength,
+					WS.SpringForce,
+					HitBelow,
+					Reach);
+			}
+			UE_LOG(LogWbCore, Log, TEXT("Fahrprobe Federung (Engine): %s"), *TraceState);
+
+			// ANTRIEB: kommt Drehmoment an den Raedern an, drehen sie sich, bremst
+			// etwas? Der Motor dreht bei Vollgas lastfrei auf Maximum, aber der
+			// Wagen steht (0 km/h) - hier wird das letzte Glied getrennt:
+			//   DrM = Antriebsmoment, BrM = Bremsmoment, Dreh = Radwinkel-
+			//   geschwindigkeit (rad/s), Lenk je Rad. Antrieb/Lenkung nur hinten
+			//   bzw. vorne je nach Konfiguration.
+			//   - DrM>0 aber Dreh~0 -> Moment kommt an, Rad steht (Bremse/blockiert)
+			//   - DrM~0 -> Getriebe/Kupplung/Differential liefert nichts
+			//   - Dreh hoch, Wagen 0 -> Durchdrehen (Traktion/Reifen)
+			FString DriveState;
+			for (int32 Index = 0; Index < Movement->Wheels.Num() && Index < Movement->GetNumWheels(); ++Index)
+			{
+				const UChaosVehicleWheel* Wheel = Movement->Wheels[Index];
+				if (!Wheel)
+				{
+					continue;
+				}
+				const FWheelStatus& WS = Movement->GetWheelState(Index);
+				DriveState += FString::Printf(TEXT("%d[%s]:DrM%.0f BrM%.0f Dreh%.1f | "),
+					Index,
+					Wheel->bAffectedByEngine ? TEXT("Antrieb") : TEXT("frei"),
+					WS.DriveTorque, WS.BrakeTorque, Wheel->GetWheelAngularVelocity());
+			}
+			UE_LOG(LogWbCore, Log,
+				TEXT("Fahrprobe Antrieb: %s Gas %.2f Bremse %.2f Handbremse %s"),
+				*DriveState, Movement->GetThrottleInput(), Movement->GetBrakeInput(),
+				Movement->GetHandbrakeInput() ? TEXT("AN") : TEXT("aus"));
 
 			// Der KOLLISIONSKOERPER, nicht das Mesh.
 			//
