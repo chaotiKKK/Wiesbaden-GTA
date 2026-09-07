@@ -353,9 +353,18 @@ void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoa
 		return true;
 	};
 
-	// Fahrbahn RENDER: alle Sections (inkl. Boeschungen), OHNE gekochte Kollision,
-	// mit Nanite (sichtbares Mesh).
-	BakeInto(RoadMesh, RoadStaticMesh, TEXT("Road"), /*bCollision=*/false, /*bHidden=*/false, /*bNanite=*/true);
+	// Fahrbahn RENDER: alle Sections (inkl. Boeschungen), OHNE gekochte Kollision.
+	//
+	// Nanite HIER (noch) AUS: Die Chunk-Geometrie steckt in absoluten WELT-
+	// Koordinaten (Wiesbaden-Georeferenz, tausende Meter vom Ursprung). Nanite
+	// kodiert Positionen/Instanz-Transforms fixpunktbasiert und laeuft bei diesen
+	// Groessen ueber - der Renderer stuerzt reproduzierbar ab ("Ensure OriginX <=
+	// OriginMax ... precision loss converting matrix to GPU format", danach
+	// "IntFitsIn narrowing conversion"). Der Baker KANN Nanite (bEnableNanite,
+	// per Test belegt an lokaler Geometrie); nutzbar wird es erst, wenn die
+	// Chunk-Vertices LOKAL (relativ zum Zellmittelpunkt) gebacken und die
+	// Komponente per Transform in die Welt gesetzt wird. Bis dahin: false.
+	BakeInto(RoadMesh, RoadStaticMesh, TEXT("Road"), /*bCollision=*/false, /*bHidden=*/false, /*bNanite=*/false);
 
 	// Fahrbahn KOLLISION: nur die kollisionsfaehigen Sections (ApplyChunk setzt
 	// bEnableCollision = bRoadCollision && !Boeschung) in ein separates, unsichtbares
@@ -402,9 +411,10 @@ void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoa
 		ColProc->DestroyComponent();
 	}
 
-	// Gebaeude: wie bisher (Box-Koerper anderswo -> i.d.R. keine Trimesh-Kollision),
-	// mit Nanite (sichtbares Mesh).
-	BakeInto(BuildingMesh, BuildingStaticMesh, TEXT("Building"), bBuildingCollision, /*bHidden=*/false, /*bNanite=*/true);
+	// Gebaeude: wie bisher (Box-Koerper anderswo -> i.d.R. keine Trimesh-Kollision).
+	// Nanite AUS aus demselben Grund wie bei der Fahrbahn (Welt-Koordinaten -> Nanite-
+	// Praezisions-Absturz); erst mit lokal gebackener Geometrie aktivierbar.
+	BakeInto(BuildingMesh, BuildingStaticMesh, TEXT("Building"), bBuildingCollision, /*bHidden=*/false, /*bNanite=*/false);
 
 	// ProcMesh-Puffer erst JETZT leeren (die Kollisions-Extraktion brauchte RoadMesh).
 	RoadMesh->ClearAllMeshSections();
