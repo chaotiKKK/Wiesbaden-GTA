@@ -158,6 +158,105 @@ void UWiesbadenRegionAssetGenerator::ScatterRegion(
 	}
 }
 
+bool UWiesbadenRegionAssetGenerator::IsTreeLinedStreet(EOSMHighwayType Type)
+{
+	switch (Type)
+	{
+	case EOSMHighwayType::Primary:
+	case EOSMHighwayType::PrimaryLink:
+	case EOSMHighwayType::Secondary:
+	case EOSMHighwayType::SecondaryLink:
+	case EOSMHighwayType::Tertiary:
+	case EOSMHighwayType::TertiaryLink:
+	case EOSMHighwayType::Unclassified:
+	case EOSMHighwayType::Residential:
+	case EOSMHighwayType::LivingStreet:
+		return true;
+	default:
+		// Autobahn/Kraftfahrstrasse (+Auffahrten), Erschliessungswege,
+		// Fuss-/Radwege, Pfade, Treppen, Wirtschaftswege, None -> keine Baeume.
+		return false;
+	}
+}
+
+void UWiesbadenRegionAssetGenerator::ScatterStreetTrees(
+	const FRoadNetwork& Network, const IHeightSampler* HeightSampler,
+	const FWiesbadenRoadClearance* Clearance, const FRegionAssetSettings& Settings,
+	int32& OutSkipped, FRegionAssetLayout& OutLayout)
+{
+	const double Spacing = FMath::Max(300.0, Settings.StreetTreeSpacingCm);
+
+	int32 SegIndex = 0;
+	for (const FRoadSegment& Seg : Network.Segments)
+	{
+		++SegIndex;
+		if (!IsTreeLinedStreet(Seg.HighwayType))
+		{
+			continue;
+		}
+		// An Kreuzungen gekuerzte Mittellinie -> Baeume blockieren keine Knoten.
+		const TArray<FVector>& Line = Seg.TrimmedCenterline.Num() >= 2
+			? Seg.TrimmedCenterline : Seg.Centerline;
+		if (Line.Num() < 2)
+		{
+			continue;
+		}
+		const double LateralCm = Seg.CarriagewayWidthCm * 0.5 + Settings.StreetTreeVergeOffsetCm;
+
+		// Deterministischer Seed je Segment (stabil ueber Laeufe).
+		FRandomStream Stream(static_cast<int32>(GetTypeHash(SegIndex) ^ 0x57B0357Eu));
+
+		// Kontinuierlicher Weg entlang der Polylinie: NextAt ist die Bogenlaenge
+		// des naechsten Baums, Accum die Bogenlaenge am aktuellen Stuetzpunkt.
+		double NextAt = Spacing * 0.5;
+		double Accum = 0.0;
+		for (int32 i = 0; i + 1 < Line.Num(); ++i)
+		{
+			FVector Dir = Line[i + 1] - Line[i];
+			Dir.Z = 0.0;
+			const double SegLen = Dir.Size();
+			if (SegLen < 1.0)
+			{
+				Accum += SegLen;
+				continue;
+			}
+			Dir /= SegLen;
+			const FVector Right = FVector::CrossProduct(Dir, FVector::UpVector).GetSafeNormal();
+
+			while (NextAt <= Accum + SegLen)
+			{
+				const double LocalS = NextAt - Accum;
+				const FVector Base = Line[i] + Dir * LocalS;
+				for (int32 Side = 0; Side < 2; ++Side)
+				{
+					const FVector Off = (Side == 0 ? Right : -Right) * LateralCm;
+					const FVector2D Pt(Base.X + Off.X, Base.Y + Off.Y);
+					// Fahrbahn-Freihaltung als Sicherheitsnetz (Versatz sitzt ohnehin
+					// auf dem Gehweg/der Verge hinter dem Bordstein).
+					if (Clearance && Clearance->IsBlocked(Pt))
+					{
+						++OutSkipped;
+						continue;
+					}
+					FPlacedRegionAsset Asset;
+					Asset.Category = ERegionAssetCategory::Tree;
+					Asset.RegionName = TEXT("StreetTree");
+					Asset.Location = FVector(Pt.X, Pt.Y, 0.0);
+					if (HeightSampler && HeightSampler->HasValidData())
+					{
+						Asset.Location.Z = HeightSampler->SampleHeightCm(Pt);
+					}
+					Asset.YawDegrees = Stream.FRandRange(0.0f, 360.0f);
+					Asset.Scale = Stream.FRandRange(0.85f, 1.15f);
+					OutLayout.Assets.Add(Asset);
+				}
+				NextAt += Spacing;
+			}
+			Accum += SegLen;
+		}
+	}
+}
+
 FRegionAssetReport UWiesbadenRegionAssetGenerator::Generate(
 	const TArray<FWiesbadenRegion>& Regions,
 	const IHeightSampler* HeightSampler,
@@ -183,7 +282,37 @@ FRegionAssetReport UWiesbadenRegionAssetGenerator::GenerateClearOfRoads(
 		TEXT("Fahrbahn-Freihaltung: %d Abschnitte aus %d Segmenten."),
 		Clearance.GetSpanCount(), Network.Segments.Num());
 
-	return GenerateInternal(Regions, HeightSampler, Settings, &Clearance, OutLayout);
+	FRegionAssetReport Report = GenerateInternal(Regions, HeightSampler, Settings, &Clearance, OutLayout);
+
+	// Strassenbaeume entlang der Fahrbahnraender ANHAENGEN: macht die bebauten
+	// Strassen baumgesaeumt (Referenz: echtes Wiesbaden). Gleiche Baum-Kategorie
+	// -> gleicher Bake-/Spawn-/Stream-Pfad; nur die Positionen kommen aus dem
+	// Netz. Nach GenerateInternal (das OutLayout zuruecksetzt), damit sie an die
+	// Regions-Baeume anschliessen statt sie zu loeschen.
+	if (Settings.bPlaceStreetTrees)
+	{
+		// EIGENES, enges Freihaltenetz NUR fuer die Fahrbahn (ohne Gehweg): die
+		// Strassenbaeume gehoeren auf die Verge/den Gehweg hinter dem Bordstein.
+		// Das breite Region-Netz oben schliesst den Gehweg mit ein und wuerde die
+		// Verge-Baeume alle wegwerfen; dieses Netz blockt nur die Fahrbahn selbst
+		// (Sicherheitsnetz gegen Baeume, die an Kreuzungen ueber eine Querstrasse
+		// fielen).
+		FWiesbadenRoadClearance StreetClearance;
+		StreetClearance.Build(Network, 40.0, /*bIncludeSidewalk=*/false);
+
+		const int32 BeforeCount = OutLayout.Assets.Num();
+		int32 StreetSkipped = 0;
+		ScatterStreetTrees(Network, HeightSampler, &StreetClearance, Settings, StreetSkipped, OutLayout);
+		const int32 Added = OutLayout.Assets.Num() - BeforeCount;
+		Report.TreeCount += Added;
+		Report.AssetCount = OutLayout.Assets.Num();
+		Report.SkippedOnRoadCount += StreetSkipped;
+		UE_LOG(LogWbCore, Log,
+			TEXT("Strassenbaeume: %d entlang der Fahrbahnraender gesetzt (%d auf Fahrbahn ausgelassen)."),
+			Added, StreetSkipped);
+	}
+
+	return Report;
 }
 
 FRegionAssetReport UWiesbadenRegionAssetGenerator::GenerateInternal(

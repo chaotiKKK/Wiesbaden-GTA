@@ -203,9 +203,15 @@ bool FRegionAssetGenerateTest::RunTest(const FString& Parameters)
 		// wegfallen, und der Bericht muss das melden. Meldet er 0, arbeitet
 		// die Freihaltung nicht - sichtbar waere das erst, wenn ein Auto
 		// durch einen Stamm faehrt.
+		// Strassenbaeume hier AUS: dieser Test prueft die Region-Streuung + Fahrbahn-
+		// Freihaltung. Strassenbaeume (auf der Verge/dem Gehweg, bewusst neben der
+		// Fahrbahn) haben ihren eigenen Test und wuerden die Zaehl-Erwartungen hier
+		// verfaelschen.
+		FRegionAssetSettings ClearSettings;
+		ClearSettings.bPlaceStreetTrees = false;
 		FRegionAssetLayout ClearLayout;
 		const FRegionAssetReport ClearReport = Generator->GenerateClearOfRoads(
-			Regions, /*HeightSampler=*/nullptr, FRegionAssetSettings(), Network, ClearLayout);
+			Regions, /*HeightSampler=*/nullptr, ClearSettings, Network, ClearLayout);
 
 		TestTrue(TEXT("Mit Netz werden Punkte weggelassen"),
 			ClearReport.SkippedOnRoadCount > 0);
@@ -227,6 +233,81 @@ bool FRegionAssetGenerateTest::RunTest(const FString& Parameters)
 		// veraendert haben.
 		TestEqual(TEXT("Ohne Netz nichts weggelassen"), Report.SkippedOnRoadCount, 0);
 	}
+
+	return true;
+}
+
+// Strassenbaeume entlang der Fahrbahnraender: richtige Seite/Abstand/Versatz,
+// Typ-Filter (keine Autobahn), nicht auf der Fahrbahn.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRegionAssetStreetTreeTest,
+	"WiesbadenReal.GIS.RegionAssets.StreetTrees",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRegionAssetStreetTreeTest::RunTest(const FString& Parameters)
+{
+	// Typ-Filter: Wohn-/Durchgangsstrassen ja, Autobahn/Erschliessung nein.
+	TestTrue(TEXT("Residential -> baumgesaeumt"),
+		UWiesbadenRegionAssetGenerator::IsTreeLinedStreet(EOSMHighwayType::Residential));
+	TestTrue(TEXT("Tertiary -> baumgesaeumt"),
+		UWiesbadenRegionAssetGenerator::IsTreeLinedStreet(EOSMHighwayType::Tertiary));
+	TestFalse(TEXT("Motorway -> keine Baeume"),
+		UWiesbadenRegionAssetGenerator::IsTreeLinedStreet(EOSMHighwayType::Motorway));
+	TestFalse(TEXT("Service -> keine Baeume"),
+		UWiesbadenRegionAssetGenerator::IsTreeLinedStreet(EOSMHighwayType::Service));
+
+	auto MakeSeg = [](EOSMHighwayType Type, const TArray<FVector>& Line)
+	{
+		FRoadSegment Seg;
+		Seg.HighwayType = Type;
+		Seg.CarriagewayWidthCm = 650.0;
+		Seg.SidewalkWidthCm = 250.0;
+		Seg.Centerline = Line;
+		Seg.TrimmedCenterline = Line;
+		return Seg;
+	};
+
+	// Eine gerade Wohnstrasse entlang X; eine Autobahn weit abseits (Y=100000).
+	FRoadNetwork Network;
+	Network.Segments.Add(MakeSeg(EOSMHighwayType::Residential,
+		{ FVector(0.0, 0.0, 0.0), FVector(30000.0, 0.0, 0.0) }));
+	Network.Segments.Add(MakeSeg(EOSMHighwayType::Motorway,
+		{ FVector(0.0, 100000.0, 0.0), FVector(30000.0, 100000.0, 0.0) }));
+
+	FRegionAssetSettings Settings;         // nur Strassenbaeume (leere Regionen)
+	Settings.bPlaceStreetTrees = true;
+	Settings.StreetTreeSpacingCm = 1200.0;
+	Settings.StreetTreeVergeOffsetCm = 150.0;
+
+	UWiesbadenRegionAssetGenerator* Gen = NewObject<UWiesbadenRegionAssetGenerator>();
+	FRegionAssetLayout Layout;
+	const TArray<FWiesbadenRegion> NoRegions;
+	Gen->GenerateClearOfRoads(NoRegions, /*HeightSampler=*/nullptr, Settings, Network, Layout);
+
+	if (!TestTrue(TEXT("Strassenbaeume gesetzt"), Layout.Assets.Num() > 0))
+	{
+		return false;
+	}
+
+	const double ExpectedLateral = 650.0 * 0.5 + 150.0;   // 475 cm
+	const double HalfCarriageway = 650.0 * 0.5;           // 325 cm
+	int32 LeftCount = 0, RightCount = 0, WrongLateral = 0, OnMotorway = 0, OnCarriageway = 0;
+	for (const FPlacedRegionAsset& A : Layout.Assets)
+	{
+		TestTrue(TEXT("Kategorie Baum"), A.Category == ERegionAssetCategory::Tree);
+		if (A.Location.Y > 50000.0) { ++OnMotorway; continue; }
+		if (A.Location.Y > 0.0) { ++LeftCount; } else { ++RightCount; }
+		if (FMath::Abs(FMath::Abs(A.Location.Y) - ExpectedLateral) > 1.0) { ++WrongLateral; }
+		if (FMath::Abs(A.Location.Y) < HalfCarriageway) { ++OnCarriageway; }
+		TestTrue(TEXT("innerhalb der Strassenlaenge"),
+			A.Location.X >= -1.0 && A.Location.X <= 30001.0);
+	}
+	TestEqual(TEXT("keiner an der Autobahn"), OnMotorway, 0);
+	TestEqual(TEXT("keiner auf der Fahrbahn"), OnCarriageway, 0);
+	TestEqual(TEXT("alle beim Verge-Versatz (475 cm)"), WrongLateral, 0);
+	TestTrue(TEXT("beide Seiten bepflanzt"), LeftCount > 0 && RightCount > 0);
+	// 30 m / 12 m ~ 25 Baeume je Seite (Rand-Toleranz).
+	TestTrue(TEXT("plausibler Abstand je Seite"),
+		LeftCount >= 20 && LeftCount <= 28 && RightCount >= 20 && RightCount <= 28);
 
 	return true;
 }

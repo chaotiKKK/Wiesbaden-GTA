@@ -106,6 +106,26 @@ struct WIESBADENREAL_API FRegionAssetSettings
 	/** Rasterabstand der Industrie-Objekte (cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets", meta = (ClampMin = "100.0"))
 	double IndustrialSpacingCm = 1200.0;
+
+	/**
+	 * Strassenbaeume ENTLANG der Fahrbahnraender pflanzen.
+	 *
+	 * Region-Baeume stehen nur in Gruenflaechen; bebaute Strassen blieben kahl.
+	 * Die Referenz (echtes Wiesbaden) ist an fast jeder Wohnstrasse baumgesaeumt.
+	 * Diese Baeume laufen ueber dieselbe Baum-Kategorie (gleicher Bake-/Spawn-/
+	 * Stream-Pfad), nur die Positionen kommen aus dem Strassennetz.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets")
+	bool bPlaceStreetTrees = true;
+
+	/** Abstand der Strassenbaeume entlang jeder Fahrbahnseite (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets", meta = (ClampMin = "300.0"))
+	double StreetTreeSpacingCm = 1200.0;
+
+	/** Seitlicher Versatz der Strassenbaeume HINTER die Bordsteinkante (cm),
+	 *  zusaetzlich zur halben Fahrbahnbreite. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets", meta = (ClampMin = "0.0"))
+	double StreetTreeVergeOffsetCm = 150.0;
 };
 
 /** Diagnose des Regionen-Asset-Passes. */
@@ -201,7 +221,26 @@ public:
 	/** Deterministischer String-Hash (FNV-1a) - Seed fuer die Streuung. */
 	static uint32 HashString(const FString& Text);
 
+	/**
+	 * True, wenn eine Strasse dieses Typs Strassenbaeume bekommt.
+	 *
+	 * Wohn-/Durchgangsstrassen (Residential..Primary) werden baumgesaeumt;
+	 * Autobahn/Kraftfahrstrasse, Erschliessungswege und Fuss-/Radwege NICHT.
+	 * Static, damit der Filter ohne Welt testbar ist.
+	 */
+	static bool IsTreeLinedStreet(EOSMHighwayType Type);
+
 private:
+	/**
+	 * Pflanzt Strassenbaeume entlang beider Fahrbahnraender jeder geeigneten
+	 * Strasse. Laeuft die (an Kreuzungen gekuerzte) TrimmedCenterline in
+	 * StreetTreeSpacingCm-Schritten ab, setzt je Seite einen Baum bei halber
+	 * Fahrbahnbreite + StreetTreeVergeOffsetCm. Fahrbahn-Freihaltung als Netz.
+	 */
+	void ScatterStreetTrees(const FRoadNetwork& Network, const IHeightSampler* HeightSampler,
+		const FWiesbadenRoadClearance* Clearance, const FRegionAssetSettings& Settings,
+		int32& OutSkipped, FRegionAssetLayout& OutLayout);
+
 	/**
 	 * Platziert eine Kategorie in einer Region (Gitter + Jitter im Polygon).
 	 *
