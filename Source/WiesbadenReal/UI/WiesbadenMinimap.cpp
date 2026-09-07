@@ -71,6 +71,26 @@ FWorldMapProjection FWiesbadenMinimap::MakeWorldMapProjection(
 	return Proj;
 }
 
+void FWiesbadenMinimap::ComputeWorldMapUV(
+	const FWorldMapProjection& BaseFit, const FVector2D& BaseSizePx,
+	const FWorldMapProjection& ViewProj, const FVector2D& ScreenSizePx,
+	FVector2D& OutUVMin, FVector2D& OutUVMax)
+{
+	// Weltfenster der aktuellen Sicht: die Bildschirmecken zurueck in Weltkoordinaten.
+	// Oben-links (0,0) -> Welt mit kleinstem X / groesstem Y (Norden oben).
+	const FVector2D WorldTL = ViewProj.Unproject(FVector2D(0.0f, 0.0f));
+	const FVector2D WorldBR = ViewProj.Unproject(ScreenSizePx);
+
+	// Dasselbe Weltfenster in Basis-Textur-Pixel projizieren (dieselbe Nord-oben-
+	// Abbildung) und auf 0..1 normieren.
+	const FVector2D BaseTL = BaseFit.Project(FVector(WorldTL.X, WorldTL.Y, 0.0));
+	const FVector2D BaseBR = BaseFit.Project(FVector(WorldBR.X, WorldBR.Y, 0.0));
+	const float InvW = (BaseSizePx.X > 0.0f) ? 1.0f / static_cast<float>(BaseSizePx.X) : 0.0f;
+	const float InvH = (BaseSizePx.Y > 0.0f) ? 1.0f / static_cast<float>(BaseSizePx.Y) : 0.0f;
+	OutUVMin = FVector2D(BaseTL.X * InvW, BaseTL.Y * InvH);
+	OutUVMax = FVector2D(BaseBR.X * InvW, BaseBR.Y * InvH);
+}
+
 FWorldMapProjection FWiesbadenMinimap::MakeZoomedProjection(
 	const FWorldMapProjection& Fit, float ZoomFactor, const FVector2D& DesiredCentreWorld)
 {

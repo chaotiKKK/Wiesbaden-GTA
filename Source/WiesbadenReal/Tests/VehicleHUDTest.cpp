@@ -437,6 +437,46 @@ bool FMinimapWaypointTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// UV-Fenster der Basiskarte: das Herzstueck des "einmal backen, dann per Textur-
+// Transform zoomen/pannen"-Umbaus. Datenrein pruefbar (kein Canvas/RT noetig).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldMapUVTest,
+	"WiesbadenReal.World.WorldMapUV",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FWorldMapUVTest::RunTest(const FString& Parameters)
+{
+	// Gleiches Seitenverhaeltnis (2:1) fuer Netz, Bildschirm und Basis -> verzerrungsfrei.
+	const FVector2D WMin(0.0, 0.0), WMax(2000.0, 1000.0);
+	const FVector2D Screen(1600.0, 800.0);
+	const FVector2D Base(4000.0, 2000.0);
+	const float M = FWiesbadenMinimap::WorldMapMarginFrac;
+	const FWorldMapProjection BaseFit =
+		FWiesbadenMinimap::MakeWorldMapProjection(WMin, WMax, Base * 0.5, Base, M);
+	const FWorldMapProjection ScreenFit =
+		FWiesbadenMinimap::MakeWorldMapProjection(WMin, WMax, Screen * 0.5, Screen, M);
+	const FVector2D NetCentre = (WMin + WMax) * 0.5;
+
+	FVector2D UVMin, UVMax;
+
+	// Zoom 1, Netzmitte: das Sichtfenster zeigt die ganze Basis -> UV ~ [0,1].
+	const FWorldMapProjection V1 = FWiesbadenMinimap::MakeZoomedProjection(ScreenFit, 1.0f, NetCentre);
+	FWiesbadenMinimap::ComputeWorldMapUV(BaseFit, Base, V1, Screen, UVMin, UVMax);
+	TestTrue(TEXT("Zoom1 UVmin ~0"), UVMin.X < 0.02 && UVMin.Y < 0.02);
+	TestTrue(TEXT("Zoom1 UVmax ~1"), UVMax.X > 0.98 && UVMax.Y > 0.98);
+
+	// Zoom 2, Netzmitte: halb so grosses, zentriertes Fenster -> UV-Breite ~0.5, Mitte ~0.5.
+	const FWorldMapProjection V2 = FWiesbadenMinimap::MakeZoomedProjection(ScreenFit, 2.0f, NetCentre);
+	FWiesbadenMinimap::ComputeWorldMapUV(BaseFit, Base, V2, Screen, UVMin, UVMax);
+	TestTrue(TEXT("Zoom2 UV-Breite ~0.5"), FMath::IsNearlyEqual(UVMax.X - UVMin.X, 0.5, 0.03));
+	TestTrue(TEXT("Zoom2 UV-Hoehe ~0.5"), FMath::IsNearlyEqual(UVMax.Y - UVMin.Y, 0.5, 0.03));
+	TestTrue(TEXT("Zoom2 zentriert X"), FMath::IsNearlyEqual((UVMin.X + UVMax.X) * 0.5, 0.5, 0.02));
+	TestTrue(TEXT("Zoom2 zentriert Y"), FMath::IsNearlyEqual((UVMin.Y + UVMax.Y) * 0.5, 0.5, 0.02));
+
+	// UVmin liegt oben-links, UVmax unten-rechts (monoton steigend).
+	TestTrue(TEXT("UVmin < UVmax"), UVMin.X < UVMax.X && UVMin.Y < UVMax.Y);
+	return true;
+}
+
 // Karten-Distanzformat: unter 1 km in Metern, darueber in Kilometern.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMapDistanceFormatTest,
 	"WiesbadenReal.Vehicles.HUD.MapDistance",

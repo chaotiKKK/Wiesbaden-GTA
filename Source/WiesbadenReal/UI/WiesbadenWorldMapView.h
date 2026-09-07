@@ -15,17 +15,18 @@ struct FRoadNetwork;
 struct FGeneratedBuilding;
 
 /**
- * Render-Ziel-Ansicht der Vollbild-Weltkarte.
+ * Basis-Karten-Textur der Vollbild-Weltkarte.
  *
- * Zieht die STATISCHE Ebene (Strassen + Gebaeude) EINMAL in ein
- * CanvasRenderTarget statt sie je Bild aus ~16.000 Linien neu zu zeichnen. Die
- * HUD blittet danach nur das fertige Texture-Quad und zeichnet die DYNAMISCHEN
- * Overlays (Spielerpfeil, Text) je Bild live darueber.
+ * Backt das GANZE Strassennetz + die Gebaeude EINMAL hochaufloesend (ueber-
+ * abgetastet) in ein CanvasRenderTarget. Zoom und Pan macht danach die HUD
+ * allein durch ein TEXTUR-TRANSFORM (sie blittet ein UV-Teilrechteck dieser
+ * Textur auf den Bildschirm) - es wird NICHTS mehr je Bild neu gerastert. Das
+ * beseitigt das Ruckeln, das entstand, weil frueher bei jedem Zoom/Pan bis zu
+ * 16.000 Linien neu gezeichnet wurden.
  *
- * Die datenreine Geometrie/Projektion bleibt in FWiesbadenMinimap (dort getestet);
- * dieses UObject ist die nicht-unit-testbare Render-Orchestrierung. Der eine
- * datenreine Teil hier - "muss neu gerendert werden?" - ist als statische
- * Funktion herausgezogen und getestet (Test World.WorldMapView.NeedsRerender).
+ * Strassen werden als gefuellte, an den Knoten verrundete Baender gebacken, damit
+ * die Zuege nahtlos statt zerstueckelt wirken. Beschriftungen zeichnet die HUD
+ * LIVE im Bildschirmraum darueber (immer scharf, unabhaengig vom Zoom).
  */
 UCLASS()
 class WIESBADENREAL_API UWiesbadenWorldMapView : public UObject
@@ -34,32 +35,26 @@ class WIESBADENREAL_API UWiesbadenWorldMapView : public UObject
 
 public:
 	/**
-	 * Stellt sicher, dass Strassen+Gebaeude fuer die aktuelle Sicht im
-	 * RenderTarget stehen und gibt das Texture zum Blitten zurueck - oder nullptr,
-	 * wenn nichts gerendert werden konnte.
-	 *
-	 * Neu gerendert wird bei Netz-/Groessenwechsel ODER bei Sichtaenderung (Zoom
-	 * bzw. verschobenes Blickzentrum). Solange die Sicht steht, wird nur das
-	 * fertige Texture weiterverwendet.
-	 *
-	 * @param ZoomFactor        1 = ganzes Netz eingepasst; groesser = naeher heran.
-	 * @param DesiredCentreWorld Blick-Mittelpunkt in Welt-cm (wird auf die
-	 *                           Netzgrenzen geklemmt).
-	 * @param bCentreValid      false auf dem ersten Bild nach dem Oeffnen: dann
-	 *                           wird auf die Netzmitte zentriert (GetProjection()
-	 *                           liefert das geklemmte Zentrum zum Zuruecklesen).
+	 * Stellt sicher, dass das GANZE Netz einmal in die Basis-Textur gebacken ist,
+	 * und gibt sie zum Blitten zurueck (oder nullptr). Neu gebacken wird NUR bei
+	 * Netz-Wechsel oder geaenderter Basisgroesse - nicht bei Zoom/Pan.
 	 */
-	UTextureRenderTarget2D* EnsureRendered(
+	UTextureRenderTarget2D* EnsureBaseMap(
 		UWorld* World, const FRoadNetwork& Network,
-		const TArray<FGeneratedBuilding>* Buildings, const FVector2D& ScreenSize,
-		float ZoomFactor, const FVector2D& DesiredCentreWorld, bool bCentreValid);
+		const TArray<FGeneratedBuilding>* Buildings, const FVector2D& ScreenSize);
 
-	/** Projektion der zuletzt gerenderten Sicht (fuer die Overlays der HUD). */
-	const FWorldMapProjection& GetProjection() const { return Projection; }
+	/** Einpass-Projektion, mit der die Basis-Textur gebacken wurde (Basis-Pixel). */
+	const FWorldMapProjection& GetBaseFit() const { return BaseFit; }
+
+	/** Pixelgroesse der Basis-Textur. */
+	FVector2D GetBaseSize() const { return FVector2D(BaseSizeX, BaseSizeY); }
+
+	/** True, wenn eine gueltige Basiskarte vorliegt. */
+	bool HasBase() const { return RenderTarget != nullptr && BaseFit.IsValid(); }
 
 	/**
-	 * Datenrein + testbar: muss das RenderTarget neu bespielt werden? True, wenn
-	 * noch kein Ziel existiert, das Netz gewechselt hat oder sich die Bildgroesse
+	 * Datenrein + testbar: muss die Basiskarte neu gebacken werden? True, wenn
+	 * noch keine existiert, das Netz gewechselt hat oder sich die Bildgroesse
 	 * geaendert hat.
 	 */
 	static bool NeedsRerender(
@@ -71,18 +66,14 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCanvasRenderTarget2D> RenderTarget = nullptr;
 
-	/** Projektion der zuletzt gerenderten Sicht. */
-	FWorldMapProjection Projection;
-
-	/** Voll-Einpassung (Netzmitte + Fit-Massstab); nur bei Netz-/Groessenwechsel neu
-	 *  berechnet - ComputeNetworkBoundsXY laeuft ueber alle Mittellinienpunkte. */
+	/** Einpassung, mit der gebacken wurde (Netzmitte + Fit-Massstab in Basis-Pixeln). */
 	FWorldMapProjection BaseFit;
 
-	/** Netz + Bildgroesse, fuer die zuletzt gerendert wurde (Neu-Render-Erkennung). */
+	/** Pixelgroesse der Basis-Textur. */
+	int32 BaseSizeX = 0;
+	int32 BaseSizeY = 0;
+
+	/** Netz + Bildgroesse, fuer die zuletzt gebacken wurde (Neu-Back-Erkennung). */
 	const FRoadNetwork* CachedNetwork = nullptr;
 	FVector2D CachedSize = FVector2D::ZeroVector;
-
-	/** Zoom + Blickzentrum der zuletzt gerenderten Sicht (Sichtwechsel-Erkennung). */
-	float CachedZoom = -1.0f;
-	FVector2D CachedCentre = FVector2D(FLT_MAX, FLT_MAX);
 };

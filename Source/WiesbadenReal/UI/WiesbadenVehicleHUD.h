@@ -184,6 +184,11 @@ private:
 	 */
 	void DrawWorldMap(float Width, float Height);
 
+	/** Strassennamen der Hauptstrassen live im Bildschirmraum ueber die Weltkarte
+	 *  zeichnen (immer scharf, entzerrt, ein Label je Name, kollisionsarm). */
+	void DrawWorldMapLabels(const struct FRoadNetwork& Network,
+		const struct FWorldMapProjection& Proj, float Width, float Height);
+
 	/** Strassenname, auf der sich der Spieler befindet - Balken oben mittig. */
 	void DrawStreetName(float CenterX, float Y);
 

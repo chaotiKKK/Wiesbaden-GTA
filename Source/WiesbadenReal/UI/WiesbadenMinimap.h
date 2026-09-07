@@ -156,6 +156,24 @@ struct WIESBADENREAL_API FWiesbadenMinimap
 	static constexpr float WorldMapMinZoom = 1.0f;
 	static constexpr float WorldMapMaxZoom = 8.0f;
 
+	/** Gemeinsamer Randanteil fuer Basis- UND Bildschirm-Einpassung der Weltkarte:
+	 *  beide muessen denselben Rand nutzen, damit Zoom 1 exakt das ganze Netz zeigt. */
+	static constexpr float WorldMapMarginFrac = 0.92f;
+
+	/**
+	 * UV-Fenster (0..1) der Basiskarte, das die aktuelle Sicht (ViewProj) zeigt.
+	 *
+	 * Die Basiskarte wurde EINMAL mit BaseFit in eine Textur der Groesse
+	 * BaseSizePx gerendert; ViewProj ist die aktuelle Bildschirm-Sicht (Zoom/Pan).
+	 * Damit laesst sich die Karte per Textur-Transform (ein Quad) zoomen/schwenken,
+	 * ohne die ~125.000 Segmente je Bild neu zu rastern. Datenrein/testbar
+	 * (Test World.WorldMapUV).
+	 */
+	static void ComputeWorldMapUV(
+		const FWorldMapProjection& BaseFit, const FVector2D& BaseSizePx,
+		const FWorldMapProjection& ViewProj, const FVector2D& ScreenSizePx,
+		FVector2D& OutUVMin, FVector2D& OutUVMax);
+
 	/**
 	 * Zoomt/verschiebt eine Voll-Einpass-Projektion (Fit) auf ZoomFactor
 	 * (geklemmt auf [WorldMapMinZoom..WorldMapMaxZoom]) um DesiredCentreWorld.

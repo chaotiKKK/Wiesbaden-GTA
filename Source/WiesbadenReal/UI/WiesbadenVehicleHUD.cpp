@@ -633,6 +633,14 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	if (FParse::Param(FCommandLine::Get(), TEXT("WbShowMap")))
 	{
 		bWorldMapOpen = true;
+		// -WbMapZoom=<n>: feste Zoomstufe fuer die Sichtprobe (headless kein Input).
+		float ForceZoom = 0.0f;
+		if (FParse::Value(FCommandLine::Get(), TEXT("WbMapZoom="), ForceZoom) && ForceZoom > 0.0f)
+		{
+			// Zoomstufe halten; das Zentrum klemmt der erste Frame auf die Netzmitte.
+			MapZoom = FMath::Clamp(ForceZoom,
+				FWiesbadenMinimap::WorldMapMinZoom, FWiesbadenMinimap::WorldMapMaxZoom);
+		}
 	}
 	if (bWorldMapOpen)
 	{
@@ -1247,7 +1255,25 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 		WorldMapView = NewObject<UWiesbadenWorldMapView>(this);
 	}
 
-	// --- Zoom & Pan aus den Eingaben (die Sicht aendern -> Neu-Render) ---
+	// Basiskarte EINMAL backen; Zoom/Pan rastern danach NICHTS mehr neu, sie
+	// transformieren nur das Texture-UV -> fluessig statt ruckelnd.
+	UTextureRenderTarget2D* MapRT = WorldMapView->EnsureBaseMap(
+		GetWorld(), *Network, CachedBuildings, FVector2D(Width, Height));
+	if (!WorldMapView->HasBase())
+	{
+		DrawRect(FLinearColor(0.04f, 0.05f, 0.07f, 1.0f), 0.0f, 0.0f, Width, Height);
+		DrawText(TEXT("Karte laedt..."), DialText, Width * 0.5f - 48.0f, Height * 0.5f,
+			GEngine ? GEngine->GetMediumFont() : nullptr, 1.3f);
+		return;
+	}
+	const FWorldMapProjection& BaseFit = WorldMapView->GetBaseFit();
+
+	// Bildschirm-Einpassung aus den GEBACKENEN Netzgrenzen (kein Grenzen-Scan je Bild).
+	const FWorldMapProjection ScreenFit = FWiesbadenMinimap::MakeWorldMapProjection(
+		BaseFit.WorldMin, BaseFit.WorldMax, FVector2D(Width * 0.5f, Height * 0.5f),
+		FVector2D(Width, Height), FWiesbadenMinimap::WorldMapMarginFrac);
+
+	// --- Zoom & Pan aus den Eingaben (nur Sichtfenster, kein Neu-Rastern) ---
 	APlayerController* MapPC = GetOwningPlayerController();
 	const float Dt = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.0f;
 	if (MapPC)
@@ -1274,33 +1300,37 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 		PanPx.Y -= MapPC->GetInputAnalogKeyState(EKeys::Gamepad_RightY);
 		if (bMapCentreInit && !PanPx.IsNearlyZero())
 		{
-			const float Scale = FMath::Max(WorldMapView->GetProjection().ScalePxPerCm, KINDA_SMALL_NUMBER);
+			const float Scale = FMath::Max(ScreenFit.ScalePxPerCm * MapZoom, KINDA_SMALL_NUMBER);
 			constexpr float PanPxPerSec = 900.0f;
 			MapCentreWorld.X += PanPx.X * PanPxPerSec * Dt / Scale;
 			MapCentreWorld.Y -= PanPx.Y * PanPxPerSec * Dt / Scale;   // Bild runter = Welt -Y
 		}
 	}
 
-	UTextureRenderTarget2D* MapRT = WorldMapView->EnsureRendered(
-		GetWorld(), *Network, CachedBuildings, FVector2D(Width, Height),
-		MapZoom, MapCentreWorld, bMapCentreInit);
-
-	// Geklemmtes Zentrum zuruecklesen: verhindert das Weglaufen der Pan-Akkumulation
-	// und setzt beim ersten Bild das Startzentrum (Netzmitte).
-	MapCentreWorld = WorldMapView->GetProjection().ViewCentreWorld;
+	// Aktuelle Sicht (fuer UV-Fenster UND Overlays); Blickzentrum wird geklemmt.
+	const FVector2D DesiredCentre = bMapCentreInit ? MapCentreWorld : ScreenFit.ViewCentreWorld;
+	const FWorldMapProjection Proj = FWiesbadenMinimap::MakeZoomedProjection(ScreenFit, MapZoom, DesiredCentre);
+	MapCentreWorld = Proj.ViewCentreWorld;
 	bMapCentreInit = true;
 
+	// Karte blitten: UV-Teilrechteck der Basis-Textur (ein Quad -> fluessiges Zoomen/Pannen).
 	if (MapRT)
 	{
-		DrawTexture(MapRT, 0.0f, 0.0f, Width, Height, 0.0f, 0.0f, 1.0f, 1.0f);
+		FVector2D UVMin, UVMax;
+		FWiesbadenMinimap::ComputeWorldMapUV(
+			BaseFit, WorldMapView->GetBaseSize(), Proj, FVector2D(Width, Height), UVMin, UVMax);
+		DrawTexture(MapRT, 0.0f, 0.0f, Width, Height,
+			UVMin.X, UVMin.Y, UVMax.X - UVMin.X, UVMax.Y - UVMin.Y);
 	}
 	else
 	{
 		DrawRect(FLinearColor(0.04f, 0.05f, 0.07f, 1.0f), 0.0f, 0.0f, Width, Height);
 	}
 
+	// Strassennamen LIVE im Bildschirmraum darueber (immer scharf, unabhaengig vom Zoom).
+	DrawWorldMapLabels(*Network, Proj, Width, Height);
+
 	// Spielerpunkt + Fahrtrichtung LIVE ueber dem Texture (bewegt sich je Bild).
-	const FWorldMapProjection& Proj = WorldMapView->GetProjection();
 	if (Proj.IsValid())
 	{
 		const APlayerController* PC = GetOwningPlayerController();
@@ -1395,6 +1425,76 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 			: 0.0;
 		DrawText(FString::Printf(TEXT("Zoom %.1fx   Sicht %.1f km"), MapZoom, VisWkm), DialScale,
 			Width - 210.0f, Height - 32.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
+	}
+}
+
+void AWiesbadenVehicleHUD::DrawWorldMapLabels(
+	const FRoadNetwork& Network, const FWorldMapProjection& Proj, float Width, float Height)
+{
+	if (!Canvas || !Proj.IsValid())
+	{
+		return;
+	}
+	UFont* Font = GEngine ? GEngine->GetSmallFont() : nullptr;
+	const FLinearColor LabelCol(0.97f, 0.97f, 0.92f, 1.0f);
+	const FLinearColor ShadowCol(0.0f, 0.0f, 0.0f, 0.85f);
+
+	// Ein Label je Strassenname, kollisionsarm. Nur Hauptstrassen -> das lesbare
+	// Skelett; sichtbar im Sichtfenster (mit kleinem Rand). Beschriftungen liegen
+	// im BILDSCHIRMRAUM, sind also bei jedem Zoom scharf und unverzerrt.
+	TSet<FString> Placed;
+	TArray<FVector2D> Positions;
+	constexpr float MinGapPx = 96.0f;
+	constexpr float Margin = 34.0f;
+	constexpr int32 MaxLabels = 44;
+	int32 Count = 0;
+
+	for (const FRoadSegment& Segment : Network.Segments)
+	{
+		if (Count >= MaxLabels)
+		{
+			break;
+		}
+		if (Segment.StreetName.IsEmpty() || !FWiesbadenMinimap::IsMajorRoad(Segment.HighwayType))
+		{
+			continue;
+		}
+		if (Placed.Contains(Segment.StreetName))
+		{
+			continue;
+		}
+		const TArray<FVector>& Line = Segment.Centerline.Num() >= 2
+			? Segment.Centerline : Segment.TrimmedCenterline;
+		if (Line.Num() < 1)
+		{
+			continue;
+		}
+		const FVector2D P = Proj.Project(Line[Line.Num() / 2]);
+		if (P.X < Margin || P.X > Width - Margin || P.Y < Margin || P.Y > Height - Margin)
+		{
+			continue;   // ausserhalb der Sicht
+		}
+		bool bTooClose = false;
+		for (const FVector2D& Q : Positions)
+		{
+			if (FVector2D::DistSquared(P, Q) < MinGapPx * MinGapPx)
+			{
+				bTooClose = true;
+				break;
+			}
+		}
+		if (bTooClose)
+		{
+			continue;
+		}
+		Placed.Add(Segment.StreetName);
+		Positions.Add(P);
+		++Count;
+
+		const float TextX = P.X - Segment.StreetName.Len() * 3.2f;
+		const float TextY = P.Y - 7.0f;
+		DrawText(Segment.StreetName, ShadowCol, TextX + 1.0f, TextY + 1.0f, Font, 1.0f);
+		DrawText(Segment.StreetName, LabelCol, TextX, TextY, Font, 1.0f);
 	}
 }
 
