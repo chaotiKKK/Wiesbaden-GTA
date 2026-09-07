@@ -48,6 +48,11 @@ AWiesbadenCar::AWiesbadenCar()
 	// Engine-Basis-Cube zurueck, solange das Asset nicht importiert ist -
 	// ohne diesen Rueckfall waere das Fahrzeug im Level unsichtbar und der
 	// Fehler schwer zu erkennen.
+	// Herbie: vollstaendiges VW-Kaefer-Modell (Kotfluegel, Chrom, Raeder,
+	// Scheiben) - loest den kaputten Platzhalter-Body ab. Faellt auf das alte
+	// Beetle-Mesh und zuletzt den Cube zurueck.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> HerbieMesh(
+		TEXT("/Game/Vehicles/Beetle/SM_Herbie.SM_Herbie"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> BeetleMesh(
 		TEXT("/Game/Vehicles/Beetle/SM_VWBeetle1969_Body.SM_VWBeetle1969_Body"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> BeetleWheelMesh(
@@ -55,13 +60,28 @@ AWiesbadenCar::AWiesbadenCar()
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube"));
 
 	UStaticMesh* Cube = CubeMesh.Object;
+	UStaticMesh* Herbie = HerbieMesh.Succeeded() ? HerbieMesh.Object : nullptr;
 	UStaticMesh* Beetle = BeetleMesh.Succeeded() ? BeetleMesh.Object : nullptr;
 	UStaticMesh* BeetleWheel = BeetleWheelMesh.Succeeded() ? BeetleWheelMesh.Object : nullptr;
+
+	// Bringt das Herbie-Modell die Raeder selbst mit -> die separaten Rad-
+	// Komponenten unten werden ausgeblendet (sonst doppelte Raeder / Z-Fighting).
+	bool bBodyIncludesWheels = false;
 
 	BodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BodyMesh"));
 	BodyMesh->SetupAttachment(SceneRoot);
 
-	if (Beetle)
+	if (Herbie)
+	{
+		// Modell ist 4,95 m lang, Ursprung auf Radaufstand (Reifenunterkante).
+		// Auf Kaefer-Maszstab 4,15 m skalieren (0.838); die im Modell enthaltenen
+		// Raeder sitzen damit korrekt auf der Strasse.
+		BodyMesh->SetStaticMesh(Herbie);
+		BodyMesh->SetRelativeLocation(FVector::ZeroVector);
+		BodyMesh->SetRelativeScale3D(FVector(0.838f));
+		bBodyIncludesWheels = true;
+	}
+	else if (Beetle)
 	{
 		// Das Modell ist massstaeblich (4,15 m lang) und hat seinen Ursprung
 		// auf Radaufstandshoehe - es wird weder skaliert noch versetzt.
@@ -126,6 +146,22 @@ AWiesbadenCar::AWiesbadenCar()
 		else if (Cube)
 		{
 			Wheel->SetStaticMesh(Cube);
+		}
+	}
+
+	// Bringt der Body die Raeder selbst mit (Herbie), die separaten Rad-Meshes
+	// ausblenden. Die Fahrphysik nutzt Raycasts, nicht die Rad-Meshes -
+	// Ausblenden aendert nur die Optik (die Herbie-Raeder drehen dann nicht mit;
+	// das ist ein bewusster Kompromiss fuer den intakten Body).
+	if (bBodyIncludesWheels)
+	{
+		for (UStaticMeshComponent* Wheel : { FrontLeftWheel, FrontRightWheel, RearLeftWheel, RearRightWheel })
+		{
+			if (Wheel)
+			{
+				Wheel->SetVisibility(false);
+				Wheel->SetHiddenInGame(true);
+			}
 		}
 	}
 
