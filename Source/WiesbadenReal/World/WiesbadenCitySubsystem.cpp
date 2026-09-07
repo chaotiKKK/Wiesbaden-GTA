@@ -272,12 +272,27 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 	S.ColorContrast = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
 	S.bOverride_ColorSaturation = true;
 	S.ColorSaturation = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
-	// Lumen-GI + -Reflexionen erzwingen (Bounce-Licht/Tiefe statt flachem Ambient)
-	// und Screen-Space-AO fuer Kontaktschatten in Ecken/unter Objekten.
+	// GI-Methode NONE statt Lumen - das war die URSACHE der schwarzen
+	// Schattenfassaden.
+	//
+	// Software-Lumen "sieht" die Stadt-Meshes nicht: sie nehmen nicht an der
+	// Distanzfeld-Generierung teil (siehe DefaultEngine.ini, r.DynamicGlobal-
+	// IlluminationMethod=0 mit Begruendung). Solange Lumen die GI-Methode ist,
+	// laeuft AUCH das Himmelslicht-Diffus ueber Lumen - und liefert auf den
+	// verschatteten Stadt-Fassaden NICHTS, egal wie hell das Himmelslicht ist
+	// (darum blieben sie schwarz und reagierten weder auf Intensitaet noch auf
+	// Albedo). Diese PPV erzwang Lumen aber trotz des Projekt-Defaults - der
+	// fruehere "Lumen an/aus"-Vergleich war deshalb wirkungslos, weil die PPV
+	// Lumen in BEIDEN Faellen erzwang.
+	//
+	// Mit GI=None fuellt das bewegliche Himmelslicht die Flaechen ueber den
+	// klassischen (SH-)Pfad, der ohne Distanzfelder funktioniert -> die
+	// Schattenfassaden werden sichtbar aufgehellt. Reflexionen: Screen-Space
+	// (wie der Projekt-Default r.ReflectionMethod=2), kein Lumen.
 	S.bOverride_DynamicGlobalIlluminationMethod = true;
-	S.DynamicGlobalIlluminationMethod = EDynamicGlobalIlluminationMethod::Lumen;
+	S.DynamicGlobalIlluminationMethod = EDynamicGlobalIlluminationMethod::None;
 	S.bOverride_ReflectionMethod = true;
-	S.ReflectionMethod = EReflectionMethod::Lumen;
+	S.ReflectionMethod = EReflectionMethod::ScreenSpace;
 	S.bOverride_AmbientOcclusionIntensity = true;
 	S.AmbientOcclusionIntensity = 0.6f;
 	S.bOverride_AmbientOcclusionRadius = true;
@@ -331,7 +346,7 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 	}
 
 	UE_LOG(LogWbCore, Log,
-		TEXT("Cinematic-Lighting: PPV (Belichtung/Kontrast/Saettigung, Lumen-GI+Refl, SSAO), %d Sonne(n) mit Schatten, %d Himmelslicht(er) gefuellt."),
+		TEXT("Cinematic-Lighting: PPV (Belichtung/Kontrast/Saettigung, GI=None+SSR, SSAO), %d Sonne(n) mit Schatten, %d Himmelslicht(er) gefuellt."),
 		SunsWithShadows, SkiesFilled);
 }
 
