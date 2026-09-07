@@ -11,6 +11,8 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 #include "InputCoreTypes.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -256,6 +258,46 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 		TailRotorBlade->SetStaticMesh(Cube);
 	}
 
+	// --- Sicht-FX: Rotor-Blur-Scheiben + Downwash-Staub ----------------------
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylMesh(
+		TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BlurMat(
+		TEXT("/Game/Materials/City/M_WbRotorBlur.M_WbRotorBlur"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> DustMat(
+		TEXT("/Game/Materials/City/M_WbDownwash.M_WbDownwash"));
+	UStaticMesh* Disc = CylMesh.Succeeded() ? CylMesh.Object : nullptr;
+
+	// Rotorscheibe misst ~12,8 m -> Zylinder (Durchmesser 100 cm) auf 12,8
+	// skalieren, flach (2 cm). Sitzt an der jeweiligen Nabe und blendet mit der
+	// Drehzahl ein (Opacity per MID), waehrend die soliden Blaetter ausblenden.
+	const FVector BlurScale(12.8f, 12.8f, 0.02f);
+	UpperRotorBlur = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("UpperRotorBlur"));
+	UpperRotorBlur->SetupAttachment(MainRotorHub);
+	UpperRotorBlur->SetRelativeScale3D(BlurScale);
+	UpperRotorBlur->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	UpperRotorBlur->SetCastShadow(false);
+	if (Disc) { UpperRotorBlur->SetStaticMesh(Disc); }
+	if (Disc && BlurMat.Succeeded()) { UpperRotorBlur->SetMaterial(0, BlurMat.Object); }
+
+	LowerRotorBlur = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LowerRotorBlur"));
+	LowerRotorBlur->SetupAttachment(LowerRotorHub);
+	LowerRotorBlur->SetRelativeScale3D(BlurScale);
+	LowerRotorBlur->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	LowerRotorBlur->SetCastShadow(false);
+	if (Disc) { LowerRotorBlur->SetStaticMesh(Disc); }
+	if (Disc && BlurMat.Succeeded()) { LowerRotorBlur->SetMaterial(0, BlurMat.Object); }
+
+	// Downwash-Staub: flache Scheibe, zur Laufzeit per Trace auf den Boden
+	// gesetzt (Weltkoordinaten, damit sie beim Neigen des Rumpfs flach bleibt).
+	GroundDust = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("GroundDust"));
+	GroundDust->SetupAttachment(SceneRoot);
+	GroundDust->SetRelativeScale3D(FVector(15.0f, 15.0f, 0.02f));
+	GroundDust->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	GroundDust->SetCastShadow(false);
+	GroundDust->SetAbsolute(true, true, false);
+	if (Disc) { GroundDust->SetStaticMesh(Disc); }
+	if (Disc && DustMat.Succeeded()) { GroundDust->SetMaterial(0, DustMat.Object); }
+
 	// Kamera: generische Fahrzeug-Kamera-Komponente (erzeugt ihr Rig in BeginPlay).
 	// Umsehen ist jetzt auch im Heli erlaubt (Freilook im Follow-Modus per
 	// Maus/Rechtsstick, Umschalten auf Orbit/Cockpit per C). Frueher war die
@@ -347,6 +389,7 @@ void AWiesbadenHelicopter::Tick(float DeltaSeconds)
 	{
 		ParkOnGround();
 		UpdateRotors(DeltaSeconds);
+		UpdateVisualEffects(DeltaSeconds);
 		UpdateAudio(DeltaSeconds);
 		return;
 	}
@@ -354,6 +397,7 @@ void AWiesbadenHelicopter::Tick(float DeltaSeconds)
 	ReadInput(DeltaSeconds);
 	ApplyFlightPhysics(DeltaSeconds);
 	UpdateRotors(DeltaSeconds);
+	UpdateVisualEffects(DeltaSeconds);
 	UpdateAudio(DeltaSeconds);
 }
 
@@ -891,6 +935,95 @@ void AWiesbadenHelicopter::UpdateRotors(float DeltaSeconds)
 	if (TailRotorHub)
 	{
 		TailRotorHub->AddLocalRotation(FRotator(TailDegPerSec * DeltaSeconds, 0.0f, 0.0f));
+	}
+}
+
+void AWiesbadenHelicopter::UpdateVisualEffects(float DeltaSeconds)
+{
+	// MIDs beim ersten Aufruf anlegen (beide Blur-Scheiben teilen sich eine).
+	if (!RotorBlurMID && UpperRotorBlur && UpperRotorBlur->GetMaterial(0))
+	{
+		RotorBlurMID = UpperRotorBlur->CreateDynamicMaterialInstance(0);
+		if (RotorBlurMID && LowerRotorBlur)
+		{
+			LowerRotorBlur->SetMaterial(0, RotorBlurMID);
+		}
+	}
+	if (!DownwashMID && GroundDust && GroundDust->GetMaterial(0))
+	{
+		DownwashMID = GroundDust->CreateDynamicMaterialInstance(0);
+	}
+
+	// Entwickler-Vorschau: -WbHeliSpin dreht den Rotor fuer Screenshots hoch und
+	// setzt das Triebwerk auf laufend, damit sich Rotor-Blur und Downwash auch am
+	// abgestellten Heli beurteilen lassen (im echten Spiel nie gesetzt).
+	static const bool bSpinDemo = FParse::Param(FCommandLine::Get(), TEXT("WbHeliSpin"));
+
+	// --- Rotor-Blur: Scheiben blenden mit der Drehzahl ein ---
+	const float Rpm = bSpinDemo ? 450.0f : RotorPhysics.MainRotorRpm;
+	const bool bEngineForVfx = bSpinDemo ? true : bEngineRunning;
+	// Unter ~120 U/min sieht man die Blaetter, ab ~360 die volle Scheibe.
+	const float BlurAlpha = FMath::Clamp((Rpm - 120.0f) / 240.0f, 0.0f, 1.0f);
+	if (RotorBlurMID)
+	{
+		RotorBlurMID->SetScalarParameterValue(TEXT("Opacity"), BlurAlpha * 0.33f);
+	}
+	// Solide Blaetter oberhalb 75 % Blur ausblenden - dann traegt die Scheibe das Bild.
+	const bool bBladesVisible = (BlurAlpha < 0.75f);
+	if (MainRotorBlade && MainRotorBlade->IsVisible() != bBladesVisible)
+	{
+		MainRotorBlade->SetVisibility(bBladesVisible);
+	}
+	if (LowerRotorBlade && LowerRotorBlade->IsVisible() != bBladesVisible)
+	{
+		LowerRotorBlade->SetVisibility(bBladesVisible);
+	}
+
+	// --- Downwash-Staub am Boden ---
+	float DustAlpha = 0.0f;
+	if (bEngineForVfx && Rpm > 200.0f)
+	{
+		const float HeightM = GetAltitudeMeters();
+		// Nur bis ~12 m ueber Grund, staerker je naeher und je hoeher der Collective.
+		const float Proximity = FMath::Clamp(1.0f - HeightM / 12.0f, 0.0f, 1.0f);
+		const float Collective = FMath::Clamp(0.5f + 0.5f * CollectiveInput, 0.0f, 1.0f);
+		DustAlpha = Proximity * (0.35f + 0.65f * Collective);
+	}
+	if (GroundDust)
+	{
+		const bool bDust = DustAlpha > 0.01f;
+		if (GroundDust->IsVisible() != bDust)
+		{
+			GroundDust->SetVisibility(bDust);
+		}
+		if (bDust)
+		{
+			// Boden direkt unter dem Heli finden.
+			FVector GroundLoc = GetActorLocation() - FVector(0.0f, 0.0f, 800.0f);
+			if (UWorld* World = GetWorld())
+			{
+				FHitResult Hit;
+				FCollisionQueryParams Params(SCENE_QUERY_STAT(WbHeliDownwash), true);
+				Params.AddIgnoredActor(this);
+				const FVector Start = GetActorLocation();
+				if (World->LineTraceSingleByChannel(
+						Hit, Start, Start - FVector(0.0f, 0.0f, 100000.0f), ECC_WorldStatic, Params)
+					&& !Hit.bStartPenetrating)
+				{
+					GroundLoc = Hit.Location + FVector(0.0f, 0.0f, 8.0f);
+				}
+			}
+			// Leichtes Pulsieren des Durchmessers (Downwash "atmet").
+			DustPhase += DeltaSeconds * 2.2f;
+			const float Pulse = 15.0f + 2.5f * FMath::Sin(DustPhase);
+			GroundDust->SetWorldLocation(GroundLoc);
+			GroundDust->SetWorldRotation(FRotator::ZeroRotator);
+			GroundDust->SetWorldScale3D(FVector(Pulse, Pulse, 0.02f));
+			if (DownwashMID)
+			{
+				DownwashMID->SetScalarParameterValue(TEXT("Opacity"), DustAlpha * 0.5f);
+			}
+		}
 	}
 }
 

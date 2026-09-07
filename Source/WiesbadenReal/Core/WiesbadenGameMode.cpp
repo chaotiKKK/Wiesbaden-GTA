@@ -828,10 +828,19 @@ bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 			PlayerHelicopter->GetComponents<UStaticMeshComponent>(Meshes);
 			for (UStaticMeshComponent* Mesh : Meshes)
 			{
-				if (Mesh)
+				if (!Mesh)
 				{
-					Mesh->SetMaterial(0, Paint);
+					continue;
 				}
+				// Die durchscheinenden FX-Scheiben (Rotor-Blur, Downwash-Staub)
+				// tragen ihre eigenen Translucent-Materialien - NICHT ueberlackieren,
+				// sonst wuerde die Blaugrau-Zelle die Effekte verdecken.
+				const FString CompName = Mesh->GetName();
+				if (CompName.Contains(TEXT("Blur")) || CompName.Contains(TEXT("Dust")))
+				{
+					continue;
+				}
+				Mesh->SetMaterial(0, Paint);
 			}
 		}
 	}

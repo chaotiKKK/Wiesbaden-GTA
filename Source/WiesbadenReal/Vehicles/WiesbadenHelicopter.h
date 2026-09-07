@@ -17,6 +17,7 @@ class APlayerController;
 class USceneComponent;
 class USphereComponent;
 class UStaticMeshComponent;
+class UMaterialInstanceDynamic;
 
 // FWiesbadenHeliControl liegt jetzt im neutralen Steuernaht-Header
 // WiesbadenVehicleControl.h (gemeinsame Interface-Familie), von hier mit-inkludiert.
@@ -334,6 +335,30 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Heli")
 	UStaticMeshComponent* TailRotorBlade = nullptr;
+
+	/** Durchscheinende Rotor-Blur-Scheiben (blenden mit der Drehzahl ein, waehrend
+	 *  die soliden Blaetter ausblenden). Je eine pro Koaxialrotor. */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Heli|FX")
+	UStaticMeshComponent* UpperRotorBlur = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Heli|FX")
+	UStaticMeshComponent* LowerRotorBlur = nullptr;
+
+	/** Staub-/Downwash-Scheibe am Boden (zieht bei Bodennaehe + Rotorschub auf). */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Heli|FX")
+	UStaticMeshComponent* GroundDust = nullptr;
+
+	UPROPERTY(Transient)
+	UMaterialInstanceDynamic* RotorBlurMID = nullptr;
+
+	UPROPERTY(Transient)
+	UMaterialInstanceDynamic* DownwashMID = nullptr;
+
+	/** Rotor-Blur-Scheiben und Downwash-Staub aus Drehzahl/Bodennaehe treiben. */
+	void UpdateVisualEffects(float DeltaSeconds);
+
+	/** Phase fuer das leichte Pulsieren der Staubscheibe. */
+	float DustPhase = 0.0f;
 
 	/** Generische Fahrzeug-Kamera (Follow/Orbit/Cockpit). */
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Heli")
