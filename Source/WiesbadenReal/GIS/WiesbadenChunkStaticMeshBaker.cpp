@@ -10,9 +10,11 @@
 #if WITH_EDITOR
 #include "MeshDescription.h"
 #include "StaticMeshAttributes.h"
+#include "StaticMeshResources.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
+#include "HAL/FileManager.h"
 #include "Misc/PackageName.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #endif
@@ -56,6 +58,14 @@ UStaticMesh* BakeFromProcMesh(UProceduralMeshComponent* Source, const FString& P
 	// Sections auf einen Slot -> die per-Section-Materialzuweisung waere kaputt.
 	TPolygonGroupAttributesRef<FName> SlotNames = Attr.GetPolygonGroupMaterialSlotNames();
 
+	// Bounds aus den ECHTEN Vertexpositionen mitfuehren: BuildFromMeshDescriptions
+	// mit bFastBuild=true schreibt die Mesh-Bounds nicht zuverlaessig (rund die
+	// Haelfte der Gebaeude-Bakes kam mit NaN/uninitialisierten ExtendedBounds heraus
+	// -> UStaticMeshComponent::CalcBounds liefert NaN-Weltbounds -> Renderer-Crash
+	// beim ersten Bild, RendererScene.cpp ContainsNaN). Aus den Positionen berechnet
+	// sind die Bounds deterministisch gueltig, unabhaengig vom schnellen Build-Pfad.
+	FBox GeoBounds(ForceInit);
+
 	int32 ValidSections = 0;
 	for (int32 S = 0; S < NumSections; ++S)
 	{
@@ -78,6 +88,7 @@ UStaticMesh* BakeFromProcMesh(UProceduralMeshComponent* Source, const FString& P
 		{
 			const FVertexID Vid = MeshDesc.CreateVertex();
 			VtxPos[Vid] = FVector3f(V.Position);
+			GeoBounds += V.Position;
 			VertIds.Add(Vid);
 		}
 
@@ -175,16 +186,50 @@ UStaticMesh* BakeFromProcMesh(UProceduralMeshComponent* Source, const FString& P
 	Mesh->MarkPackageDirty();
 	FAssetRegistryModule::AssetCreated(Mesh);
 
+	// Bounds ZULETZT erzwingen (nach PostEditChange, vor dem Speichern): der
+	// schnelle Build liess sie bei einem Teil der Bakes NaN/uninitialisiert.
+	// RenderData-Basisbounds hart aus den echten Positionen setzen, dann die
+	// davon abgeleiteten ExtendedBounds neu berechnen (die
+	// UStaticMeshComponent::CalcBounds -> GetBounds() liest). So kann keine
+	// NaN-Weltbound mehr entstehen, die den Renderer beim ersten Bild kippt.
+	if (GeoBounds.IsValid)
+	{
+		const FBoxSphereBounds SafeBounds(GeoBounds);
+		if (FStaticMeshRenderData* RD = Mesh->GetRenderData())
+		{
+			RD->Bounds = SafeBounds;
+			Mesh->CalculateExtendedBounds();
+		}
+		else
+		{
+			Mesh->SetExtendedBounds(SafeBounds);
+		}
+	}
+
 	// --- 5) Paket auf die Platte schreiben ---------------------------------
 	const FString FileName = FPackageName::LongPackageNameToFilename(
 		PackagePath, FPackageName::GetAssetPackageExtension());
+	// Bestehende Datei ZUERST loeschen, sonst schreibt SavePackage die neue
+	// Geometrie NICHT ueber ein vorhandenes .uasset (der Bake baute das Mesh im
+	// Speicher, die Platte blieb aber stale - genau daran scheiterte ein Re-Bake
+	// stillschweigend, sodass Code-Aenderungen scheinbar wirkungslos blieben und
+	// eine alte Bake-Generation als "Korruption" erschien). Ohne Datei schreibt
+	// SavePackage sauber neu - per erzwungenem Loeschen + Re-Bake verifiziert.
+	if (IFileManager::Get().FileExists(*FileName))
+	{
+		IFileManager::Get().Delete(*FileName, /*RequireExists=*/false, /*EvenReadOnly=*/true);
+	}
+
 	FSavePackageArgs SaveArgs;
 	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
 	SaveArgs.SaveFlags = SAVE_NoError;
 	if (!UPackage::SavePackage(Pkg, Mesh, *FileName, SaveArgs))
 	{
+		// NICHT den Speicher-Mesh zurueckgeben: sonst haengt der Chunk an einem
+		// nie gespeicherten Asset, das Protokoll bleibt still und die Platte
+		// stale. Nullptr macht den Fehler in BakeToStaticMeshes sichtbar.
 		OutError = FString::Printf(TEXT("SavePackage fehlgeschlagen: %s"), *FileName);
-		return Mesh; // Asset existiert im Speicher, nur nicht gespeichert.
+		return nullptr;
 	}
 
 	UE_LOG(LogWbCore, Log,

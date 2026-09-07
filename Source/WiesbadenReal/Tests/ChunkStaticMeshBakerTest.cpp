@@ -61,6 +61,17 @@ bool FChunkStaticMeshBakerTest::RunTest(const FString& Parameters)
 	// Render-Daten serialisiert (der teure Laufzeit-Proxy-Aufbau entfaellt damit).
 	TestTrue(TEXT("RenderData mit LOD vorhanden"),
 		Mesh->GetRenderData() != nullptr && Mesh->GetRenderData()->LODResources.Num() > 0);
+
+	// Bounds MUESSEN endlich sein: NaN/uninitialisierte Bounds (der schnelle
+	// Build lieferte sie bei einem Teil der Bakes) machen die Komponenten-
+	// Weltbounds NaN und stuerzen den Renderer beim ersten Bild ab.
+	{
+		const FBoxSphereBounds B = Mesh->GetBounds();
+		const bool bFinite = !B.Origin.ContainsNaN() && !B.BoxExtent.ContainsNaN()
+			&& FMath::IsFinite(B.SphereRadius);
+		TestTrue(TEXT("Bounds endlich (kein NaN/Inf)"), bFinite);
+		TestTrue(TEXT("Bounds decken die Geometrie (Radius > 0)"), B.SphereRadius > 0.0f);
+	}
 	// Jede Section behaelt ihren eigenen Material-Slot (Slot-Namen-Zuordnung):
 	// zwei Eingabe-Sections -> zwei Material-Slots -> zwei Render-Sections.
 	TestEqual(TEXT("Zwei Material-Slots (je Section einer)"), Mesh->GetStaticMaterials().Num(), 2);
