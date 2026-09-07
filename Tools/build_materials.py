@@ -647,12 +647,37 @@ def make_photo_facade(name, texture_name, meters_along_wall=8.0,
     return mat
 
 
+def pastel_tint(mat, x, y):
+    """
+    Warme Gruenderzeit-Pastellpalette (creme / hellgelb / warmweiss / ocker),
+    ueber WELTBEZOGENES Rauschen variiert - so bekommen benachbarte Haeuser
+    unterschiedliche Toene, obwohl kein per-Gebaeude-Vertexkanal existiert und
+    ohne Re-Bake. Die niedrigen Rausch-Skalen (0.30 / 0.55) erzeugen Flecken
+    etwa in Haus- bis Blockgroesse, nicht innerhalb einer Wand.
+
+    Rueckgabe ist als Multiplikator auf die (neutrale, graue) Putztextur
+    gedacht: Textur ~0.58 * Tint ~0.9 * FACADE_BRIGHTNESS 1.6 ~ 0.83 hell.
+    """
+    cream  = c3(mat, 0.95, 0.91, 0.76, x, y - 300)
+    yellow = c3(mat, 1.00, 0.90, 0.54, x, y - 100)   # kraeftigeres Hellgelb
+    white  = c3(mat, 0.97, 0.95, 0.90, x, y + 100)
+    ochre  = c3(mat, 0.90, 0.72, 0.48, x, y + 300)   # kraeftigeres Ocker
+    n1 = noise(mat, x + 250, y - 200, 0.22)   # groessere Flecken ~ ganzes Haus
+    n2 = noise(mat, x + 250, y + 200, 0.42)   # zweite Achse: waehlt die Reihe
+    warm = lerp(mat, cream, yellow, n1, x + 550, y - 150)
+    cool = lerp(mat, white, ochre, n1, x + 550, y + 150)
+    return lerp(mat, warm, cool, n2, x + 800, y)
+
+
 def make_wall(textures, name="M_WbBuildingWall"):
     """
     Putzfassade mit Fenstern. Vertexfarbe R = Sockelmaske (0 am Sockel).
 
     Die Putztextur liefert die feine Oberflaeche, die Fenster kommen wie bei
     den uebrigen Varianten aus der UV-Belegung (U in Metern, V in Geschossen).
+    Die (neutral graue) Textur wird mit einer warmen Pastellpalette eingefaerbt
+    (pastel_tint), damit die Innenstadt wie die creme/pastellgelben
+    Gruenderzeit-Altbauten der Referenz wirkt statt einheitlich grau.
     """
     mat = new_material(name)
     vc = expr(mat, unreal.MaterialExpressionVertexColor, -2600, 400)
@@ -662,8 +687,11 @@ def make_wall(textures, name="M_WbBuildingWall"):
         # UVs der Fassaden: U in Metern, V in Geschossen. 0.5 laesst das
         # Putzmuster alle 2 m bzw. alle 2 Geschosse wiederkehren.
         uv = tex_coord(mat, -2900, -200, 0.5, 0.5)
-        col = tex_sample(mat, color_tex, -2600, -200, uv)
-        col_out = "RGB"
+        tex = tex_sample(mat, color_tex, -2600, -200, uv)
+        # Pastell-Einfaerbung der grauen Putztextur.
+        tint = pastel_tint(mat, -3700, -700)
+        col = mul(mat, tex, tint, -2350, -200, a_out="RGB")
+        col_out = ""
     else:
         col = c3(mat, 0.42, 0.385, 0.335, -2600, -200)
         col_out = ""
@@ -786,16 +814,19 @@ def add_facade_windows(mat, wall_color, wall_out=""):
     # horizontal auch dort, wo keine Fenster sitzen.
     cornice = band(mat, floor_pos, 0.90, 0.99, -1550, 1400)
 
-    glass = c3(mat, 0.020, 0.028, 0.038, -700, 500)
+    glass = c3(mat, 0.018, 0.022, 0.028, -700, 500)
     cornice_color = c3(mat, 0.045, 0.042, 0.038, -700, 1400)
 
     with_windows = lerp(mat, wall_color, glass, window, -450, 700, a_out=wall_out)
     base = lerp(mat, with_windows, cornice_color, cornice, -250, 900)
 
-    # Glas ist glatt und spiegelnd, Putz rau.
-    rough = lerp(mat, c1(mat, 0.88, -700, 1700), c1(mat, 0.10, -700, 1800),
+    # Glas matter und weniger metallisch als frueher: als spiegelnde
+    # Metallflaechen warfen die Fenster den blauen Himmel zurueck und faerbten
+    # die ganze Stadt kuehl-blau - genau gegen die creme/pastell-Absicht. Jetzt
+    # lesen sie als zurueckhaltendes dunkles Glas, die Putztoene tragen die Farbe.
+    rough = lerp(mat, c1(mat, 0.88, -700, 1700), c1(mat, 0.42, -700, 1800),
                  window, -450, 1750)
-    metal = mul(mat, window, 0.75, -450, 1950)
+    metal = mul(mat, window, 0.25, -450, 1950)
 
     return base, rough, metal
 
@@ -888,11 +919,13 @@ def make_facade_variants(textures):
             "M_WbFacade_Backstein", (0.205, 0.085, 0.060), (0.330, 0.150, 0.100),
             roughness=0.88, noise_scale=6.0, socket=(0.085, 0.040, 0.028))
 
-    # 2 Sandstein - heller Gruenderzeit-Ton, praegt die Innenstadt.
+    # 2 Sandstein - heller, warmer Gruenderzeit-Ton, praegt die Innenstadt.
+    # Richtung creme/hell gezogen (Referenz Wilhelmstrasse/Kurhaus), damit die
+    # Innenstadt mit den Putz-Pastelltoenen zusammenklingt.
     if "Sandstein" not in out:
         out["Sandstein"] = make_facade(
-            "M_WbFacade_Sandstein", (0.365, 0.305, 0.220), (0.510, 0.435, 0.315),
-            roughness=0.80, noise_scale=3.0, socket=(0.155, 0.128, 0.092))
+            "M_WbFacade_Sandstein", (0.435, 0.375, 0.280), (0.615, 0.535, 0.405),
+            roughness=0.80, noise_scale=3.0, socket=(0.175, 0.145, 0.105))
 
     # 3 Glas - Buerofassade: metallisch und glatt, damit sie den Himmel
     # spiegelt und sich klar vom Wohnbestand abhebt.
@@ -933,10 +966,14 @@ def make_lane_marking():
 
 
 def make_cycleway():
-    """Radweg: der in Deutschland uebliche rote Belag."""
+    """
+    Radweg: der in Deutschland uebliche rote Belag. Deutlich heller/klarer als
+    zuvor (0.085..0.125) - so las sich der Radweg kaum vom dunklen Asphalt ab.
+    Jetzt ein klares Terrakotta-Rot wie die eingefaerbten Wiesbadener Radspuren.
+    """
     mat = new_material("M_WbCycleway")
-    a = c3(mat, 0.085, 0.030, 0.022, -800, -200)
-    b = c3(mat, 0.125, 0.048, 0.034, -800, -50)
+    a = c3(mat, 0.180, 0.062, 0.045, -800, -200)
+    b = c3(mat, 0.260, 0.095, 0.068, -800, -50)
     n = noise(mat, -800, 150, 8.0)
     MEL.connect_material_property(lerp(mat, a, b, n, -450, -100), "",
                                   MP.MP_BASE_COLOR)
@@ -1097,15 +1134,26 @@ def make_unpaved():
 
 
 def make_paved_stone():
-    """Pflaster und Naturstein - Fussgaengerzonen und Altstadtgassen."""
+    """
+    Kopfsteinpflaster / Naturstein - Fussgaengerzonen und Altstadtgassen.
+
+    Frueher ein flaches, sehr dunkles Grau (0.085..0.135) - las sich wie nasser
+    Asphalt, nicht wie Pflaster. Jetzt heller warmer Granit mit deutlicher
+    Ton-Variation je Stein und dunklen Fugenlinien, damit die Wiesbadener
+    Fussgaengerzone (Langgasse/Kirchgasse) als gepflastert erkennbar wird - eine
+    reine Materialaenderung, kein Re-Bake.
+    """
     mat = new_material("M_WbPavedStone")
-    a = c3(mat, 0.085, 0.080, 0.076, -800, -200)
-    b = c3(mat, 0.135, 0.128, 0.120, -800, -50)
-    # Feines Rauschen zeichnet die einzelnen Steine nach.
-    n = noise(mat, -800, 150, 26.0)
-    MEL.connect_material_property(lerp(mat, a, b, n, -450, -100), "",
-                                  MP.MP_BASE_COLOR)
-    MEL.connect_material_property(c1(mat, 0.80, -450, 250), "", MP.MP_ROUGHNESS)
+    # Einzelsteine: warmer Granit, Ton je Stein (feines Rauschen).
+    a = c3(mat, 0.205, 0.192, 0.176, -900, -200)
+    b = c3(mat, 0.360, 0.340, 0.315, -900, -50)
+    stone = lerp(mat, a, b, noise(mat, -900, 120, 34.0), -600, -120)
+    # Fugen: schmale dunkle Linien aus einem hoeherfrequenten Rauschband.
+    joint = band(mat, noise(mat, -900, 350, 60.0), 0.46, 0.54, -600, 300)
+    dark = c3(mat, 0.095, 0.088, 0.080, -600, 500)
+    base = lerp(mat, stone, dark, joint, -300, 0)
+    MEL.connect_material_property(base, "", MP.MP_BASE_COLOR)
+    MEL.connect_material_property(c1(mat, 0.82, -300, 300), "", MP.MP_ROUGHNESS)
     finish(mat)
     return mat
 
