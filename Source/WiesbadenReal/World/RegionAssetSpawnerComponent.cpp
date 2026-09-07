@@ -36,7 +36,10 @@ void URegionAssetSpawnerComponent::EnsureDefaultAssets()
 	// dann sieht man Platzhalter statt gar nichts.
 	if (TreeMeshes.Num() == 0)
 	{
-		for (int32 Index = 1; Index <= 6; ++Index)
+		// SM_WbTree_01..06: Blendswap-Paket. SM_WbTree_07: importierte Birke
+		// (echtes Modell, andere Art -> Abwechslung Richtung Referenz). Fehlt eine
+		// Nummer, liefert LoadObject nullptr und sie wird uebersprungen.
+		for (int32 Index = 1; Index <= 7; ++Index)
 		{
 			const FString Path = FString::Printf(
 				TEXT("/Game/Vegetation/Meshes/SM_WbTree_%02d.SM_WbTree_%02d"), Index, Index);
