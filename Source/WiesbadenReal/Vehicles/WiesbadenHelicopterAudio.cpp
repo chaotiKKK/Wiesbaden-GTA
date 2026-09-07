@@ -78,7 +78,7 @@ void FWiesbadenHelicopterAudioModel::GenerateSamples(
 	// Zylinder-V8 modelliert - fuer eine Wellenturbine falsch).
 	const bool bMotorAudible = Params.bEngineRunning && Params.EngineRpm > 50.0f;
 	const float Spool = FMath::Clamp(Params.EngineRpm / 3360.0f, 0.0f, 1.6f);   // ~1.0 bei Nenndrehzahl
-	const float WhineHz = 700.0f + Spool * 1500.0f;                              // ~700 Hz Leerlauf .. ~2.2 kHz Vollast
+	const float WhineHz = 300.0f + Spool * 600.0f;                              // ~300 Hz Leerlauf .. ~1.3 kHz Vollast (tief/weich)
 
 	float Filtered = 0.0f;
 	for (int32 Index = 0; Index < NumSamples; ++Index)
@@ -97,10 +97,11 @@ void FWiesbadenHelicopterAudioModel::GenerateSamples(
 		if (BladePass > 0.1f)
 		{
 			const float Phase = TwoPi * BladePass * Time;
-			// Zwei verschraenkte Blattpaesse (Koaxial) + langsame Schwebung.
+			// Zwei verschraenkte Blattpaesse (Koaxial) + langsame Schwebung. Der
+			// 2x-Anteil bewusst schwach, sonst wird der Schlag "brummig/buzzig".
 			const float Wop = 0.55f
-				+ SlapDepth * (0.72f * FMath::Sin(Phase + 1.7f)
-							 + 0.42f * FMath::Sin(2.0f * Phase + 0.5f));
+				+ SlapDepth * (0.75f * FMath::Sin(Phase + 1.7f)
+							 + 0.28f * FMath::Sin(2.0f * Phase + 0.5f));
 			const float Throb = 1.0f + 0.05f * FMath::Sin(TwoPi * 3.2f * Time);
 			RotorSample = Filtered * FMath::Max(0.0f, Wop) * Throb * RotorVolume;
 		}
@@ -109,14 +110,14 @@ void FWiesbadenHelicopterAudioModel::GenerateSamples(
 		float TurbineSample = 0.0f;
 		if (bMotorAudible)
 		{
-			const float Tone =
-				  0.60f * FMath::Sin(TwoPi * WhineHz * Time)
-				+ 0.34f * FMath::Sin(TwoPi * 2.0f * WhineHz * Time)
-				+ 0.18f * FMath::Sin(TwoPi * 3.0f * WhineHz * Time)
-				+ 0.10f * FMath::Sin(TwoPi * 4.0f * WhineHz * Time);
-			const float Buzz = 0.22f * FMath::Sin(TwoPi * (WhineHz * 0.5f) * Time);
-			const float Air = NextNoise(RandState) * 0.22f;
-			TurbineSample = (Tone + Buzz + Air) * (0.16f + 0.30f * Spool);
+			// Weicher, TIEFER Spool-Ton (nur Grundton + leiser 2. Oberton) plus
+			// etwas Luftrauschen. Die frueheren hellen Obertoene (bis ~8,8 kHz)
+			// klangen schrill/kuenstlich ("total unreal") - komplett entfernt.
+			// Deutlich leiser gemischt, damit der Rotorschlag das Bild traegt.
+			const float Tone = 0.30f * FMath::Sin(TwoPi * WhineHz * Time)
+							 + 0.12f * FMath::Sin(TwoPi * 2.0f * WhineHz * Time);
+			const float Air = NextNoise(RandState) * 0.35f;
+			TurbineSample = (Tone + Air) * (0.10f + 0.20f * Spool);
 		}
 
 		const float Mix = (RotorSample + TurbineSample) * 32767.0f * 0.8f;
