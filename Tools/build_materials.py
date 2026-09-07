@@ -1103,13 +1103,22 @@ def make_tree():
 
 
 def make_helicopter():
-    """Helikopter-Lackierung. Die Zelle besteht aus Engine-Wuerfeln und trug
-    ohne Material das Default-Schachbrett."""
+    """
+    Ka-52-Lackierung: das typische blaugrau/graue Tarnschema des 'Alligator'.
+
+    Frueher ein fast schwarzes Dunkelgruen (0.045/0.070/0.050) mit hohem
+    Metallic - der Heli wirkte schwarz und lackglaenzend. Jetzt ein zweitoniges,
+    mattes Militaer-Blaugrau (dunkle Tarnflecken auf hellerem Grau), Metallic 0
+    wie mattierter Militaerlack.
+    """
     mat = new_material("M_WbHelicopter")
-    MEL.connect_material_property(c3(mat, 0.045, 0.070, 0.050, -500, 0), "",
+    a = c3(mat, 0.095, 0.125, 0.165, -900, -200)   # dunkles Blaugrau (Tarnflecken)
+    b = c3(mat, 0.225, 0.260, 0.300, -900, -50)    # mittleres Blaugrau (Ka-52-Ton)
+    n = noise(mat, -900, 120, 3.5)                 # etwas kleinteiligere Tarnflecken
+    MEL.connect_material_property(lerp(mat, a, b, n, -450, -100), "",
                                   MP.MP_BASE_COLOR)
-    MEL.connect_material_property(c1(mat, 0.35, -500, 200), "", MP.MP_ROUGHNESS)
-    MEL.connect_material_property(c1(mat, 0.6, -500, 350), "", MP.MP_METALLIC)
+    MEL.connect_material_property(c1(mat, 0.60, -450, 250), "", MP.MP_ROUGHNESS)
+    MEL.connect_material_property(c1(mat, 0.0, -450, 400), "", MP.MP_METALLIC)
     finish(mat)
     return mat
 
