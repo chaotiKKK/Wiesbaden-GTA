@@ -7,6 +7,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GIS/WiesbadenChunkStaticMeshBaker.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "World/RegionAssetSpawnerComponent.h"
 
 AWiesbadenCityChunk::AWiesbadenCityChunk()
@@ -137,9 +139,13 @@ void AWiesbadenCityChunk::AnchorStreamingBounds()
 			// Bounds wieder ueber km aufgeblaeht. Identity zaehlt den transienten
 			// Komponentenversatz nicht doppelt (Re-Bake-Pfad: Mesh ohnehin am
 			// Ursprung -> gleiches Ergebnis C).
-			Anchor = Mesh->CalcBounds(FTransform::Identity).Origin;
-			bHasAnchor = true;
-			break;
+			const FVector O = Mesh->CalcBounds(FTransform::Identity).Origin;
+			if (!O.ContainsNaN())
+			{
+				Anchor = O;
+				bHasAnchor = true;
+				break;
+			}
 		}
 	}
 	// Nach dem Bake tragen die StaticMesh-Komponenten die (welt-koordinierte)
@@ -150,9 +156,19 @@ void AWiesbadenCityChunk::AnchorStreamingBounds()
 		{
 			if (SM && SM->GetStaticMesh())
 			{
-				Anchor = SM->CalcBounds(FTransform::Identity).Origin;
-				bHasAnchor = true;
-				break;
+				// CalcBounds eines gerade erst geladenen/gebackenen StaticMesh kann
+				// NaN liefern (Render-Daten noch nicht bereit / degenerierte Bake-
+				// Bounds). Ein NaN-Anker wuerde ueber SetWorldLocation eine ungueltige
+				// Transform setzen (Ensure NewTransform.IsValid()), die Komponenten-
+				// Bounds NaN machen und den Renderer beim ersten Bild abstuerzen lassen
+				// (ContainsNaN -> IntFitsIn-narrowing). Solche Werte NICHT uebernehmen.
+				const FVector O = SM->CalcBounds(FTransform::Identity).Origin;
+				if (!O.ContainsNaN())
+				{
+					Anchor = O;
+					bHasAnchor = true;
+					break;
+				}
 			}
 		}
 	}
@@ -166,8 +182,11 @@ void AWiesbadenCityChunk::AnchorStreamingBounds()
 		Anchor = AssetBounds.GetCenter();
 		bHasAnchor = true;
 	}
-	if (!bHasAnchor)
+	if (!bHasAnchor || Anchor.ContainsNaN())
 	{
+		// Kein gueltiger Anker -> Komponenten unveraendert lassen. NIE eine NaN-
+		// Transform setzen (siehe oben): der Absturz lag hier, nicht im
+		// Welt-Koordinaten-Design.
 		return;
 	}
 
@@ -322,6 +341,23 @@ void AWiesbadenCityChunk::ApplyChunk(const FCityChunkMesh& Chunk, bool bRoadColl
 void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoadCollision, bool bBuildingCollision)
 {
 #if WITH_EDITOR
+	// Diagnose-Schalter -WbProcMeshChunks: StaticMesh-Bake KOMPLETT ueberspringen,
+	// die Chunks bleiben ProcMesh (mit synchron gekochter Kollision). Nur so laesst
+	// sich eine gebackene ProcMesh-Karte erzeugen und im kontrollierten A/B gegen
+	// die StaticMesh-Bake stellen (gleiche Quelle/Code, nur der Kollisionspfad
+	// unterscheidet sich). ApplyChunk hat die Bounds bereits verankert.
+	if (FParse::Param(FCommandLine::Get(), TEXT("WbProcMeshChunks")))
+	{
+		static bool bLoggedOnce = false;
+		if (!bLoggedOnce)
+		{
+			bLoggedOnce = true;
+			UE_LOG(LogWbCore, Log,
+				TEXT("WbProcMeshChunks: StaticMesh-Bake uebersprungen - Chunks bleiben ProcMesh (Diagnose-A/B)."));
+		}
+		return;
+	}
+
 	// Ein ProcMesh -> ein vorgekochtes StaticMesh (Render + optional gekochte
 	// Kollision), an die Komponente gehaengt. Leert den ProcMesh NICHT (die
 	// Kollisions-Extraktion braucht RoadMesh noch); das Leeren macht der Aufrufer.
