@@ -42,6 +42,15 @@ void AWiesbadenStreamingSource::BeginPlay()
 		UE_LOG(LogWbCore, Log, TEXT("WbRadius: Streaming-Radius fest auf %.0f m erzwungen (adaptiv aus)."), ForcedRadius);
 	}
 
+	// -WbLookAhead=<Sekunden>: Geschwindigkeits-Vorausladung fest setzen (Diagnose).
+	// 0 schaltet sie ab und misst den Vorher-Zustand (nur Boden-Radius).
+	float ForcedLookAhead = -1.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("WbLookAhead="), ForcedLookAhead) && ForcedLookAhead >= 0.0f)
+	{
+		SpeedLookAheadSeconds = ForcedLookAhead;
+		UE_LOG(LogWbCore, Log, TEXT("WbLookAhead: Vorausladung fest auf %.1f s gesetzt."), ForcedLookAhead);
+	}
+
 	WorldPartitionSubsystem = GetWorld() ? GetWorld()->GetSubsystem<UWorldPartitionSubsystem>() : nullptr;
 	if (WorldPartitionSubsystem)
 	{
@@ -160,6 +169,26 @@ void AWiesbadenStreamingSource::UpdateSource(float DeltaSeconds)
 			GroundRadiusMeters, StreamingRadiusMeters, AdaptiveStartAltitudeMeters, AdaptiveFullAltitudeMeters);
 	}
 
+	// Geschwindigkeits-Vorausladung: Quelle nach VORN verschieben und den Radius
+	// maessig weiten, beides skaliert mit dem horizontalen Tempo. Anders als die
+	// reine Velocity-Sortierung vergroessert das die REICHWEITE im Fahrweg - genau
+	// die 34,5-%-Kollisionsluecken bei 250 km/h. Aufgeteilt je zur Haelfte:
+	//   Zentrum um LookAhead/2 nach vorn, Radius um LookAhead/2 groesser.
+	// -> Vorwaerts-Reichweite waechst um LookAhead, HINTER dem Wagen bleibt der
+	// Boden-Radius stehen (Wagen sicher im Kreis, Kollision unter ihm bleibt
+	// geladen), und im Stand (Tempo 0) aendert sich nichts (FPS bleiben hoch).
+	const FVector HorizVel(SmoothedVelocity.X, SmoothedVelocity.Y, 0.0f);
+	const float SpeedMps = HorizVel.Size() * 0.01f; // cm/s -> m/s
+	const float LookAheadMeters = ComputeLookAheadMeters(SpeedMps, SpeedLookAheadSeconds, MaxLookAheadMeters);
+	FVector StreamLocation = SourceLocation;
+	if (LookAheadMeters > 0.0f)
+	{
+		const FVector Dir = HorizVel.GetSafeNormal();
+		StreamLocation = SourceLocation + Dir * (LookAheadMeters * 0.5f * 100.0f); // m -> cm
+		EffectiveRadiusMeters += LookAheadMeters * 0.5f;
+	}
+	CurrentSource.Location = StreamLocation;
+
 	// Aktuellen Radius ans Strassen-Material geben (MPC_WbStreaming.FadeRadiusM).
 	//
 	// Das entfernungsbasierte Einblenden im Strassen-Material braucht den
@@ -204,9 +233,10 @@ void AWiesbadenStreamingSource::UpdateSource(float DeltaSeconds)
 		{
 			LastRadiusLogSecond = Sec;
 			UE_LOG(LogWbCore, Log,
-				TEXT("WbStreaming: Hoehe %.0f m -> Radius %.0f m%s. Fade-MPC: %s"),
+				TEXT("WbStreaming: Hoehe %.0f m -> Radius %.0f m%s. Tempo %.0f km/h, Vorausladung %.0f m. Fade-MPC: %s"),
 				SmoothedAltitudeMeters, EffectiveRadiusMeters,
 				bForceFixedRadius ? TEXT(" (fest, -WbRadius)") : TEXT(""),
+				SpeedMps * 3.6f, LookAheadMeters,
 				bFadeMpcSet ? TEXT("FadeRadiusM gesetzt")
 				            : (FadeMpc ? TEXT("Instanz fehlt!") : TEXT("MPC nicht geladen!")));
 		}
@@ -249,6 +279,16 @@ float AWiesbadenStreamingSource::ComputeAdaptiveRadiusMeters(float AltitudeMeter
 	const float T = FMath::Clamp((AltitudeMeters - StartAltM) / (FullAltM - StartAltM), 0.0f, 1.0f);
 	const float S = T * T * (3.0f - 2.0f * T); // smoothstep - weiche Blende ohne Knick
 	return FMath::Lerp(GroundRadiusM, AirRadiusM, S);
+}
+
+float AWiesbadenStreamingSource::ComputeLookAheadMeters(float SpeedMetersPerS,
+	float LookAheadSeconds, float MaxMeters)
+{
+	if (SpeedMetersPerS <= 0.0f || LookAheadSeconds <= 0.0f)
+	{
+		return 0.0f;
+	}
+	return FMath::Clamp(SpeedMetersPerS * LookAheadSeconds, 0.0f, FMath::Max(0.0f, MaxMeters));
 }
 
 bool AWiesbadenStreamingSource::GetStreamingSource(FWorldPartitionStreamingSource& OutStreamingSource) const

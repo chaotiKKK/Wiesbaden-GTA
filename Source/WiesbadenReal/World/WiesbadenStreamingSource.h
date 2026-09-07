@@ -59,6 +59,27 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming", meta = (ClampMin = "1.0"))
 	float AdaptiveFullAltitudeMeters = 350.0f;
 
+	/**
+	 * Geschwindigkeits-Vorausladung: Sekunden Fahrweg, die VOR dem Fahrzeug
+	 * zusaetzlich geladen werden.
+	 *
+	 * Reine Velocity-SORTIERUNG (bUseVelocityContributionToCellsSorting) laedt die
+	 * Zellen im Fahrweg nur ZUERST - sie vergroessert die Reichweite nicht. Bei
+	 * Tempo (250 km/h = 69 m/s) reicht der enge Boden-Radius (900 m ~ 13 s Vorlauf)
+	 * nicht: der Durchfall-Test fuhr 34,5 % der Strecke ueber noch NICHT geladene
+	 * Kollision. Die Quelle wird darum um SpeedLookAheadSeconds * Tempo nach vorn
+	 * verschoben (halb als Zentrums-Versatz, halb als Radius-Zuwachs): der Vorwaerts-
+	 * Puffer waechst mit dem Tempo, HINTER dem Wagen bleibt der Boden-Radius stehen,
+	 * und im Stand (Tempo 0) ist alles wie zuvor - die FPS am Zellrand bleiben hoch.
+	 * 0 schaltet die Vorausladung ab. -WbLookAhead=<s> ueberschreibt (Diagnose).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming", meta = (ClampMin = "0.0"))
+	float SpeedLookAheadSeconds = 6.0f;
+
+	/** Obergrenze der Vorausladung (m) - deckelt Zellenzahl/Versatz bei Extremtempo. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming", meta = (ClampMin = "0.0"))
+	float MaxLookAheadMeters = 1500.0f;
+
 	/** Dem lokalen Player-Pawn folgen (sonst eigene Actor-Position nutzen). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Streaming")
 	bool bFollowPlayerPawn = true;
@@ -82,6 +103,13 @@ public:
 	 */
 	static float ComputeAdaptiveRadiusMeters(float AltitudeMeters, float GroundRadiusM,
 		float AirRadiusM, float StartAltM, float FullAltM);
+
+	/**
+	 * Vorausladeweite (m) aus horizontalem Tempo - ohne Weltzugriff, damit testbar.
+	 * = clamp(SpeedMetersPerS * LookAheadSeconds, 0, MaxMeters). Tempo 0 -> 0.
+	 */
+	static float ComputeLookAheadMeters(float SpeedMetersPerS, float LookAheadSeconds,
+		float MaxMeters);
 
 protected:
 	virtual void BeginPlay() override;
