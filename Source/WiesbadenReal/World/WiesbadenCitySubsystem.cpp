@@ -261,8 +261,12 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 	S.AutoExposureMinBrightness = 0.15f;
 	S.bOverride_AutoExposureMaxBrightness = true;
 	S.AutoExposureMaxBrightness = 1.5f;
+	// Bias war -0.5 gegen "ueberbelichtet". Am Strassenbild zeigte sich das
+	// Gegenteil: die verschatteten Fassaden einer Strassenschlucht saufen fast
+	// schwarz ab. -0.2 nimmt das meiste der aktiven Abdunkelung zurueck (heller,
+	// sonniger Referenz-Look), bleibt aber knapp im Minus gegen Ausbleichen.
 	S.bOverride_AutoExposureBias = true;
-	S.AutoExposureBias = -0.5f;
+	S.AutoExposureBias = -0.2f;
 	// Dezent mehr Kontrast/Saettigung (gegen "flach"). W = Luminanz.
 	S.bOverride_ColorContrast = true;
 	S.ColorContrast = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
@@ -292,9 +296,43 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 		}
 	}
 
+	// Himmelslicht-Fuellung: beide sichtbaren Fassadenseiten einer Strassen-
+	// schlucht liegen fast immer im Schatten und werden NUR vom Himmelslicht
+	// aufgehellt. Die gebackene Karte bringt ein schwaches Himmelslicht mit -
+	// auf Echtzeit-Aufnahme umstellen und anheben, damit die Fassaden nicht
+	// schwarz absaufen (heller, sonniger Referenz-Look). Movable +
+	// RealTimeCapture -> kein Re-Bake noetig, das Licht folgt dem Sonnenstand.
+	int32 SkiesFilled = 0;
+	for (TActorIterator<ASkyLight> It(&World); It; ++It)
+	{
+		if (USkyLightComponent* Sky = It->GetLightComponent())
+		{
+			Sky->SetMobility(EComponentMobility::Movable);
+			Sky->bRealTimeCapture = true;
+			Sky->SetIntensity(3.2f);
+			++SkiesFilled;
+		}
+	}
+	// Ohne Himmelslicht in der Karte selbst eins anlegen (sonst bleibt der
+	// Schatten schwarz).
+	if (SkiesFilled == 0)
+	{
+		if (ASkyLight* NewSky = World.SpawnActor<ASkyLight>())
+		{
+			NewSky->Tags.Add(TEXT("WbCinematicLighting"));
+			if (USkyLightComponent* Comp = NewSky->GetLightComponent())
+			{
+				Comp->SetMobility(EComponentMobility::Movable);
+				Comp->bRealTimeCapture = true;
+				Comp->SetIntensity(3.2f);
+			}
+			++SkiesFilled;
+		}
+	}
+
 	UE_LOG(LogWbCore, Log,
-		TEXT("Cinematic-Lighting: PPV (Belichtung/Kontrast/Saettigung, Lumen-GI+Refl, SSAO), %d Sonne(n) mit Schatten."),
-		SunsWithShadows);
+		TEXT("Cinematic-Lighting: PPV (Belichtung/Kontrast/Saettigung, Lumen-GI+Refl, SSAO), %d Sonne(n) mit Schatten, %d Himmelslicht(er) gefuellt."),
+		SunsWithShadows, SkiesFilled);
 }
 
 void UWiesbadenCitySubsystem::Tick(float DeltaTime)
