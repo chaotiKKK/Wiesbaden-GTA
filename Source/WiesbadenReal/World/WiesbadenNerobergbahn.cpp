@@ -410,7 +410,7 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 		// (Meterspur: Schienenmitten 50 cm neben der Achse).
 		struct FRibbon { float HalfWidth; float Offset; float Lift; FLinearColor Colour; };
 		const FRibbon Ribbons[] = {
-			{ 130.0f, 0.0f, 6.0f,  FLinearColor(0.10f, 0.09f, 0.085f) },  // Bett
+			{ 130.0f, 0.0f, 6.0f,  FLinearColor(0.19f, 0.17f, 0.155f) },  // Bett (Schotter, heller)
 			{ 6.0f, -50.0f, 16.0f, FLinearColor(0.35f, 0.34f, 0.32f) },   // Schiene links
 			{ 6.0f, +50.0f, 16.0f, FLinearColor(0.35f, 0.34f, 0.32f) },   // Schiene rechts
 		};
@@ -472,7 +472,7 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 	{
 		constexpr float BedHalf = 130.0f;
 		constexpr float BedTopLift = 6.0f;
-		const FLinearColor EarthColour(0.14f, 0.11f, 0.07f);
+		const FLinearColor EarthColour(0.30f, 0.24f, 0.16f);   // Erd-/Sandton, nicht schwarz
 		for (const FTrack* Track : { &TrackA, &TrackB })
 		{
 			for (int32 SideSign = -1; SideSign <= 1; SideSign += 2)
