@@ -9,6 +9,8 @@
 #include "Camera/CameraActor.h"
 #include "Components/BoxComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Core/WiesbadenGameInstance.h"
 #include "World/BuildingCollisionSpawnerComponent.h"
 #include "LandscapeHeightfieldCollisionComponent.h"
@@ -1399,6 +1401,65 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			LogGeometryBalance(PerfReport);
 			LogMaterialBalance(PerfReport);
 			LogHeightStackNearPlayer();
+
+			// DIAGNOSE -WbDumpNearby: alle Mesh-Komponenten/ISM-Instanzen nahe dem
+			// Spieler auflisten (Mesh-Name + Nachbar-Instanzzahl), um das
+			// Zacken-Spinnen-Asset EINDEUTIG zu identifizieren statt zu raten.
+			if (FParse::Param(FCommandLine::Get(), TEXT("WbDumpNearby")))
+			{
+				if (UWorld* DW = GetWorld())
+				{
+					if (APlayerController* DPC = DW->GetFirstPlayerController())
+					{
+						FVector Ref; FRotator RefRot;
+						DPC->GetPlayerViewPoint(Ref, RefRot);
+						UE_LOG(LogWbCore, Warning,
+							TEXT("DUMP-NEARBY: Blickpunkt (%.0f,%.0f,%.0f)"), Ref.X, Ref.Y, Ref.Z);
+						for (TActorIterator<AActor> DIt(DW); DIt; ++DIt)
+						{
+							TArray<UStaticMeshComponent*> Comps;
+							DIt->GetComponents(Comps);
+							for (UStaticMeshComponent* C : Comps)
+							{
+								UStaticMesh* SM = C ? C->GetStaticMesh() : nullptr;
+								if (!SM) { continue; }
+								const FString MeshName = SM->GetName();
+								const double MeshZ = SM->GetBoundingBox().GetSize().Z;
+								if (UInstancedStaticMeshComponent* ISM = Cast<UInstancedStaticMeshComponent>(C))
+								{
+									const int32 Total = ISM->GetInstanceCount();
+									int32 Near = 0;
+									double ZExt = 0.0;
+									for (int32 i = 0; i < Total; ++i)
+									{
+										FTransform T;
+										if (ISM->GetInstanceTransform(i, T, /*bWorldSpace=*/true) &&
+											FVector::Dist(T.GetLocation(), Ref) < 15000.0)
+										{
+											++Near;
+											ZExt = FMath::Max(ZExt, MeshZ * T.GetScale3D().Z);
+										}
+									}
+									if (Near > 0)
+									{
+										UE_LOG(LogWbCore, Warning,
+											TEXT("DUMP-NEARBY ISM %s owner=%s mesh=%s nah=%d/%d Zca=%.0fcm"),
+											*C->GetClass()->GetName(), *DIt->GetName(), *MeshName, Near, Total, ZExt);
+									}
+								}
+								else if (FVector::Dist(C->Bounds.Origin, Ref) < 15000.0)
+								{
+									UE_LOG(LogWbCore, Warning,
+										TEXT("DUMP-NEARBY SMC owner=%s mesh=%s Zext=%.0fcm"),
+										*DIt->GetName(), *MeshName, C->Bounds.BoxExtent.Z);
+								}
+							}
+						}
+						UE_LOG(LogWbCore, Warning, TEXT("DUMP-NEARBY: fertig."));
+					}
+				}
+			}
+
 			RequestDiagnosticScreenshot();
 		}
 	}
