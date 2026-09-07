@@ -25,6 +25,7 @@
 #include "World/WiesbadenNerobergbahn.h"
 #include "World/WiesbadenNerotalbahn.h"
 #include "World/WiesbadenNerotal48.h"
+#include "World/WiesbadenLandmarks.h"
 
 AWiesbadenGameMode::AWiesbadenGameMode()
 {
@@ -109,6 +110,19 @@ void AWiesbadenGameMode::BeginPlay()
 		GartenWorld->SpawnActor<AWiesbadenNerotal48>(
 			AWiesbadenNerotal48::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator, GartenParams);
+	}
+
+	// Wiesbaden-Wahrzeichen (Marktkirche, Russisch-Orthodoxe Kirche): setzen
+	// sich wie die Bahnen selbst anhand ihrer OSM-Koordinaten und bauen sich
+	// aus Primitiven, sobald ihre WP-Zelle gestreamt ist. Kein Re-Bake noetig.
+	if (UWorld* LandmarkWorld = GetWorld())
+	{
+		FActorSpawnParameters LandmarkParams;
+		LandmarkParams.SpawnCollisionHandlingOverride =
+			ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		LandmarkWorld->SpawnActor<AWiesbadenLandmarks>(
+			AWiesbadenLandmarks::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
 	}
 
 	// Spielerfahrzeug einsetzen. Bei einer gebackenen Stadt liegt das
