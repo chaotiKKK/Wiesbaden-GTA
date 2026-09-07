@@ -94,9 +94,10 @@ struct WIESBADENREAL_API FRegionAssetSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets")
 	bool bPlaceIndustrial = true;
 
-	/** Rasterabstand der Baeume (cm). */
+	/** Rasterabstand der Baeume (cm). Dichter = ueppiger, naeher an der
+	 *  baumgesaeumten Referenz (echtes Wiesbaden). 900 war zu licht. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets", meta = (ClampMin = "100.0"))
-	double TreeSpacingCm = 900.0;
+	double TreeSpacingCm = 500.0;
 
 	/** Rasterabstand der Ufer-Objekte entlang des Ufers (cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets", meta = (ClampMin = "50.0"))

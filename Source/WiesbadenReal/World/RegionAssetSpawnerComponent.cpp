@@ -262,10 +262,11 @@ void URegionAssetSpawnerComponent::SpawnVaried(const TArray<FPlacedRegionAsset>&
 			continue;
 		}
 
-		// Modelle in echten Massen brauchen nur noch die Streuung.
-		const FVector Scale = bMeshesAreRealScale
+		// Modelle in echten Massen brauchen nur noch die Streuung; TreeScaleBoost
+		// hebt die Baeume Richtung der ueppigen Referenz-Strassenbaeume.
+		const FVector Scale = (bMeshesAreRealScale
 			? FVector(Asset.Scale)
-			: TreeBaseSizeCm / 100.0 * Asset.Scale;
+			: TreeBaseSizeCm / 100.0 * Asset.Scale) * TreeScaleBoost;
 
 		PerMesh[MeshIndex].Emplace(
 			FRotator(0.0f, Asset.YawDegrees, 0.0f),

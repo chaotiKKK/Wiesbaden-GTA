@@ -1574,12 +1574,13 @@ void AWiesbadenWorldBuilder::EnsureLightingActors()
 
 	if (!Sun)
 	{
-		// Pitch -24 Grad: tiefer, streifender Sonnenstand fuer lange, plastische
-		// Schatten - per Vorher/Nachher-HighResShot als bester Kompromiss aus
-		// Tiefe und Tageslicht-Helligkeit ermittelt (identisch zum Wert, den
-		// Tools/set_alkis_raking_light.py auf die gebackene Karte setzt; hier fest
-		// verankert, damit ein Re-Bake nicht auf den flachen Stand zuruecksetzt).
-		Sun = World->SpawnActor<ADirectionalLight>(High, FRotator(-24.0f, -35.0f, 0.0f), Params);
+		// Pitch -45 Grad: HOEHERER, mittaghafter Sonnenstand fuer den hellen,
+		// sonnigen Referenz-Look (echtes Wiesbaden bei Tageslicht). Der fruehere
+		// tiefe Streifstand (-24) gab lange, plastische Schatten, liess die Stadt
+		// aber duester wirken; die Referenz ist hell und sonnig. Zusammen mit dem
+		// angehobenen Himmelslicht (2.2, siehe unten) saufen die Schattenseiten
+		// nicht ab.
+		Sun = World->SpawnActor<ADirectionalLight>(High, FRotator(-45.0f, -35.0f, 0.0f), Params);
 		++Created;
 	}
 	if (Sun)
@@ -1625,13 +1626,15 @@ void AWiesbadenWorldBuilder::EnsureLightingActors()
 			// Schwarz kippen - beides ist am Bild nachgeprueft. 3.5 lag dazwischen
 			// und hielt die Schattenseiten lesbar.
 			//
-			// Mit dem jetzt tiefen, streifenden Sonnenstand (Pitch -24, siehe oben)
-			// fuellte 3.5 die langen Schatten aber wieder auf und nahm ihnen die
-			// Tiefe. 1.3 (13 Prozent - nahe am realen Tageslicht-Verhaeltnis)
-			// laesst die Streiflicht-Schatten stehen und haelt die reine
-			// Himmelslicht-Seite gerade noch lesbar. Per Vorher/Nachher-HighResShot
-			// iteriert; identisch zu Tools/set_alkis_raking_light.py.
-			Comp->SetIntensity(1.3f);
+			// Mit dem jetzt tiefen, streifenden Sonnenstand (Pitch -24) fuellte 3.5
+			// die langen Schatten wieder auf. 1.3 hielt die Streiflicht-Schatten.
+			//
+			// ZIEL JETZT: der helle, sonnige Referenz-Look (echtes Wiesbaden,
+			// Street-View-Mittagslicht) - hoehere Sonne (Pitch -45, siehe oben) UND
+			// mehr Himmelslicht, damit die verschatteten Fassaden/Gehwege nicht
+			// dunkel absaufen. 2.2 hebt die Schattenseiten sichtbar an und bleibt
+			// unter dem milchigen 3.5.
+			Comp->SetIntensity(2.2f);
 		}
 		MarkAlwaysLoaded(Sky);
 	}

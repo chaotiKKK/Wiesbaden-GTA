@@ -169,6 +169,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|RegionAssets")
 	bool bMeshesAreRealScale = true;
 
+	/**
+	 * Globaler Groessen-Faktor fuer Baeume (zur Streuung dazu).
+	 *
+	 * Die Referenz (echtes Wiesbaden, Neroberg/Nerotal) ist von hohen, ueppigen
+	 * Strassenbaeumen gepraegt; im Spiel wirkten sie zu klein/licht. > 1 macht
+	 * die Kronen voller und die Baeume hoeher, ohne die Modelle zu tauschen.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|RegionAssets", meta = (ClampMin = "0.2"))
+	float TreeScaleBoost = 1.35f;
+
 	/** Grundgroesse eines Ufer-Objekts in cm. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|RegionAssets")
 	FVector WaterfrontBaseSizeCm = FVector(120.0, 120.0, 90.0);
