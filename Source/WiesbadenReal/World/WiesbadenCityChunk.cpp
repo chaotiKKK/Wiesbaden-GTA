@@ -31,6 +31,12 @@ AWiesbadenCityChunk::AWiesbadenCityChunk()
 	BuildingStaticMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BuildingStaticMesh"));
 	BuildingStaticMesh->SetupAttachment(Root);
 
+	// Getrenntes, unsichtbares Kollisions-Mesh der Fahrbahn (nur kollisionsfaehige
+	// Sections) - so bleiben Boeschungen kollisionsfrei, obwohl SM-Kollision sonst
+	// die ganze Asset-Geometrie kocht.
+	RoadCollisionStaticMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RoadCollisionStaticMesh"));
+	RoadCollisionStaticMesh->SetupAttachment(Root);
+
 	// Kollision NEBENHER kochen, nicht im Spiel-Strang.
 	//
 	// UProceduralMeshComponent kocht seine Kollisionsdaten vorgabegemaess
@@ -140,7 +146,7 @@ void AWiesbadenCityChunk::AnchorStreamingBounds()
 	// Geometrie; ihre Bounds liefern denselben Zellmittelpunkt wie die ProcMeshes.
 	if (!bHasAnchor)
 	{
-		for (const UStaticMeshComponent* SM : { RoadStaticMesh, BuildingStaticMesh })
+		for (const UStaticMeshComponent* SM : { RoadStaticMesh, BuildingStaticMesh, RoadCollisionStaticMesh })
 		{
 			if (SM && SM->GetStaticMesh())
 			{
@@ -191,7 +197,7 @@ void AWiesbadenCityChunk::AnchorStreamingBounds()
 	}
 	// StaticMesh-Komponenten ebenso: mit Geometrie an die Actor-Position (Welt-
 	// koordinaten), leere an den Zell-Inhalt (nur sie tragen Punkt-Bounds).
-	for (UStaticMeshComponent* SM : { RoadStaticMesh, BuildingStaticMesh })
+	for (UStaticMeshComponent* SM : { RoadStaticMesh, BuildingStaticMesh, RoadCollisionStaticMesh })
 	{
 		if (!SM)
 		{
@@ -316,15 +322,15 @@ void AWiesbadenCityChunk::ApplyChunk(const FCityChunkMesh& Chunk, bool bRoadColl
 void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoadCollision, bool bBuildingCollision)
 {
 #if WITH_EDITOR
-	// Ein ProcMesh -> ein vorgekochtes StaticMesh (Render + Kollision serialisiert),
-	// an die StaticMesh-Komponente gehaengt; danach den ProcMesh-Puffer leeren, damit
-	// die gebackene Karte zur Laufzeit keine ProcMesh-Geometrie neu aufbauen/kochen muss.
-	auto BakeOne = [&](UProceduralMeshComponent* Src, UStaticMeshComponent* Dst,
-		const TCHAR* Kind, bool bCollision)
+	// Ein ProcMesh -> ein vorgekochtes StaticMesh (Render + optional gekochte
+	// Kollision), an die Komponente gehaengt. Leert den ProcMesh NICHT (die
+	// Kollisions-Extraktion braucht RoadMesh noch); das Leeren macht der Aufrufer.
+	auto BakeInto = [&](UProceduralMeshComponent* Src, UStaticMeshComponent* Dst,
+		const TCHAR* Kind, bool bCollision, bool bHideRender) -> bool
 	{
 		if (!Src || !Dst || Src->GetNumSections() == 0)
 		{
-			return;
+			return false;
 		}
 		const FString Path = FString::Printf(TEXT("/Game/Generated/Chunks/SM_%s_%d_%d"), Kind, CellX, CellY);
 		FString Err;
@@ -332,7 +338,7 @@ void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoa
 		if (!Baked)
 		{
 			UE_LOG(LogWbCore, Warning, TEXT("BakeToStaticMeshes %s (%d,%d): %s"), Kind, CellX, CellY, *Err);
-			return;
+			return false;
 		}
 		Dst->SetStaticMesh(Baked);
 		Dst->SetWorldLocation(GetActorLocation());   // Geometrie steckt in Weltkoordinaten
@@ -343,11 +349,63 @@ void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoa
 			// Verfolgerkamera (sonst zuckt der Arm an jeder Kuppe).
 			Dst->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
 		}
-		Src->ClearAllMeshSections();   // ProcMesh-Puffer leeren -> serialisiert leer
+		Dst->SetHiddenInGame(bHideRender);   // reines Kollisions-Mesh: unsichtbar, kollidiert aber
+		return true;
 	};
 
-	BakeOne(RoadMesh, RoadStaticMesh, TEXT("Road"), bRoadCollision);
-	BakeOne(BuildingMesh, BuildingStaticMesh, TEXT("Building"), bBuildingCollision);
+	// Fahrbahn RENDER: alle Sections (inkl. Boeschungen), OHNE gekochte Kollision.
+	BakeInto(RoadMesh, RoadStaticMesh, TEXT("Road"), /*bCollision=*/false, /*bHidden=*/false);
+
+	// Fahrbahn KOLLISION: nur die kollisionsfaehigen Sections (ApplyChunk setzt
+	// bEnableCollision = bRoadCollision && !Boeschung) in ein separates, unsichtbares
+	// StaticMesh mit vorgekochter Trimesh-Kollision. So bekommen Boeschungen KEINE
+	// Trimesh-Kollision (allein in Wiesbaden ~3,5 Mio Dreiecke) - wie im ProcMesh-Pfad.
+	if (bRoadCollision && RoadMesh && RoadMesh->GetNumSections() > 0)
+	{
+		UProceduralMeshComponent* ColProc = NewObject<UProceduralMeshComponent>(this);
+		ColProc->RegisterComponent();
+		int32 DstSection = 0;
+		for (int32 S = 0; S < RoadMesh->GetNumSections(); ++S)
+		{
+			const FProcMeshSection* Sec = RoadMesh->GetProcMeshSection(S);
+			if (!Sec || !Sec->bEnableCollision || Sec->ProcIndexBuffer.Num() < 3)
+			{
+				continue;
+			}
+			TArray<FVector> Verts;
+			TArray<FVector> Normals;
+			TArray<FVector2D> UVs;
+			TArray<int32> Tris;
+			Verts.Reserve(Sec->ProcVertexBuffer.Num());
+			Normals.Reserve(Sec->ProcVertexBuffer.Num());
+			UVs.Reserve(Sec->ProcVertexBuffer.Num());
+			for (const FProcMeshVertex& V : Sec->ProcVertexBuffer)
+			{
+				Verts.Add(V.Position);
+				Normals.Add(V.Normal);
+				UVs.Add(V.UV0);
+			}
+			Tris.Reserve(Sec->ProcIndexBuffer.Num());
+			for (uint32 I : Sec->ProcIndexBuffer)
+			{
+				Tris.Add(static_cast<int32>(I));
+			}
+			ColProc->CreateMeshSection(DstSection++, Verts, Tris, Normals, UVs,
+				TArray<FColor>(), TArray<FProcMeshTangent>(), /*bCreateCollision=*/true);
+		}
+		if (DstSection > 0)
+		{
+			BakeInto(ColProc, RoadCollisionStaticMesh, TEXT("RoadCol"), /*bCollision=*/true, /*bHidden=*/true);
+		}
+		ColProc->DestroyComponent();
+	}
+
+	// Gebaeude: wie bisher (Box-Koerper anderswo -> i.d.R. keine Trimesh-Kollision).
+	BakeInto(BuildingMesh, BuildingStaticMesh, TEXT("Building"), bBuildingCollision, /*bHidden=*/false);
+
+	// ProcMesh-Puffer erst JETZT leeren (die Kollisions-Extraktion brauchte RoadMesh).
+	RoadMesh->ClearAllMeshSections();
+	BuildingMesh->ClearAllMeshSections();
 
 	bBakedToStaticMesh = true;
 

@@ -60,10 +60,14 @@ public:
 	 * Proxy-Neuaufbau (~40-50 ms/Chunk) und kein Kollisions-Cook (die 736-848-ms-
 	 * ProcessLoadedPackages-Aussetzer). Nur im Editor/Bake-Pfad; ausserhalb No-op.
 	 *
-	 * MVP-Grenze: Die Road-Kollision wird als EIN Complex-as-Simple-Trimesh ueber
-	 * das ganze Road-Mesh gekocht - inkl. Boeschungen, die im ProcMesh-Pfad KEINE
-	 * Kollision trugen. Das ist Laufzeit-Physik-Speicher, NICHT der Ladeaussetzer;
-	 * die feinere Kanal-Trennung ist ein Folgeschritt.
+	 * Render und Kollision der Fahrbahn werden GETRENNT gebacken, weil SM-Kollision
+	 * (anders als das per-Section schaltbare ProcMesh) immer die GANZE Asset-
+	 * Geometrie kocht: Das sichtbare RoadStaticMesh traegt alle Sections OHNE
+	 * gekochte Kollision; ein separates, unsichtbares RoadCollisionStaticMesh kocht
+	 * die Trimesh-Kollision nur fuer die kollisionsfaehigen Sections (ApplyChunk
+	 * setzt bEnableCollision = bRoadCollision && !Boeschung). So bleiben die
+	 * Boeschungen (allein in Wiesbaden ~3,5 Mio Dreiecke) physikfrei - wie im
+	 * ProcMesh-Pfad. Gebaeude nutzen weiter die guenstigeren Box-Koerper.
 	 */
 	void BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoadCollision, bool bBuildingCollision);
 
@@ -179,6 +183,18 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Chunk")
 	UStaticMeshComponent* BuildingStaticMesh = nullptr;
+
+	/**
+	 * Unsichtbares Kollisions-StaticMesh der Fahrbahn: NUR die kollisionsfaehigen
+	 * Road-Sections (Boeschungen ausgenommen), mit vorgekochter Trimesh-Kollision.
+	 *
+	 * SM-Kollision ist immer die GANZE Asset-Geometrie (kein per-Section-Schalter
+	 * wie beim ProcMesh). Damit Boeschungen keine unbezahlbare Trimesh-Kollision
+	 * bekommen, wird gerendert (RoadStaticMesh, alle Sections) und kollidiert
+	 * (dieses Mesh, nur Fahrbahn) GETRENNT - wie im ProcMesh-Pfad.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Chunk")
+	UStaticMeshComponent* RoadCollisionStaticMesh = nullptr;
 
 	/** True, sobald BakeToStaticMeshes gelaufen ist: die Material-Setter zielen
 	 *  dann auf die StaticMesh-Slots statt auf die (geleerten) ProcMeshes. */
