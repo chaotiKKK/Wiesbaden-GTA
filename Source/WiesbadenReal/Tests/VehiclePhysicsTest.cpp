@@ -479,3 +479,50 @@ bool FVehicleFallStepTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleSlipTest,
+	"WiesbadenReal.Vehicles.Physics.Slip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * "Nicht auf Schienen": bei zuegiger Kurvenfahrt baut der Wagen einen
+ * Karosserie-Schwimmwinkel auf - er bewegt sich NICHT mehr exakt in
+ * Blickrichtung, sondern rutscht quer (dynamisches Einspurmodell). Genau das
+ * war die urspruengliche Bitte; das kinematische Modell konnte es prinzipiell
+ * nicht. Der Schlupf muss spuerbar, aber begrenzt sein (kein Ausbrechen).
+ */
+bool FVehicleSlipTest::RunTest(const FString& Parameters)
+{
+	FWiesbadenVehiclePhysics Vehicle;
+	Vehicle.Reset();
+
+	// Auf Tempo bringen, dann zuegig einlenken.
+	FWiesbadenVehiclePhysicsInput In;
+	In.Throttle = 1.0f;
+	Simulate(Vehicle, In, 6.0f);
+
+	FWiesbadenVehiclePhysicsOutput Out;
+	In.Steering = 1.0f;
+	SimulateTo(Vehicle, In, 1.5f, Out);
+
+	// Der Wagen rutscht quer: Schwimmwinkel ungleich null.
+	TestTrue(FString::Printf(TEXT("Kurvenfahrt erzeugt Schwimmwinkel (%.2f Grad, nicht auf Schienen)"),
+		Out.SlipAngleDeg),
+		FMath::Abs(Out.SlipAngleDeg) > 0.5f);
+
+	// ... aber der Wagen bricht nicht aus (Schlupf bleibt beherrschbar).
+	TestTrue(FString::Printf(TEXT("Schwimmwinkel bleibt beherrschbar (%.2f Grad)"), Out.SlipAngleDeg),
+		FMath::Abs(Out.SlipAngleDeg) < 30.0f);
+
+	// Die Quergeschwindigkeit ist real, nicht null (auf Schienen waere sie null).
+	TestTrue(FString::Printf(TEXT("Quergeschwindigkeit vorhanden (%.2f m/s)"), Out.LateralVelocityMetersPerS),
+		FMath::Abs(Out.LateralVelocityMetersPerS) > 0.1f);
+
+	// Geradeaus (nach Zuruecklenken) baut sich der Schlupf wieder ab.
+	In.Steering = 0.0f;
+	SimulateTo(Vehicle, In, 3.0f, Out);
+	TestTrue(FString::Printf(TEXT("Geradeaus laeuft der Schlupf aus (%.2f Grad)"), Out.SlipAngleDeg),
+		FMath::Abs(Out.SlipAngleDeg) < 2.0f);
+
+	return true;
+}

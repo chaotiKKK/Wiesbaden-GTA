@@ -15,6 +15,9 @@ void FWiesbadenVehiclePhysics::Reset()
 	Gear = 1;
 	EngineRpm = Powertrain.IdleRpm;
 	FuelLiters = TankCapacityLiters;
+	LateralVelocityMetersPerS = 0.0f;
+	YawRateRadPerS = 0.0f;
+	SteerAngleNorm = 0.0f;
 }
 
 float FWiesbadenVehiclePhysics::GetTotalGearRatio() const
@@ -265,7 +268,80 @@ void FWiesbadenVehiclePhysics::Tick(
 	SteerAngleNorm = AdvanceSteerAngle(
 		SteerAngleNorm, Input.Steering, SteerRatePerSecond, SteerReturnRatePerSecond, DeltaSeconds);
 
-	Out.YawRateRadPerS = ComputeYawRate(SteerAngleNorm, Acceleration);
+	// -- Querdynamik: DYNAMISCHES Einspurmodell statt kinematisch -------------
+	//
+	// Bisher fuhr der Wagen exakt in Blickrichtung (kinematisches Bicycle-Modell,
+	// yaw = v/L*tan(delta)) - kein Schlupf, kein Drift: "auf Schienen". Jetzt
+	// rechnet ein dynamisches Einspurmodell die Reifen-Seitenkraefte aus den
+	// Schraeglaufwinkeln, integriert Quergeschwindigkeit (Vy) UND Gierrate (r)
+	// und laesst den hecklastigen Kaefer quer rutschen, unter- und (unter Last)
+	// leicht uebersteuern. Ergebnis: der Wagen bewegt sich entlang (Vx, Vy),
+	// die Karosserie zeigt einen Schwimmwinkel - genau das "reale" Fahrgefuehl.
+	const float Vx = SpeedMetersPerS;
+	if (Vx > LowSpeedBlendMetersPerS)
+	{
+		const float L = FMath::Max(WheelbaseM, 0.5f);
+		const float aFront = L * (1.0f - FrontWeightFraction);   // CG -> Vorderachse
+		const float bRear = L * FrontWeightFraction;             // CG -> Hinterachse
+		const float m = FMath::Max(Powertrain.MassKg, 1.0f);
+		const float Iz = FMath::Max(YawInertiaKgM2, 1.0f);
+
+		const float UsableSteerDeg = ComputeUsableSteerAngleDeg(
+			MaxSteerAngleDeg, Vx, SteerFalloffSpeedMetersPerS);
+		const float Delta = FMath::DegreesToRadians(SteerAngleNorm * UsableSteerDeg);
+
+		const float Vy = LateralVelocityMetersPerS;
+		const float r = YawRateRadPerS;
+
+		// Schraeglaufwinkel vorn/hinten (klein-Winkel ueber atan2 stabil).
+		const float AlphaF = FMath::Atan2(Vy + aFront * r, Vx) - Delta;
+		const float AlphaR = FMath::Atan2(Vy - bRear * r, Vx);
+
+		// Reibungskreis: die LAENGSkraft (Antrieb/Bremse) verbraucht Grip, der
+		// dann quer fehlt. Der verbleibende Queranteil ist Wurzel(1 - (a_x/mu g)^2)
+		// - dieselbe Kopplung wie ComputeAvailableLateralAccel. Ohne sie liesse
+		// sich unter Vollbremsung genauso scharf einlenken wie ohne (Schienen).
+		const float LatFraction = ComputeAvailableLateralAccel(
+			MuTraction, GravityMetersPerS2, Acceleration)
+			/ FMath::Max(MuTraction * GravityMetersPerS2, 0.01f);
+
+		// Reifen-Seitenkraefte, linear, im Reibungskreis je Achse gesaettigt.
+		const float FrontLoad = m * GravityMetersPerS2 * FrontWeightFraction;
+		const float RearLoad = m * GravityMetersPerS2 * (1.0f - FrontWeightFraction);
+		const float FyfMax = MuTraction * FrontLoad * LatFraction;
+		const float FyrMax = MuTraction * RearLoad * LatFraction;
+		const float Fyf = FMath::Clamp(-CorneringStiffnessFrontNPerRad * AlphaF, -FyfMax, FyfMax);
+		const float Fyr = FMath::Clamp(-CorneringStiffnessRearNPerRad * AlphaR, -FyrMax, FyrMax);
+
+		// Bewegungsgleichungen (Zentripetalterm -Vx*r).
+		const float dVy = (Fyf + Fyr) / m - Vx * r;
+		const float dr = (aFront * Fyf - bRear * Fyr) / Iz;
+
+		LateralVelocityMetersPerS = Vy + dVy * DeltaSeconds;
+		YawRateRadPerS = r + dr * DeltaSeconds;
+
+		// Sicherung gegen Ausbrechen: Schwimmwinkel und Gierrate begrenzen. Die
+		// stationaere Gierrate ergibt sich physikalisch aus a_lat = Vx*r <= mu*g;
+		// die Klemmung deckelt nur transiente UEberschwinger auf dieses Limit.
+		LateralVelocityMetersPerS =
+			FMath::Clamp(LateralVelocityMetersPerS, -0.7f * Vx - 1.0f, 0.7f * Vx + 1.0f);
+		const float MaxYaw = MuTraction * GravityMetersPerS2 / FMath::Max(Vx, 1.0f);
+		YawRateRadPerS = FMath::Clamp(YawRateRadPerS, -MaxYaw, MaxYaw);
+	}
+	else
+	{
+		// Langsam/Stand/Rueckwaerts: kinematisch (dynamisches Modell singulaer bei
+		// v->0). Querschlupf sanft abbauen, damit kein Rest-Drift haengen bleibt.
+		YawRateRadPerS = ComputeYawRate(SteerAngleNorm, Acceleration);
+		LateralVelocityMetersPerS =
+			FMath::FInterpTo(LateralVelocityMetersPerS, 0.0f, DeltaSeconds, 5.0f);
+	}
+
+	Out.YawRateRadPerS = YawRateRadPerS;
+	Out.LateralVelocityMetersPerS = LateralVelocityMetersPerS;
+	Out.SlipAngleDeg = (FMath::Abs(Vx) > 0.5f)
+		? FMath::RadiansToDegrees(FMath::Atan2(LateralVelocityMetersPerS, FMath::Abs(Vx)))
+		: 0.0f;
 	Out.SteerAngleNorm = SteerAngleNorm;
 	Out.ForwardAccelerationMetersPerS2 = Acceleration;
 

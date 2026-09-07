@@ -518,6 +518,13 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 	const FVector Forward = GetActorForwardVector();
 	const double SpeedCmPerS = Output.ForwardSpeedMetersPerS * MetersToCm;
 
+	// QUERbewegung (Schlupf/Drift) aus dem dynamischen Einspurmodell: der Wagen
+	// faehrt nicht mehr exakt in Blickrichtung, sondern hat eine Querkomponente
+	// entlang der rechten Fahrzeugachse - das ist der Kern des "nicht auf
+	// Schienen"-Gefuehls (Untersteuern, Heck kommt, Drift).
+	const FVector Right = GetActorRightVector();
+	const double LateralCmPerS = Output.LateralVelocityMetersPerS * MetersToCm;
+
 	// -- Ueberflug: Gebaeude voraus? ----------------------------------------
 	//
 	// Der Wagen kracht nicht in Haeuser, er fliegt darueber - rund zehn Meter
@@ -586,7 +593,8 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 	// aber wer erst dicht vor der Wand Gas gibt, wuerde vom Sweep gestoppt,
 	// bevor die Steigrate ihn ueber die Kante traegt.
 	FHitResult MoveHit;
-	const FVector Wanted = Forward * (SpeedCmPerS * DeltaSeconds);
+	const FVector Wanted =
+		(Forward * SpeedCmPerS + Right * LateralCmPerS) * DeltaSeconds;
 
 	// Kollision AUSDRUECKLICH gegen die Kollisionsbox pruefen.
 	//

@@ -78,6 +78,20 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysicsOutput
 	/** Aktueller Lenkeinschlag -1..1 (Zustand, nicht die rohe Eingabe). */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
 	float SteerAngleNorm = 0.0f;
+
+	/**
+	 * QUERgeschwindigkeit im Fahrzeug-Lokalsystem (m/s, +Y = rechts).
+	 *
+	 * Das ist der Kern des "nicht auf Schienen"-Gefuehls: der Wagen bewegt sich
+	 * nicht mehr exakt in Blickrichtung, sondern kann quer rutschen (Schlupf,
+	 * Drift). Das Fahrzeug addiert diese Komponente zur Laengsbewegung.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
+	float LateralVelocityMetersPerS = 0.0f;
+
+	/** Karosserie-Schwimmwinkel in Grad (atan(Vy/Vx)) - fuer HUD/Diagnose. */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
+	float SlipAngleDeg = 0.0f;
 };
 
 /**
@@ -267,6 +281,40 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	// deutlich weniger Seitenfuehrung aufbauen als moderne Guerteilreifen.
 	float MuTraction = 0.75f;
 
+	// -- Dynamisches Einspurmodell (Querschlupf/Drift) --------------------
+	//
+	// Das kinematische Bicycle-Modell laesst den Wagen exakt in Blickrichtung
+	// fahren - kein Schlupf, kein Drift, kein Unter-/Uebersteuern: "auf
+	// Schienen". Das dynamische Einspurmodell rechnet stattdessen die
+	// Reifen-Seitenkraefte aus den Schraeglaufwinkeln und laesst den Wagen quer
+	// rutschen. Ab LowSpeedBlend aktiv (bei v->0 ist das Modell singulaer).
+
+	/** Schraeglaufsteifigkeit Vorderachse (N je rad Schraeglaufwinkel). */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1000.0"))
+	float CorneringStiffnessFrontNPerRad = 30000.0f;
+
+	/**
+	 * Schraeglaufsteifigkeit Hinterachse. Bewusst HOEHER als vorn: der Kaefer
+	 * ist hecklastig (Motor hinten) und neigt zum Uebersteuern; eine steifere
+	 * Hinterachse haelt ihn ueber den ganzen Geschwindigkeitsbereich stabil
+	 * (kritische Geschwindigkeit ueber der Hoechstgeschwindigkeit), laesst aber
+	 * unter Last/hartem Einlenken das Heck gutmuetig kommen.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1000.0"))
+	float CorneringStiffnessRearNPerRad = 36000.0f;
+
+	/** Giertraegheitsmoment um die Hochachse (kg*m^2). ~ m*a*b fuer einen PKW. */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1.0"))
+	float YawInertiaKgM2 = 1150.0f;
+
+	/** Gewichtsanteil auf der Vorderachse (Kaefer hecklastig: ~0,42). */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.1", ClampMax = "0.9"))
+	float FrontWeightFraction = 0.42f;
+
+	/** Unterhalb dieser Geschwindigkeit kinematisch lenken (m/s). */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.5"))
+	float LowSpeedBlendMetersPerS = 3.0f;
+
 	// -- Zustand ----------------------------------------------------------
 	/** Aktuelle Geschwindigkeit entlang der Fahrzeug-X-Achse (m/s). */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
@@ -288,6 +336,14 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	float SteerAngleNorm = 0.0f;
+
+	/** Quergeschwindigkeit im Lokalsystem (m/s, +Y = rechts) - Schlupf-Zustand. */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float LateralVelocityMetersPerS = 0.0f;
+
+	/** Gierrate als integrierter Zustand (rad/s, + = rechts). */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float YawRateRadPerS = 0.0f;
 
 	/**
 	 * Treibt die Laengs-/Querdynamik einen Schritt weiter.
