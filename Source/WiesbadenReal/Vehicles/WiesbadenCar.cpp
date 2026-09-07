@@ -534,7 +534,13 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 	// Das zweite Merkmal haelt Bordsteine heraus: deren Wand ist genauso
 	// steil, ihre Oberkante liegt aber auf Strassenhoehe - ohne die Pruefung
 	// wuerde jeder Bordstein den Wagen zehn Meter in die Luft schicken.
-	if (UWorld* ProbeWorld = GetWorld())
+	//
+	// STANDARD AUS (bEnableBuildingFlyOver): der Ueberflug warf den Wagen bei
+	// normaler Fahrt an jeder Hauswand hoch ueber die Daecher (trudelnder
+	// Absturz = "Kaefer fliegt ueber die Haeuser"). Ist er aus, wird nie ein
+	// Ueberflug ausgeloest; der Wagen bleibt am Boden und schiebt an Waenden
+	// entlang. Der Ueberflug bleibt als bewusst schaltbares Feature erhalten.
+	if (UWorld* ProbeWorld = bEnableBuildingFlyOver ? GetWorld() : nullptr)
 	{
 		const FVector ForwardFlat =
 			FVector::VectorPlaneProject(Forward, FVector::UpVector).GetSafeNormal();
@@ -608,7 +614,35 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 	//
 	// Beim Fussgaenger faellt derselbe Aufruf nicht auf, weil dort die
 	// KAPSEL die Wurzel ist - dort funktioniert er.
-	const bool bBlocked = !bFlyingOverBuilding && SweepVehicle(Wanted, MoveHit);
+	bool bBlocked = !bFlyingOverBuilding && SweepVehicle(Wanted, MoveHit);
+
+	// Step-up: niedrige Stufen (Bordsteine bis StepUpMaxCm) NICHT als Wand
+	// behandeln - sonst bleibt der Wagen am Bordstein haengen. Die Oberkante der
+	// Blockade kurz DAHINTER abtasten: der Abwaertsstrahl startet nur wenig ueber
+	// der maximalen Stufenhoehe, sodass eine echte Hauswand (Balken bis zum Dach)
+	// den Strahl beim Start durchdringt -> Treffer weit oben -> KEIN Step-up,
+	// waehrend ein flacher Bordstein knapp darunter getroffen wird -> ueberfahren.
+	if (bBlocked)
+	{
+		const FVector WantedDirFlat = FVector(Wanted.X, Wanted.Y, 0.0f).GetSafeNormal();
+		if (UWorld* StepWorld = GetWorld(); StepWorld && !WantedDirFlat.IsNearlyZero())
+		{
+			const float CarBaseZ = GetActorLocation().Z - GroundClearanceCm;
+			const FVector Behind = MoveHit.ImpactPoint + WantedDirFlat * 45.0f;
+			const FVector StepStart(Behind.X, Behind.Y, CarBaseZ + StepUpMaxCm + 10.0f);
+			FHitResult StepHit;
+			FCollisionQueryParams StepParams(SCENE_QUERY_STAT(WbCarStepUp), true);
+			StepParams.AddIgnoredActor(this);
+			if (StepWorld->LineTraceSingleByChannel(StepHit, StepStart,
+					StepStart - FVector(0.0f, 0.0f, StepUpMaxCm + 410.0f),
+					ECC_WorldStatic, StepParams)
+				&& (StepHit.ImpactPoint.Z - CarBaseZ) <= StepUpMaxCm + 1.0f)
+			{
+				// Flache Stufe: vollen Zug zulassen, die Bodenverfolgung hebt sanft an.
+				bBlocked = false;
+			}
+		}
+	}
 
 	if (bBlocked)
 	{

@@ -100,6 +100,17 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
 	float GroundClearanceCm = 35.0f;
 
+	/**
+	 * Stufen bis zu dieser Hoehe (cm) werden UEBERFAHREN statt als Wand behandelt.
+	 *
+	 * Die vorgekochte Fahrbahn-Kollision traegt 12-cm-Bordsteine als senkrechte
+	 * Kanten; der Bewegungs-Sweep blockierte daran und der Wagen blieb am
+	 * Bordstein haengen. Ist die Oberkante einer Blockade nur so hoch, wird der
+	 * volle Zug zugelassen und die Bodenverfolgung hebt den Wagen sanft hinauf.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
+	float StepUpMaxCm = 18.0f;
+
 	/** Fallbeschleunigung, wenn kein Boden gefunden wird (cm/s^2). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
 	float FallGravityCmS2 = 981.0f;
@@ -156,6 +167,18 @@ public:
 	/** Mindesthoehe eines Hindernisses ueber dem Wagen, damit geflogen wird (cm). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Ueberflug", meta = (ClampMin = "0.0"))
 	float FlyOverMinObstacleCm = 250.0f;
+
+	/**
+	 * Gebaeude-UEBERFLUG erlauben. STANDARD AUS.
+	 *
+	 * Der Ueberflug warf den Wagen bei normaler Fahrt an jeder Hauswand (und bei
+	 * gestreiften Kanten) hoch ueber die Daecher, wo er trudelnd wieder herabfiel
+	 * - im Spiel als "Kaefer fliegt ueber die Haeuser" sichtbar. Bei normaler
+	 * Fahrt bleibt der Wagen jetzt am Boden und schiebt an Waenden entlang; der
+	 * Ueberflug ist nur noch ueber diesen expliziten Schalter aktivierbar.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Ueberflug")
+	bool bEnableBuildingFlyOver = false;
 
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
