@@ -1417,16 +1417,16 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 							TEXT("DUMP-NEARBY: Blickpunkt (%.0f,%.0f,%.0f)"), Ref.X, Ref.Y, Ref.Z);
 						for (TActorIterator<AActor> DIt(DW); DIt; ++DIt)
 						{
-							TArray<UStaticMeshComponent*> Comps;
-							DIt->GetComponents(Comps);
-							for (UStaticMeshComponent* C : Comps)
+							TArray<UPrimitiveComponent*> Prims;
+							DIt->GetComponents(Prims);
+							for (UPrimitiveComponent* C : Prims)
 							{
-								UStaticMesh* SM = C ? C->GetStaticMesh() : nullptr;
-								if (!SM) { continue; }
-								const FString MeshName = SM->GetName();
-								const double MeshZ = SM->GetBoundingBox().GetSize().Z;
+								if (!C) { continue; }
 								if (UInstancedStaticMeshComponent* ISM = Cast<UInstancedStaticMeshComponent>(C))
 								{
+									UStaticMesh* SM = ISM->GetStaticMesh();
+									if (!SM) { continue; }
+									const double MeshZ = SM->GetBoundingBox().GetSize().Z;
 									const int32 Total = ISM->GetInstanceCount();
 									int32 Near = 0;
 									double ZExt = 0.0;
@@ -1434,7 +1434,7 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 									{
 										FTransform T;
 										if (ISM->GetInstanceTransform(i, T, /*bWorldSpace=*/true) &&
-											FVector::Dist(T.GetLocation(), Ref) < 15000.0)
+											FVector::Dist(T.GetLocation(), Ref) < 30000.0)
 										{
 											++Near;
 											ZExt = FMath::Max(ZExt, MeshZ * T.GetScale3D().Z);
@@ -1444,14 +1444,26 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 									{
 										UE_LOG(LogWbCore, Warning,
 											TEXT("DUMP-NEARBY ISM %s owner=%s mesh=%s nah=%d/%d Zca=%.0fcm"),
-											*C->GetClass()->GetName(), *DIt->GetName(), *MeshName, Near, Total, ZExt);
+											*C->GetClass()->GetName(), *DIt->GetName(), *SM->GetName(), Near, Total, ZExt);
 									}
 								}
-								else if (FVector::Dist(C->Bounds.Origin, Ref) < 15000.0)
+								else
 								{
+									// Alle uebrigen Primitive (SMC, ProcMesh, Skeletal, ...):
+									// nach Groesse filtern, um das breite Zacken-Asset zu finden.
+									const FBoxSphereBounds B = C->Bounds;
+									if (FVector::Dist(B.Origin, Ref) > 30000.0) { continue; }
+									const double XY = FMath::Max(B.BoxExtent.X, B.BoxExtent.Y);
+									if (XY < 300.0 && B.BoxExtent.Z < 300.0) { continue; }
+									FString MeshName = TEXT("-");
+									if (UStaticMeshComponent* SMC = Cast<UStaticMeshComponent>(C))
+									{
+										if (SMC->GetStaticMesh()) { MeshName = SMC->GetStaticMesh()->GetName(); }
+									}
 									UE_LOG(LogWbCore, Warning,
-										TEXT("DUMP-NEARBY SMC owner=%s mesh=%s Zext=%.0fcm"),
-										*DIt->GetName(), *MeshName, C->Bounds.BoxExtent.Z);
+										TEXT("DUMP-NEARBY PRIM %s owner=%s mesh=%s dist=%.0f XY=%.0f Z=%.0f"),
+										*C->GetClass()->GetName(), *DIt->GetName(), *MeshName,
+										FVector::Dist(B.Origin, Ref), XY, B.BoxExtent.Z);
 								}
 							}
 						}
