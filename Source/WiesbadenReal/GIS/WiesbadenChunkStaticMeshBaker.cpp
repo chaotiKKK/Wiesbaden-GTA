@@ -21,7 +21,7 @@ namespace WiesbadenChunkStaticMeshBaker
 {
 
 UStaticMesh* BakeFromProcMesh(UProceduralMeshComponent* Source, const FString& PackagePath,
-	bool bCookComplexCollision, FString& OutError)
+	bool bCookComplexCollision, bool bEnableNanite, FString& OutError)
 {
 #if !WITH_EDITOR
 	OutError = TEXT("BakeFromProcMesh ist nur im Editor verfuegbar (Bake-Pfad).");
@@ -128,6 +128,14 @@ UStaticMesh* BakeFromProcMesh(UProceduralMeshComponent* Source, const FString& P
 	Mesh->InitResources();
 	Mesh->SetLightingGuid();
 
+	// Nanite VOR dem Build setzen: die Nanite-Ressourcen (samt Fallback-Mesh)
+	// werden in BuildFromMeshDescriptions/PostEditChange miterzeugt und ins Asset
+	// serialisiert. Die Stadt besteht aus Zehntausenden statischen Fahrbahn- und
+	// Gebaeude-Dreiecken - genau der Fall, fuer den Nanite die Draw-Calls
+	// zusammenfasst und das Dreiecks-LOD GPU-seitig aufloest. Nur fuer sichtbare
+	// Render-Meshes; das unsichtbare Kollisions-Mesh rendert nie (bEnableNanite=false).
+	Mesh->NaniteSettings.bEnabled = bEnableNanite;
+
 	// Material-Slots je Section (Standardmaterial; die City weist ihre echten
 	// Materialien ohnehin per SetMaterial/Instanz zu).
 	UMaterialInterface* DefaultMat = UMaterial::GetDefaultMaterial(MD_Surface);
@@ -180,9 +188,9 @@ UStaticMesh* BakeFromProcMesh(UProceduralMeshComponent* Source, const FString& P
 	}
 
 	UE_LOG(LogWbCore, Log,
-		TEXT("ChunkStaticMeshBaker: %s gebacken (%d Sections, Kollision %s) -> %s"),
+		TEXT("ChunkStaticMeshBaker: %s gebacken (%d Sections, Kollision %s, Nanite %s) -> %s"),
 		*AssetName, NumSections, bCookComplexCollision ? TEXT("gekocht") : TEXT("keine"),
-		*FileName);
+		bEnableNanite ? TEXT("an") : TEXT("aus"), *FileName);
 	return Mesh;
 #endif // WITH_EDITOR
 }

@@ -50,7 +50,7 @@ bool FChunkStaticMeshBakerTest::RunTest(const FString& Parameters)
 	const FString PackagePath = TEXT("/Game/Generated/Test/SM_ChunkBakerTest");
 	FString Err;
 	UStaticMesh* Mesh = WiesbadenChunkStaticMeshBaker::BakeFromProcMesh(
-		Pm, PackagePath, /*bCookComplexCollision=*/true, Err);
+		Pm, PackagePath, /*bCookComplexCollision=*/true, /*bEnableNanite=*/false, Err);
 
 	TestTrue(FString::Printf(TEXT("Kein Fehler ('%s')"), *Err), Err.IsEmpty());
 	if (!TestNotNull(TEXT("StaticMesh erzeugt"), Mesh))
@@ -78,10 +78,28 @@ bool FChunkStaticMeshBakerTest::RunTest(const FString& Parameters)
 			BS->CollisionTraceFlag == CTF_UseComplexAsSimple);
 	}
 
-	// Aufraeumen: das Test-Asset von der Platte entfernen.
+	// Nanite-Pfad: derselbe Bake mit bEnableNanite=true muss Nanite auf dem Asset
+	// setzen und weiter gueltige Render-Daten liefern (Fahrbahn/Gebaeude sind das
+	// klassische Nanite-Ziel: viele statische Dreiecke, Draw-Call-Zusammenfassung).
+	const FString NanitePath = TEXT("/Game/Generated/Test/SM_ChunkBakerTestNanite");
+	FString NaniteErr;
+	UStaticMesh* NaniteMesh = WiesbadenChunkStaticMeshBaker::BakeFromProcMesh(
+		Pm, NanitePath, /*bCookComplexCollision=*/false, /*bEnableNanite=*/true, NaniteErr);
+	TestTrue(FString::Printf(TEXT("Nanite-Bake ohne Fehler ('%s')"), *NaniteErr), NaniteErr.IsEmpty());
+	if (TestNotNull(TEXT("Nanite-StaticMesh erzeugt"), NaniteMesh))
+	{
+		TestTrue(TEXT("NaniteSettings.bEnabled gesetzt"), NaniteMesh->NaniteSettings.bEnabled);
+		TestTrue(TEXT("Nanite-Mesh hat Render-Daten"),
+			NaniteMesh->GetRenderData() != nullptr && NaniteMesh->GetRenderData()->LODResources.Num() > 0);
+	}
+
+	// Aufraeumen: die Test-Assets von der Platte entfernen.
 	const FString FileName = FPackageName::LongPackageNameToFilename(
 		PackagePath, FPackageName::GetAssetPackageExtension());
 	IFileManager::Get().Delete(*FileName, /*RequireExists=*/false, /*EvenReadOnly=*/true);
+	const FString NaniteFileName = FPackageName::LongPackageNameToFilename(
+		NanitePath, FPackageName::GetAssetPackageExtension());
+	IFileManager::Get().Delete(*NaniteFileName, /*RequireExists=*/false, /*EvenReadOnly=*/true);
 
 	return true;
 }

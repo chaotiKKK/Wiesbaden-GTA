@@ -39,6 +39,9 @@ namespace WiesbadenChunkStaticMeshBaker
 	 * @param PackagePath         Ziel-Assetpfad, z. B. "/Game/Generated/Chunks/SM_..".
 	 * @param bCookComplexCollision  true -> Trimesh-Kollision (Complex-as-Simple)
 	 *                            gekocht ins Asset; false -> ohne Kollision.
+	 * @param bEnableNanite       true -> Nanite auf dem Asset aktiviert (nur fuer
+	 *                            SICHTBARE Render-Meshes sinnvoll; unsichtbare
+	 *                            Kollisions-Meshes rendern nicht -> false).
 	 * @param OutError            Fehlermeldung bei Rueckgabe nullptr.
 	 * @return                    Gespeichertes UStaticMesh oder nullptr.
 	 */
@@ -46,5 +49,6 @@ namespace WiesbadenChunkStaticMeshBaker
 		UProceduralMeshComponent* Source,
 		const FString& PackagePath,
 		bool bCookComplexCollision,
+		bool bEnableNanite,
 		FString& OutError);
 }

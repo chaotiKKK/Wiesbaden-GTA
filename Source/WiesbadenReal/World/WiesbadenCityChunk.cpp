@@ -326,7 +326,7 @@ void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoa
 	// Kollision), an die Komponente gehaengt. Leert den ProcMesh NICHT (die
 	// Kollisions-Extraktion braucht RoadMesh noch); das Leeren macht der Aufrufer.
 	auto BakeInto = [&](UProceduralMeshComponent* Src, UStaticMeshComponent* Dst,
-		const TCHAR* Kind, bool bCollision, bool bHideRender) -> bool
+		const TCHAR* Kind, bool bCollision, bool bHideRender, bool bNanite) -> bool
 	{
 		if (!Src || !Dst || Src->GetNumSections() == 0)
 		{
@@ -334,7 +334,7 @@ void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoa
 		}
 		const FString Path = FString::Printf(TEXT("/Game/Generated/Chunks/SM_%s_%d_%d"), Kind, CellX, CellY);
 		FString Err;
-		UStaticMesh* Baked = WiesbadenChunkStaticMeshBaker::BakeFromProcMesh(Src, Path, bCollision, Err);
+		UStaticMesh* Baked = WiesbadenChunkStaticMeshBaker::BakeFromProcMesh(Src, Path, bCollision, bNanite, Err);
 		if (!Baked)
 		{
 			UE_LOG(LogWbCore, Warning, TEXT("BakeToStaticMeshes %s (%d,%d): %s"), Kind, CellX, CellY, *Err);
@@ -353,8 +353,9 @@ void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoa
 		return true;
 	};
 
-	// Fahrbahn RENDER: alle Sections (inkl. Boeschungen), OHNE gekochte Kollision.
-	BakeInto(RoadMesh, RoadStaticMesh, TEXT("Road"), /*bCollision=*/false, /*bHidden=*/false);
+	// Fahrbahn RENDER: alle Sections (inkl. Boeschungen), OHNE gekochte Kollision,
+	// mit Nanite (sichtbares Mesh).
+	BakeInto(RoadMesh, RoadStaticMesh, TEXT("Road"), /*bCollision=*/false, /*bHidden=*/false, /*bNanite=*/true);
 
 	// Fahrbahn KOLLISION: nur die kollisionsfaehigen Sections (ApplyChunk setzt
 	// bEnableCollision = bRoadCollision && !Boeschung) in ein separates, unsichtbares
@@ -395,13 +396,15 @@ void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoa
 		}
 		if (DstSection > 0)
 		{
-			BakeInto(ColProc, RoadCollisionStaticMesh, TEXT("RoadCol"), /*bCollision=*/true, /*bHidden=*/true);
+			// Unsichtbares Kollisions-Mesh: rendert nie -> KEIN Nanite (spart Bake-Zeit/Speicher).
+			BakeInto(ColProc, RoadCollisionStaticMesh, TEXT("RoadCol"), /*bCollision=*/true, /*bHidden=*/true, /*bNanite=*/false);
 		}
 		ColProc->DestroyComponent();
 	}
 
-	// Gebaeude: wie bisher (Box-Koerper anderswo -> i.d.R. keine Trimesh-Kollision).
-	BakeInto(BuildingMesh, BuildingStaticMesh, TEXT("Building"), bBuildingCollision, /*bHidden=*/false);
+	// Gebaeude: wie bisher (Box-Koerper anderswo -> i.d.R. keine Trimesh-Kollision),
+	// mit Nanite (sichtbares Mesh).
+	BakeInto(BuildingMesh, BuildingStaticMesh, TEXT("Building"), bBuildingCollision, /*bHidden=*/false, /*bNanite=*/true);
 
 	// ProcMesh-Puffer erst JETZT leeren (die Kollisions-Extraktion brauchte RoadMesh).
 	RoadMesh->ClearAllMeshSections();
