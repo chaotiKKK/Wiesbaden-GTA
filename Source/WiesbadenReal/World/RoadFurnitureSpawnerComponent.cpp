@@ -34,6 +34,10 @@ URoadFurnitureSpawnerComponent::URoadFurnitureSpawnerComponent()
 	MarkingInstances->SetupAttachment(this);
 	MarkingInstances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
+	Zone30Instances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("Zone30Symbols"));
+	Zone30Instances->SetupAttachment(this);
+	Zone30Instances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
 	LampPostInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("LampPosts"));
 	LampPostInstances->SetupAttachment(this);
 	LampPostInstances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -45,6 +49,7 @@ void URoadFurnitureSpawnerComponent::ClearFurniture()
 	if (DelineatorPostInstances) { DelineatorPostInstances->ClearInstances(); }
 	if (DelineatorReflectorInstances) { DelineatorReflectorInstances->ClearInstances(); }
 	if (MarkingInstances) { MarkingInstances->ClearInstances(); }
+	if (Zone30Instances) { Zone30Instances->ClearInstances(); }
 
 	for (UHierarchicalInstancedStaticMeshComponent* Panel : SignPanelInstances)
 	{
@@ -101,6 +106,8 @@ void URoadFurnitureSpawnerComponent::SpawnFurniture(const FRoadFurnitureLayout& 
 	DelineatorPostInstances->SetCollisionEnabled(Collision);
 	DelineatorReflectorInstances->SetCollisionEnabled(Collision);
 	MarkingInstances->SetCollisionEnabled(Collision);
+	// Aufgemalte "30" -> immer kollisionsfrei, unabhaengig von bCreateCollision.
+	if (Zone30Instances) { Zone30Instances->SetCollisionEnabled(ECollisionEnabled::NoCollision); }
 	LampPostInstances->SetCollisionEnabled(Collision);
 
 	// Sichtweiten setzen: Ohne sie zeichnet die Engine auch Leitpfosten, die
@@ -287,13 +294,44 @@ void URoadFurnitureSpawnerComponent::SpawnMarkings(
 			TEXT("Ausstattungs-Spawner: kein MarkingMaterial zugewiesen - Markierungen rendern mit Default-Material."));
 	}
 
+	// "30"-Zonensymbole tragen ein eigenes, maskiertes Material (weisse Ziffern
+	// auf transparentem Grund) -> eigenes ISM. Fehlt das Material, bleibt der
+	// Default (grau) - besser als gar keine Markierung.
+	if (Zone30Instances)
+	{
+		Zone30Instances->SetStaticMesh(PlaneMesh);
+		if (UMaterialInterface* Zone30Mat = LoadObject<UMaterialInterface>(
+				nullptr, TEXT("/Game/Materials/City/M_WbZone30.M_WbZone30")))
+		{
+			Zone30Instances->SetMaterial(0, Zone30Mat);
+		}
+	}
+
 	for (const FMarkingInstance& Marking : Markings)
 	{
 		const FVector Dir = Marking.Direction.GetSafeNormal2D();
 		const float Yaw = Dir.Rotation().Yaw;
 		const float WidthScale = static_cast<float>(Marking.WidthCm) / 100.0f;
 
-		if (Marking.Kind == ERoadMarkingKind::StopLine)
+		if (Marking.Kind == ERoadMarkingKind::SpeedZone30)
+		{
+			// Aufgemalte "30": eine flache Quad-Instanz mittig auf der Fahrbahn.
+			// Die Textur laeuft hochkant (Ziffern entlang V = lokal +Y). Plane um
+			// Yaw-90 drehen, damit die Ziffern LAENGS zur Fahrtrichtung stehen;
+			// LengthCm laeuft dann laengs, WidthCm quer.
+			if (Zone30Instances)
+			{
+				const FVector Center = Marking.Center + FVector(0.0, 0.0, MarkingZOffsetCm);
+				Zone30Instances->AddInstance(
+					FTransform(
+						FRotator(0.0f, Yaw - 90.0f, 0.0f).Quaternion(),
+						Center,
+						FVector(WidthScale, static_cast<float>(Marking.LengthCm) / 100.0f, 1.0f)),
+					/*bWorldSpace=*/true);
+				++LastSpawnedMarkingCount;
+			}
+		}
+		else if (Marking.Kind == ERoadMarkingKind::StopLine)
 		{
 			// Durchgehende Haltlinie: eine Quad-Instanz quer zur Fahrbahn.
 			const FVector Center = Marking.Center + FVector(0.0, 0.0, MarkingZOffsetCm);

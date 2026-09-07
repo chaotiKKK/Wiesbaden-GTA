@@ -598,6 +598,89 @@ void URoadFurnitureGenerator::PlaceMarkings(
 			Layout.Markings.Add(Marking);
 		}
 	}
+
+	// -- Tempo-30-Zonen: grosse weisse "30" auf die Fahrbahn ----------------
+	//
+	// Deutsche 30-Zonen tragen ein aufgemaltes "30" auf dem Asphalt. Als
+	// 30-Zone gelten Wohnstrassen und verkehrsberuhigte Bereiche sowie alles
+	// mit maxspeed <= 30; Durchgangsstrassen (Primary..Tertiary, i.d.R. 50)
+	// bleiben unmarkiert. Die "30" wird entlang der Fahrbahnachse in festem
+	// Abstand gesetzt (dieselbe getrimmte Mittellinie, die auch die
+	// Fahrbahndecke traegt), mittig auf der Fahrbahn und laengs zur
+	// Fahrtrichtung ausgerichtet.
+	if (Settings.bPlaceMarkings)
+	{
+		constexpr double Zone30SpacingCm = 5000.0;     // ~alle 50 m eine "30"
+		constexpr double Zone30LengthCm = 420.0;       // Ziffernhoehe (laengs)
+		constexpr double Zone30WidthCm = 190.0;        // Ziffernbreite (quer)
+		constexpr double Zone30MinSegmentCm = 3000.0;  // Kreuzungsstummel ueberspringen
+
+		for (const FRoadSegment& Segment : Network.Segments)
+		{
+			if (Segment.bIsArea)
+			{
+				continue;
+			}
+			const bool bIsThirtyZone =
+				Segment.HighwayType == EOSMHighwayType::LivingStreet ||
+				Segment.HighwayType == EOSMHighwayType::Residential ||
+				Segment.MaxSpeedKmh <= 30.5;
+			if (!bIsThirtyZone)
+			{
+				continue;
+			}
+
+			const TArray<FVector>& Line = (Segment.TrimmedCenterline.Num() >= 2)
+				? Segment.TrimmedCenterline : Segment.Centerline;
+			if (Line.Num() < 2)
+			{
+				continue;
+			}
+
+			double TotalLen = 0.0;
+			for (int32 i = 1; i < Line.Num(); ++i)
+			{
+				TotalLen += FVector::Dist2D(Line[i - 1], Line[i]);
+			}
+			if (TotalLen < Zone30MinSegmentCm)
+			{
+				continue;
+			}
+
+			// Ab halbem Abstand vom Segmentanfang, dann alle Zone30SpacingCm.
+			double NextAt = Zone30SpacingCm * 0.5;
+			double Travelled = 0.0;
+			for (int32 i = 1; i < Line.Num(); ++i)
+			{
+				const FVector A = Line[i - 1];
+				const FVector B = Line[i];
+				const double SegLen = FVector::Dist2D(A, B);
+				if (SegLen <= KINDA_SMALL_NUMBER)
+				{
+					continue;
+				}
+				const FVector Tangent = (B - A).GetSafeNormal2D();
+				while (NextAt <= Travelled + SegLen)
+				{
+					const double T = (NextAt - Travelled) / SegLen;
+					FVector Center = FMath::Lerp(A, B, T);
+					Center.Z = SampleZ(HeightSampler, Center, Settings.RoadSurfaceOffsetCm);
+
+					FMarkingInstance Marking;
+					Marking.Kind = ERoadMarkingKind::SpeedZone30;
+					Marking.Center = Center;
+					Marking.Direction = Tangent;    // laengs zur Fahrtrichtung
+					Marking.LengthCm = Zone30LengthCm;
+					Marking.WidthCm = Zone30WidthCm;
+					Marking.IntersectionNodeId = 0;
+					Layout.Markings.Add(Marking);
+
+					NextAt += Zone30SpacingCm;
+				}
+				Travelled += SegLen;
+			}
+		}
+	}
 }
 
 FString FRoadFurnitureReport::ToString() const

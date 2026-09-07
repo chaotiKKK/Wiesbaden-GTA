@@ -243,6 +243,11 @@ private:
 	UPROPERTY(Transient)
 	UHierarchicalInstancedStaticMeshComponent* MarkingInstances = nullptr;
 
+	// "30"-Zonensymbole -> eigenes ISM, weil sie ein anderes (maskiertes)
+	// Material tragen als die weissen Linien in MarkingInstances.
+	UPROPERTY(Transient)
+	UHierarchicalInstancedStaticMeshComponent* Zone30Instances = nullptr;
+
 	// Laternenmasten -> ein ISM, ein Draw-Call.
 	UPROPERTY(Transient)
 	UHierarchicalInstancedStaticMeshComponent* LampPostInstances = nullptr;

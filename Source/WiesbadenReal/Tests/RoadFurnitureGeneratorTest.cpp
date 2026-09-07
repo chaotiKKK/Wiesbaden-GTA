@@ -83,16 +83,71 @@ bool FRoadFurnitureDerivedTest::RunTest(const FString& Parameters)
 	// beidseitig -> 4 je Segment -> 12 gesamt.
 	TestEqual(TEXT("12 Leitpfosten"), Layout.Delineators.Num(), 12);
 
-	// Haltlinien: je Arm eine, zusammen drei.
-	TestEqual(TEXT("3 Haltlinien"), Layout.Markings.Num(), 3);
+	// Haltlinien: je Arm eine, zusammen drei. Zusaetzlich je 30-Zonen-Segment
+	// eine "30" auf der Fahrbahn - alle drei Arme sind Wohnstrassen (bzw. Tempo
+	// 30), also je Segment eine "30" (5000-cm-Segment, 5000-cm-Abstand).
+	int32 StopLines = 0;
+	int32 Zone30 = 0;
 	for (const FMarkingInstance& Marking : Layout.Markings)
 	{
-		TestTrue(TEXT("Markierung ist Haltlinie"), Marking.Kind == ERoadMarkingKind::StopLine);
+		if (Marking.Kind == ERoadMarkingKind::StopLine) { ++StopLines; }
+		else if (Marking.Kind == ERoadMarkingKind::SpeedZone30) { ++Zone30; }
 	}
+	TestEqual(TEXT("3 Haltlinien"), StopLines, 3);
+	TestEqual(TEXT("3 Zone-30-Symbole"), Zone30, 3);
 
 	TestTrue(TEXT("Report zaehlt Schilder"), Report.SignCount == Layout.Signs.Num());
 	TestTrue(TEXT("Report zaehlt Leitpfosten"), Report.DelineatorCount == Layout.Delineators.Num());
 	TestTrue(TEXT("Report zaehlt Markierungen"), Report.MarkingCount == Layout.Markings.Num());
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoadFurnitureZone30Test,
+	"WiesbadenReal.GIS.RoadFurniture.Zone30",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRoadFurnitureZone30Test::RunTest(const FString& Parameters)
+{
+	// Zwei gerade 100-m-Strassen ohne Kreuzung: eine Wohnstrasse (30-Zone, y=0)
+	// und eine Hauptstrasse Tempo 50 (keine 30-Zone, y=3000).
+	FRoadNetwork Network;
+	FRoadSegment Wohn = MakeSegment(0, 1, 2,
+		{ FVector(0.0, 0.0, 0.0), FVector(10000.0, 0.0, 0.0) }, /*SpeedKmh=*/30.0);
+	FRoadSegment Haupt = MakeSegment(1, 3, 4,
+		{ FVector(0.0, 3000.0, 0.0), FVector(10000.0, 3000.0, 0.0) }, /*SpeedKmh=*/50.0);
+	Haupt.HighwayType = EOSMHighwayType::Primary;   // Durchgangsstrasse, keine 30-Zone
+	Network.Segments.Add(Wohn);
+	Network.Segments.Add(Haupt);
+
+	FFlatHeightSampler Sampler(0.0);
+	FRoadFurnitureSettings Settings;
+	FRoadFurnitureLayout Layout;
+
+	URoadFurnitureGenerator* Generator = NewObject<URoadFurnitureGenerator>();
+	const FRoadFurnitureReport Report =
+		Generator->Generate(Network, nullptr, nullptr, &Sampler, Settings, Layout);
+	TestTrue(TEXT("Pass erfolgreich"), Report.bSuccess);
+
+	int32 Zone30 = 0;
+	bool bAllOnWohnstrasse = true;
+	bool bAllAlongTravel = true;
+	for (const FMarkingInstance& M : Layout.Markings)
+	{
+		if (M.Kind != ERoadMarkingKind::SpeedZone30)
+		{
+			continue;
+		}
+		++Zone30;
+		// Alle "30" liegen auf der Wohnstrasse (y ~ 0), nicht auf der Hauptstrasse.
+		if (FMath::Abs(M.Center.Y) > 100.0) { bAllOnWohnstrasse = false; }
+		// Ausrichtung laengs zur Fahrtrichtung (+X).
+		if (FMath::Abs(M.Direction.X) < 0.9) { bAllAlongTravel = false; }
+	}
+	// 100 m Laenge, 50 m Abstand, Start bei 25 m -> Positionen 25 m und 75 m.
+	TestEqual(TEXT("2 Zone-30-Symbole auf der Wohnstrasse"), Zone30, 2);
+	TestTrue(TEXT("Keine 30 auf der Tempo-50-Hauptstrasse"), bAllOnWohnstrasse);
+	TestTrue(TEXT("30 laengs zur Fahrtrichtung ausgerichtet"), bAllAlongTravel);
 
 	return true;
 }

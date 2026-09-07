@@ -19,6 +19,8 @@ enum class ERoadMarkingKind : uint8
 	StopLine    UMETA(DisplayName = "Haltlinie"),
 	/** Wartelinie (unterbrochen) an Vorfahrt-gewaehren-Kreuzungen. */
 	GiveWayLine UMETA(DisplayName = "Wartelinie"),
+	/** Auf die Fahrbahn gemalte "30" in Tempo-30-Zonen (Symbol, keine Linie). */
+	SpeedZone30 UMETA(DisplayName = "Zone-30-Symbol"),
 	MAX         UMETA(Hidden)
 };
 
