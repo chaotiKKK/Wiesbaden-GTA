@@ -518,6 +518,11 @@ void AWiesbadenNerobergbahn::PlaceStructures()
 	if (UWorld* World = GetWorld())
 	{
 		UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+		// Naturstein statt Engine-Default (grau): warmer, verwitterter Sandstein,
+		// Wiesbaden-typisch und passend zum steinernen Viadukt. Fehlt das Material,
+		// bleibt der Default - besser als ein NULL-Slot.
+		UMaterialInterface* StoneMat = LoadObject<UMaterialInterface>(
+			nullptr, TEXT("/Game/Materials/City/M_WbNaturstein.M_WbNaturstein"));
 		constexpr double PillarWidthCm = 55.0;
 		constexpr double DeckOffsetCm = 25.0;   // Pfeilerkopf knapp unter der Schiene
 		for (double S = SupportSpacingCm;
@@ -550,6 +555,10 @@ void AWiesbadenNerobergbahn::PlaceStructures()
 
 			UStaticMeshComponent* Pillar = NewObject<UStaticMeshComponent>(this);
 			Pillar->SetStaticMesh(Cube);
+			if (StoneMat)
+			{
+				Pillar->SetMaterial(0, StoneMat);
+			}
 			Pillar->SetupAttachment(Root);
 			Pillar->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 			Pillar->RegisterComponent();
