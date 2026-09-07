@@ -1017,7 +1017,7 @@ bool UBuildingGenerator::BuildSingleBuilding(
 
 	if (Settings.bGenerateRoofs)
 	{
-		BuildRoof(Ring, Holes, EavesZ, OutBuilding.RoofShape, RoofHeightCm, MaterialVariant, FacadeOverrideKey, *OutMeshData);
+		BuildRoof(Ring, Holes, EavesZ, OutBuilding.RoofShape, RoofHeightCm, MaterialVariant, FacadeOverrideKey, Settings.RoofOverhangMeters, *OutMeshData);
 	}
 
 	return true;
@@ -1150,6 +1150,7 @@ void UBuildingGenerator::BuildRoof(
 	double RoofHeightCm,
 	int32 MaterialVariant,
 	const FString& FacadeOverrideKey,
+	double RoofOverhangMeters,
 	FBuildingMeshData& OutMeshData) const
 {
 	if (OuterRing.Num() < 3)
@@ -1288,79 +1289,148 @@ void UBuildingGenerator::BuildRoof(
 	// aus Strassenperspektive kaum sichtbar ist, nicht gerechtfertigt.
 	// Fuer die Landmarken wird ohnehin ein handmodelliertes Asset gesetzt.
 
-	const FBox2D Bounds = FPolygonUtils::ComputeBounds2D(OuterRing);
-	const FVector2D Extent = Bounds.Max - Bounds.Min;
-	const bool bRidgeAlongX = Extent.X >= Extent.Y;
+	// First im LOKALEN Rahmen der flaechenminimalen (gedrehten) Box bilden -
+	// NICHT der welt-achsenparallelen AABB.
+	//
+	// ALKIS-Grundrisse sind fast nie zur UTM-Nord/Ost-Achse ausgerichtet. Die
+	// AABB-Mittellinie lief dann quer zum Gebaeude: der First stand schief, die
+	// Dachflaechen kippten durch die Waende. Die orientierte Box (schon fuer die
+	// Kollision berechnet) legt den First entlang der ECHTEN Laengsachse.
+	FVector2D BoxCenter = Centroid;
+	FVector2D BoxExtent(1.0, 1.0);
+	double BoxYaw = 0.0;
+	FPolygonUtils::ComputeMinimumAreaBox2D(OuterRing, BoxCenter, BoxExtent, BoxYaw);
 
-	// Pultdach: eine Seite bleibt auf Traufhoehe, die andere steigt an.
+	const double CosY = FMath::Cos(BoxYaw);
+	const double SinY = FMath::Sin(BoxYaw);
+	auto ToLocal = [&](const FVector2D& W) -> FVector2D
+	{
+		const double dx = W.X - BoxCenter.X;
+		const double dy = W.Y - BoxCenter.Y;
+		return FVector2D(dx * CosY + dy * SinY, -dx * SinY + dy * CosY);
+	};
+	auto ToWorld = [&](const FVector2D& L) -> FVector2D
+	{
+		return FVector2D(
+			BoxCenter.X + L.X * CosY - L.Y * SinY,
+			BoxCenter.Y + L.X * SinY + L.Y * CosY);
+	};
+
+	// First laeuft entlang der laengeren LOKALEN Achse.
+	const bool bRidgeAlongLocalX = BoxExtent.X >= BoxExtent.Y;
 	const bool bIsSkillion = (Shape == EOSMRoofShape::Skillion);
 
-	// Walmdach: der First ist kuerzer als das Gebaeude, die Stirnseiten sind
-	// ebenfalls geneigt.
+	// Walmdach: First auf beiden Enden um die halbe Gebaeudebreite eingezogen.
 	const double HipInset = (Shape == EOSMRoofShape::Hipped)
-		? FMath::Min(Extent.X, Extent.Y) * 0.5
+		? FMath::Min(BoxExtent.X, BoxExtent.Y)
 		: 0.0;
 
 	const int32 PointCount = OuterRing.Num();
 
+	// Dachueberstand: RoofOverhangMeters war bisher toter Code - Daecher sassen
+	// buendig auf den Waenden ("aufgesetzte Kartons"). Jeder Traufpunkt wandert
+	// entlang seiner gemittelten Aussennormale nach aussen; der First bleibt am
+	// Wand-Umriss. (Aeussere Ringe sind CCW erzwungen -> rechte Senkrechte aussen.)
+	const double OverhangCm = FMath::Max(0.0, RoofOverhangMeters) * MetersToCm;
+	TArray<FVector2D> EaveRing;
+	EaveRing.SetNum(PointCount);
+	{
+		auto EdgeOutN = [](const FVector2D& From, const FVector2D& To) -> FVector2D
+		{
+			const FVector2D E = (To - From).GetSafeNormal();
+			return FVector2D(E.Y, -E.X);
+		};
+		for (int32 i = 0; i < PointCount; ++i)
+		{
+			if (OverhangCm <= 0.0)
+			{
+				EaveRing[i] = OuterRing[i];
+				continue;
+			}
+			const FVector2D& P = OuterRing[i];
+			const FVector2D& Prev = OuterRing[(i + PointCount - 1) % PointCount];
+			const FVector2D& Nxt = OuterRing[(i + 1) % PointCount];
+			const FVector2D N = (EdgeOutN(Prev, P) + EdgeOutN(P, Nxt)).GetSafeNormal();
+			EaveRing[i] = P + N * OverhangCm;
+		}
+	}
+
+	auto ProjectToRidge = [&](const FVector2D& Wpt) -> FVector
+	{
+		const FVector2D L = ToLocal(Wpt);
+		if (bIsSkillion)
+		{
+			// Pultdach: Hoehe steigt linear ueber die kurze LOKALE Achse.
+			const double Alpha = bRidgeAlongLocalX
+				? (L.Y + BoxExtent.Y) / FMath::Max(2.0 * BoxExtent.Y, 1.0)
+				: (L.X + BoxExtent.X) / FMath::Max(2.0 * BoxExtent.X, 1.0);
+			return FVector(Wpt.X, Wpt.Y, FMath::Lerp(EavesZ, RidgeZ, Alpha));
+		}
+
+		FVector2D RidgeLocal;
+		if (bRidgeAlongLocalX)
+		{
+			RidgeLocal.X = FMath::Clamp(L.X, -BoxExtent.X + HipInset, BoxExtent.X - HipInset);
+			RidgeLocal.Y = 0.0;
+		}
+		else
+		{
+			RidgeLocal.X = 0.0;
+			RidgeLocal.Y = FMath::Clamp(L.Y, -BoxExtent.Y + HipInset, BoxExtent.Y - HipInset);
+		}
+		const FVector2D RidgeWorld = ToWorld(RidgeLocal);
+		return FVector(RidgeWorld.X, RidgeWorld.Y, RidgeZ);
+	};
+
 	for (int32 Index = 0; Index < PointCount; ++Index)
 	{
-		const FVector2D& A = OuterRing[Index];
-		const FVector2D& B = OuterRing[(Index + 1) % PointCount];
+		const int32 NextIdx = (Index + 1) % PointCount;
+		const FVector EaveA(EaveRing[Index].X, EaveRing[Index].Y, EavesZ);
+		const FVector EaveB(EaveRing[NextIdx].X, EaveRing[NextIdx].Y, EavesZ);
+		const FVector RidgeA = ProjectToRidge(OuterRing[Index]);
+		const FVector RidgeB = ProjectToRidge(OuterRing[NextIdx]);
 
-		// Firstpunkt ueber der Kantenmitte: auf die Firstachse projiziert.
-		auto ProjectToRidge = [&](const FVector2D& Point) -> FVector
+		// Giebelende: die First-Endpunkte fallen zusammen -> aus dem Viereck wird
+		// EIN senkrechtes Giebeldreieck; das zweite Dreieck waere entartet.
+		const bool bGable = FVector::DistSquared(RidgeA, RidgeB) < FMath::Square(5.0);
+
+		// Normale aus der ECHTEN Wicklung (EaveA, EaveB, RidgeA) - NICHT nach oben
+		// erzwingen. Passt die Wicklung nicht zur gewuenschten Aussenseite, wird
+		// SIE gedreht (nicht die Normale gekippt), sonst cullt der Renderer die
+		// Flaeche von der Sichtseite weg = schwarze/unsichtbare Daecher.
+		const FVector GeoNormal = FVector::CrossProduct(EaveB - EaveA, RidgeA - EaveA);
+		if (GeoNormal.IsNearlyZero())
 		{
-			if (bIsSkillion)
-			{
-				// Beim Pultdach steigt die Hoehe linear ueber die kurze Achse.
-				const double Alpha = bRidgeAlongX
-					? (Point.Y - Bounds.Min.Y) / FMath::Max(Extent.Y, 1.0)
-					: (Point.X - Bounds.Min.X) / FMath::Max(Extent.X, 1.0);
-				return FVector(Point.X, Point.Y, FMath::Lerp(EavesZ, RidgeZ, Alpha));
-			}
+			continue;   // entartete Kante (z. B. Ueberstand-Kollaps) auslassen
+		}
 
-			// Sattel-/Walmdach: der Punkt wandert auf die Mittelachse.
-			double RidgeX = Point.X;
-			double RidgeY = Point.Y;
+		bool bReverse;
+		if (bGable)
+		{
+			// Giebel: Aussenseite zeigt WAAGERECHT vom Gebaeude-Schwerpunkt weg.
+			const FVector2D FaceCtr(
+				(EaveA.X + EaveB.X + RidgeA.X) / 3.0,
+				(EaveA.Y + EaveB.Y + RidgeA.Y) / 3.0);
+			const FVector2D Outward = FaceCtr - Centroid;
+			bReverse = (GeoNormal.X * Outward.X + GeoNormal.Y * Outward.Y) < 0.0;
+		}
+		else
+		{
+			// Dachflaeche (Schraege): Aussenseite zeigt nach OBEN.
+			bReverse = GeoNormal.Z < 0.0;
+		}
 
-			if (bRidgeAlongX)
-			{
-				RidgeY = (Bounds.Min.Y + Bounds.Max.Y) * 0.5;
-				RidgeX = FMath::Clamp(Point.X, Bounds.Min.X + HipInset, Bounds.Max.X - HipInset);
-			}
-			else
-			{
-				RidgeX = (Bounds.Min.X + Bounds.Max.X) * 0.5;
-				RidgeY = FMath::Clamp(Point.Y, Bounds.Min.Y + HipInset, Bounds.Max.Y - HipInset);
-			}
-
-			return FVector(RidgeX, RidgeY, RidgeZ);
-		};
-
-		const FVector EaveA(A.X, A.Y, EavesZ);
-		const FVector EaveB(B.X, B.Y, EavesZ);
-		const FVector RidgeA = ProjectToRidge(A);
-		const FVector RidgeB = ProjectToRidge(B);
+		FVector FaceNormal = GeoNormal.GetSafeNormal();
+		if (bReverse)
+		{
+			FaceNormal = -FaceNormal;
+		}
 
 		const int32 Base = Section.Vertices.Num();
-
 		Section.Vertices.Add(EaveA);
 		Section.Vertices.Add(EaveB);
 		Section.Vertices.Add(RidgeA);
 		Section.Vertices.Add(RidgeB);
-
-		// Flaechennormale aus dem tatsaechlichen Dreieck - bei Walm- und
-		// Pultdaechern unterscheidet sie sich je Kante.
-		FVector FaceNormal = FVector::CrossProduct(EaveB - EaveA, RidgeA - EaveA).GetSafeNormal();
-		if (FaceNormal.Z < 0.0)
-		{
-			FaceNormal = -FaceNormal;
-		}
-		if (FaceNormal.IsNearlyZero())
-		{
-			FaceNormal = FVector::UpVector;
-		}
 
 		for (int32 Corner = 0; Corner < 4; ++Corner)
 		{
@@ -1369,16 +1439,8 @@ void UBuildingGenerator::BuildRoof(
 			Section.Tangents.Add(FProcMeshTangent((EaveB - EaveA).GetSafeNormal(), false));
 		}
 
-		// UVs ENTLANG DER DACHFLAECHE, nicht top-down projiziert.
-		//
-		// RoofUV(X, Y) misst nur die WAAGERECHTE Lage. Auf einer Schraege ist
-		// die echte Flaeche aber um 1/cos(Neigung) laenger als ihr Grundriss -
-		// top-down gestaucht wuerden die Ziegel entlang der Falllinie gestreckt.
-		// Stattdessen wird je Dachflaeche lokal abgewickelt: U laeuft entlang
-		// der Traufe (first-parallel), V die Schraege hinauf in ECHTER 3D-Laenge
-		// (senkrechter Anteil in der Flaeche). So behaelt der Ziegel auf jeder
-		// Neigung seine Groesse; jede Flaeche traegt ihr eigenes, an ihrer Traufe
-		// ausgerichtetes Raster - genau wie ein real gedecktes Dach.
+		// UVs entlang der Dachflaeche: U laeuft an der Traufe, V die echte Schraege
+		// hinauf (3D-Laenge). So behaelt der Ziegel auf jeder Neigung seine Groesse.
 		const FVector EaveDir = (EaveB - EaveA).GetSafeNormal();
 		auto SlopeUV = [&](const FVector& P) -> FVector2D
 		{
@@ -1387,19 +1449,23 @@ void UBuildingGenerator::BuildRoof(
 			const double V = (Local - EaveDir * U).Size();
 			return FVector2D(U / MetersToCm, V / MetersToCm);
 		};
-
 		Section.UVs.Add(SlopeUV(EaveA));
 		Section.UVs.Add(SlopeUV(EaveB));
 		Section.UVs.Add(SlopeUV(RidgeA));
 		Section.UVs.Add(SlopeUV(RidgeB));
 
-		// Dachflaeche zwischen Traufe und First - Vorderseite nach aussen.
-		Section.Triangles.Add(Base + 0);
-		Section.Triangles.Add(Base + 1);
-		Section.Triangles.Add(Base + 2);
-		Section.Triangles.Add(Base + 1);
-		Section.Triangles.Add(Base + 3);
-		Section.Triangles.Add(Base + 2);
+		// Dreiecke mit zur Normale passender Wicklung; Giebel nur eines.
+		auto AddTri = [&](int32 I0, int32 I1, int32 I2)
+		{
+			Section.Triangles.Add(Base + I0);
+			Section.Triangles.Add(Base + (bReverse ? I2 : I1));
+			Section.Triangles.Add(Base + (bReverse ? I1 : I2));
+		};
+		AddTri(0, 1, 2);
+		if (!bGable)
+		{
+			AddTri(1, 3, 2);
+		}
 	}
 }
 

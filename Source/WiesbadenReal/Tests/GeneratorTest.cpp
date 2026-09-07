@@ -712,6 +712,142 @@ bool FBuildingGeneratorTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildingGabledRoofRotatedTest,
+	"WiesbadenReal.GIS.BuildingGenerator.GabledRoofRotated",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FBuildingGabledRoofRotatedTest::RunTest(const FString& Parameters)
+{
+	UGeoCoordinateConverter* Converter = NewWiesbadenConverter();
+	if (!TestTrue(TEXT("Konverter initialisiert"), Converter != nullptr && Converter->IsInitialized()))
+	{
+		return false;
+	}
+
+	// GEDREHTER Rechteck-Grundriss (~20 m x ~8 m, um ~35 Grad gedreht) mit
+	// Satteldach. Genau dieser Fall deckte den BuildRoof-Bug auf: die welt-
+	// achsenparallele AABB legte den First quer, die Dachflaechen kippten durch
+	// die Waende. Die vier Ecken sind ueber lon/lat so gesetzt, dass der
+	// projizierte Umriss ein klar gedrehtes Rechteck ergibt.
+	FOSMDataSet DataSet;
+	DataSet.Nodes.Add(11, FOSMNode(11, 8.2400821, 50.0824810));
+	DataSet.Nodes.Add(12, FOSMNode(12, 8.2401463, 50.0824221));
+	DataSet.Nodes.Add(13, FOSMNode(13, 8.2399179, 50.0823190));
+	DataSet.Nodes.Add(14, FOSMNode(14, 8.2398537, 50.0823779));
+
+	FOSMWay Building;
+	Building.Id = 2;
+	Building.NodeIds = { 11, 12, 13, 14, 11 };
+	Building.Tags.Add(TEXT("building"), TEXT("yes"));
+	Building.Tags.Add(TEXT("building:levels"), TEXT("2"));
+	Building.Tags.Add(TEXT("roof:shape"), TEXT("gabled"));
+	DataSet.Ways.Add(2, Building);
+
+	UBuildingGenerator* Generator = NewObject<UBuildingGenerator>();
+	TArray<FGeneratedBuilding> Buildings;
+	FBuildingMeshData MeshData;
+	FBuildingGenerationSettings Settings; // Defaults (bGenerateRoofs = true)
+
+	const FBuildingGenerationReport Report = Generator->Generate(
+		DataSet, Converter, /*HeightSampler=*/nullptr, Settings, Buildings, &MeshData);
+
+	TestTrue(TEXT("Gebaeude erfolgreich"), Report.bSuccess);
+	if (!TestEqual(TEXT("1 Gebaeude"), Buildings.Num(), 1))
+	{
+		return false;
+	}
+
+	const FGeneratedBuilding& B = Buildings[0];
+	TestTrue(TEXT("Grundriss ist gedreht (Yaw nicht achsparallel)"),
+		FMath::Abs(FMath::Fmod(FMath::Abs(B.FootprintYawDegrees), 90.0f)) > 5.0f);
+
+	// Dach-Section finden.
+	const FBuildingMeshSection* Roof = nullptr;
+	for (const FBuildingMeshSection& Section : MeshData.Sections)
+	{
+		if (Section.Channel == EBuildingMeshChannel::Roof)
+		{
+			Roof = &Section;
+			break;
+		}
+	}
+	if (!TestNotNull(TEXT("Dach-Section vorhanden"), Roof))
+	{
+		return false;
+	}
+	if (!TestTrue(TEXT("Dach-Dreiecke vorhanden"), Roof->Triangles.Num() >= 3))
+	{
+		return false;
+	}
+
+	// (1) Kein entartetes Dreieck und (2) keine nach UNTEN gewickelte Flaeche.
+	// Giebeldreiecke stehen senkrecht -> Wicklungsnormale ~waagerecht (Z ~ 0),
+	// deshalb Schwelle bei -0.05 statt strikt > 0.
+	int32 DegenerateCount = 0;
+	int32 DownwardCount = 0;
+	for (int32 Tri = 0; Tri + 2 < Roof->Triangles.Num(); Tri += 3)
+	{
+		const FVector& V0 = Roof->Vertices[Roof->Triangles[Tri + 0]];
+		const FVector& V1 = Roof->Vertices[Roof->Triangles[Tri + 1]];
+		const FVector& V2 = Roof->Vertices[Roof->Triangles[Tri + 2]];
+		const FVector Cross = FVector::CrossProduct(V1 - V0, V2 - V0);
+		if (Cross.Size() < 1.0)
+		{
+			++DegenerateCount;
+			continue;
+		}
+		if (Cross.GetSafeNormal().Z < -0.05)
+		{
+			++DownwardCount;
+		}
+	}
+	TestEqual(TEXT("keine entarteten Dach-Dreiecke"), DegenerateCount, 0);
+	TestEqual(TEXT("keine nach unten gewickelten Dach-Flaechen"), DownwardCount, 0);
+
+	// (3) Firstlinie laeuft entlang der LANGEN, gedrehten Achse - NICHT achsparallel.
+	// Firstpunkte = Dach-Vertices auf maximaler Hoehe.
+	double MaxZ = Roof->Vertices[0].Z;
+	for (const FVector& V : Roof->Vertices)
+	{
+		MaxZ = FMath::Max(MaxZ, V.Z);
+	}
+	TArray<FVector2D> RidgePts;
+	for (const FVector& V : Roof->Vertices)
+	{
+		if (V.Z >= MaxZ - 1.0)
+		{
+			RidgePts.Add(FVector2D(V.X, V.Y));
+		}
+	}
+	if (TestTrue(TEXT("mindestens zwei Firstpunkte"), RidgePts.Num() >= 2))
+	{
+		// Richtung zwischen den beiden am weitesten entfernten Firstpunkten.
+		double BestDistSq = -1.0;
+		FVector2D A = RidgePts[0];
+		FVector2D Bp = RidgePts[0];
+		for (int32 i = 0; i < RidgePts.Num(); ++i)
+		{
+			for (int32 j = i + 1; j < RidgePts.Num(); ++j)
+			{
+				const double D = FVector2D::DistSquared(RidgePts[i], RidgePts[j]);
+				if (D > BestDistSq)
+				{
+					BestDistSq = D;
+					A = RidgePts[i];
+					Bp = RidgePts[j];
+				}
+			}
+		}
+		const FVector2D Dir = (Bp - A).GetSafeNormal();
+		// Achsparallel waere |X|~1,|Y|~0 oder umgekehrt. Ein gedrehter First hat
+		// beide Komponenten deutlich ungleich Null.
+		TestTrue(TEXT("Firstlinie ist gedreht (nicht welt-achsparallel)"),
+			FMath::Abs(Dir.X) > 0.2 && FMath::Abs(Dir.Y) > 0.2);
+	}
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainGeneratorTest,
 	"WiesbadenReal.GIS.TerrainGenerator.Generate",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

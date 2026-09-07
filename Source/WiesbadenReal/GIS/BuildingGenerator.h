@@ -432,6 +432,7 @@ private:
 		double RoofHeightCm,
 		int32 MaterialVariant,
 		const FString& FacadeOverrideKey,
+		double RoofOverhangMeters,
 		FBuildingMeshData& OutMeshData) const;
 
 	/**
