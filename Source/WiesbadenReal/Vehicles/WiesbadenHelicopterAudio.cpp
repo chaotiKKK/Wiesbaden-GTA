@@ -49,7 +49,8 @@ float FWiesbadenHelicopterAudioModel::GetRotorCutoffHz(const FWiesbadenHelicopte
 
 void FWiesbadenHelicopterAudioModel::GenerateSamples(
 	const FWiesbadenHelicopterAudioParams& Params,
-	int32 SampleRate, int32 NumSamples, uint32 Seed, int16* OutSamples)
+	int32 SampleRate, int32 NumSamples, uint32 Seed, int16* OutSamples,
+	double StartTimeSeconds)
 {
 	if (!OutSamples || NumSamples <= 0 || SampleRate <= 0)
 	{
@@ -63,42 +64,62 @@ void FWiesbadenHelicopterAudioModel::GenerateSamples(
 	const float Cutoff = GetRotorCutoffHz(Params);
 	const float FilterAlpha = 1.0f - FMath::Exp(-TwoPi * Cutoff / SampleRateF);
 	const float BladePass = GetBladePassFrequency(Params.MainRotorRpm, Params.BladeCount);
-	const float SlapDepth = FMath::Clamp(Params.BladeSlapDepth, 0.0f, 1.0f);
+	// Koaxial (Ka-52): der zweite gegenlaeufige Rotor dreht mit gleicher Drehzahl,
+	// seine Blattpaesse verschraenken sich mit denen des ersten -> ein DICHTERER,
+	// haerterer Schlag (naeher an 2x Blattpass) mit langsamer Schwebung. Vorwaerts
+	// verstaerkt der vorlaufende Rotorblatt den Schlag ("advancing blade slap").
+	const float SpeedFactor = FMath::Clamp(Params.ForwardSpeedMetersPerS / 60.0f, 0.0f, 1.0f);
+	const float SlapDepth = FMath::Clamp(Params.BladeSlapDepth, 0.0f, 1.0f) * (1.0f + 0.35f * SpeedFactor);
 	const float RotorVolume = (0.25f + 0.75f * FMath::Clamp(Params.Collective, 0.0f, 1.0f)) * 0.75f;
 
-	// Motor: Grundfrequenz aus Drehzahl * 8 Zylinder (V8-Sound-Charakter).
+	// Triebwerk: 2x Klimov VK-2500 Wellenturbine - ein heller, metallischer
+	// Turbinen-Whine (Spool-Grundton + Obertonkamm) mit Kompressor-Buzz und
+	// Ansaug-/Abgas-Luftrauschen. KEIN Kolbenmotor-Ton mehr (frueher als 8-
+	// Zylinder-V8 modelliert - fuer eine Wellenturbine falsch).
 	const bool bMotorAudible = Params.bEngineRunning && Params.EngineRpm > 50.0f;
-	const float MotorFreq = bMotorAudible ? (Params.EngineRpm / 60.0f) * 8.0f : 0.0f;
+	const float Spool = FMath::Clamp(Params.EngineRpm / 3360.0f, 0.0f, 1.6f);   // ~1.0 bei Nenndrehzahl
+	const float WhineHz = 700.0f + Spool * 1500.0f;                              // ~700 Hz Leerlauf .. ~2.2 kHz Vollast
 
 	float Filtered = 0.0f;
 	for (int32 Index = 0; Index < NumSamples; ++Index)
 	{
-		const float Time = static_cast<float>(Index) / SampleRateF;
+		// Fortlaufende Zeitbasis in DOUBLE: der Aufrufer zaehlt ueber alle Puffer
+		// hoch, sodass die Sinus-Phasen NICHT je Puffer springen (sonst buzzt die
+		// Turbine mit der Pufferrate). Double haelt die Phase auch nach Minuten
+		// praezise; die Sinus-Argumente promoten dadurch auf double.
+		const double Time = StartTimeSeconds + static_cast<double>(Index) / SampleRateF;
 
-		// Rotor-Anteil: Rauschen -> Tiefpass -> Wop-Wop-Amplitudenmodulation.
+		// Rotor-Anteil: Rauschen -> Tiefpass -> koaxiale Wop-Wop-Modulation.
 		const float Noise = NextNoise(RandState);
 		Filtered += FilterAlpha * (Noise - Filtered);
 
 		float RotorSample = 0.0f;
 		if (BladePass > 0.1f)
 		{
-			// Blade Slap: je hoeher die Slap-Tiefe, desto deutlicher der
-			// Schlag (Kampfheli) statt eines gleichmaessigen Rauschens.
-			const float Wop = 0.62f + SlapDepth * FMath::Sin(TwoPi * BladePass * Time + 1.7f);
-			RotorSample = Filtered * Wop * RotorVolume;
+			const float Phase = TwoPi * BladePass * Time;
+			// Zwei verschraenkte Blattpaesse (Koaxial) + langsame Schwebung.
+			const float Wop = 0.55f
+				+ SlapDepth * (0.72f * FMath::Sin(Phase + 1.7f)
+							 + 0.42f * FMath::Sin(2.0f * Phase + 0.5f));
+			const float Throb = 1.0f + 0.05f * FMath::Sin(TwoPi * 3.2f * Time);
+			RotorSample = Filtered * FMath::Max(0.0f, Wop) * Throb * RotorVolume;
 		}
 
-		// Motor-Anteil: Ton + Oberwelle + gedaempftes Rauschen.
-		float MotorSample = 0.0f;
+		// Turbinen-Anteil: Whine-Kamm + Buzz + Luftrauschen (nur bei Lauf).
+		float TurbineSample = 0.0f;
 		if (bMotorAudible)
 		{
-			const float Tone = FMath::Sin(TwoPi * MotorFreq * Time)
-				+ 0.4f * FMath::Sin(TwoPi * 2.0f * MotorFreq * Time);
-			const float MotorNoise = NextNoise(RandState) * 0.25f;
-			MotorSample = (Tone + MotorNoise) * 0.5f;
+			const float Tone =
+				  0.60f * FMath::Sin(TwoPi * WhineHz * Time)
+				+ 0.34f * FMath::Sin(TwoPi * 2.0f * WhineHz * Time)
+				+ 0.18f * FMath::Sin(TwoPi * 3.0f * WhineHz * Time)
+				+ 0.10f * FMath::Sin(TwoPi * 4.0f * WhineHz * Time);
+			const float Buzz = 0.22f * FMath::Sin(TwoPi * (WhineHz * 0.5f) * Time);
+			const float Air = NextNoise(RandState) * 0.22f;
+			TurbineSample = (Tone + Buzz + Air) * (0.16f + 0.30f * Spool);
 		}
 
-		const float Mix = (RotorSample + MotorSample) * 32767.0f * 0.8f;
+		const float Mix = (RotorSample + TurbineSample) * 32767.0f * 0.8f;
 		OutSamples[Index] = static_cast<int16>(FMath::Clamp(Mix, -32768.0f, 32767.0f));
 	}
 }

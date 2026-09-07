@@ -158,7 +158,12 @@ void UWiesbadenHelicopterAudioComponent::PushProceduralAudio()
 	AudioSeed = (AudioSeed * 1664525u) + 1013904223u;
 
 	FWiesbadenHelicopterAudioModel::GenerateSamples(
-		Params, ProceduralSampleRate, SamplesPerPush, AudioSeed, SampleBuffer.GetData());
+		Params, ProceduralSampleRate, SamplesPerPush, AudioSeed, SampleBuffer.GetData(),
+		AudioTimeSeconds);
+
+	// Zeitbasis um exakt die erzeugte Pufferlaenge weiterzaehlen -> der naechste
+	// Puffer setzt phasenstetig an (kein Klick/Buzz an der Puffergrenze).
+	AudioTimeSeconds += static_cast<double>(SamplesPerPush) / ProceduralSampleRate;
 
 	ProceduralWave->QueueAudio(
 		reinterpret_cast<const uint8*>(SampleBuffer.GetData()),

@@ -107,5 +107,8 @@ private:
 	FWiesbadenHelicopterAudioParams Params;
 	TArray<int16> SampleBuffer;
 	uint32 AudioSeed = 0x5EED0001u;
+	// Fortlaufende Wiedergabe-Zeit ueber alle Puffer - haelt die Sinus-Phasen
+	// (Turbine/Rotor) puffueberdeckend stetig, damit nichts mit der Pufferrate buzzt.
+	double AudioTimeSeconds = 0.0;
 	bool bEnabled = true;
 };

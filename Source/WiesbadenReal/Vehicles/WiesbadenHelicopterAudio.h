@@ -37,10 +37,12 @@ struct FWiesbadenHelicopterAudioParams
  *
  * Erzeugt Mono-int16-PCM aus den Rotor-/Motor-Parameter. Klaenge:
  *  - Rotor: weisses Rauschen durch einen One-Pole-Tiefpass, dessen Grenzfrequenz
- *    mit der Drehzahl und der Blattlast (Collective) steigt; dazu die typische
- *    "Wop-Wop"-Amplitudenmodulation mit der Blattpassfrequenz.
- *  - Motor: Sinus-Ton auf der Grundfrequenz (Drehzahl * Zylinderzahl) plus
- *    Oberwelle und gedaempftem Rauschen; nur bei laufendem Triebwerk.
+ *    mit der Drehzahl und der Blattlast (Collective) steigt; dazu die koaxiale
+ *    "Wop-Wop"-Amplitudenmodulation (zwei verschraenkte Blattpaesse des Ka-52-
+ *    Gegenlaufrotors) mit langsamer Schwebung.
+ *  - Triebwerk: heller Wellenturbinen-Whine (Spool-Grundton + Obertonkamm +
+ *    Kompressor-Buzz + Luftrauschen), steigt mit der Triebwerksdrehzahl; nur bei
+ *    laufendem Triebwerk. Modelliert die 2x Klimov VK-2500 - kein Kolbenmotor.
  *
  * Deterministisch: gleiche Parameter + gleicher Seed erzeugen identische
  * Samples (xorshift32-PRNG), dadurch in Automation-/node-Tests pruefbar.
@@ -59,7 +61,13 @@ struct FWiesbadenHelicopterAudioModel
 	/**
 	 * Generiert NumSamples Mono-Samples (SampleRate Hz) als int16-PCM.
 	 * @param Seed PRNG-Seed - fester Wert fuer Tests, Laufzeit-Seed fuer Gameplay.
+	 * @param StartTimeSeconds Fortlaufende Zeitbasis fuer die Sinus-Phasen. Der
+	 *        Aufrufer zaehlt die abgespielte Zeit ueber alle Puffer hoch, damit
+	 *        die Turbinen-/Rotortoene NICHT bei jedem Puffer (2048 Samples) auf
+	 *        Phase 0 zuruckspringen - sonst buzzt der Turbinen-Whine mit der
+	 *        Pufferrate (~21 Hz). Default 0 fuer die deterministischen Tests.
 	 */
 	static void GenerateSamples(const FWiesbadenHelicopterAudioParams& Params,
-		int32 SampleRate, int32 NumSamples, uint32 Seed, int16* OutSamples);
+		int32 SampleRate, int32 NumSamples, uint32 Seed, int16* OutSamples,
+		double StartTimeSeconds = 0.0);
 };
