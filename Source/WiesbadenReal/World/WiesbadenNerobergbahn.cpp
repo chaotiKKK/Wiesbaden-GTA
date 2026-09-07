@@ -506,8 +506,63 @@ void AWiesbadenNerobergbahn::PlaceStructures()
 	// Viadukt im unteren Streckendrittel: die Deckoberkante (rund 7,7 m ueber
 	// der Pfeilerbasis) traegt das Gleis, die Boegen ueberspannen den Talgrund.
 	constexpr double ViaduktDeckTopCm = 770.0;
-	Place(Viadukt, FMath::Min(5500.0, TrackA.TotalLength * 0.18),
-		0.0, 0.0, ViaduktDeckTopCm);
+	const double ViaduktS = FMath::Min(5500.0, TrackA.TotalLength * 0.18);
+	Place(Viadukt, ViaduktS, 0.0, 0.0, ViaduktDeckTopCm);
+
+	// Stuetzpfeiler ueberall dort, wo die (fahrbare, geglaettete) Trasse ueber
+	// dem Terrain schwebt - sonst "haengen die Schienen in der Luft". Entlang der
+	// Strecke abtasten, Gelaende darunter per Trace suchen, und wo die Luecke
+	// groesser als SupportGapMinCm ist, einen Pfeiler vom Boden bis knapp unter
+	// die Schiene setzen. In der Naehe des Viadukts uebersprungen (traegt dort
+	// bereits) und an den Stationen ohnehin luftlos.
+	if (UWorld* World = GetWorld())
+	{
+		UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+		constexpr double PillarWidthCm = 55.0;
+		constexpr double DeckOffsetCm = 25.0;   // Pfeilerkopf knapp unter der Schiene
+		for (double S = SupportSpacingCm;
+			Cube && S < TrackA.TotalLength - SupportSpacingCm && SupportPillars.Num() < 300;
+			S += SupportSpacingCm)
+		{
+			if (FMath::Abs(S - ViaduktS) < 2000.0)
+			{
+				continue;   // Viadukt traegt hier schon
+			}
+			FVector Pos, Tangent;
+			SampleTrack(TrackA, S, Pos, Tangent);
+
+			FHitResult Hit;
+			FCollisionQueryParams PillarParams(SCENE_QUERY_STAT(WbBahnPfeiler), true);
+			PillarParams.AddIgnoredActor(this);
+			const FVector TraceStart(Pos.X, Pos.Y, Pos.Z + 100.0);
+			if (!World->LineTraceSingleByChannel(Hit, TraceStart,
+					TraceStart - FVector(0.0, 0.0, 100000.0), ECC_WorldStatic, PillarParams))
+			{
+				continue;
+			}
+			const double TerrainZ = Hit.Location.Z;
+			const double PillarTopZ = Pos.Z - DeckOffsetCm;
+			const double GapCm = PillarTopZ - TerrainZ;
+			if (GapCm < SupportGapMinCm)
+			{
+				continue;
+			}
+
+			UStaticMeshComponent* Pillar = NewObject<UStaticMeshComponent>(this);
+			Pillar->SetStaticMesh(Cube);
+			Pillar->SetupAttachment(Root);
+			Pillar->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			Pillar->RegisterComponent();
+			// Engine-Cube ist 100 cm, um den Ursprung zentriert.
+			Pillar->SetWorldScale3D(FVector(
+				PillarWidthCm / 100.0, PillarWidthCm / 100.0, GapCm / 100.0));
+			Pillar->SetWorldLocation(FVector(Pos.X, Pos.Y, (TerrainZ + PillarTopZ) * 0.5));
+			SupportPillars.Add(Pillar);
+		}
+		UE_LOG(LogWbStreaming, Log,
+			TEXT("Nerobergbahn: %d Stuetzpfeiler unter der schwebenden Trasse gesetzt."),
+			SupportPillars.Num());
+	}
 
 	UE_LOG(LogWbStreaming, Log,
 		TEXT("Nerobergbahn: Bauwerke gesetzt (Talstation, Bergstation, Viadukt)."));
@@ -734,6 +789,12 @@ void AWiesbadenNerobergbahn::CreatePassengerCamera()
 	PassengerCamera->FollowArmLength = 260.0f;
 	PassengerCamera->ZoomMinArmLength = 80.0f;
 	PassengerCamera->ZoomMaxArmLength = 700.0f;
+	// Horizont waagerecht halten. Ohne das erbte die Kamera die STEILE Neigung
+	// des Wagens (die Bahn faehrt ~30 % Steigung): der Verfolgerarm zeigte
+	// steil abwaerts in den massiven Trassen-Balken und das Bild wurde SCHWARZ.
+	// Waagerecht steht die Kamera ueber dem Balken und zeigt den Panoramablick
+	// ueber die Stadt statt ins Innere der Trasse.
+	PassengerCamera->bLevelHorizon = true;
 	PassengerCamera->RegisterComponent();
 	PassengerCamera->ActivateExternalView(PC, Car, RideSession.GetPassenger());
 }

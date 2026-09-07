@@ -123,6 +123,22 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Bahn")
 	UStaticMeshComponent* Viadukt = nullptr;
 
+	/**
+	 * Stuetzpfeiler unter der Trasse. Zur Laufzeit erzeugt (Anzahl haengt von
+	 * Streckenlaenge und Gelaende ab), wo das Gleis mehr als SupportGapMinCm ueber
+	 * dem Terrain liegt - sonst "haengen die Schienen in der Luft".
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Bahn")
+	TArray<TObjectPtr<UStaticMeshComponent>> SupportPillars;
+
+	/** Ab dieser Trasse-ueber-Terrain-Hoehe (cm) wird ein Pfeiler gesetzt. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bahn", meta = (ClampMin = "0.0"))
+	double SupportGapMinCm = 150.0;
+
+	/** Abstand der Pfeiler entlang der Trasse (cm). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bahn", meta = (ClampMin = "200.0"))
+	double SupportSpacingCm = 900.0;
+
 	/** Bauwerke bereits gesetzt? */
 	bool bStructuresPlaced = false;
 
