@@ -26,6 +26,7 @@
 #include "World/WiesbadenNerotalbahn.h"
 #include "World/WiesbadenNerotal48.h"
 #include "World/WiesbadenLandmarks.h"
+#include "World/WiesbadenParkFeatures.h"
 
 AWiesbadenGameMode::AWiesbadenGameMode()
 {
@@ -122,6 +123,12 @@ void AWiesbadenGameMode::BeginPlay()
 			ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		LandmarkWorld->SpawnActor<AWiesbadenLandmarks>(
 			AWiesbadenLandmarks::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
+
+		// Formale Parkanlagen (Bowling Green am Kurhaus, Reisinger-Anlagen):
+		// lange Wasserbecken + Fontaenen, ebenfalls selbstsetzend zur Laufzeit.
+		LandmarkWorld->SpawnActor<AWiesbadenParkFeatures>(
+			AWiesbadenParkFeatures::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
 	}
 
