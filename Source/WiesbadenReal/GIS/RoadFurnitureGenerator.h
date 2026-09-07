@@ -208,6 +208,27 @@ struct WIESBADENREAL_API FRoadFurnitureSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture", meta = (ClampMin = "0.0"))
 	double SignLateralOffsetCm = WiesbadenRoadMarkings::SignLateralOffsetCm;
 
+	/**
+	 * Hoehe der Fahrbahnoberkante ueber dem Terrain (cm).
+	 *
+	 * MUSS mit FRoadNetworkSettings::RoadSurfaceOffsetCm uebereinstimmen: Die
+	 * Strassen-/Kreuzungsgeometrie wird um genau diesen Betrag ueber das Terrain
+	 * gehoben. Die Ausstattung sampelte bisher die ROHE Terrainhoehe und stand
+	 * damit um diesen Betrag IM Boden ("Ampeln/Schilder stecken im Boden").
+	 * Hier durchgereicht, damit Ausstattung und Fahrbahn dieselbe Referenz haben.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture", meta = (ClampMin = "0.0"))
+	double RoadSurfaceOffsetCm = 20.0;
+
+	/**
+	 * Bordsteinhoehe (cm) - Gehwegoberkante liegt bei Terrain + RoadSurfaceOffset
+	 * + KerbHeight. MUSS mit FRoadSegment::KerbHeightCm uebereinstimmen. Schilder,
+	 * Laternen und Leitpfosten stehen auf dem Gehweg, also um diesen Betrag hoeher
+	 * als die Fahrbahn; Markierungen liegen auf der Fahrbahn (ohne Bordstein).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture", meta = (ClampMin = "0.0"))
+	double KerbHeightCm = 12.0;
+
 	/** Schildunterkante ueber dem Boden (cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture", meta = (ClampMin = "0.0"))
 	double SignHeightAboveGroundCm = WiesbadenRoadMarkings::SignHeightAboveWalkwayCm;

@@ -262,3 +262,87 @@ bool FStreetLampSynthesisTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoadFurnitureSurfaceHeightTest,
+	"WiesbadenReal.GIS.RoadFurniture.SurfaceHeight",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Ausstattung steht AUF der Oberflaeche, nicht IM Boden.
+ *
+ * Die Strasse/der Gehweg liegt um RoadSurfaceOffsetCm (Fahrbahn) bzw.
+ * RoadSurfaceOffsetCm + KerbHeightCm (Gehweg) UEBER dem Terrain. Frueher
+ * sampelte die Ausstattung die rohe Terrainhoehe und sass damit um genau
+ * diesen Betrag im Boden ("Ampeln/Schilder stecken im Boden"). Dieser Test
+ * haelt fest, dass Schilder/Leitpfosten auf Gehweghoehe und Markierungen auf
+ * Fahrbahnhoehe platziert werden.
+ */
+bool FRoadFurnitureSurfaceHeightTest::RunTest(const FString& Parameters)
+{
+	// Terrain auf konstanter, deutlich von 0 verschiedener Hoehe.
+	constexpr double TerrainCm = 500.0;
+
+	FRoadNetwork Network;
+	Network.Segments.Add(MakeSegment(0, 1, 0, { FVector(-5000.0, 0.0, TerrainCm), FVector(0.0, 0.0, TerrainCm) }));
+	Network.Segments.Add(MakeSegment(1, 2, 0, { FVector(5000.0, 0.0, TerrainCm), FVector(0.0, 0.0, TerrainCm) }));
+	Network.Segments.Add(MakeSegment(2, 3, 0, { FVector(0.0, 5000.0, TerrainCm), FVector(0.0, 0.0, TerrainCm) }, 30.0));
+
+	FRoadIntersection Intersection;
+	Intersection.NodeId = 0;
+	Intersection.Location = FVector(0.0, 0.0, TerrainCm);
+	Intersection.Control = EIntersectionControl::Stop;
+	Intersection.RadiusCm = 800.0;
+	auto AddArm = [&Intersection](const FVector& Outward)
+	{
+		FIntersectionArm Arm;
+		Arm.OutwardDirection = Outward;
+		Arm.HalfWidthCm = 325.0;
+		Arm.BearingDegrees = Outward.Rotation().Yaw;
+		Intersection.Arms.Add(Arm);
+	};
+	AddArm(FVector(-1.0, 0.0, 0.0));
+	AddArm(FVector(1.0, 0.0, 0.0));
+	AddArm(FVector(0.0, 1.0, 0.0));
+	Network.Intersections.Add(Intersection);
+
+	FFlatHeightSampler Sampler(TerrainCm);
+	FRoadFurnitureSettings Settings;   // Default: RoadSurfaceOffsetCm=20, KerbHeightCm=12
+	FRoadFurnitureLayout Layout;
+
+	URoadFurnitureGenerator* Generator = NewObject<URoadFurnitureGenerator>();
+	const FRoadFurnitureReport Report = Generator->Generate(Network, nullptr, nullptr, &Sampler, Settings, Layout);
+	TestTrue(TEXT("Pass erfolgreich"), Report.bSuccess);
+
+	const double SidewalkZ = TerrainCm + Settings.RoadSurfaceOffsetCm + Settings.KerbHeightCm; // 532 (Fuss)
+	const double RoadZ = TerrainCm + Settings.RoadSurfaceOffsetCm;                              // 520
+	// Die Schild-TAFEL sitzt SignHeightAboveGroundCm ueber dem Gehweg-Fuss.
+	const double SignPlateZ = SidewalkZ + Settings.SignHeightAboveGroundCm;
+
+	TestTrue(TEXT("Es gibt Schilder zum Pruefen"), Layout.Signs.Num() > 0);
+	for (const FSignInstance& Sign : Layout.Signs)
+	{
+		TestTrue(FString::Printf(TEXT("Schild-Tafel ueber Gehweg (%.1f statt %.1f)"), Sign.Location.Z, SignPlateZ),
+			FMath::IsNearlyEqual(Sign.Location.Z, SignPlateZ, 0.5));
+	}
+	TestTrue(TEXT("Es gibt Leitpfosten zum Pruefen"), Layout.Delineators.Num() > 0);
+	for (const FDelineatorInstance& D : Layout.Delineators)
+	{
+		TestTrue(FString::Printf(TEXT("Leitpfosten-Fuss auf Gehweghoehe (%.1f statt %.1f)"), D.Location.Z, SidewalkZ),
+			FMath::IsNearlyEqual(D.Location.Z, SidewalkZ, 0.5));
+	}
+	TestTrue(TEXT("Es gibt Markierungen zum Pruefen"), Layout.Markings.Num() > 0);
+	for (const FMarkingInstance& M : Layout.Markings)
+	{
+		TestTrue(FString::Printf(TEXT("Markierung auf Fahrbahnhoehe (%.1f statt %.1f)"), M.Center.Z, RoadZ),
+			FMath::IsNearlyEqual(M.Center.Z, RoadZ, 0.5));
+	}
+
+	// Kernaussage: NICHTS sitzt auf der rohen Terrainhoehe (= im Boden).
+	for (const FSignInstance& Sign : Layout.Signs)
+	{
+		TestTrue(TEXT("Schild NICHT auf roher Terrainhoehe (nicht im Boden)"),
+			Sign.Location.Z > TerrainCm + 1.0);
+	}
+
+	return true;
+}

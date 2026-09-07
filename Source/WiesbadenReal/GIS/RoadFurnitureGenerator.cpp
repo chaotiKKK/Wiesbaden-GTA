@@ -63,10 +63,18 @@ namespace
 		}
 	}
 
-	/** Terrainhoehe an einer XY-Position; 0, wenn kein Sampler vorhanden. */
-	double SampleZ(const IHeightSampler* Sampler, const FVector& P)
+	/**
+	 * Hoehe der OBERFLAECHE, auf der die Ausstattung steht, an einer XY-Position.
+	 *
+	 * = Terrainhoehe + SurfaceOffsetCm. Der Offset ist entscheidend: die Strasse
+	 * und der Gehweg liegen um RoadSurfaceOffsetCm (Fahrbahn) bzw.
+	 * RoadSurfaceOffsetCm + KerbHeightCm (Gehweg) UEBER dem Terrain. Ohne den
+	 * Offset (frueherer Zustand) sass jede Basis um genau diesen Betrag im Boden.
+	 * 0, wenn kein Sampler vorhanden.
+	 */
+	double SampleZ(const IHeightSampler* Sampler, const FVector& P, double SurfaceOffsetCm)
 	{
-		return Sampler ? Sampler->SampleHeightCm(FVector2D(P.X, P.Y)) : 0.0;
+		return Sampler ? Sampler->SampleHeightCm(FVector2D(P.X, P.Y)) + SurfaceOffsetCm : 0.0;
 	}
 }
 
@@ -281,8 +289,10 @@ void URoadFurnitureGenerator::PlaceStreetLamps(
 
 		if (HeightSampler && HeightSampler->HasValidData())
 		{
+			// Laternen stehen auf dem Gehweg: Terrain + Fahrbahn-Offset + Bordstein.
 			Lamp.Location.Z = HeightSampler->SampleHeightCm(
-				FVector2D(Lamp.Location.X, Lamp.Location.Y));
+				FVector2D(Lamp.Location.X, Lamp.Location.Y))
+				+ Settings.RoadSurfaceOffsetCm + Settings.KerbHeightCm;
 		}
 
 		OutLayout.StreetLamps.Add(Lamp);
@@ -321,7 +331,9 @@ void URoadFurnitureGenerator::PlaceSigns(
 			FWiesbadenTrafficSignCatalog::ParseOsmTag(Tag, Signs);
 
 			FVector Ground = Converter->GeoToUnrealGround(Node.Location);
-			Ground.Z = SampleZ(HeightSampler, Ground);
+			// Schilder stehen auf dem GEHWEG: Terrain + Fahrbahn-Offset + Bordstein.
+			Ground.Z = SampleZ(HeightSampler, Ground,
+				Settings.RoadSurfaceOffsetCm + Settings.KerbHeightCm);
 
 			for (const FWiesbadenTrafficSign& Sign : Signs)
 			{
@@ -419,7 +431,9 @@ void URoadFurnitureGenerator::PlaceSigns(
 			FVector Base = ArmEnd
 				+ Outward * Settings.SignBacksetCm
 				+ Right * (Arm.HalfWidthCm + Settings.SignLateralOffsetCm);
-			Base.Z = SampleZ(HeightSampler, Base);
+			// Schild auf dem Gehweg: Terrain + Fahrbahn-Offset + Bordstein.
+		Base.Z = SampleZ(HeightSampler, Base,
+			Settings.RoadSurfaceOffsetCm + Settings.KerbHeightCm);
 
 			FSignInstance Instance;
 			Instance.SignId = Sign.Id;
@@ -483,7 +497,9 @@ void URoadFurnitureGenerator::PlaceSigns(
 
 		FVector Base = Segment.Centerline[0]
 			+ Right * (Segment.CarriagewayWidthCm * 0.5 + Settings.SignLateralOffsetCm);
-		Base.Z = SampleZ(HeightSampler, Base);
+		// Schild auf dem Gehweg: Terrain + Fahrbahn-Offset + Bordstein.
+		Base.Z = SampleZ(HeightSampler, Base,
+			Settings.RoadSurfaceOffsetCm + Settings.KerbHeightCm);
 
 		FSignInstance Instance;
 		Instance.SignId = Sign.Id;
@@ -517,7 +533,9 @@ void URoadFurnitureGenerator::PlaceDelineators(
 		for (int32 i = 0; i < Positions.Num(); ++i)
 		{
 			const FVector Right = RightPerpendicular(Directions[i]);
-			const double Z = SampleZ(HeightSampler, Positions[i]);
+			// Leitpfosten stehen am Fahrbahnrand auf dem Gehweg/der Verge.
+			const double Z = SampleZ(HeightSampler, Positions[i],
+				Settings.RoadSurfaceOffsetCm + Settings.KerbHeightCm);
 			const float Yaw = Directions[i].Rotation().Yaw;
 
 			// Rechte Fahrbahnkante.
@@ -566,7 +584,9 @@ void URoadFurnitureGenerator::PlaceMarkings(
 
 			FVector Center = Intersection.Location
 				+ Outward * (Intersection.RadiusCm + Settings.StopLineDistanceCm);
-			Center.Z = SampleZ(HeightSampler, Center);
+			// Markierungen liegen AUF der Fahrbahn: nur der Fahrbahn-Offset, kein
+			// Bordstein (sonst schwebten sie ueber dem Asphalt).
+			Center.Z = SampleZ(HeightSampler, Center, Settings.RoadSurfaceOffsetCm);
 
 			FMarkingInstance Marking;
 			Marking.Kind = Kind;
@@ -718,12 +738,17 @@ void URoadFurnitureGenerator::SynthesiseStreetLamps(
 
 				if (HeightSampler && HeightSampler->HasValidData())
 				{
-					Lamp.Location.Z = HeightSampler->SampleHeightCm(Side);
+					// Ergaenzte Laterne auf dem Gehweg: Terrain + Fahrbahn-Offset +
+					// Bordstein (wie die kartierten Laternen und Schilder).
+					Lamp.Location.Z = HeightSampler->SampleHeightCm(Side)
+						+ Settings.RoadSurfaceOffsetCm + Settings.KerbHeightCm;
 				}
 				else
 				{
-					// Ohne Hoehenmodell die Hoehe der Mittellinie uebernehmen.
-					Lamp.Location.Z = FMath::Lerp(A.Z, B.Z, Travelled / SegLength);
+					// Ohne Hoehenmodell die Hoehe der Mittellinie uebernehmen (die
+					// enthaelt den Fahrbahn-Offset bereits) plus den Bordstein.
+					Lamp.Location.Z = FMath::Lerp(A.Z, B.Z, Travelled / SegLength)
+						+ Settings.KerbHeightCm;
 				}
 
 				OutLayout.StreetLamps.Add(Lamp);
