@@ -11,6 +11,13 @@ import os
 
 MAT_DIR = "/Game/Materials/City"
 TEX_DIR = "/Game/Textures/Facades"
+
+# Fassaden global aufhellen. Die Wiesbaden-Referenz ist hell (Putz/Sandstein),
+# aber die Fototexturen rendern in den fast immer verschatteten Strassenschlucht-
+# Fassaden gegen Schwarz - kein Licht-/Belichtungshebel erreichte die statischen
+# Chunk-Flaechen. Ein Faktor auf die Basisfarbe hebt genau diese Flaechen; 1.6
+# haelt selbst helle Fassaden (~0.45) unter 1.0, dunkelt nichts aus.
+FACADE_BRIGHTNESS = 1.6
 # Kartenpfad zentral.
 #
 # Die Karte heisst seit dem Neubau vom 31.08. WiesbadenCity_Alkis3; die alte wurde
@@ -606,7 +613,8 @@ def make_photo_facade(name, texture_name, meters_along_wall=8.0,
     # Sockel: dieselbe geschaerfte Maske wie bei den uebrigen Fassaden.
     sock = c3(mat, 0.120, 0.115, 0.108, -1100, 500)
     base = lerp(mat, sock, tex_color, socket_mask(mat, vc, -1500, 700), -700, 0)
-    MEL.connect_material_property(base, "", MP.MP_BASE_COLOR)
+    bright = mul(mat, base, c1(mat, FACADE_BRIGHTNESS, -500, 250), -300, 0)
+    MEL.connect_material_property(bright, "", MP.MP_BASE_COLOR)
 
     if tex_rough is not None:
         MEL.connect_material_property(tex_rough, "R", MP.MP_ROUGHNESS)
@@ -664,7 +672,8 @@ def make_wall(textures, name="M_WbBuildingWall"):
 
     socket = c3(mat, 0.190, 0.172, 0.150, -600, 250)
     base = lerp(mat, socket, wall, socket_mask(mat, vc, -400, 400), -100, 0)
-    MEL.connect_material_property(base, "", MP.MP_BASE_COLOR)
+    bright = mul(mat, base, c1(mat, FACADE_BRIGHTNESS, -300, 150), -50, 0)
+    MEL.connect_material_property(bright, "", MP.MP_BASE_COLOR)
     MEL.connect_material_property(rough_expr, "", MP.MP_ROUGHNESS)
     MEL.connect_material_property(metal_expr, "", MP.MP_METALLIC)
 
