@@ -171,11 +171,11 @@ public:
 	 * macht. Linear ist ein Hubschrauber kaum auf der Stelle zu halten.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Helikopter|Steuerung", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float StickExpo = 0.6f;
+	float StickExpo = 0.72f;   // mehr Expo: kleine Ausschlaege feiner, weniger nervoes
 
 	/** Aufbau des zyklischen Ausschlags (Anteil je Sekunde). */
 	UPROPERTY(EditAnywhere, Category = "Helikopter|Steuerung", meta = (ClampMin = "0.1"))
-	float CyclicRiseRate = 2.2f;
+	float CyclicRiseRate = 1.6f;   // langsamerer Aufbau: weniger abrupt/uebersteuernd
 
 	/** Ruecklauf des zyklischen Ausschlags zur Mitte. */
 	UPROPERTY(EditAnywhere, Category = "Helikopter|Steuerung", meta = (ClampMin = "0.1"))
@@ -209,7 +209,7 @@ public:
 	 * schraeg fliegt, wird nicht gegen sich selbst arbeiten muessen.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Helikopter|Steuerung", meta = (ClampMin = "0.0"))
-	float AutoLevelStrength = 0.045f;
+	float AutoLevelStrength = 0.065f;   // staerkere Selbstnivellierung
 
 	/** Groesster Ausschlag, den die Selbststabilisierung allein erzeugt. */
 	UPROPERTY(EditAnywhere, Category = "Helikopter|Steuerung", meta = (ClampMin = "0.0", ClampMax = "1.0"))
@@ -236,7 +236,7 @@ public:
 	 * vorwaerts noch traege anfuehlen, nur nicht unkontrollierbar.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Helikopter|Steuerung", meta = (ClampMin = "0.0"))
-	float DriftAssistStrength = 0.8f;
+	float DriftAssistStrength = 1.15f;   // weniger Nachrutschen nach dem Kippen
 
 	/**
 	 * Ratendaempfung um Quer- und Laengsachse ohne Knueppelausschlag (1/s).
@@ -244,7 +244,7 @@ public:
 	 * Restdrehung weiterlaufen zu lassen.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Helikopter|Steuerung", meta = (ClampMin = "0.0"))
-	float RateAssistStrength = 2.0f;
+	float RateAssistStrength = 3.0f;   // mehr Ratendaempfung: Restdrehung klingt schneller ab
 
 	/** Luftwiderstand des Rumpfes (pro Sekunde). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Heli|Physik", meta = (ClampMin = "0.0"))
