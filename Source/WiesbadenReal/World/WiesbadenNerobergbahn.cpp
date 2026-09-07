@@ -462,6 +462,93 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 				TArray<FProcMeshTangent>(), /*bCreateCollision=*/false);
 		}
 	}
+
+	// -- Erd-Boeschung (Damm/Einschnitt) statt Stuetzpfeiler -----------------
+	//
+	// Von beiden Bettkanten eine Boeschung hinab zum Gelaende. Wo die Trasse
+	// ueber dem Terrain liegt, entsteht ein Damm; wo sie darunter liegt, ist die
+	// Boeschung ~0 (Einschnitt). Dadurch schmiegt sich die Bahn an den Hang.
+	if (UWorld* EmbWorld = GetWorld())
+	{
+		constexpr float BedHalf = 130.0f;
+		constexpr float BedTopLift = 6.0f;
+		const FLinearColor EarthColour(0.14f, 0.11f, 0.07f);
+		for (const FTrack* Track : { &TrackA, &TrackB })
+		{
+			for (int32 SideSign = -1; SideSign <= 1; SideSign += 2)
+			{
+				TArray<FVector> V; TArray<int32> Tri; TArray<FVector> N;
+				TArray<FVector2D> UV; TArray<FLinearColor> C;
+				for (int32 i = 0; i < Track->Points.Num(); ++i)
+				{
+					const FVector& P = Track->Points[i].Position;
+					FVector Tangent = FVector::ForwardVector;
+					if (i + 1 < Track->Points.Num())
+					{
+						Tangent = (Track->Points[i + 1].Position - P).GetSafeNormal();
+					}
+					else if (i > 0)
+					{
+						Tangent = (P - Track->Points[i - 1].Position).GetSafeNormal();
+					}
+					const FVector Right = FVector::CrossProduct(Tangent, FVector::UpVector).GetSafeNormal();
+					const float BedLift = Track->Points[i].ArcLength >= TrackBedStartCm ? 6.0f : 0.0f;
+					const double BedTopZ = P.Z + BedTopLift + BedLift;
+
+					// Gelaende unter dem Punkt.
+					double TerrainZ = P.Z;
+					FHitResult Hit;
+					FCollisionQueryParams EmbParams(SCENE_QUERY_STAT(WbBahnDamm), true);
+					EmbParams.AddIgnoredActor(this);
+					const FVector TS(P.X, P.Y, P.Z + 200.0);
+					if (EmbWorld->LineTraceSingleByChannel(Hit, TS,
+							TS - FVector(0, 0, 100000.0), ECC_WorldStatic, EmbParams)
+						&& !Hit.bStartPenetrating)
+					{
+						TerrainZ = Hit.Location.Z;
+					}
+					const double Height = FMath::Max(0.0, BedTopZ - TerrainZ);
+					const double Run = Height * 1.4;   // ~35-Grad-Boeschung
+
+					const FVector EdgeTop(P.X + Right.X * (SideSign * BedHalf),
+										  P.Y + Right.Y * (SideSign * BedHalf), BedTopZ);
+					const FVector EdgeBot(P.X + Right.X * (SideSign * (BedHalf + Run)),
+										  P.Y + Right.Y * (SideSign * (BedHalf + Run)), TerrainZ);
+					V.Add(EdgeTop); V.Add(EdgeBot);
+					N.Add(FVector::UpVector); N.Add(FVector::UpVector);
+					const float Vc = static_cast<float>(Track->Points[i].ArcLength / 100.0);
+					UV.Add(FVector2D(0.0f, Vc)); UV.Add(FVector2D(1.0f, Vc));
+					C.Add(EarthColour); C.Add(EarthColour);
+					if (i > 0)
+					{
+						const int32 B = (i - 1) * 2;
+						// Windung je Seite, damit die Oberseite nach aussen zeigt.
+						if (SideSign < 0)
+						{
+							Tri.Append({ B, B + 2, B + 1, B + 1, B + 2, B + 3 });
+						}
+						else
+						{
+							Tri.Append({ B, B + 1, B + 2, B + 1, B + 3, B + 2 });
+						}
+					}
+				}
+				TrackMesh->CreateMeshSection_LinearColor(
+					Section++, V, Tri, N, UV, C, TArray<FProcMeshTangent>(),
+					/*bCreateCollision=*/false);
+			}
+		}
+	}
+
+	// Vertexfarben-Material fuer ALLE Sektionen (Bett/Schienen/Boeschung).
+	if (UMaterialInterface* TrackMat = LoadObject<UMaterialInterface>(
+			nullptr, TEXT("/Game/Materials/City/M_WbVertexFarbe.M_WbVertexFarbe")))
+	{
+		for (int32 S = 0; S < Section; ++S)
+		{
+			TrackMesh->SetMaterial(S, TrackMat);
+		}
+	}
 }
 
 void AWiesbadenNerobergbahn::PlaceStructures()
@@ -509,69 +596,11 @@ void AWiesbadenNerobergbahn::PlaceStructures()
 	const double ViaduktS = FMath::Min(5500.0, TrackA.TotalLength * 0.18);
 	Place(Viadukt, ViaduktS, 0.0, 0.0, ViaduktDeckTopCm);
 
-	// Stuetzpfeiler ueberall dort, wo die (fahrbare, geglaettete) Trasse ueber
-	// dem Terrain schwebt - sonst "haengen die Schienen in der Luft". Entlang der
-	// Strecke abtasten, Gelaende darunter per Trace suchen, und wo die Luecke
-	// groesser als SupportGapMinCm ist, einen Pfeiler vom Boden bis knapp unter
-	// die Schiene setzen. In der Naehe des Viadukts uebersprungen (traegt dort
-	// bereits) und an den Stationen ohnehin luftlos.
-	if (UWorld* World = GetWorld())
-	{
-		UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
-		// Naturstein statt Engine-Default (grau): warmer, verwitterter Sandstein,
-		// Wiesbaden-typisch und passend zum steinernen Viadukt. Fehlt das Material,
-		// bleibt der Default - besser als ein NULL-Slot.
-		UMaterialInterface* StoneMat = LoadObject<UMaterialInterface>(
-			nullptr, TEXT("/Game/Materials/City/M_WbNaturstein.M_WbNaturstein"));
-		constexpr double PillarWidthCm = 55.0;
-		constexpr double DeckOffsetCm = 25.0;   // Pfeilerkopf knapp unter der Schiene
-		for (double S = SupportSpacingCm;
-			Cube && S < TrackA.TotalLength - SupportSpacingCm && SupportPillars.Num() < 300;
-			S += SupportSpacingCm)
-		{
-			if (FMath::Abs(S - ViaduktS) < 2000.0)
-			{
-				continue;   // Viadukt traegt hier schon
-			}
-			FVector Pos, Tangent;
-			SampleTrack(TrackA, S, Pos, Tangent);
-
-			FHitResult Hit;
-			FCollisionQueryParams PillarParams(SCENE_QUERY_STAT(WbBahnPfeiler), true);
-			PillarParams.AddIgnoredActor(this);
-			const FVector TraceStart(Pos.X, Pos.Y, Pos.Z + 100.0);
-			if (!World->LineTraceSingleByChannel(Hit, TraceStart,
-					TraceStart - FVector(0.0, 0.0, 100000.0), ECC_WorldStatic, PillarParams))
-			{
-				continue;
-			}
-			const double TerrainZ = Hit.Location.Z;
-			const double PillarTopZ = Pos.Z - DeckOffsetCm;
-			const double GapCm = PillarTopZ - TerrainZ;
-			if (GapCm < SupportGapMinCm)
-			{
-				continue;
-			}
-
-			UStaticMeshComponent* Pillar = NewObject<UStaticMeshComponent>(this);
-			Pillar->SetStaticMesh(Cube);
-			if (StoneMat)
-			{
-				Pillar->SetMaterial(0, StoneMat);
-			}
-			Pillar->SetupAttachment(Root);
-			Pillar->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			Pillar->RegisterComponent();
-			// Engine-Cube ist 100 cm, um den Ursprung zentriert.
-			Pillar->SetWorldScale3D(FVector(
-				PillarWidthCm / 100.0, PillarWidthCm / 100.0, GapCm / 100.0));
-			Pillar->SetWorldLocation(FVector(Pos.X, Pos.Y, (TerrainZ + PillarTopZ) * 0.5));
-			SupportPillars.Add(Pillar);
-		}
-		UE_LOG(LogWbStreaming, Log,
-			TEXT("Nerobergbahn: %d Stuetzpfeiler unter der schwebenden Trasse gesetzt."),
-			SupportPillars.Num());
-	}
+	// KEINE Stuetzpfeiler mehr (die wirkten wie Stelzen und trafen die Referenz
+	// nicht). Stattdessen schmiegt sich die Trasse ueber eine Erd-Boeschung an
+	// den Hang: BuildTrackMeshes zieht vom Schotterbett eine Boeschung zum
+	// Gelaende (Damm, wo die Bahn drueberliegt; im Einschnitt verschwindet sie).
+	// So laeuft die Bahn wie im Vorbild direkt am Berg, nur unten der Viadukt.
 
 	UE_LOG(LogWbStreaming, Log,
 		TEXT("Nerobergbahn: Bauwerke gesetzt (Talstation, Bergstation, Viadukt)."));
