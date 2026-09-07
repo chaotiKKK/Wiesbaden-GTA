@@ -73,11 +73,14 @@ AWiesbadenCar::AWiesbadenCar()
 
 	if (Herbie)
 	{
-		// Modell ist 4,95 m lang, Ursprung auf Radaufstand (Reifenunterkante).
-		// Auf Kaefer-Maszstab 4,15 m skalieren (0.838); die im Modell enthaltenen
-		// Raeder sitzen damit korrekt auf der Strasse.
+		// Modell ist 4,95 m lang, aber die LAENGSACHSE liegt im Import auf +Y
+		// (gemessene Bounds: X=202, Y=495, Z=184 cm) - dadurch stand der Wagen
+		// 90 Grad quer und die Follow-Kamera sass in der Karosserie. Ein Yaw von
+		// -90 Grad dreht die Modell-Laengsachse (+Y) auf die Fahrzeug-Vorwaerts-
+		// richtung (+X). Auf Kaefer-Maszstab skalieren (0.838 -> 4,15 m).
 		BodyMesh->SetStaticMesh(Herbie);
 		BodyMesh->SetRelativeLocation(FVector::ZeroVector);
+		BodyMesh->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
 		BodyMesh->SetRelativeScale3D(FVector(0.838f));
 		bBodyIncludesWheels = true;
 	}
