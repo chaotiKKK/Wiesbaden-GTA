@@ -410,9 +410,9 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 		// (Meterspur: Schienenmitten 50 cm neben der Achse).
 		struct FRibbon { float HalfWidth; float Offset; float Lift; FLinearColor Colour; };
 		const FRibbon Ribbons[] = {
-			{ 130.0f, 0.0f, 6.0f,  FLinearColor(0.19f, 0.17f, 0.155f) },  // Bett (Schotter, heller)
-			{ 6.0f, -50.0f, 16.0f, FLinearColor(0.35f, 0.34f, 0.32f) },   // Schiene links
-			{ 6.0f, +50.0f, 16.0f, FLinearColor(0.35f, 0.34f, 0.32f) },   // Schiene rechts
+			{ 130.0f, 0.0f, 4.0f,  FLinearColor(0.34f, 0.31f, 0.27f) },   // Schotterbett (heller Kies statt Schwarz)
+			{ 5.0f, -50.0f, 14.0f, FLinearColor(0.55f, 0.56f, 0.60f) },   // Schiene links (heller Stahl)
+			{ 5.0f, +50.0f, 14.0f, FLinearColor(0.55f, 0.56f, 0.60f) },   // Schiene rechts
 		};
 
 		for (const FRibbon& Ribbon : Ribbons)
@@ -463,6 +463,64 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 		}
 	}
 
+	// -- Schwellen: dunkle Querbalken auf dem Schotter, ~alle 65 cm -----------
+	// Erst dadurch liest sich das Band als GLEIS statt als schwarze Strasse.
+	{
+		const FLinearColor SleeperColour(0.16f, 0.115f, 0.08f);   // creosot-dunkles Holz
+		constexpr double SleeperSpacingCm = 65.0;
+		constexpr float SleeperHalfLenCm = 13.0f;    // Balken 26 cm laengs
+		constexpr float SleeperHalfWidthCm = 88.0f;  // Schwelle ~1,76 m quer (schmaler als das Bett)
+		constexpr float SleeperLift = 8.0f;
+		for (const FTrack* Track : { &TrackA, &TrackB })
+		{
+			TArray<FVector> V; TArray<int32> Tri; TArray<FVector> N;
+			TArray<FVector2D> UV; TArray<FLinearColor> C;
+			double NextArc = 0.0;
+			for (int32 i = 0; i < Track->Points.Num(); ++i)
+			{
+				if (Track->Points[i].ArcLength < NextArc)
+				{
+					continue;
+				}
+				NextArc = Track->Points[i].ArcLength + SleeperSpacingCm;
+				const FVector& P = Track->Points[i].Position;
+				FVector Tangent = FVector::ForwardVector;
+				if (i + 1 < Track->Points.Num())
+				{
+					Tangent = (Track->Points[i + 1].Position - P).GetSafeNormal();
+				}
+				else if (i > 0)
+				{
+					Tangent = (P - Track->Points[i - 1].Position).GetSafeNormal();
+				}
+				const FVector Right = FVector::CrossProduct(Tangent, FVector::UpVector).GetSafeNormal();
+				const float BedLift = Track->Points[i].ArcLength >= TrackBedStartCm ? 6.0f : 0.0f;
+				const FVector Base = P + FVector(0, 0, SleeperLift + BedLift);
+				const FVector Along = Tangent * SleeperHalfLenCm;
+				const FVector Across = Right * SleeperHalfWidthCm;
+				// Reihenfolge wie beim Bett-Band: [links0, rechts0, links1, rechts1].
+				const int32 B = V.Num();
+				V.Add(Base - Across - Along);
+				V.Add(Base + Across - Along);
+				V.Add(Base - Across + Along);
+				V.Add(Base + Across + Along);
+				for (int32 k = 0; k < 4; ++k)
+				{
+					N.Add(FVector::UpVector);
+					UV.Add(FVector2D(0.0f, 0.0f));
+					C.Add(SleeperColour);
+				}
+				Tri.Append({ B, B + 2, B + 1, B + 1, B + 2, B + 3 });
+			}
+			if (V.Num() > 0)
+			{
+				TrackMesh->CreateMeshSection_LinearColor(
+					Section++, V, Tri, N, UV, C, TArray<FProcMeshTangent>(),
+					/*bCreateCollision=*/false);
+			}
+		}
+	}
+
 	// -- Erd-Boeschung (Damm/Einschnitt) statt Stuetzpfeiler -----------------
 	//
 	// Von beiden Bettkanten eine Boeschung hinab zum Gelaende. Wo die Trasse
@@ -472,7 +530,7 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 	{
 		constexpr float BedHalf = 130.0f;
 		constexpr float BedTopLift = 6.0f;
-		const FLinearColor EarthColour(0.30f, 0.24f, 0.16f);   // Erd-/Sandton, nicht schwarz
+		const FLinearColor EarthColour(0.20f, 0.27f, 0.14f);   // begruenter Bahndamm - schmiegt sich an den Hang
 		for (const FTrack* Track : { &TrackA, &TrackB })
 		{
 			for (int32 SideSign = -1; SideSign <= 1; SideSign += 2)
@@ -833,6 +891,10 @@ void AWiesbadenNerobergbahn::CreatePassengerCamera()
 	// Waagerecht steht die Kamera ueber dem Balken und zeigt den Panoramablick
 	// ueber die Stadt statt ins Innere der Trasse.
 	PassengerCamera->bLevelHorizon = true;
+	// Innenansicht (C schaltet Follow -> Orbit -> Cockpit): First-Person im Wagen,
+	// Blick nach vorn die Trasse hinauf. Der Wagen bleibt sichtbar (man sitzt
+	// darin); die Cockpit-Kamera erbt die Wagenneigung, zeigt also den Hang hinauf.
+	PassengerCamera->CockpitOffset = FVector(40.0f, 0.0f, 175.0f);
 	PassengerCamera->RegisterComponent();
 	PassengerCamera->ActivateExternalView(PC, Car, RideSession.GetPassenger());
 }

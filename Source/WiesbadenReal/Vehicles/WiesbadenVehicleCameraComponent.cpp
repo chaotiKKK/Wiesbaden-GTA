@@ -13,6 +13,8 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "InputCoreTypes.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 UWiesbadenVehicleCameraComponent::UWiesbadenVehicleCameraComponent()
 {
@@ -167,6 +169,22 @@ void UWiesbadenVehicleCameraComponent::AddCockpitHiddenMesh(UPrimitiveComponent*
 
 void UWiesbadenVehicleCameraComponent::HandleInput(float DeltaTime)
 {
+#if !UE_BUILD_SHIPPING
+	// Dev-Sichtprobe: -WbCamMode=0/1/2 erzwingt Follow/Orbit/Cockpit EINMAL, damit
+	// sich die Innen-/Aussenansicht headless per Screenshot belegen laesst.
+	if (!bDevModeApplied)
+	{
+		bDevModeApplied = true;
+		int32 Forced = -1;
+		if (FParse::Value(FCommandLine::Get(), TEXT("WbCamMode="), Forced) && Forced >= 0)
+		{
+			CameraMode = static_cast<EWiesbadenVehicleCameraMode>(FMath::Clamp(Forced, 0, 2));
+			ApplyCameraMode();
+			return;
+		}
+	}
+#endif
+
 	// Gesperrte Follow-Kamera: Umschaltung und Orbit-Eingaben komplett ignorieren.
 	if (bLockFollowMode)
 	{

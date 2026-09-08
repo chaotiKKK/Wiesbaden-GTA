@@ -218,4 +218,6 @@ private:
 	FRotator OrbitOffset = FRotator::ZeroRotator;
 	bool bCameraToggleHeld = false;
 	bool bRigCreated = false;
+	/** Einmalige Anwendung des Dev-Schalters -WbCamMode (Sichtprobe). */
+	bool bDevModeApplied = false;
 };
