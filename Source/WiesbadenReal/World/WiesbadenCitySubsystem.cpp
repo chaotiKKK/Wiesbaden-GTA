@@ -3170,6 +3170,22 @@ bool UWiesbadenCitySubsystem::SetupAerialViewParams(float HeightMeters, bool bHa
 		ViewLocation.X = AtX;
 		ViewLocation.Y = AtY;
 
+		// Z am BODEN des Zielorts verankern, statt die Z des vorigen View-Targets
+		// (GetPlayerViewPoint) zu uebernehmen. Sonst setzt sich in einer
+		// Posen-Serie jede Aufnahme auf die Kamera der vorigen - die Hoehe
+		// akkumuliert, und schon Pose 2 steht kilometerhoch. Ein senkrechter
+		// Trace verankert die Hoehe am tatsaechlichen Gelaende/Dach am Zielort;
+		// das stimmt auch am Hang (Platter Str. liegt hoch ueber dem Tal, in dem
+		// der Spieler startet).
+		FHitResult GroundHit;
+		FCollisionQueryParams GroundParams(SCENE_QUERY_STAT(WbAerialGround), true);
+		if (World->LineTraceSingleByChannel(GroundHit,
+			FVector(AtX, AtY, 1000000.0), FVector(AtX, AtY, -200000.0),
+			ECC_WorldStatic, GroundParams))
+		{
+			ViewLocation.Z = GroundHit.ImpactPoint.Z;
+		}
+
 		UE_LOG(LogWbStreaming, Log,
 			TEXT("Luftaufnahme an vorgegebener Stelle: (%.0f, %.0f), Hoehe %.0f m."),
 			AtX, AtY, HeightMeters);
