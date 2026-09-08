@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 #include "Core/WiesbadenGameStateSubsystem.h"
 
+#include "Core/WiesbadenSaveGame.h"
 #include "WiesbadenReal.h"
+#include "Kismet/GameplayStatics.h"
 
 namespace WiesbadenEconomy
 {
@@ -31,6 +33,7 @@ void UWiesbadenGameStateSubsystem::Initialize(FSubsystemCollectionBase& Collecti
 void UWiesbadenGameStateSubsystem::AddGuthaben(int32 Delta)
 {
 	Guthaben = WiesbadenEconomy::ApplyDelta(Guthaben, Delta);
+	UE_LOG(LogWbCore, Log, TEXT("Guthaben gutgeschrieben: %+d (gesamt %d)."), Delta, Guthaben);
 	Save();
 	OnGuthabenChanged.Broadcast();
 }
@@ -48,12 +51,43 @@ bool UWiesbadenGameStateSubsystem::SpendGuthaben(int32 Kosten)
 	return false;
 }
 
+namespace
+{
+	const TCHAR* const GSaveSlot = TEXT("WiesbadenReal");
+	constexpr int32 GSaveUserIndex = 0;
+}
+
 void UWiesbadenGameStateSubsystem::Save() const
 {
-	// Persistenz folgt in Phase 2.
+	UWiesbadenSaveGame* SaveObj = Cast<UWiesbadenSaveGame>(
+		UGameplayStatics::CreateSaveGameObject(UWiesbadenSaveGame::StaticClass()));
+	if (!SaveObj)
+	{
+		return;
+	}
+	SaveObj->Guthaben = Guthaben;
+	if (UGameplayStatics::SaveGameToSlot(SaveObj, GSaveSlot, GSaveUserIndex))
+	{
+		UE_LOG(LogWbCore, Log, TEXT("Guthaben gespeichert: %d."), Guthaben);
+	}
+	else
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("Guthaben konnte nicht gespeichert werden."));
+	}
 }
 
 void UWiesbadenGameStateSubsystem::Load()
 {
-	// Persistenz folgt in Phase 2.
+	if (UGameplayStatics::DoesSaveGameExist(GSaveSlot, GSaveUserIndex))
+	{
+		if (UWiesbadenSaveGame* SaveObj = Cast<UWiesbadenSaveGame>(
+			UGameplayStatics::LoadGameFromSlot(GSaveSlot, GSaveUserIndex)))
+		{
+			Guthaben = SaveObj->Guthaben;
+			UE_LOG(LogWbCore, Log, TEXT("Guthaben geladen: %d."), Guthaben);
+			return;
+		}
+	}
+	Guthaben = 0;
+	UE_LOG(LogWbCore, Log, TEXT("Kein Guthaben-Speicherstand - starte mit 0."));
 }

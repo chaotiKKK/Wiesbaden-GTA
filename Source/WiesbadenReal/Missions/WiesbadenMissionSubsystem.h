@@ -34,7 +34,6 @@ public:
 	const FMissionObjective* GetCurrentObjective() const;
 
 	FString GetActiveMissionTitle() const;
-	int32 GetGuthaben() const { return Guthaben; }
 	bool HasActiveMission() const { return ActiveMissionIndex != INDEX_NONE; }
 
 	FOnMissionObjectiveChanged OnObjectiveChanged;
@@ -47,6 +46,5 @@ private:
 	TArray<FMission> Missions;
 	int32 ActiveMissionIndex = INDEX_NONE;
 	int32 ActiveObjectiveIndex = 0;
-	int32 Guthaben = 0;
 	float CheckAccumulator = 0.0f;
 };

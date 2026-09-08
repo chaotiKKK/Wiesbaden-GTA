@@ -3,11 +3,13 @@
 
 #include "Missions/WiesbadenMissionLoader.h"
 #include "Missions/WiesbadenMissionRunner.h"
+#include "Core/WiesbadenGameStateSubsystem.h"
 #include "WiesbadenReal.h"
 
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Engine/World.h"
+#include "Engine/GameInstance.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Pawn.h"
 
@@ -135,11 +137,27 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 	ActiveObjectiveIndex = Result.NextObjectiveIndex;
 	if (Result.bMissionCompleted)
 	{
-		Guthaben += Result.GuthabenAwarded;
 		const FMission Completed = Missions[ActiveMissionIndex];
-		UE_LOG(LogWbCore, Log,
-			TEXT("Mission erfuellt: %s (+%d Guthaben, gesamt %d)."),
-			*Completed.Title, Result.GuthabenAwarded, Guthaben);
+		UE_LOG(LogWbCore, Log, TEXT("Mission erfuellt: %s."), *Completed.Title);
+
+		// Belohnung zentral gutschreiben (persistenter Spielzustand).
+		if (const UWorld* CompletionWorld = GetWorld())
+		{
+			if (UGameInstance* GI = CompletionWorld->GetGameInstance())
+			{
+				if (UWiesbadenGameStateSubsystem* GameState =
+					GI->GetSubsystem<UWiesbadenGameStateSubsystem>())
+				{
+					GameState->AddGuthaben(Result.GuthabenAwarded);
+				}
+				else
+				{
+					UE_LOG(LogWbCore, Warning,
+						TEXT("Kein GameState-Subsystem - Missionsbelohnung nicht gutgeschrieben."));
+				}
+			}
+		}
+
 		ActiveMissionIndex = INDEX_NONE;
 		ActiveObjectiveIndex = 0;
 		OnMissionCompleted.Broadcast(Completed);

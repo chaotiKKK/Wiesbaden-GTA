@@ -24,6 +24,8 @@
 #include "UI/WiesbadenMinimap.h"
 #include "Missions/WiesbadenMissionSubsystem.h"
 #include "Missions/WiesbadenMissionTypes.h"
+#include "Core/WiesbadenGameStateSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "UI/WiesbadenWorldMapView.h"
 #include "Engine/TextureRenderTarget2D.h"
 
@@ -710,6 +712,22 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	DrawStreetName(Width * 0.5f, 28.0f);
 	DrawVehicleBanner(Width * 0.5f, Height * 0.16f);
 	DrawMissionPanel(Width, Height);
+
+	// Guthaben oben rechts (aus dem persistenten Spielzustand).
+	if (const UWorld* HudGameWorld = GetWorld())
+	{
+		if (const UGameInstance* GI = HudGameWorld->GetGameInstance())
+		{
+			if (const UWiesbadenGameStateSubsystem* GameState =
+				GI->GetSubsystem<UWiesbadenGameStateSubsystem>())
+			{
+				const FString GuthabenText =
+					FString::Printf(TEXT("Guthaben: %d EUR"), GameState->GetGuthaben());
+				DrawText(GuthabenText, FLinearColor(1.0f, 0.86f, 0.35f, 1.0f),
+					Width - 210.0f, 16.0f, GEngine ? GEngine->GetMediumFont() : nullptr, 1.0f);
+			}
+		}
+	}
 
 	// -- Helikopter: eigene Cockpit-Instrumententafel -----------------------
 	if (Heli)
