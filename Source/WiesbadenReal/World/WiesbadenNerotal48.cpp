@@ -46,7 +46,7 @@ namespace
 	const FLinearColor COLOUR_TILE(0.12f, 0.42f, 0.55f);      // Beckenfliesen
 	const FLinearColor COLOUR_WATER(0.05f, 0.35f, 0.50f);     // Wasser
 	const FLinearColor COLOUR_TRUNK(0.36f, 0.29f, 0.21f);     // Palmstamm
-	const FLinearColor COLOUR_FROND(0.26f, 0.50f, 0.18f);     // Wedel - helleres Palmgruen (unter GI=None sonst nachschwarz)
+	const FLinearColor COLOUR_FROND(0.07f, 0.29f, 0.06f);     // Wedel - sattes Palmgruen (niedriges R/B = gesaettigt statt blass; Normalenfix behebt das Schwarz)
 
 	// Abschnittsnummern im ProceduralMesh.
 	constexpr int32 SECTION_TERRACE = 0;

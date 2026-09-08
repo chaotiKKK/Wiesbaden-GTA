@@ -455,8 +455,6 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 
 				Vertices.Add(Centre - Right * Ribbon.HalfWidth);
 				Vertices.Add(Centre + Right * Ribbon.HalfWidth);
-				Normals.Add(FVector::UpVector);
-				Normals.Add(FVector::UpVector);
 				const float V = static_cast<float>(Track->Points[i].ArcLength / 100.0);
 				UV0.Add(FVector2D(0.0f, V));
 				UV0.Add(FVector2D(1.0f, V));
@@ -471,9 +469,14 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 				}
 			}
 
+			// Normalen aus der Geometrie ableiten (wie bei der Boeschung): fixe
+			// UpVector-Normalen auf dem steilen Gleiskoerper spiegelte der
+			// zweiseitige Shader auf der Sichtseite nach unten -> dunkler Streifen.
+			TArray<FProcMeshTangent> Tang;
+			UKismetProceduralMeshLibrary::CalculateTangentsForMesh(Vertices, Triangles, UV0, Normals, Tang);
 			TrackMesh->CreateMeshSection_LinearColor(
 				Section++, Vertices, Triangles, Normals, UV0, Colours,
-				TArray<FProcMeshTangent>(), /*bCreateCollision=*/false);
+				Tang, /*bCreateCollision=*/false);
 		}
 	}
 
@@ -518,9 +521,9 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 				V.Add(Base + Across - Along);
 				V.Add(Base - Across + Along);
 				V.Add(Base + Across + Along);
+				// Normalen unten aus der Geometrie (CalculateTangentsForMesh).
 				for (int32 k = 0; k < 4; ++k)
 				{
-					N.Add(FVector::UpVector);
 					UV.Add(FVector2D(0.0f, 0.0f));
 					C.Add(SleeperColour);
 				}
@@ -528,8 +531,10 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 			}
 			if (V.Num() > 0)
 			{
+				TArray<FProcMeshTangent> Tang;
+				UKismetProceduralMeshLibrary::CalculateTangentsForMesh(V, Tri, UV, N, Tang);
 				TrackMesh->CreateMeshSection_LinearColor(
-					Section++, V, Tri, N, UV, C, TArray<FProcMeshTangent>(),
+					Section++, V, Tri, N, UV, C, Tang,
 					/*bCreateCollision=*/false);
 			}
 		}
@@ -544,7 +549,7 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 	{
 		constexpr float BedHalf = 130.0f;
 		constexpr float BedTopLift = 6.0f;
-		const FLinearColor EarthColour(0.30f, 0.42f, 0.22f);   // begruenter Bahndamm - heller, damit die Boeschung unter GI=None nicht nachschwarz wirkt
+		const FLinearColor EarthColour(0.13f, 0.20f, 0.09f);   // begruenter Bahndamm - an die Landschafts-Wiese (Foto-Textur, olivgruen ~15-20% Albedo) angeglichen, damit der Damm nahtlos ins Gras uebergeht
 
 		// Wie beim Hoehen-Trace: Stadt-Chunks ausnehmen, sonst misst die Boeschung
 		// gegen ein Dach und zieht eine riesige dunkle Schuerze in die Luft.
