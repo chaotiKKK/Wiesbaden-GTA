@@ -64,9 +64,11 @@ FADE_MATERIALS = [
     "/Game/Materials/City/M_WbBuildingRoof",
     "/Game/Materials/AAA/M_AAA_RoofClay",
     "/Game/Materials/AAA/M_AAA_RoofVaried",
-    # Uebrige Chunk-Bodenflaechen (Gehweg/Bordstein/Pflaster/unbefestigt) - KEIN Terrain
+    # Uebrige Chunk-Bodenflaechen (Gehweg/Pflaster/unbefestigt) - KEIN Terrain.
+    # M_WbKerb bewusst NICHT: der Bordstein ist ein DUENNES, senkrechtes Band.
+    # Unter der DitherTemporalAA-Maske (Masked-Blend) stippelt es und wirkt
+    # durchsichtig ("man schaut hindurch"). Der Bordstein bleibt opak (fix_kerb_solid.py).
     "/Game/Materials/City/M_WbSidewalk",
-    "/Game/Materials/City/M_WbKerb",
     "/Game/Materials/City/M_WbPavedStone",
     "/Game/Materials/City/M_WbUnpaved",
     "/Game/Materials/AAA/M_AAA_Paving",
