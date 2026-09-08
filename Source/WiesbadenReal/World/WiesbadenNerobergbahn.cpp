@@ -424,9 +424,9 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 		// (Meterspur: Schienenmitten 50 cm neben der Achse).
 		struct FRibbon { float HalfWidth; float Offset; float Lift; FLinearColor Colour; };
 		const FRibbon Ribbons[] = {
-			{ 130.0f, 0.0f, 4.0f,  FLinearColor(0.34f, 0.31f, 0.27f) },   // Schotterbett (heller Kies statt Schwarz)
-			{ 5.0f, -50.0f, 14.0f, FLinearColor(0.55f, 0.56f, 0.60f) },   // Schiene links (heller Stahl)
-			{ 5.0f, +50.0f, 14.0f, FLinearColor(0.55f, 0.56f, 0.60f) },   // Schiene rechts
+			{ 130.0f, 0.0f, 4.0f,  FLinearColor(0.26f, 0.245f, 0.22f) },  // Schotterbett - realistischer Kies (mittelgrau, leicht warm - Bruchstein statt hellbeige)
+			{ 5.0f, -50.0f, 14.0f, FLinearColor(0.40f, 0.41f, 0.44f) },   // Schiene links - gedaempfter Stahl (heller als Bett/Schwelle, aber nicht grellweiss)
+			{ 5.0f, +50.0f, 14.0f, FLinearColor(0.40f, 0.41f, 0.44f) },   // Schiene rechts
 		};
 
 		for (const FRibbon& Ribbon : Ribbons)
