@@ -126,6 +126,20 @@ struct WIESBADENREAL_API FRegionAssetSettings
 	 *  zusaetzlich zur halben Fahrbahnbreite. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets", meta = (ClampMin = "0.0"))
 	double StreetTreeVergeOffsetCm = 150.0;
+
+	/**
+	 * Baeume aus den ECHTEN OSM-Punkten (natural=tree) setzen statt Flaechen-/
+	 * Strassen-Scatter. Zusaetzlich werden nur ECHTE Waldflaechen (landuse=forest
+	 * / natural=wood) dicht aufgefuellt. So stehen Baeume NUR, wo sie real
+	 * vorkommen - der blanke Gruen-Scatter (Wiesen/Parks) und die pauschalen
+	 * Strassenbaeume entfallen dann.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets")
+	bool bUseOsmTrees = false;
+
+	/** Rasterabstand der dichten Wald-Fuellung innerhalb realer Waldflaechen (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets", meta = (ClampMin = "200.0"))
+	double ForestTreeSpacingCm = 750.0;
 };
 
 /** Diagnose des Regionen-Asset-Passes. */
@@ -213,6 +227,21 @@ public:
 		const IHeightSampler* HeightSampler,
 		const FRegionAssetSettings& Settings,
 		const FRoadNetwork& Network,
+		FRegionAssetLayout& OutLayout);
+
+	/**
+	 * Setzt Baeume aus den ECHTEN OSM-Punkten (natural=tree) - Groesse aus dem
+	 * height-Tag, sonst deterministisch gestreut - und fuellt zusaetzlich echte
+	 * Waldflaechen (landuse=forest / natural=wood) dicht auf. Fahrbahnen bleiben
+	 * frei. HAENGT an OutLayout an (kein Reset), ist also nach GenerateClearOfRoads
+	 * aufzurufen (mit bUseOsmTrees, damit dort der blanke Baum-Scatter entfaellt).
+	 */
+	FRegionAssetReport PlaceOsmTrees(
+		const struct FOSMDataSet& OSMData,
+		const class UGeoCoordinateConverter* Converter,
+		const IHeightSampler* HeightSampler,
+		const FRoadNetwork& Network,
+		const FRegionAssetSettings& Settings,
 		FRegionAssetLayout& OutLayout);
 
 	/** Asset-Kategorien, die eine Region liefert (leer = keine Assets). */

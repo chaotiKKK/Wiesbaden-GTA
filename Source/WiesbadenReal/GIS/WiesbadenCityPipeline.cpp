@@ -234,6 +234,19 @@ namespace WiesbadenCityPipeline
 			OutData.RegionAssetReport = Tools.RegionAssetGenerator->GenerateClearOfRoads(
 				OutData.Regions, HeightSampler, Input.RegionAssetSettings,
 				OutData.RoadNetwork, OutData.RegionAssetLayout);
+
+			// Baeume aus den ECHTEN OSM-Punkten (natural=tree) + dichte Fuellung nur
+			// echter Waldflaechen - haengt an das Layout an (GenerateClearOfRoads liess
+			// die Baum-Kategorie bei bUseOsmTrees aus). So stehen Baeume nur, wo real.
+			if (Input.RegionAssetSettings.bUseOsmTrees)
+			{
+				const FRegionAssetReport OsmTrees = Tools.RegionAssetGenerator->PlaceOsmTrees(
+					OutData.OSMData, Tools.Converter, HeightSampler,
+					OutData.RoadNetwork, Input.RegionAssetSettings, OutData.RegionAssetLayout);
+				OutData.RegionAssetReport.TreeCount += OsmTrees.TreeCount;
+				OutData.RegionAssetReport.AssetCount = OutData.RegionAssetLayout.Assets.Num();
+				OutData.RegionAssetReport.SkippedOnRoadCount += OsmTrees.SkippedOnRoadCount;
+			}
 		}
 
 		if (Cancelled()) { return EBuildResult::Cancelled; }

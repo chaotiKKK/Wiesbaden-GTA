@@ -5,6 +5,8 @@
 #include "WiesbadenReal.h"
 
 #include "GIS/PolygonUtils.h"
+#include "GIS/OSMTypes.h"
+#include "GIS/GeoCoordinateConverter.h"
 
 namespace
 {
@@ -289,7 +291,7 @@ FRegionAssetReport UWiesbadenRegionAssetGenerator::GenerateClearOfRoads(
 	// -> gleicher Bake-/Spawn-/Stream-Pfad; nur die Positionen kommen aus dem
 	// Netz. Nach GenerateInternal (das OutLayout zuruecksetzt), damit sie an die
 	// Regions-Baeume anschliessen statt sie zu loeschen.
-	if (Settings.bPlaceStreetTrees)
+	if (Settings.bPlaceStreetTrees && !Settings.bUseOsmTrees)
 	{
 		// EIGENES, enges Freihaltenetz NUR fuer die Fahrbahn (ohne Gehweg): die
 		// Strassenbaeume gehoeren auf die Verge/den Gehweg hinter dem Bordstein.
@@ -341,6 +343,12 @@ FRegionAssetReport UWiesbadenRegionAssetGenerator::GenerateInternal(
 			{
 				continue;
 			}
+			// Baeume kommen bei bUseOsmTrees aus den echten OSM-Punkten (PlaceOsmTrees),
+			// nicht aus dem blanken Gruenflaechen-Scatter (der auch Wiesen/Parks fuellt).
+			if (Category == ERegionAssetCategory::Tree && Settings.bUseOsmTrees)
+			{
+				continue;
+			}
 			ScatterRegion(Region, Category, GetSpacingCm(Category, Settings),
 				GetJitterCm(Category), HeightSampler, Clearance,
 				Report.SkippedOnRoadCount, OutLayout);
@@ -361,5 +369,123 @@ FRegionAssetReport UWiesbadenRegionAssetGenerator::GenerateInternal(
 	Report.bSuccess = true;
 
 	UE_LOG(LogWbCore, Log, TEXT("%s"), *Report.ToString());
+	return Report;
+}
+
+FRegionAssetReport UWiesbadenRegionAssetGenerator::PlaceOsmTrees(
+	const FOSMDataSet& OSMData,
+	const UGeoCoordinateConverter* Converter,
+	const IHeightSampler* HeightSampler,
+	const FRoadNetwork& Network,
+	const FRegionAssetSettings& Settings,
+	FRegionAssetLayout& OutLayout)
+{
+	FRegionAssetReport Report;
+	Report.bSuccess = true;
+	if (!Converter || !Converter->IsInitialized())
+	{
+		Report.ErrorMessage = TEXT("OSM-Baeume: kein initialisierter Geo-Konverter.");
+		return Report;
+	}
+
+	// Fahrbahn freihalten (etwas schmaler als bei den Region-Baeumen, damit echte
+	// strassennahe OSM-Baeume auf der Verge nicht alle wegfallen).
+	FWiesbadenRoadClearance Clearance;
+	Clearance.Build(Network, 120.0);
+
+	const FName NaturalKey(TEXT("natural"));
+	const FName LanduseKey(TEXT("landuse"));
+	const FName HeightKey(TEXT("height"));
+
+	int32 TreeCount = 0;
+	int32 Skipped = 0;
+
+	// 1) Echte Einzelbaeume an allen OSM natural=tree-Punkten.
+	for (const TPair<FOSMId, FOSMNode>& Pair : OSMData.Nodes)
+	{
+		const FOSMNode& Node = Pair.Value;
+		if (Node.GetTag(NaturalKey) != TEXT("tree"))
+		{
+			continue;
+		}
+		const FVector World = Converter->GeoToUnrealGround(Node.Location);
+		const FVector2D Pt(World.X, World.Y);
+		if (Clearance.IsBlocked(Pt))
+		{
+			++Skipped;
+			continue;
+		}
+
+		FPlacedRegionAsset Asset;
+		Asset.Category = ERegionAssetCategory::Tree;
+		Asset.RegionName = TEXT("OsmTree");
+		Asset.Location = FVector(Pt.X, Pt.Y, 0.0);
+		if (HeightSampler && HeightSampler->HasValidData())
+		{
+			Asset.Location.Z = HeightSampler->SampleHeightCm(Pt);
+		}
+		// Deterministisch aus der Node-Id: Drehung + Groesse.
+		FRandomStream Stream(static_cast<int32>(GetTypeHash(Pair.Key) ^ 0x9E3779B9u));
+		Asset.YawDegrees = Stream.FRandRange(0.0f, 360.0f);
+		double HeightMeters = 0.0;
+		if (FOSMTagParser::ParseLengthMeters(Node.GetTag(HeightKey), HeightMeters) && HeightMeters > 1.0)
+		{
+			// Groesse aus dem echten height-Tag (Referenz-Baumhoehe ~9 m).
+			Asset.Scale = FMath::Clamp(static_cast<float>(HeightMeters / 9.0), 0.5f, 2.2f);
+		}
+		else
+		{
+			Asset.Scale = Stream.FRandRange(0.8f, 1.25f);
+		}
+		OutLayout.Assets.Add(Asset);
+		++TreeCount;
+	}
+
+	// 2) Nur ECHTE Waldflaechen (landuse=forest / natural=wood) dicht auffuellen -
+	// dort steht real geschlossener Wald, der in OSM nicht Baum fuer Baum erfasst ist.
+	int32 ForestAreas = 0;
+	for (const TPair<FOSMId, FOSMWay>& WayPair : OSMData.Ways)
+	{
+		const FOSMWay& Way = WayPair.Value;
+		const bool bForest =
+			Way.GetTag(LanduseKey).Equals(TEXT("forest"), ESearchCase::IgnoreCase)
+			|| Way.GetTag(NaturalKey).Equals(TEXT("wood"), ESearchCase::IgnoreCase);
+		if (!bForest || Way.NodeIds.Num() < 4)
+		{
+			continue;
+		}
+
+		FWiesbadenRegion Forest;
+		Forest.Type = ECityRegionType::Green;
+		Forest.Name = FString::Printf(TEXT("Forest_%lld"), static_cast<long long>(WayPair.Key));
+		Forest.Polygon.Reserve(Way.NodeIds.Num());
+		for (const FOSMId NodeId : Way.NodeIds)
+		{
+			if (const FOSMNode* N = OSMData.Nodes.Find(NodeId))
+			{
+				const FVector W = Converter->GeoToUnrealGround(N->Location);
+				Forest.Polygon.Add(FVector2D(W.X, W.Y));
+			}
+		}
+		if (Forest.Polygon.Num() < 3)
+		{
+			continue;
+		}
+
+		const int32 Before = OutLayout.Assets.Num();
+		ScatterRegion(Forest, ERegionAssetCategory::Tree,
+			FMath::Max(200.0, Settings.ForestTreeSpacingCm),
+			GetJitterCm(ERegionAssetCategory::Tree),
+			HeightSampler, &Clearance, Skipped, OutLayout);
+		TreeCount += OutLayout.Assets.Num() - Before;
+		++ForestAreas;
+	}
+
+	Report.TreeCount = TreeCount;
+	Report.AssetCount = OutLayout.Assets.Num();
+	Report.SkippedOnRoadCount = Skipped;
+	UE_LOG(LogWbCore, Log,
+		TEXT("OSM-Baeume: %d Baeume gesetzt (echte Punkte + Fuellung aus %d Waldflaechen; %d auf Fahrbahn ausgelassen)."),
+		TreeCount, ForestAreas, Skipped);
 	return Report;
 }
