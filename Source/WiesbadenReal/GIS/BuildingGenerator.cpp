@@ -850,6 +850,30 @@ bool UBuildingGenerator::BuildSingleBuilding(
 	}
 	OutBuilding.LevelCount = Levels;
 
+	// Adress-Override fuer drei konkrete reale Gebaeude an der Platter Strasse
+	// (per Adresse identifiziert; OSM fuehrt sie als "Platter Straße 140/144/146",
+	// sz-insensitiv ueber NormalizeAddressForMatch):
+	//  - 140: markanter Wohnblock, deutlich hoeher (12 Geschosse).
+	//  - 144/146: eingeschossige Garage (der Parkplatz davor statt Fahrbahn ist eine
+	//    Strassennetz-Korrektur, nicht hier).
+	if (!OutBuilding.Address.IsEmpty())
+	{
+		const FString NormAddr = NormalizeAddressForMatch(OutBuilding.Address);
+		if (NormAddr == NormalizeAddressForMatch(TEXT("Platter Strasse 140")))
+		{
+			OutBuilding.LevelCount = 12;
+			OutBuilding.HeightCm = 12.0 * Settings.MetersPerLevel * MetersToCm;
+		}
+		else if (NormAddr == NormalizeAddressForMatch(TEXT("Platter Strasse 144"))
+			|| NormAddr == NormalizeAddressForMatch(TEXT("Platter Strasse 146")))
+		{
+			OutBuilding.LevelCount = 1;
+			OutBuilding.HeightCm = 3.2 * MetersToCm;   // flache, eingeschossige Garage
+			OutBuilding.BuildingType = EOSMBuildingType::Garage;
+			OutBuilding.RoofShape = EOSMRoofShape::Flat;
+		}
+	}
+
 	OutBuilding.bIsLandmark = IsLandmark(OutBuilding.BuildingName, OutBuilding.BuildingType, AreaSqm);
 
 	// City-Prompt-Override: prompt-erkannte Landmarken markieren zusaetzlich
