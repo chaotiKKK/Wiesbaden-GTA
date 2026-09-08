@@ -118,8 +118,11 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 		return; // z. B. waehrend Streaming/Fahrzeugwechsel
 	}
 
-	// Auto-Angebot der ersten Mission, solange keine aktiv ist.
-	if (ActiveMissionIndex == INDEX_NONE)
+	// Auto-Angebot der ersten Mission - genau EINMAL je Sitzung. Ohne diese
+	// Sperre startete die Mission direkt nach dem Abschluss wieder von vorn
+	// (das Ziel klappte sofort auf "Fahre zur Abholung" zurueck), was wirkt, als
+	// haette der Abschluss nicht gezaehlt. Einmaliges Angebot = klarer Abschluss.
+	if (ActiveMissionIndex == INDEX_NONE && !bAutoOfferConsumed)
 	{
 		StartMission(Missions[0].Id);
 		return;
@@ -160,6 +163,9 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 
 		ActiveMissionIndex = INDEX_NONE;
 		ActiveObjectiveIndex = 0;
+		bAutoOfferConsumed = true;
+		UE_LOG(LogWbCore, Log,
+			TEXT("Auftrag abgeschlossen - kein weiterer Auto-Auftrag diese Sitzung."));
 		OnMissionCompleted.Broadcast(Completed);
 	}
 	else

@@ -54,6 +54,16 @@ void AWiesbadenGameMode::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Engine-Bildschirmwarnungen (z. B. der rote "RAY TRACING GEOMETRY ... EXCEEDS
+	// BUDGET"-Hinweis) sind Entwickler-Diagnose und wirken auf Spieler wie ein
+	// Fehler. Im -game-/gepackten Lauf ausblenden; im Editor (PIE, GIsEditor=true)
+	// bleiben sie fuer die Entwicklung sichtbar. Die Spiel-HUDs zeichnen ueber
+	// Canvas und sind davon nicht betroffen.
+	if (GEngine && !GIsEditor)
+	{
+		GEngine->bEnableOnScreenDebugMessages = false;
+	}
+
 	// -WbZuFuss=<Sekunden>: nach dieser Zeit von selbst aussteigen. Ohne den
 	// Schalter zeigt jedes mit -WbShot aufgenommene Bild nur das Auto.
 	if (!FParse::Value(FCommandLine::Get(), TEXT("WbZuFuss="), OnFootAfterSeconds))

@@ -47,4 +47,8 @@ private:
 	int32 ActiveMissionIndex = INDEX_NONE;
 	int32 ActiveObjectiveIndex = 0;
 	float CheckAccumulator = 0.0f;
+
+	// Auto-Angebot nur EINMAL je Sitzung: verhindert, dass die Mission direkt
+	// nach dem Abschluss wieder von vorn startet (siehe Tick).
+	bool bAutoOfferConsumed = false;
 };
