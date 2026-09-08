@@ -1634,6 +1634,7 @@ void UWiesbadenCitySubsystem::LogGeometryBalance(const FWiesbadenHealthReport& R
 	}
 
 	int32 ChunkCount = 0;
+	int32 EmptyChunks = 0;
 	int32 RoadSections = 0;
 	int32 BuildingSections = 0;
 
@@ -1641,6 +1642,18 @@ void UWiesbadenCitySubsystem::LogGeometryBalance(const FWiesbadenHealthReport& R
 	{
 		++ChunkCount;
 
+		// Leer = weder gefuellte ProcMesh-Sections NOCH ein gebackenes StaticMesh.
+		// Nur die ProcMesh-Sections zu zaehlen (wie frueher) meldete die fertige
+		// Stadt IMMER als leer: BakeToStaticMeshes leert die ProcMeshes nach dem
+		// Bake, der Render laeuft dann ueber die StaticMesh-Komponenten. Die alte
+		// Diagnose loeste deshalb bei jedem Laden aus - mit einer Zahl, die nur die
+		// gerade gestreamten Chunks zaehlte (mal 31, mal 27), nicht echte Luecken.
+		if (!It->HasRenderGeometry())
+		{
+			++EmptyChunks;
+		}
+
+		// ProcMesh-Sections nur noch zur Info (im Bake > 0, auf der Karte 0).
 		if (const UProceduralMeshComponent* Road = It->GetRoadMesh())
 		{
 			RoadSections += Road->GetNumSections();
@@ -1660,18 +1673,19 @@ void UWiesbadenCitySubsystem::LogGeometryBalance(const FWiesbadenHealthReport& R
 		return;
 	}
 
-	if (RoadSections == 0 && BuildingSections == 0)
+	if (EmptyChunks > 0)
 	{
 		UE_LOG(LogWbStreaming, Warning,
-			TEXT("Stadt-Geometrie: %d Chunk-Actors geladen, aber OHNE Mesh-Abschnitte. ")
-			TEXT("Die Actors wurden leer gespeichert - der Stadt-Build muss wiederholt werden."),
-			ChunkCount);
-		return;
+			TEXT("Stadt-Geometrie: %d von %d geladenen Chunk-Actors OHNE Render-Geometrie ")
+			TEXT("(weder gefuellte ProcMesh-Sections noch gebackenes StaticMesh) - diese Zellen ")
+			TEXT("wurden leer gespeichert; der Stadt-Build muss wiederholt werden."),
+			EmptyChunks, ChunkCount);
 	}
 
 	UE_LOG(LogWbStreaming, Log,
-		TEXT("Stadt-Geometrie: %d Chunk-Actors geladen, %d Strassen- und %d Gebaeude-Abschnitte."),
-		ChunkCount, RoadSections, BuildingSections);
+		TEXT("Stadt-Geometrie: %d Chunk-Actors geladen (%d ohne Render-Geometrie), ")
+		TEXT("%d Strassen- und %d Gebaeude-ProcMesh-Abschnitte (nach Bake 0 - Render ueber StaticMesh)."),
+		ChunkCount, EmptyChunks, RoadSections, BuildingSections);
 
 	// Streaming-Diagnose: Wie weit sind die GELADENEN Chunks vom Spieler entfernt?
 	// Sind viele weit jenseits des Streaming-Radius geladen, streamt WP nicht
@@ -2736,7 +2750,52 @@ void UWiesbadenCitySubsystem::LogHeightStackNearPlayer() const
 
 				FHitResult Hit;
 				FCollisionQueryParams TraceParams(SCENE_QUERY_STAT(WbBuildingCollision), true);
+				// Nur den Helikopter ignorieren (NICHT den CityActor - an ihm haengen
+				// die Gebaeude-Boxen, die der Strahl ja treffen SOLL). Am Spawn
+				// (Platter 142) stand der Heli genau auf der Linie; seine CollisionSphere
+				// (QueryOnly+Block) fing den Strahl ab, sodass die Diagnose IMMER
+				// "getroffen: CollisionSphere" meldete statt der Gebaeude-Box.
+				for (TActorIterator<AWiesbadenHelicopter> HeliIt(World); HeliIt; ++HeliIt)
+				{
+					TraceParams.AddIgnoredActor(*HeliIt);
+				}
 				const bool bHit = World->LineTraceSingleByChannel(Hit, From, To, ECC_WorldStatic, TraceParams);
+
+				// Z-Beleg der Box-Platzierung: Die Box-Hoehe stammt aus
+				// Building.Bounds.Z, zur GENERIERUNGSZEIT per Terrain-Trace bestimmt.
+				// Weicht die GEBACKENE Landschaft davon ab (Platter liegt am Hang),
+				// schwebt die Box ueber oder steckt unter dem Haus - der Wagen fegt auf
+				// Strassenhoehe daneben und faehrt "durch". Den gebackenen Boden unter
+				// dem Grundriss messen (Heli UND CityActor ignorieren - an CityActor
+				// haengen die Box-Koerper, sonst traefe der Abwaertsstrahl die Box statt
+				// des Terrains) und gegen das Fahrzeug-Band (~Boden+35..185 cm) halten.
+				{
+					const FGeneratedBuilding& NB = Builder->Buildings[Nearest[0]];
+					const double BoxZc = NB.Bounds.IsValid ? NB.Bounds.GetCenter().Z : NB.Centroid.Z;
+					const double BoxZe = NB.Bounds.IsValid ? NB.Bounds.GetExtent().Z : 0.0;
+					FCollisionQueryParams GParams(SCENE_QUERY_STAT(WbBuildingCollisionGround), true);
+					for (TActorIterator<AWiesbadenHelicopter> HeliIt(World); HeliIt; ++HeliIt)
+					{
+						GParams.AddIgnoredActor(*HeliIt);
+					}
+					if (CityActor)
+					{
+						GParams.AddIgnoredActor(CityActor);
+					}
+					const FVector GStart(NB.Centroid.X, NB.Centroid.Y, BoxZc + BoxZe + 5000.0);
+					FHitResult GroundHit;
+					const bool bGround = World->LineTraceSingleByChannel(
+						GroundHit, GStart, GStart - FVector(0.0, 0.0, 20000.0), ECC_WorldStatic, GParams);
+					const double GroundZ = bGround ? GroundHit.Location.Z : NB.Centroid.Z;
+					const bool bBandGedeckt = (BoxZc - BoxZe) <= (GroundZ + 185.0)
+						&& (BoxZc + BoxZe) >= (GroundZ + 35.0);
+					UE_LOG(LogWbCore, Log,
+						TEXT("Gebaeude-Kollision Z-Beleg: Box-Z [%.0f..%.0f] cm, gebackener Boden %.0f cm, ")
+						TEXT("Fahrband [%.0f..%.0f] cm -> %s."),
+						BoxZc - BoxZe, BoxZc + BoxZe, GroundZ,
+						GroundZ + 35.0, GroundZ + 185.0,
+						bBandGedeckt ? TEXT("Band gedeckt") : TEXT("BAND NICHT GEDECKT (Box in Z verrutscht)"));
+				}
 
 				// Auf die Marke pruefen, nicht auf den Typ: der Verkehr haelt
 				// ebenfalls Box-Koerper bereit, ein Auto vor der Motorhaube haette

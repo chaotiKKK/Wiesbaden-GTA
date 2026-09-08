@@ -497,3 +497,15 @@ void AWiesbadenCityChunk::SetBuildingSectionMaterial(int32 SectionIndex, UMateri
 		BuildingMesh->SetMaterial(SectionIndex, Material);
 	}
 }
+
+bool AWiesbadenCityChunk::HasRenderGeometry() const
+{
+	// Waehrend des Bakes tragen die ProcMeshes die Geometrie; nach
+	// BakeToStaticMeshes sind sie leer und die StaticMesh-Komponenten tragen sie.
+	// Beide Wege zaehlen, sonst gilt die fertige (StaticMesh-)Stadt als leer.
+	const bool bRoad = (RoadMesh && RoadMesh->GetNumSections() > 0)
+		|| (RoadStaticMesh && RoadStaticMesh->GetStaticMesh() != nullptr);
+	const bool bBuilding = (BuildingMesh && BuildingMesh->GetNumSections() > 0)
+		|| (BuildingStaticMesh && BuildingStaticMesh->GetStaticMesh() != nullptr);
+	return bRoad || bBuilding;
+}

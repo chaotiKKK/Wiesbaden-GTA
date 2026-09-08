@@ -88,6 +88,17 @@ public:
 	UProceduralMeshComponent* GetBuildingMesh() const { return BuildingMesh; }
 
 	/**
+	 * True, wenn diese Zelle zur LAUFZEIT sichtbare Geometrie traegt.
+	 *
+	 * Entweder gefuellte ProcMesh-Sections (waehrend des Bakes) ODER ein
+	 * gebackenes Render-StaticMesh (auf der fertigen Karte). Zwingend fuer die
+	 * Geometrie-Diagnose: BakeToStaticMeshes LEERT die ProcMeshes nach dem Bake,
+	 * die StaticMeshes tragen dann die Stadt. Eine Diagnose, die nur die
+	 * ProcMesh-Sections zaehlt, meldet jede gebackene Stadt faelschlich als leer.
+	 */
+	bool HasRenderGeometry() const;
+
+	/**
 	 * Setzt die Regionsobjekte dieser Zelle und baut ihre Instanzen auf.
 	 *
 	 * Getrennt von ApplyChunk, weil die Objekte auch NACHTRAEGLICH in eine
