@@ -4,6 +4,7 @@
 
 #include "Missions/WiesbadenMissionTypes.h"
 #include "Missions/WiesbadenMissionLoader.h"
+#include "Missions/WiesbadenMissionRunner.h"
 
 // Ziel-Erfuellung ReachLocation: horizontale (2D) Distanz <= Radius. Hoehe wird
 // bewusst ignoriert (Hang/Bahn-Umgebung), daher der Hoehen-Testfall.
@@ -91,6 +92,50 @@ bool FMissionLoaderTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("unknown: 0 Ziele (uebersprungen)"), UR.Missions[0].Objectives.Num(), 0);
 	}
 	TestTrue(TEXT("unknown: Fehler geloggt"), UR.Errors.Num() > 0);
+
+	return true;
+}
+
+// Fortschritt: Ziel-Kette durchlaufen; letztes Ziel -> Mission fertig + Belohnung.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionRunnerTest,
+	"WiesbadenReal.Missions.Runner",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMissionRunnerTest::RunTest(const FString& Parameters)
+{
+	FMission M;
+	M.Reward.Guthaben = 250;
+	FMissionObjective O0; O0.Location = FVector(0.0, 0.0, 0.0);       O0.RadiusCm = 800.0; M.Objectives.Add(O0);
+	FMissionObjective O1; O1.Location = FVector(10000.0, 0.0, 0.0);   O1.RadiusCm = 800.0; M.Objectives.Add(O1);
+
+	auto Ctx = [](double X, double Y) -> FMissionContext
+	{
+		FMissionContext C; C.PlayerLocation = FVector(X, Y, 0.0); return C;
+	};
+
+	// Fern von Ziel 0 -> kein Fortschritt.
+	FMissionProgressResult R = FWiesbadenMissionRunner::Step(M, 0, Ctx(5000.0, 0.0));
+	TestFalse(TEXT("fern: kein Fortschritt"), R.bAdvanced);
+	TestEqual(TEXT("fern: Index bleibt 0"), R.NextObjectiveIndex, 0);
+	TestFalse(TEXT("fern: nicht fertig"), R.bMissionCompleted);
+
+	// An Ziel 0 -> Index 1, noch nicht fertig.
+	R = FWiesbadenMissionRunner::Step(M, 0, Ctx(0.0, 0.0));
+	TestTrue(TEXT("Ziel0: vorgerueckt"), R.bAdvanced);
+	TestEqual(TEXT("Ziel0: Index 1"), R.NextObjectiveIndex, 1);
+	TestFalse(TEXT("Ziel0: nicht fertig"), R.bMissionCompleted);
+	TestEqual(TEXT("Ziel0: keine Belohnung"), R.GuthabenAwarded, 0);
+
+	// An Ziel 1 (letztes) -> fertig + Belohnung.
+	R = FWiesbadenMissionRunner::Step(M, 1, Ctx(10000.0, 0.0));
+	TestTrue(TEXT("Ziel1: vorgerueckt"), R.bAdvanced);
+	TestTrue(TEXT("Ziel1: Mission fertig"), R.bMissionCompleted);
+	TestEqual(TEXT("Ziel1: Guthaben 250"), R.GuthabenAwarded, 250);
+
+	// Ungueltiger Index -> nichts.
+	R = FWiesbadenMissionRunner::Step(M, 5, Ctx(0.0, 0.0));
+	TestFalse(TEXT("ungueltig: kein Fortschritt"), R.bAdvanced);
+	TestFalse(TEXT("ungueltig: nicht fertig"), R.bMissionCompleted);
 
 	return true;
 }
