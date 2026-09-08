@@ -183,23 +183,27 @@ builder.set_editor_property("auto_save_city_as_map", True)
 # Halten das Skript generisch; die konkreten Werte stehen im jeweiligen
 # rebake_*.cmd. So laesst sich ein Bake gezielt anders parametrisieren, ohne den
 # Quell-Actor oder dieses Skript dauerhaft zu aendern.
+def override_struct_field(prop_name, field_name, value):
+    # UE-Python strippt das b-Praefix bei bool-UPROPERTYs (bUseOsmTrees ->
+    # use_osm_trees), genau wie generate_region_assets fuer bGenerateRegionAssets.
+    # In try/except, damit ein falscher Name den Bake NICHT abbricht, sondern nur
+    # eine Warnung erzeugt (der Bake laeuft dann mit dem Default weiter).
+    try:
+        s = builder.get_editor_property(prop_name)
+        s.set_editor_property(field_name, value)
+        builder.set_editor_property(prop_name, s)
+        log("Override %s.%s = %s" % (prop_name, field_name, value))
+    except Exception as exc:
+        log("Override %s.%s FEHLGESCHLAGEN: %s" % (prop_name, field_name, exc))
+
 seg = os.environ.get("WB_MAX_SEGMENT_CM")
 if seg:
-    rs = builder.get_editor_property("road_settings")
-    rs.set_editor_property("max_segment_length_cm", float(seg))
-    builder.set_editor_property("road_settings", rs)
-    log("Override road_settings.max_segment_length_cm = %s" % seg)
+    override_struct_field("road_settings", "max_segment_length_cm", float(seg))
 off = os.environ.get("WB_ROAD_OFFSET_CM")
 if off:
-    rs = builder.get_editor_property("road_settings")
-    rs.set_editor_property("road_surface_offset_cm", float(off))
-    builder.set_editor_property("road_settings", rs)
-    log("Override road_settings.road_surface_offset_cm = %s" % off)
+    override_struct_field("road_settings", "road_surface_offset_cm", float(off))
 if os.environ.get("WB_USE_OSM_TREES") == "1":
-    ras = builder.get_editor_property("region_asset_settings")
-    ras.set_editor_property("b_use_osm_trees", True)
-    builder.set_editor_property("region_asset_settings", ras)
-    log("Override region_asset_settings.b_use_osm_trees = True")
+    override_struct_field("region_asset_settings", "use_osm_trees", True)
 
 log("Bau startet - Ziel %s. Das dauert." % TARGET)
 builder.build_city()
