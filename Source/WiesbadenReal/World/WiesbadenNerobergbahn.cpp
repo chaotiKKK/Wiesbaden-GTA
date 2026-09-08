@@ -14,11 +14,14 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
+#include "KismetProceduralMeshLibrary.h"
 #include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Vehicles/WiesbadenFootPawn.h"
+#include "World/WiesbadenCityChunk.h"
+#include "EngineUtils.h"
 
 namespace
 {
@@ -243,6 +246,16 @@ bool AWiesbadenNerobergbahn::ResolveHeights()
 	bool bResolvedAny = false;
 	bool bAllResolved = true;
 
+	// Stadt-Chunks vom Hoehen-Trace AUSNEHMEN. Der Trace sucht das GELAENDE unter
+	// dem Gleis; trifft er zuerst ein Gebaeude- oder Strassen-Chunk (die liegen
+	// am Hang mit), setzt er die Schiene auf ein Dach - die Bahn "schwebt" dann
+	// ueberm Berg und das Viadukt darauf mit. Die Landscape bleibt trefbar.
+	TArray<AActor*> ChunkActors;
+	for (TActorIterator<AWiesbadenCityChunk> It(World); It; ++It)
+	{
+		ChunkActors.Add(*It);
+	}
+
 	for (FTrack* Track : { &TrackA, &TrackB })
 	{
 		for (FTrackPoint& Point : Track->Points)
@@ -272,6 +285,7 @@ bool AWiesbadenNerobergbahn::ResolveHeights()
 			const FVector End(Point.Position.X, Point.Position.Y, TraceBottomCm);
 			FCollisionQueryParams Params(SCENE_QUERY_STAT(WbBahnHoehe), true);
 			Params.AddIgnoredActor(this);
+			Params.AddIgnoredActors(ChunkActors);
 
 			FHitResult Hit;
 			const bool bHit = World->LineTraceSingleByChannel(
@@ -530,7 +544,15 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 	{
 		constexpr float BedHalf = 130.0f;
 		constexpr float BedTopLift = 6.0f;
-		const FLinearColor EarthColour(0.20f, 0.27f, 0.14f);   // begruenter Bahndamm - schmiegt sich an den Hang
+		const FLinearColor EarthColour(0.30f, 0.42f, 0.22f);   // begruenter Bahndamm - heller, damit die Boeschung unter GI=None nicht nachschwarz wirkt
+
+		// Wie beim Hoehen-Trace: Stadt-Chunks ausnehmen, sonst misst die Boeschung
+		// gegen ein Dach und zieht eine riesige dunkle Schuerze in die Luft.
+		TArray<AActor*> EmbChunks;
+		for (TActorIterator<AWiesbadenCityChunk> It(EmbWorld); It; ++It)
+		{
+			EmbChunks.Add(*It);
+		}
 		for (const FTrack* Track : { &TrackA, &TrackB })
 		{
 			for (int32 SideSign = -1; SideSign <= 1; SideSign += 2)
@@ -558,6 +580,7 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 					FHitResult Hit;
 					FCollisionQueryParams EmbParams(SCENE_QUERY_STAT(WbBahnDamm), true);
 					EmbParams.AddIgnoredActor(this);
+					EmbParams.AddIgnoredActors(EmbChunks);
 					const FVector TS(P.X, P.Y, P.Z + 200.0);
 					if (EmbWorld->LineTraceSingleByChannel(Hit, TS,
 							TS - FVector(0, 0, 100000.0), ECC_WorldStatic, EmbParams)
@@ -573,7 +596,6 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 					const FVector EdgeBot(P.X + Right.X * (SideSign * (BedHalf + Run)),
 										  P.Y + Right.Y * (SideSign * (BedHalf + Run)), TerrainZ);
 					V.Add(EdgeTop); V.Add(EdgeBot);
-					N.Add(FVector::UpVector); N.Add(FVector::UpVector);
 					const float Vc = static_cast<float>(Track->Points[i].ArcLength / 100.0);
 					UV.Add(FVector2D(0.0f, Vc)); UV.Add(FVector2D(1.0f, Vc));
 					C.Add(EarthColour); C.Add(EarthColour);
@@ -591,8 +613,16 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 						}
 					}
 				}
+				// Normalen aus der Geometrie ableiten statt fix UpVector: Auf der
+				// steilen Boeschung ist die sichtbare Seite die Windungs-Rueckseite;
+				// der zweiseitige Shader spiegelt dort die Normale, aus UpVector wurde
+				// so eine nach UNTEN zeigende Schattier-Normale -> N*L <= 0 -> schwarz.
+				// CalculateTangentsForMesh liefert windungs-konsistente Normalen (+
+				// Tangenten), die der Shader je Seite korrekt spiegelt -> beleuchtet.
+				TArray<FProcMeshTangent> Tang;
+				UKismetProceduralMeshLibrary::CalculateTangentsForMesh(V, Tri, UV, N, Tang);
 				TrackMesh->CreateMeshSection_LinearColor(
-					Section++, V, Tri, N, UV, C, TArray<FProcMeshTangent>(),
+					Section++, V, Tri, N, UV, C, Tang,
 					/*bCreateCollision=*/false);
 			}
 		}

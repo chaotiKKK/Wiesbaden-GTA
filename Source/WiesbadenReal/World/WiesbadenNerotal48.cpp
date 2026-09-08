@@ -5,6 +5,7 @@
 #include "Engine/World.h"
 #include "GIS/GeoCoordinateConverter.h"
 #include "ProceduralMeshComponent.h"
+#include "KismetProceduralMeshLibrary.h"
 #include "UObject/ConstructorHelpers.h"
 #include "WiesbadenReal.h"
 
@@ -45,7 +46,7 @@ namespace
 	const FLinearColor COLOUR_TILE(0.12f, 0.42f, 0.55f);      // Beckenfliesen
 	const FLinearColor COLOUR_WATER(0.05f, 0.35f, 0.50f);     // Wasser
 	const FLinearColor COLOUR_TRUNK(0.36f, 0.29f, 0.21f);     // Palmstamm
-	const FLinearColor COLOUR_FROND(0.18f, 0.36f, 0.14f);     // Wedel
+	const FLinearColor COLOUR_FROND(0.26f, 0.50f, 0.18f);     // Wedel - helleres Palmgruen (unter GI=None sonst nachschwarz)
 
 	// Abschnittsnummern im ProceduralMesh.
 	constexpr int32 SECTION_TERRACE = 0;
@@ -377,9 +378,11 @@ void AWiesbadenNerotal48::AddPalm(const FVector& Base, double HeightCm, double Y
 		{
 			FrondVerts.Add(Points[i] - Side * Widths[i]);
 			FrondVerts.Add(Points[i] + Side * Widths[i]);
+			// Normalen NICHT fix setzen - sie werden am Sektionsende aus der
+			// Geometrie abgeleitet (CalculateTangentsForMesh), sonst schattiert
+			// der steile, haengende Wedel falsch und wirkt schwarz.
 			for (int32 k = 0; k < 2; ++k)
 			{
-				FrondNormals.Add(FVector::UpVector);
 				FrondColours.Add(COLOUR_FROND);
 			}
 			FrondUVs.Add(FVector2D(0.0, static_cast<double>(i) * 0.5));
@@ -389,10 +392,12 @@ void AWiesbadenNerotal48::AddPalm(const FVector& Base, double HeightCm, double Y
 		for (int32 i = 0; i < 2; ++i)
 		{
 			const int32 A = Base0 + i * 2;
+			// Nur EINE Windung: die Rueckseite zeichnet der zweiseitige Shader
+			// (two_sided) mit gespiegelter Normale selbst. Zwei deckungsgleiche
+			// Windungen mit fixer UpVector-Normale ueberlagerten sich (Z-Fighting),
+			// und auf der gespiegelten Seite wurde aus UpVector eine Abwaertsnormale
+			// -> der Wedel wirkte schwarz.
 			FrondTris.Append({ A, A + 2, A + 1, A + 1, A + 2, A + 3 });
-			// Rueckseite mitzeichnen: ein Wedel ist duenn, und von unten
-			// betrachtet waere er sonst unsichtbar.
-			FrondTris.Append({ A, A + 1, A + 2, A + 1, A + 3, A + 2 });
 		}
 	}
 }
@@ -533,8 +538,12 @@ void AWiesbadenNerotal48::BuildGarden()
 	// durch Blaetter geht man hindurch.
 	GardenMesh->CreateMeshSection_LinearColor(SECTION_TRUNK, TrV, TrT, TrN, TrU, TrC,
 		TArray<FProcMeshTangent>(), /*bCreateCollision=*/true);
+	// Wedel-Normalen aus der Geometrie ableiten (statt fixem UpVector): steile,
+	// haengende Blaetter schattieren so korrekt statt schwarz.
+	TArray<FProcMeshTangent> FrTang;
+	UKismetProceduralMeshLibrary::CalculateTangentsForMesh(FrV, FrT, FrU, FrN, FrTang);
 	GardenMesh->CreateMeshSection_LinearColor(SECTION_FROND, FrV, FrT, FrN, FrU, FrC,
-		TArray<FProcMeshTangent>(), /*bCreateCollision=*/false);
+		FrTang, /*bCreateCollision=*/false);
 
 	UE_LOG(LogWbStreaming, Log,
 		TEXT("Nerotal 48: Garten gebaut - Becken %.1f x %.1f x %.1f m, %d Palmen, ")

@@ -56,8 +56,21 @@ if mat is None:
     log("ABBRUCH: M_WbVertexFarbe liess sich nicht anlegen.")
     raise SystemExit(1)
 
+# Zweiseitig: Die Trassen-Baender (Schotterbett/Boeschung) sind duenne Streifen,
+# deren sichtbare Flaeche je nach Blickwinkel die Rueckseite ist. Einseitig
+# gecullt zeigte die Trasse dann das dunkle Innere -> "schwarze Decke" den Berg
+# hinauf. Zweiseitig rendert die Flaeche aus jedem Winkel mit der Ober-Vertexfarbe.
+mat.set_editor_property("two_sided", True)
+
 vertex = expr(mat, unreal.MaterialExpressionVertexColor, -400, 0)
-MEL.connect_material_property(vertex, "RGB", MP.MP_BASE_COLOR)
+# WURZELFIX schwarze Trasse/Garten: Der RGBA-Ausgang von VertexColor heisst ""
+# (leer), NICHT "RGB" - es gibt keinen Ausgang namens "RGB". Mit "RGB" schlug die
+# Verbindung STILL fehl, BaseColor blieb unverbunden -> die Flaeche rendert SCHWARZ
+# (unverbundene BaseColor = schwarz). Deshalb leerer Ausgangsname; Erfolg pruefen.
+if not MEL.connect_material_property(vertex, "", MP.MP_BASE_COLOR):
+    log("ABBRUCH: VertexColor -> BaseColor liess sich NICHT verbinden.")
+    raise SystemExit(1)
+log("VertexColor -> BaseColor verbunden (Ausgang '').")
 
 # Matte Oberflaeche mit konstanter Rauheit.
 #
@@ -90,7 +103,10 @@ water.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
 water.set_editor_property("two_sided", True)
 
 water_vertex = expr(water, unreal.MaterialExpressionVertexColor, -400, 0)
-MEL.connect_material_property(water_vertex, "RGB", MP.MP_BASE_COLOR)
+# Gleicher Fix wie oben: RGBA-Ausgang heisst "" (nicht "RGB").
+if not MEL.connect_material_property(water_vertex, "", MP.MP_BASE_COLOR):
+    log("ABBRUCH: Wasser VertexColor -> BaseColor liess sich NICHT verbinden.")
+    raise SystemExit(1)
 
 # Wasser ist glatt und nicht metallisch; die Spiegelung macht die Oberflaeche.
 MEL.connect_material_property(constant(water, 0.05, -250, 120), "", MP.MP_ROUGHNESS)
