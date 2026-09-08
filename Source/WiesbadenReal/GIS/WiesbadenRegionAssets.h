@@ -140,6 +140,17 @@ struct WIESBADENREAL_API FRegionAssetSettings
 	/** Rasterabstand der dichten Wald-Fuellung innerhalb realer Waldflaechen (cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets", meta = (ClampMin = "200.0"))
 	double ForestTreeSpacingCm = 750.0;
+
+	/**
+	 * Mindestflaeche (m^2), ab der eine wood/forest-Flaeche dicht aufgefuellt wird.
+	 *
+	 * Kleine, teils falsch als wood/forest getaggte Gruenflaechen mitten in
+	 * Wohnstrassen (z. B. an der Cranachstrasse) wurden sonst im 7,5-m-Raster
+	 * zugepflanzt - viel zu viele Baeume fuer eine Wohnstrasse. Grosse echte
+	 * Waelder (Neroberg/Stadtwald) liegen weit darueber und bleiben dicht.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "RegionAssets", meta = (ClampMin = "0.0"))
+	double MinForestAreaSqm = 5000.0;
 };
 
 /** Diagnose des Regionen-Asset-Passes. */

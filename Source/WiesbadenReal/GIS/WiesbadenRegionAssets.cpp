@@ -472,6 +472,22 @@ FRegionAssetReport UWiesbadenRegionAssetGenerator::PlaceOsmTrees(
 			continue;
 		}
 
+		// Nur GROSSE Waldflaechen dicht auffuellen. Kleine (oft falsch als
+		// wood/forest getaggte) Gruenflaechen in Wohnstrassen wurden sonst im
+		// 7,5-m-Raster zugepflanzt (zu viele Baeume, z. B. Cranachstrasse).
+		double Shoelace = 0.0;
+		for (int32 Pi = 0; Pi < Forest.Polygon.Num(); ++Pi)
+		{
+			const FVector2D& P0 = Forest.Polygon[Pi];
+			const FVector2D& P1 = Forest.Polygon[(Pi + 1) % Forest.Polygon.Num()];
+			Shoelace += P0.X * P1.Y - P1.X * P0.Y;
+		}
+		const double AreaSqm = FMath::Abs(Shoelace) * 0.5 / 10000.0;   // cm^2 -> m^2
+		if (AreaSqm < Settings.MinForestAreaSqm)
+		{
+			continue;
+		}
+
 		const int32 Before = OutLayout.Assets.Num();
 		ScatterRegion(Forest, ERegionAssetCategory::Tree,
 			FMath::Max(200.0, Settings.ForestTreeSpacingCm),
