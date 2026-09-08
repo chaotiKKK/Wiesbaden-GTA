@@ -22,6 +22,8 @@
 #include "GIS/WiesbadenWorldBuilder.h"
 #include "World/WiesbadenCitySubsystem.h"
 #include "UI/WiesbadenMinimap.h"
+#include "Missions/WiesbadenMissionSubsystem.h"
+#include "Missions/WiesbadenMissionTypes.h"
 #include "UI/WiesbadenWorldMapView.h"
 #include "Engine/TextureRenderTarget2D.h"
 
@@ -707,6 +709,7 @@ void AWiesbadenVehicleHUD::DrawHUD()
 
 	DrawStreetName(Width * 0.5f, 28.0f);
 	DrawVehicleBanner(Width * 0.5f, Height * 0.16f);
+	DrawMissionPanel(Width, Height);
 
 	// -- Helikopter: eigene Cockpit-Instrumententafel -----------------------
 	if (Heli)
@@ -1226,10 +1229,88 @@ void AWiesbadenVehicleHUD::DrawMinimap(float CenterX, float CenterY, float Diame
 			GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
 	}
 
+	// Missions-Ziel: eigener Marker (Bernstein), unabhaengig vom Nutzer-Wegpunkt.
+	if (const UWorld* MissionWorld = GetWorld())
+	{
+		if (const UWiesbadenMissionSubsystem* Missions =
+			MissionWorld->GetSubsystem<UWiesbadenMissionSubsystem>())
+		{
+			if (const FMissionObjective* Obj = Missions->GetCurrentObjective())
+			{
+				const FLinearColor MissionMarker(1.0f, 0.72f, 0.20f, 1.0f);
+				const FMinimapWaypoint MP = FWiesbadenMinimap::ProjectWaypointToMinimap(
+					MapCentre, MapYaw, Obj->Location, FVector2D(CenterX, CenterY), Settings);
+				const FVector2D M = MP.ScreenPos;
+				if (MP.bOffMap)
+				{
+					FVector2D Dir = M - FVector2D(CenterX, CenterY);
+					if (!Dir.IsNearlyZero())
+					{
+						Dir.Normalize();
+						DrawLine(M.X - Dir.X * 12.0f, M.Y - Dir.Y * 12.0f, M.X, M.Y, MissionMarker, 2.4f);
+					}
+				}
+				constexpr float MD = 7.0f;
+				DrawLine(M.X, M.Y - MD, M.X + MD, M.Y, MissionMarker, 2.4f);
+				DrawLine(M.X + MD, M.Y, M.X, M.Y + MD, MissionMarker, 2.4f);
+				DrawLine(M.X, M.Y + MD, M.X - MD, M.Y, MissionMarker, 2.4f);
+				DrawLine(M.X - MD, M.Y, M.X, M.Y - MD, MissionMarker, 2.4f);
+			}
+		}
+	}
+
 	// Massstab: Der Umkreis in Metern, damit die Karte lesbar bleibt.
 	const FString ScaleText = FString::Printf(TEXT("%.0f m"), Settings.RangeCm / 100.0);
 	DrawText(ScaleText, DialScale, CenterX - Radius + 8.0f, CenterY + Radius - 20.0f,
 		GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
+}
+
+void AWiesbadenVehicleHUD::DrawMissionPanel(float Width, float Height)
+{
+	const UWorld* W = GetWorld();
+	const UWiesbadenMissionSubsystem* Missions =
+		W ? W->GetSubsystem<UWiesbadenMissionSubsystem>() : nullptr;
+	if (!Missions)
+	{
+		return;
+	}
+	const FMissionObjective* Obj = Missions->GetCurrentObjective();
+	if (!Obj)
+	{
+		return;
+	}
+
+	// Planare Distanz Spieler -> Ziel (nur wenn ein Pawn existiert).
+	FString DistText;
+	if (const APlayerController* PC = GetOwningPlayerController())
+	{
+		if (const APawn* Pawn = PC->GetPawn())
+		{
+			const FVector PL = Pawn->GetActorLocation();
+			const double Dx = PL.X - Obj->Location.X;
+			const double Dy = PL.Y - Obj->Location.Y;
+			const double DistM = FMath::Sqrt(Dx * Dx + Dy * Dy) / 100.0;
+			DistText = DistM >= 1000.0
+				? FString::Printf(TEXT("%.1f km"), DistM / 1000.0)
+				: FString::Printf(TEXT("%.0f m"), DistM);
+		}
+	}
+
+	const float PanelW = 360.0f;
+	const float PanelH = 56.0f;
+	const float X = (Width - PanelW) * 0.5f;
+	const float Y = 60.0f;
+	DrawPanelBackdrop(X, Y, PanelW, PanelH, 10.0f, FLinearColor(0.08f, 0.10f, 0.13f), 0.72f);
+
+	const FLinearColor TitleColour(1.0f, 0.72f, 0.20f, 1.0f);
+	const FLinearColor BodyColour(0.92f, 0.94f, 0.96f, 1.0f);
+	DrawText(Missions->GetActiveMissionTitle(), TitleColour, X + 16.0f, Y + 8.0f,
+		GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
+	const FString ObjLine = DistText.IsEmpty()
+		? Obj->Label
+		: FString::Printf(TEXT("%s  -  %s"), *Obj->Label, *DistText);
+	DrawText(ObjLine, BodyColour, X + 16.0f, Y + 28.0f,
+		GEngine ? GEngine->GetMediumFont() : nullptr, 1.0f);
 }
 
 void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)

@@ -5,7 +5,7 @@
       "title": "Kurierfahrt Platter Strasse",
       "reward": { "guthaben": 250 },
       "objectives": [
-        { "type": "reach_location", "label": "Fahre zur Abholung", "x": -121000.0, "y": -119000.0, "radius_cm": 800.0 },
+        { "type": "reach_location", "label": "Fahre zur Abholung", "x": -119000.0, "y": -116500.0, "radius_cm": 800.0 },
         { "type": "reach_location", "label": "Liefere die Sendung", "x": -104083.0, "y": -137317.0, "radius_cm": 800.0 }
       ]
     }

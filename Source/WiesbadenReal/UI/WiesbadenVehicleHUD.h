@@ -156,6 +156,9 @@ private:
 	 */
 	void DrawControlLegend(bool bInVehicle, float X, float Y);
 
+	/** Missions-Ziel-Panel (Titel + Ziel-Label + Distanz), oben mittig. */
+	void DrawMissionPanel(float Width, float Height);
+
 	// Die volle Instrumententafel laeuft ueber die Steuernaht-Familie, damit sie
 	// fuer JEDES Fahrzeug (Kaefer wie ChaosCar) identisch funktioniert.
 	void DrawSpeedometer(const IWiesbadenVehicleControl& Vehicle, float CenterX, float CenterY, float Radius);
