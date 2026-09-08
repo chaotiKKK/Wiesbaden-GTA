@@ -23,6 +23,11 @@ Data/Raw/
 Content/__ExternalActors__/
 Content/__ExternalObjects__/
 
+# === Gebackener Stadt-Output (regenerierbar via Re-Bake; ~760 MB, gehoert nicht ins Git) ===
+# Content/Generated: gebackene Chunk-StaticMeshes; Content/Materials/AAA: Bake-Materialien.
+Content/Generated/
+Content/Materials/AAA/
+
 # === Logs und Fehlerdateien ===
 *.log
 *.err
