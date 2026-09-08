@@ -325,6 +325,38 @@ FString UBuildingGenerator::NormalizeAddressForMatch(const FString& Address)
 	return Normalized.ToLower();
 }
 
+bool UBuildingGenerator::ApplyPlatterAddressOverride(FGeneratedBuilding& OutBuilding, double MetersPerLevel)
+{
+	if (OutBuilding.Address.IsEmpty())
+	{
+		return false;
+	}
+
+	const FString NormAddr = NormalizeAddressForMatch(OutBuilding.Address);
+	if (NormAddr == NormalizeAddressForMatch(TEXT("Platter Strasse 140")))
+	{
+		OutBuilding.LevelCount = 12;
+		OutBuilding.HeightCm = 12.0 * MetersPerLevel * MetersToCm;
+		return true;
+	}
+	if (NormAddr == NormalizeAddressForMatch(TEXT("Platter Strasse 142")))
+	{
+		OutBuilding.LevelCount = 1;
+		OutBuilding.HeightCm = 3.2 * MetersToCm;   // flache, eingeschossige Garage
+		OutBuilding.BuildingType = EOSMBuildingType::Garage;
+		OutBuilding.RoofShape = EOSMRoofShape::Flat;
+		return true;
+	}
+	if (NormAddr == NormalizeAddressForMatch(TEXT("Platter Strasse 144"))
+		|| NormAddr == NormalizeAddressForMatch(TEXT("Platter Strasse 146")))
+	{
+		OutBuilding.LevelCount = 6;
+		OutBuilding.HeightCm = 6.0 * MetersPerLevel * MetersToCm;
+		return true;
+	}
+	return false;
+}
+
 FString UBuildingGenerator::ResolveFacadeOverrideKey(
 	const FString& Address,
 	const TArray<FString>& OverrideAddresses)
@@ -850,29 +882,10 @@ bool UBuildingGenerator::BuildSingleBuilding(
 	}
 	OutBuilding.LevelCount = Levels;
 
-	// Adress-Override fuer drei konkrete reale Gebaeude an der Platter Strasse
-	// (per Adresse identifiziert; OSM fuehrt sie als "Platter Straße 140/144/146",
-	// sz-insensitiv ueber NormalizeAddressForMatch):
-	//  - 140: markanter Wohnblock, deutlich hoeher (12 Geschosse).
-	//  - 144/146: eingeschossige Garage (der Parkplatz davor statt Fahrbahn ist eine
-	//    Strassennetz-Korrektur, nicht hier).
-	if (!OutBuilding.Address.IsEmpty())
-	{
-		const FString NormAddr = NormalizeAddressForMatch(OutBuilding.Address);
-		if (NormAddr == NormalizeAddressForMatch(TEXT("Platter Strasse 140")))
-		{
-			OutBuilding.LevelCount = 12;
-			OutBuilding.HeightCm = 12.0 * Settings.MetersPerLevel * MetersToCm;
-		}
-		else if (NormAddr == NormalizeAddressForMatch(TEXT("Platter Strasse 144"))
-			|| NormAddr == NormalizeAddressForMatch(TEXT("Platter Strasse 146")))
-		{
-			OutBuilding.LevelCount = 1;
-			OutBuilding.HeightCm = 3.2 * MetersToCm;   // flache, eingeschossige Garage
-			OutBuilding.BuildingType = EOSMBuildingType::Garage;
-			OutBuilding.RoofShape = EOSMRoofShape::Flat;
-		}
-	}
+	// Adress-Override fuer die realen Gebaeude an der Platter Strasse:
+	// 140 -> 12 Geschosse, 142 -> Garage/Flachdach/1, 144/146 -> 6. Logik in
+	// ApplyPlatterAddressOverride (per Unit-Test abgesichert).
+	ApplyPlatterAddressOverride(OutBuilding, Settings.MetersPerLevel);
 
 	OutBuilding.bIsLandmark = IsLandmark(OutBuilding.BuildingName, OutBuilding.BuildingType, AreaSqm);
 

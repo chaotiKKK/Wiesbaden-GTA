@@ -499,6 +499,18 @@ public:
 	static FString NormalizeAddressForMatch(const FString& Address);
 
 	/**
+	 * Adress-Override fuer die realen Gebaeude an der Platter Strasse (per Adresse
+	 * identifiziert, sz/umlaut-insensitiv ueber NormalizeAddressForMatch):
+	 *  - 140      -> 12 Geschosse (markanter Wohnblock)
+	 *  - 142      -> eingeschossige Garage/Flachdach (Spawn + Heli davor)
+	 *  - 144/146  -> 6 Geschosse (Wohnblock)
+	 * Setzt LevelCount/HeightCm (und fuer 142 BuildingType/RoofShape) auf OutBuilding
+	 * und gibt true zurueck, wenn ein Zweig griff. MetersPerLevel skaliert die Hoehe
+	 * konsistent zur restlichen Generierung. Rein datenbasiert -> direkt testbar.
+	 */
+	static bool ApplyPlatterAddressOverride(FGeneratedBuilding& OutBuilding, double MetersPerLevel);
+
+	/**
 	 * Deterministische gewichtete Stil-Auswahl aus den Prompt-Gewichten
 	 * (Materialvariante -> Gewicht). Seed = OSM-Id als String; gleicher Seed
 	 * ergibt immer dieselbe Variante. Gibt -1 zurueck, wenn keine Gewichte
