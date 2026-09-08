@@ -3,6 +3,7 @@
 
 #include "Missions/WiesbadenMissionLoader.h"
 #include "Missions/WiesbadenMissionRunner.h"
+#include "Missions/WiesbadenMissionDispatcher.h"
 #include "Core/WiesbadenGameStateSubsystem.h"
 #include "WiesbadenReal.h"
 
@@ -35,20 +36,26 @@ void UWiesbadenMissionSubsystem::LoadMissions()
 	{
 		UE_LOG(LogWbCore, Warning, TEXT("Missionen-Ladefehler: %s"), *Err);
 	}
-	Missions = MoveTemp(Loaded.Missions);
-	UE_LOG(LogWbCore, Log, TEXT("Missionen geladen: %d."), Missions.Num());
+	MissionPool = MoveTemp(Loaded.Missions);
+	UE_LOG(LogWbCore, Log, TEXT("Missionen geladen: %d."), MissionPool.Num());
+}
+
+void UWiesbadenMissionSubsystem::BeginMission(const FMission& Mission)
+{
+	ActiveMission = Mission;
+	bHasActiveMission = true;
+	ActiveObjectiveIndex = 0;
+	UE_LOG(LogWbCore, Log, TEXT("Mission gestartet: %s"), *ActiveMission.Title);
+	OnObjectiveChanged.Broadcast();
 }
 
 bool UWiesbadenMissionSubsystem::StartMission(FName MissionId)
 {
-	for (int32 Index = 0; Index < Missions.Num(); ++Index)
+	for (const FMission& M : MissionPool)
 	{
-		if (Missions[Index].Id == MissionId)
+		if (M.Id == MissionId)
 		{
-			ActiveMissionIndex = Index;
-			ActiveObjectiveIndex = 0;
-			UE_LOG(LogWbCore, Log, TEXT("Mission gestartet: %s"), *Missions[Index].Title);
-			OnObjectiveChanged.Broadcast();
+			BeginMission(M);
 			return true;
 		}
 	}
@@ -57,23 +64,16 @@ bool UWiesbadenMissionSubsystem::StartMission(FName MissionId)
 
 const FMissionObjective* UWiesbadenMissionSubsystem::GetCurrentObjective() const
 {
-	if (!Missions.IsValidIndex(ActiveMissionIndex))
+	if (!bHasActiveMission || !ActiveMission.Objectives.IsValidIndex(ActiveObjectiveIndex))
 	{
 		return nullptr;
 	}
-	const FMission& Mission = Missions[ActiveMissionIndex];
-	if (!Mission.Objectives.IsValidIndex(ActiveObjectiveIndex))
-	{
-		return nullptr;
-	}
-	return &Mission.Objectives[ActiveObjectiveIndex];
+	return &ActiveMission.Objectives[ActiveObjectiveIndex];
 }
 
 FString UWiesbadenMissionSubsystem::GetActiveMissionTitle() const
 {
-	return Missions.IsValidIndex(ActiveMissionIndex)
-		? Missions[ActiveMissionIndex].Title
-		: FString();
+	return bHasActiveMission ? ActiveMission.Title : FString();
 }
 
 bool UWiesbadenMissionSubsystem::TryGetPlayerLocation(FVector& OutLocation) const
@@ -99,9 +99,9 @@ bool UWiesbadenMissionSubsystem::TryGetPlayerLocation(FVector& OutLocation) cons
 
 void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 {
-	if (Missions.Num() == 0)
+	if (MissionPool.Num() == 0)
 	{
-		return;
+		return; // ohne Vorlagen keine Auftraege
 	}
 
 	// ~5 Hz genuegt fuer Ankunfts-Pruefung.
@@ -118,20 +118,25 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 		return; // z. B. waehrend Streaming/Fahrzeugwechsel
 	}
 
-	// Auto-Angebot der ersten Mission - genau EINMAL je Sitzung. Ohne diese
-	// Sperre startete die Mission direkt nach dem Abschluss wieder von vorn
-	// (das Ziel klappte sofort auf "Fahre zur Abholung" zurueck), was wirkt, als
-	// haette der Abschluss nicht gezaehlt. Einmaliges Angebot = klarer Abschluss.
-	if (ActiveMissionIndex == INDEX_NONE && !bAutoOfferConsumed)
+	// Kein aktiver Auftrag -> naechsten vergeben (nachladend). Der Dispatcher
+	// liefert erst die handgeschriebenen Vorlagen, danach endlos prozedurale
+	// Kurierjobs. CompletedCount ist der Cursor: dadurch wird nie derselbe
+	// gerade abgeschlossene Auftrag erneut angeboten.
+	if (!bHasActiveMission)
 	{
-		StartMission(Missions[0].Id);
+		const FMissionDispatchResult Next =
+			FWiesbadenMissionDispatcher::NextMission(MissionPool, CompletedCount);
+		if (Next.bHasMission)
+		{
+			BeginMission(Next.Mission);
+		}
 		return;
 	}
 
 	FMissionContext Ctx;
 	Ctx.PlayerLocation = PlayerLocation;
 	const FMissionProgressResult Result = FWiesbadenMissionRunner::Step(
-		Missions[ActiveMissionIndex], ActiveObjectiveIndex, Ctx);
+		ActiveMission, ActiveObjectiveIndex, Ctx);
 	if (!Result.bAdvanced)
 	{
 		return;
@@ -140,7 +145,7 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 	ActiveObjectiveIndex = Result.NextObjectiveIndex;
 	if (Result.bMissionCompleted)
 	{
-		const FMission Completed = Missions[ActiveMissionIndex];
+		const FMission Completed = ActiveMission;
 		UE_LOG(LogWbCore, Log, TEXT("Mission erfuellt: %s."), *Completed.Title);
 
 		// Belohnung zentral gutschreiben (persistenter Spielzustand).
@@ -161,11 +166,11 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 			}
 		}
 
-		ActiveMissionIndex = INDEX_NONE;
+		bHasActiveMission = false;
 		ActiveObjectiveIndex = 0;
-		bAutoOfferConsumed = true;
+		++CompletedCount;
 		UE_LOG(LogWbCore, Log,
-			TEXT("Auftrag abgeschlossen - kein weiterer Auto-Auftrag diese Sitzung."));
+			TEXT("Auftrag abgeschlossen (%d gesamt) - naechster Auftrag folgt."), CompletedCount);
 		OnMissionCompleted.Broadcast(Completed);
 	}
 	else

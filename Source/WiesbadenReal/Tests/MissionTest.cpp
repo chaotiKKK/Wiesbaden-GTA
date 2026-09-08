@@ -5,6 +5,7 @@
 #include "Missions/WiesbadenMissionTypes.h"
 #include "Missions/WiesbadenMissionLoader.h"
 #include "Missions/WiesbadenMissionRunner.h"
+#include "Missions/WiesbadenMissionDispatcher.h"
 
 // Ziel-Erfuellung ReachLocation: horizontale (2D) Distanz <= Radius. Hoehe wird
 // bewusst ignoriert (Hang/Bahn-Umgebung), daher der Hoehen-Testfall.
@@ -136,6 +137,73 @@ bool FMissionRunnerTest::RunTest(const FString& Parameters)
 	R = FWiesbadenMissionRunner::Step(M, 5, Ctx(0.0, 0.0));
 	TestFalse(TEXT("ungueltig: kein Fortschritt"), R.bAdvanced);
 	TestFalse(TEXT("ungueltig: nicht fertig"), R.bMissionCompleted);
+
+	return true;
+}
+
+// Kleiner Kurierauftrag als Testvorlage: zwei Ziele (Abholung -> Lieferung).
+static FMission MakeCourierMission(const TCHAR* Id, const FVector& A, const FVector& B, int32 Reward)
+{
+	FMission M;
+	M.Id = FName(Id);
+	M.Title = Id;
+	M.Reward.Guthaben = Reward;
+	FMissionObjective O0; O0.Location = A; O0.RadiusCm = 800.0; O0.Label = TEXT("Abholung"); M.Objectives.Add(O0);
+	FMissionObjective O1; O1.Location = B; O1.RadiusCm = 800.0; O1.Label = TEXT("Lieferung"); M.Objectives.Add(O1);
+	return M;
+}
+
+// Auftragsvergabe: erst handgeschriebene Missionen in Reihenfolge, danach
+// endlos prozedurale Kurierjobs (eindeutige Id, gueltige Route, deterministisch).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionDispatcherTest,
+	"WiesbadenReal.Missions.Dispatcher",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMissionDispatcherTest::RunTest(const FString& Parameters)
+{
+	// -- Leerer Pool -> keine Vergabe --
+	const TArray<FMission> Empty;
+	TestFalse(TEXT("leer: kein Auftrag"),
+		FWiesbadenMissionDispatcher::NextMission(Empty, 0).bHasMission);
+
+	TArray<FMission> Pool;
+	Pool.Add(MakeCourierMission(TEXT("m0"), FVector(0.0, 0.0, 0.0), FVector(1000.0, 0.0, 0.0), 250));
+	Pool.Add(MakeCourierMission(TEXT("m1"), FVector(2000.0, 0.0, 0.0), FVector(3000.0, 0.0, 0.0), 300));
+
+	// -- Phase 1: handgeschriebene Auftraege in Reihenfolge --
+	FMissionDispatchResult R0 = FWiesbadenMissionDispatcher::NextMission(Pool, 0);
+	TestTrue(TEXT("0: Auftrag"), R0.bHasMission);
+	TestFalse(TEXT("0: nicht prozedural"), R0.bProcedural);
+	TestEqual(TEXT("0: m0"), R0.Mission.Id.ToString(), FString(TEXT("m0")));
+
+	FMissionDispatchResult R1 = FWiesbadenMissionDispatcher::NextMission(Pool, 1);
+	TestFalse(TEXT("1: nicht prozedural"), R1.bProcedural);
+	TestEqual(TEXT("1: m1"), R1.Mission.Id.ToString(), FString(TEXT("m1")));
+
+	// -- Phase 2: prozedural, endlos, eindeutige Ids, echte Fahrt --
+	FMissionDispatchResult P0 = FWiesbadenMissionDispatcher::NextMission(Pool, 2);
+	TestTrue(TEXT("2: Auftrag"), P0.bHasMission);
+	TestTrue(TEXT("2: prozedural"), P0.bProcedural);
+	TestEqual(TEXT("2: 2 Ziele"), P0.Mission.Objectives.Num(), 2);
+	TestTrue(TEXT("2: Belohnung > 0"), P0.Mission.Reward.Guthaben > 0);
+	if (P0.Mission.Objectives.Num() == 2)
+	{
+		TestFalse(TEXT("2: Abholung != Lieferung"),
+			P0.Mission.Objectives[0].Location.Equals(P0.Mission.Objectives[1].Location, 0.01));
+	}
+
+	FMissionDispatchResult P1 = FWiesbadenMissionDispatcher::NextMission(Pool, 3);
+	TestTrue(TEXT("3: prozedural"), P1.bProcedural);
+	TestTrue(TEXT("3: andere Id als 2"), P1.Mission.Id != P0.Mission.Id);
+
+	// -- Determinismus: gleiche Eingabe -> gleiche Ausgabe --
+	FMissionDispatchResult P0b = FWiesbadenMissionDispatcher::NextMission(Pool, 2);
+	TestEqual(TEXT("det: gleiche Id"), P0b.Mission.Id.ToString(), P0.Mission.Id.ToString());
+	if (P0.Mission.Objectives.Num() == 2 && P0b.Mission.Objectives.Num() == 2)
+	{
+		TestTrue(TEXT("det: gleiche Abholung"),
+			P0b.Mission.Objectives[0].Location.Equals(P0.Mission.Objectives[0].Location, 0.01));
+	}
 
 	return true;
 }
