@@ -146,6 +146,10 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 	}
 	else
 	{
+		if (const FMissionObjective* Next = GetCurrentObjective())
+		{
+			UE_LOG(LogWbCore, Log, TEXT("Ziel erreicht - naechstes Ziel: %s"), *Next->Label);
+		}
 		OnObjectiveChanged.Broadcast();
 	}
 }
