@@ -179,6 +179,28 @@ builder.set_editor_property("generate_city_chunks", True)
 builder.set_editor_property("map_asset_path", TARGET)
 builder.set_editor_property("auto_save_city_as_map", True)
 
+# -- 3b) Optionale Overrides fuer koordinierte Re-Bakes (env-gesteuert) -----
+# Halten das Skript generisch; die konkreten Werte stehen im jeweiligen
+# rebake_*.cmd. So laesst sich ein Bake gezielt anders parametrisieren, ohne den
+# Quell-Actor oder dieses Skript dauerhaft zu aendern.
+seg = os.environ.get("WB_MAX_SEGMENT_CM")
+if seg:
+    rs = builder.get_editor_property("road_settings")
+    rs.set_editor_property("max_segment_length_cm", float(seg))
+    builder.set_editor_property("road_settings", rs)
+    log("Override road_settings.max_segment_length_cm = %s" % seg)
+off = os.environ.get("WB_ROAD_OFFSET_CM")
+if off:
+    rs = builder.get_editor_property("road_settings")
+    rs.set_editor_property("road_surface_offset_cm", float(off))
+    builder.set_editor_property("road_settings", rs)
+    log("Override road_settings.road_surface_offset_cm = %s" % off)
+if os.environ.get("WB_USE_OSM_TREES") == "1":
+    ras = builder.get_editor_property("region_asset_settings")
+    ras.set_editor_property("b_use_osm_trees", True)
+    builder.set_editor_property("region_asset_settings", ras)
+    log("Override region_asset_settings.b_use_osm_trees = True")
+
 log("Bau startet - Ziel %s. Das dauert." % TARGET)
 builder.build_city()
 log("Bau zurueck: %s" % builder.get_editor_property("last_build_summary"))
