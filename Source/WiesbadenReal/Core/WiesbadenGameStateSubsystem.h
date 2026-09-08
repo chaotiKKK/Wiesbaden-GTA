@@ -6,6 +6,7 @@
 #include "WiesbadenGameStateSubsystem.generated.h"
 
 DECLARE_MULTICAST_DELEGATE(FOnGuthabenChanged);
+DECLARE_MULTICAST_DELEGATE(FOnUnlocksChanged);
 
 /**
  * Datenreine Kontostand-Arithmetik - ohne Engine/Save testbar. Das Subsystem
@@ -44,11 +45,22 @@ public:
 	/** Bucht Kosten ab, wenn gedeckt; sonst false und unveraendert. */
 	bool SpendGuthaben(int32 Kosten);
 
+	/** True, wenn diese Freischaltung gekauft wurde. */
+	bool HasUnlock(FName UnlockId) const { return OwnedUnlocks.Contains(UnlockId); }
+
+	/** Erteilt eine Freischaltung (idempotent), speichert und meldet die Aenderung. */
+	void GrantUnlock(FName UnlockId);
+
+	/** Gekaufte Freischaltungen (fuer HUD/Anzeige). */
+	const TSet<FName>& GetOwnedUnlocks() const { return OwnedUnlocks; }
+
 	FOnGuthabenChanged OnGuthabenChanged;
+	FOnUnlocksChanged OnUnlocksChanged;
 
 private:
 	void Save() const;
 	void Load();
 
 	int32 Guthaben = 0;
+	TSet<FName> OwnedUnlocks;
 };

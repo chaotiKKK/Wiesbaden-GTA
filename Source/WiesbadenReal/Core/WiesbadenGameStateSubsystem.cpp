@@ -51,6 +51,19 @@ bool UWiesbadenGameStateSubsystem::SpendGuthaben(int32 Kosten)
 	return false;
 }
 
+void UWiesbadenGameStateSubsystem::GrantUnlock(FName UnlockId)
+{
+	if (UnlockId.IsNone() || OwnedUnlocks.Contains(UnlockId))
+	{
+		return; // idempotent - nichts zu tun
+	}
+	OwnedUnlocks.Add(UnlockId);
+	UE_LOG(LogWbCore, Log, TEXT("Freischaltung erteilt: %s (gesamt %d)."),
+		*UnlockId.ToString(), OwnedUnlocks.Num());
+	Save();
+	OnUnlocksChanged.Broadcast();
+}
+
 namespace
 {
 	const TCHAR* const GSaveSlot = TEXT("WiesbadenReal");
@@ -66,9 +79,11 @@ void UWiesbadenGameStateSubsystem::Save() const
 		return;
 	}
 	SaveObj->Guthaben = Guthaben;
+	SaveObj->OwnedUnlocks = OwnedUnlocks.Array();
 	if (UGameplayStatics::SaveGameToSlot(SaveObj, GSaveSlot, GSaveUserIndex))
 	{
-		UE_LOG(LogWbCore, Log, TEXT("Guthaben gespeichert: %d."), Guthaben);
+		UE_LOG(LogWbCore, Log, TEXT("Guthaben gespeichert: %d (Freischaltungen: %d)."),
+			Guthaben, OwnedUnlocks.Num());
 	}
 	else
 	{
@@ -84,10 +99,13 @@ void UWiesbadenGameStateSubsystem::Load()
 			UGameplayStatics::LoadGameFromSlot(GSaveSlot, GSaveUserIndex)))
 		{
 			Guthaben = SaveObj->Guthaben;
-			UE_LOG(LogWbCore, Log, TEXT("Guthaben geladen: %d."), Guthaben);
+			OwnedUnlocks = TSet<FName>(SaveObj->OwnedUnlocks);
+			UE_LOG(LogWbCore, Log, TEXT("Guthaben geladen: %d (Freischaltungen: %d)."),
+				Guthaben, OwnedUnlocks.Num());
 			return;
 		}
 	}
 	Guthaben = 0;
+	OwnedUnlocks.Empty();
 	UE_LOG(LogWbCore, Log, TEXT("Kein Guthaben-Speicherstand - starte mit 0."));
 }

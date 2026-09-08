@@ -25,6 +25,8 @@
 #include "Missions/WiesbadenMissionSubsystem.h"
 #include "Missions/WiesbadenMissionTypes.h"
 #include "Core/WiesbadenGameStateSubsystem.h"
+#include "Store/WiesbadenStoreSubsystem.h"
+#include "Store/WiesbadenStoreTypes.h"
 #include "Engine/GameInstance.h"
 #include "UI/WiesbadenWorldMapView.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -729,6 +731,9 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		}
 	}
 
+	// Freischaltungs-Katalog (per Konsole "Wb.Store" ein-/ausgeblendet).
+	DrawStorePanel(Width, Height);
+
 	// -- Helikopter: eigene Cockpit-Instrumententafel -----------------------
 	if (Heli)
 	{
@@ -1329,6 +1334,66 @@ void AWiesbadenVehicleHUD::DrawMissionPanel(float Width, float Height)
 		: FString::Printf(TEXT("%s  -  %s"), *Obj->Label, *DistText);
 	DrawText(ObjLine, BodyColour, X + 16.0f, Y + 28.0f,
 		GEngine ? GEngine->GetMediumFont() : nullptr, 1.0f);
+}
+
+void AWiesbadenVehicleHUD::DrawStorePanel(float Width, float Height)
+{
+	const UWorld* W = GetWorld();
+	const UGameInstance* GI = W ? W->GetGameInstance() : nullptr;
+	const UWiesbadenStoreSubsystem* Store =
+		GI ? GI->GetSubsystem<UWiesbadenStoreSubsystem>() : nullptr;
+	if (!Store || !Store->IsPanelOpen())
+	{
+		return;
+	}
+	const UWiesbadenGameStateSubsystem* GameState =
+		GI->GetSubsystem<UWiesbadenGameStateSubsystem>();
+	const int32 Guthaben = GameState ? GameState->GetGuthaben() : 0;
+
+	const TArray<FStoreItem>& Catalog = Store->GetCatalog();
+
+	const float PanelW = 420.0f;
+	const float RowH = 46.0f;
+	const float HeadH = 40.0f;
+	const float PanelH = HeadH + RowH * FMath::Max(1, Catalog.Num()) + 12.0f;
+	const float X = (Width - PanelW) * 0.5f;
+	const float Y = (Height - PanelH) * 0.5f;
+	DrawPanelBackdrop(X, Y, PanelW, PanelH, 12.0f, FLinearColor(0.06f, 0.08f, 0.11f), 0.86f);
+
+	const FLinearColor HeadColour(1.0f, 0.72f, 0.20f, 1.0f);
+	DrawText(FString::Printf(TEXT("Freischaltungen    Guthaben: %d EUR"), Guthaben),
+		HeadColour, X + 16.0f, Y + 10.0f, GEngine ? GEngine->GetMediumFont() : nullptr, 1.0f);
+
+	float RowY = Y + HeadH;
+	for (const FStoreItem& Item : Catalog)
+	{
+		const bool bOwned = GameState && GameState->HasUnlock(Item.Id);
+		const bool bAffordable = Guthaben >= Item.Kosten;
+
+		FString StatusText;
+		FLinearColor RowColour;
+		if (bOwned)
+		{
+			StatusText = TEXT("im Besitz");
+			RowColour = FLinearColor(0.55f, 0.85f, 0.55f, 1.0f);
+		}
+		else if (bAffordable)
+		{
+			StatusText = FString::Printf(TEXT("%d EUR  -  Wb.Buy %s"), Item.Kosten, *Item.Id.ToString());
+			RowColour = FLinearColor(0.92f, 0.94f, 0.96f, 1.0f);
+		}
+		else
+		{
+			StatusText = FString::Printf(TEXT("%d EUR  (zu teuer)"), Item.Kosten);
+			RowColour = FLinearColor(0.70f, 0.55f, 0.55f, 1.0f);
+		}
+
+		DrawText(Item.Title, RowColour, X + 16.0f, RowY + 4.0f,
+			GEngine ? GEngine->GetMediumFont() : nullptr, 1.0f);
+		DrawText(StatusText, RowColour, X + 16.0f, RowY + 24.0f,
+			GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
+		RowY += RowH;
+	}
 }
 
 void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)

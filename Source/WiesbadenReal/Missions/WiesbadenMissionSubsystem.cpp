@@ -5,6 +5,7 @@
 #include "Missions/WiesbadenMissionRunner.h"
 #include "Missions/WiesbadenMissionDispatcher.h"
 #include "Core/WiesbadenGameStateSubsystem.h"
+#include "Store/WiesbadenStore.h"
 #include "WiesbadenReal.h"
 
 #include "Misc/FileHelper.h"
@@ -156,7 +157,16 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 				if (UWiesbadenGameStateSubsystem* GameState =
 					GI->GetSubsystem<UWiesbadenGameStateSubsystem>())
 				{
-					GameState->AddGuthaben(Result.GuthabenAwarded);
+					// Kurierlizenz (gekaufte Freischaltung) erhoeht die Praemie um 50%
+					// - die Ausgabe-Senke zahlt sich im Kurier-Loop wieder aus.
+					const bool bLicensed = GameState->HasUnlock(FWiesbadenStore::KurierlizenzId());
+					const int32 Award = FWiesbadenStore::ApplyLicenseBonus(Result.GuthabenAwarded, bLicensed);
+					if (bLicensed)
+					{
+						UE_LOG(LogWbCore, Log, TEXT("Kurierlizenz-Bonus: %d -> %d."),
+							Result.GuthabenAwarded, Award);
+					}
+					GameState->AddGuthaben(Award);
 				}
 				else
 				{

@@ -159,6 +159,10 @@ private:
 	/** Missions-Ziel-Panel (Titel + Ziel-Label + Distanz), oben mittig. */
 	void DrawMissionPanel(float Width, float Height);
 
+	/** Freischaltungs-Katalog (Ausgabe-Senke) - Liste mit Kosten/Besitz/Deckung,
+	 *  nur wenn per Konsole "Wb.Store" geoeffnet. */
+	void DrawStorePanel(float Width, float Height);
+
 	// Die volle Instrumententafel laeuft ueber die Steuernaht-Familie, damit sie
 	// fuer JEDES Fahrzeug (Kaefer wie ChaosCar) identisch funktioniert.
 	void DrawSpeedometer(const IWiesbadenVehicleControl& Vehicle, float CenterX, float CenterY, float Radius);
