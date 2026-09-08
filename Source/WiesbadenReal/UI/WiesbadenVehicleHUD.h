@@ -331,6 +331,15 @@ private:
 	bool bWaypointSetKeyHeld = false;
 	bool bWaypointClearKeyHeld = false;
 
+	// -- Strassennamen-Suche der Weltkarte (Feature 6) -----------------------
+	/** True, solange das Suchfeld offen ist: Tastatureingabe geht dann in die Suche
+	 *  statt in Pan/Wegpunkt. Tab oeffnet/schliesst. */
+	bool bMapSearchActive = false;
+	/** Bisher getippter Strassenname. */
+	FString MapSearchQuery;
+	/** Halte-Flanke der Umschalt-Taste (Tab), damit ein Druck einmal wirkt. */
+	bool bMapSearchToggleHeld = false;
+
 public:
 	/**
 	 * Entfernung fuer die Karten-Anzeige: unter 1 km in Metern ("340 m"), darueber

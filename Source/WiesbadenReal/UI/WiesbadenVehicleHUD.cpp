@@ -1276,6 +1276,8 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 	// --- Zoom & Pan aus den Eingaben (nur Sichtfenster, kein Neu-Rastern) ---
 	APlayerController* MapPC = GetOwningPlayerController();
 	const float Dt = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.0f;
+	// Solange das Suchfeld getippt wird, gehen Pfeile/Enter NICHT an Pan/Wegpunkt.
+	const bool bTypingSearch = bMapSearchActive;
 	if (MapPC)
 	{
 		// Zoom: +/- (Tastatur), Mausrad, Gamepad-Schultertasten. Stetig ueber
@@ -1298,12 +1300,58 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 		if (MapPC->IsInputKeyDown(EKeys::Down))  { PanPx.Y += 1.0f; }
 		PanPx.X += MapPC->GetInputAnalogKeyState(EKeys::Gamepad_RightX);
 		PanPx.Y -= MapPC->GetInputAnalogKeyState(EKeys::Gamepad_RightY);
-		if (bMapCentreInit && !PanPx.IsNearlyZero())
+		if (bMapCentreInit && !PanPx.IsNearlyZero() && !bTypingSearch)
 		{
 			const float Scale = FMath::Max(ScreenFit.ScalePxPerCm * MapZoom, KINDA_SMALL_NUMBER);
 			constexpr float PanPxPerSec = 900.0f;
 			MapCentreWorld.X += PanPx.X * PanPxPerSec * Dt / Scale;
 			MapCentreWorld.Y -= PanPx.Y * PanPxPerSec * Dt / Scale;   // Bild runter = Welt -Y
+		}
+
+		// --- Strassennamen-Suche (Feature 6): Tab oeffnet/schliesst das Feld; im
+		// Feld A-Z + Leertaste tippen, Rueck loescht, Enter zentriert die Karte auf
+		// den Treffer (FindStreetCenter -> Blickzentrum + naeherer Zoom). ---
+		const bool bToggleSearch = MapPC->IsInputKeyDown(EKeys::Tab);
+		if (bToggleSearch && !bMapSearchToggleHeld)
+		{
+			bMapSearchActive = !bMapSearchActive;
+			if (bMapSearchActive) { MapSearchQuery.Empty(); }
+		}
+		bMapSearchToggleHeld = bToggleSearch;
+
+		if (bMapSearchActive)
+		{
+			for (TCHAR Ch = 'A'; Ch <= 'Z'; ++Ch)
+			{
+				if (MapPC->WasInputKeyJustPressed(FKey(*FString::Chr(Ch))))
+				{
+					MapSearchQuery.AppendChar(Ch);
+				}
+			}
+			if (MapPC->WasInputKeyJustPressed(EKeys::SpaceBar))
+			{
+				MapSearchQuery.AppendChar(' ');
+			}
+			if (MapPC->WasInputKeyJustPressed(EKeys::BackSpace) && MapSearchQuery.Len() > 0)
+			{
+				MapSearchQuery.LeftChopInline(1);
+			}
+			if (MapPC->WasInputKeyJustPressed(EKeys::Escape))
+			{
+				bMapSearchActive = false;
+			}
+			else if (MapPC->WasInputKeyJustPressed(EKeys::Enter))
+			{
+				FVector2D Hit;
+				if (FWiesbadenMinimap::FindStreetCenter(*Network, MapSearchQuery, Hit))
+				{
+					MapCentreWorld = Hit;
+					bMapCentreInit = true;
+					MapZoom = FMath::Clamp(4.0f,
+						FWiesbadenMinimap::WorldMapMinZoom, FWiesbadenMinimap::WorldMapMaxZoom);
+				}
+				bMapSearchActive = false;
+			}
 		}
 	}
 
@@ -1325,6 +1373,49 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 	else
 	{
 		DrawRect(FLinearColor(0.04f, 0.05f, 0.07f, 1.0f), 0.0f, 0.0f, Width, Height);
+	}
+
+	// Feature 5: beim starken Reinzoomen vergroessert der Textur-Blitt nur noch
+	// Pixel (unscharf). Dann die im Fenster sichtbaren Strassen LIVE als scharfe
+	// Vektoren darueber zeichnen - gecullt auf den sichtbaren Ausschnitt, also nur
+	// wenige Segmente (kein Ruckeln wie beim frueheren Voll-Netz-Zeichnen).
+	if (Proj.IsValid() && FWiesbadenMinimap::ShouldDrawVectorStreets(Proj, BaseFit))
+	{
+		FVector2D VisMin, VisMax;
+		FWiesbadenMinimap::ComputeVisibleWorldBounds(Proj, FVector2D(Width, Height), VisMin, VisMax);
+		const FLinearColor MinorCol(0.66f, 0.68f, 0.72f, 1.0f);
+		const FLinearColor MajorCol(0.97f, 0.84f, 0.38f, 1.0f);
+		for (const FRoadSegment& Seg : Network->Segments)
+		{
+			const TArray<FVector>& Line = Seg.Centerline.Num() >= 2
+				? Seg.Centerline : Seg.TrimmedCenterline;
+			if (Line.Num() < 2)
+			{
+				continue;
+			}
+			// Huellbox-Cull gegen das sichtbare Fenster: nur Strassen im Blick zeichnen.
+			FVector2D SegMin(TNumericLimits<double>::Max(), TNumericLimits<double>::Max());
+			FVector2D SegMax(TNumericLimits<double>::Lowest(), TNumericLimits<double>::Lowest());
+			for (const FVector& P : Line)
+			{
+				SegMin.X = FMath::Min(SegMin.X, P.X); SegMin.Y = FMath::Min(SegMin.Y, P.Y);
+				SegMax.X = FMath::Max(SegMax.X, P.X); SegMax.Y = FMath::Max(SegMax.Y, P.Y);
+			}
+			if (SegMax.X < VisMin.X || SegMin.X > VisMax.X
+				|| SegMax.Y < VisMin.Y || SegMin.Y > VisMax.Y)
+			{
+				continue;
+			}
+			const bool bMajor = FWiesbadenMinimap::IsMajorRoad(Seg.HighwayType);
+			const FLinearColor& Col = bMajor ? MajorCol : MinorCol;
+			const float Thick = bMajor ? 2.6f : 1.3f;
+			for (int32 i = 1; i < Line.Num(); ++i)
+			{
+				const FVector2D A = Proj.Project(Line[i - 1]);
+				const FVector2D B = Proj.Project(Line[i]);
+				DrawLine(A.X, A.Y, B.X, B.Y, Col, Thick);
+			}
+		}
 	}
 
 	// Strassennamen LIVE im Bildschirmraum darueber (immer scharf, unabhaengig vom Zoom).
@@ -1354,7 +1445,7 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 	// Wegpunkt setzen/loeschen: Fadenkreuz in der Bildmitte anvisieren (mit Zoom
 	// + Pan darueberfahren), Enter / A / Linksklick setzt, Rueck / B / Rechtsklick
 	// loescht. Flanken, damit ein Druck einmal wirkt.
-	if (MapPC && Proj.IsValid())
+	if (MapPC && Proj.IsValid() && !bTypingSearch)
 	{
 		const bool bSet = MapPC->IsInputKeyDown(EKeys::Enter)
 			|| MapPC->IsInputKeyDown(EKeys::LeftMouseButton)
@@ -1413,9 +1504,22 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 	DrawLine(Width * 0.5f, 42.0f, Width * 0.5f, 66.0f, MapMajorRoad, 2.0f);
 	DrawText(TEXT("N"), DialScale, Width * 0.5f - 5.0f, 22.0f,
 		GEngine ? GEngine->GetMediumFont() : nullptr, 1.3f);
+
+	// Suchfeld (Feature 6): oben zentriert, solange aktiv.
+	if (bMapSearchActive)
+	{
+		const float BoxW = 380.0f, BoxH = 30.0f;
+		const float Bx = Width * 0.5f - BoxW * 0.5f, By = 74.0f;
+		DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.72f), Bx, By, BoxW, BoxH);
+		DrawText(FString::Printf(TEXT("Strasse: %s_"), *MapSearchQuery), DialText,
+			Bx + 10.0f, By + 6.0f, GEngine ? GEngine->GetMediumFont() : nullptr, 1.2f);
+	}
+
 	DrawText(TEXT("Enter / A / Klick: Wegpunkt setzen   Rueck / B: loeschen"),
 		DialScale, 24.0f, Height - 50.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
-	DrawText(TEXT("M / Select: schliessen   +/- / Rad: Zoom   Pfeile / Stick: schwenken"),
+	DrawText(bMapSearchActive
+		? TEXT("Tippen: Strassenname   Enter: hinspringen   Esc/Tab: abbrechen")
+		: TEXT("M: schliessen   +/- / Rad: Zoom   Pfeile: schwenken   Tab: Strasse suchen"),
 		DialScale, 24.0f, Height - 32.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
 	if (Proj.IsValid())
 	{

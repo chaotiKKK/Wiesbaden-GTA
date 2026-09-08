@@ -161,6 +161,17 @@ struct WIESBADENREAL_API FWiesbadenMinimap
 	static constexpr float WorldMapMarginFrac = 0.92f;
 
 	/**
+	 * Vielfache der Basis-Textur-Aufloesung, ab dem die Sicht "hineingezoomt"
+	 * genug ist, um Strassen LIVE als Vektoren zu zeichnen statt nur den
+	 * vergroesserten Texture-Blitt zu zeigen (Feature: Detail beim Zoomen).
+	 *
+	 * 2.0 bedeutet: erst wenn jedes Textur-Texel auf mehr als 2 Bildschirmpixel
+	 * gedehnt wird - darunter liefert die (mit 2.5f ueberabgetastete) Basiskarte
+	 * noch genug Detail, darueber wird sie zu Pixelkloetzen.
+	 */
+	static constexpr float WorldMapVectorSwitchMagnification = 2.0f;
+
+	/**
 	 * UV-Fenster (0..1) der Basiskarte, das die aktuelle Sicht (ViewProj) zeigt.
 	 *
 	 * Die Basiskarte wurde EINMAL mit BaseFit in eine Textur der Groesse
@@ -184,6 +195,32 @@ struct WIESBADENREAL_API FWiesbadenMinimap
 	 */
 	static FWorldMapProjection MakeZoomedProjection(
 		const FWorldMapProjection& Fit, float ZoomFactor, const FVector2D& DesiredCentreWorld);
+
+	/**
+	 * Sichtbarer Welt-Ausschnitt (cm) der aktuellen Sicht: die Weltkoordinaten
+	 * der Bildschirm-Ecke oben-links (OutWorldMin.X/OutWorldMax.Y) und unten-
+	 * rechts (OutWorldMax.X/OutWorldMin.Y), aus Project/Unproject abgeleitet.
+	 *
+	 * Das ist das Fenster, in dem bei hineingezoomter Karte Strassen LIVE
+	 * gezeichnet werden muessten - die spaetere Vektor-Zeichnung kann damit auf
+	 * die sichtbaren Segmente beschraenkt bleiben. Datenrein/testbar
+	 * (Test World.VisibleWorldBounds).
+	 */
+	static void ComputeVisibleWorldBounds(
+		const FWorldMapProjection& ViewProj, const FVector2D& ScreenSizePx,
+		FVector2D& OutWorldMin, FVector2D& OutWorldMax);
+
+	/**
+	 * True, sobald die Sicht so tief hineingezoomt ist, dass die eingebackene
+	 * Basiskarte ihre Aufloesung ueberschreitet (siehe
+	 * WorldMapVectorSwitchMagnification): Dann vergroessert der Texture-Blitt
+	 * nur noch Pixel, und die HUD soll Strassen stattdessen live als scharfe
+	 * Vektoren zeichnen. BaseFit ist die Einpassung, mit der die Basiskarte
+	 * gebacken wurde (ihr ScalePxPerCm ist die Texeldichte der Textur).
+	 * Datenrein/testbar (Test World.WorldMapVectorSwitch).
+	 */
+	static bool ShouldDrawVectorStreets(
+		const FWorldMapProjection& ViewProj, const FWorldMapProjection& BaseFit);
 
 	/**
 	 * Projiziert das ganze Netz in Bildschirmlinien: Nebenstrassen zuerst,
@@ -245,6 +282,17 @@ struct WIESBADENREAL_API FWiesbadenMinimap
 		const FRoadNetwork& Network,
 		const FVector& PlayerLocation,
 		double MaxDistanceCm = 3000.0);
+
+	/**
+	 * Sucht eine Strasse per (Teil-)Name und liefert ihren Mittelpunkt in Welt-XY
+	 * (cm) - das Mittel ALLER Mittellinienpunkte der Segmente dieser Strasse.
+	 *
+	 * Ein exakter Name (case-insensitive) hat Vorrang; sonst die erste Strasse,
+	 * deren Name den Query-Text enthaelt. False, wenn nichts passt (OutWorldXY
+	 * bleibt dann unveraendert). Fuer das Straßennamen-Suchfeld der Weltkarte.
+	 */
+	static bool FindStreetCenter(
+		const FRoadNetwork& Network, const FString& Query, FVector2D& OutWorldXY);
 
 	/** True fuer Strassentypen, die auf der Karte hervorgehoben werden. */
 	static bool IsMajorRoad(EOSMHighwayType Type);

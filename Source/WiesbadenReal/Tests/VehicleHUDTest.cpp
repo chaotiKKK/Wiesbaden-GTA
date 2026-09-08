@@ -388,6 +388,128 @@ bool FWorldMapZoomPanTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// Weltkarte (Feature 5, Kern): der SICHTBARE Welt-Ausschnitt der aktuellen
+// Zoom/Pan-Sicht. Daran haengt spaeter die Live-Vektor-Zeichnung: nur Segmente
+// in diesem Fenster werden je Bild gerastert, wenn die Basistextur vergroessert
+// wuerde. Ohne Canvas/Welt pruefbar.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVisibleWorldBoundsTest,
+	"WiesbadenReal.World.VisibleWorldBounds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FVisibleWorldBoundsTest::RunTest(const FString& Parameters)
+{
+	// Fit wie im Zoom/Pan-Test: Netz 0..1000 x 0..500 cm, Bild 800x600, Mitte
+	// (400,300), voller Rand -> 0.8 px/cm.
+	const FWorldMapProjection Fit = FWiesbadenMinimap::MakeWorldMapProjection(
+		FVector2D(0.0, 0.0), FVector2D(1000.0, 500.0),
+		FVector2D(400.0, 300.0), FVector2D(800.0, 600.0), /*MarginFrac=*/1.0f);
+	const FVector2D ScreenSize(800.0, 600.0);
+
+	// Zoom 2 um die Netzmitte: Massstab 1.6 px/cm -> sichtbares Fenster
+	// 800/1.6 = 500 cm breit und 600/1.6 = 375 cm hoch um (500, 250).
+	{
+		const FWorldMapProjection Z2 = FWiesbadenMinimap::MakeZoomedProjection(
+			Fit, 2.0f, FVector2D(500.0, 250.0));
+		FVector2D Min, Max;
+		FWiesbadenMinimap::ComputeVisibleWorldBounds(Z2, ScreenSize, Min, Max);
+
+		TestTrue(TEXT("Zoom2: sichtbare Ecke unten-links (250, 62.5)"),
+			Min.Equals(FVector2D(250.0, 62.5), 0.05));
+		TestTrue(TEXT("Zoom2: sichtbare Ecke oben-rechts (750, 437.5)"),
+			Max.Equals(FVector2D(750.0, 437.5), 0.05));
+		TestTrue(TEXT("Zoom2: Fensterbreite = 800px / Massstab"),
+			FMath::IsNearlyEqual(Max.X - Min.X, 500.0, 0.05));
+		TestTrue(TEXT("Zoom2: Fensterhoehe = 600px / Massstab"),
+			FMath::IsNearlyEqual(Max.Y - Min.Y, 375.0, 0.05));
+	}
+
+	// Zoom 4, an die Ecke gepannt/geklemmt (Zentrum X 875, Y 400, Massstab
+	// 3.2): das Fenster liegt dann NICHT mehr mittig - es zeigt die Kante.
+	{
+		const FWorldMapProjection Z4 = FWiesbadenMinimap::MakeZoomedProjection(
+			Fit, 4.0f, FVector2D(900.0, 400.0));
+		FVector2D Min, Max;
+		FWiesbadenMinimap::ComputeVisibleWorldBounds(Z4, ScreenSize, Min, Max);
+
+		TestTrue(TEXT("Zoom4: sichtbare Ecke unten-links (750, 306.25)"),
+			Min.Equals(FVector2D(750.0, 306.25), 0.05));
+		TestTrue(TEXT("Zoom4: sichtbare Ecke oben-rechts (1000, 493.75)"),
+			Max.Equals(FVector2D(1000.0, 493.75), 0.05));
+	}
+
+	// Zoom 1 (ganzes Netz): die Sicht ist breiter als das Netz -> senkrecht
+	// bleibt Platz (Bild 4:3 gegen Netz 2:1), das Fenster ragt ueber die
+	// Netzgrenzen hinaus.
+	{
+		const FWorldMapProjection Z1 = FWiesbadenMinimap::MakeZoomedProjection(
+			Fit, 1.0f, FVector2D(900.0, 480.0));
+		FVector2D Min, Max;
+		FWiesbadenMinimap::ComputeVisibleWorldBounds(Z1, ScreenSize, Min, Max);
+
+		// Rand exakt = nur im Idealfall; 0.8 px/cm ist als float nicht exakt, also
+		// mit 1 cm Toleranz (nicht signifikant gegen die 1000-cm-Netzbreite).
+		TestTrue(TEXT("Zoom1: Fenster umfasst das Netz (X ~0..1000)"),
+			FMath::Abs(Min.X) < 1.0 && FMath::Abs(Max.X - 1000.0) < 1.0);
+		TestTrue(TEXT("Zoom1: Hoehe 750 cm (600px / 0.8)"),
+			FMath::IsNearlyEqual(Max.Y - Min.Y, 750.0, 0.05));
+	}
+
+	return true;
+}
+
+// Weltkarte (Feature 5, Kern): die UMSCHALT-SCHWELLE von der eingebackenen
+// Basistextur auf LIVE gezeichnete Strassenvektoren. Sobald die Sicht dichter
+// als das Magnification-Vielfache der Textur-Aufloesung ist, kann die Textur
+// beim Hineinzoomen kein Detail mehr liefern - nur noch vergroesserte Pixel.
+// Ohne Canvas/Welt pruefbar.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldMapVectorSwitchTest,
+	"WiesbadenReal.World.WorldMapVectorSwitch",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FWorldMapVectorSwitchTest::RunTest(const FString& Parameters)
+{
+	// Netz 0..2000 x 0..1000 (2:1). Basis-Textur 2000x1000 -> 1.0 Texel/cm;
+	// Bildschirm 800x400 -> 0.4 px/cm. Die Sicht erreicht die 2x-Texeldichte
+	// also erst bei Zoom 5 (0.4*5 = 2.0 = 1.0 * WorldMapVectorSwitchMagnification).
+	const FVector2D WMin(0.0, 0.0);
+	const FVector2D WMax(2000.0, 1000.0);
+	const FVector2D BaseSize(2000.0, 1000.0);
+	const FWorldMapProjection BaseFit = FWiesbadenMinimap::MakeWorldMapProjection(
+		WMin, WMax, BaseSize * 0.5, BaseSize, /*MarginFrac=*/1.0f);
+	const FVector2D ScreenSize(800.0, 400.0);
+	const FWorldMapProjection ScreenFit = FWiesbadenMinimap::MakeWorldMapProjection(
+		WMin, WMax, ScreenSize * 0.5, ScreenSize, /*MarginFrac=*/1.0f);
+	const FVector2D NetCentre = (WMin + WMax) * 0.5;
+
+	// Stadt-Ansicht (Zoom 1..2): die ueberabgetastete Textur reicht - keine Vektoren.
+	for (float Zoom : { 1.0f, 2.0f, 3.0f })
+	{
+		const FWorldMapProjection V = FWiesbadenMinimap::MakeZoomedProjection(
+			ScreenFit, Zoom, NetCentre);
+		TestFalse(FString::Printf(TEXT("Zoom %.0f: Textur reicht, keine Vektoren"), Zoom),
+			FWiesbadenMinimap::ShouldDrawVectorStreets(V, BaseFit));
+	}
+
+	// Tief hineingezoomt (Zoom 6..8): jedes Texel deckt mehrere Bildschirmpixel,
+	// die Textur wird zu Pixelkloetzen -> Strassen live als Vektoren.
+	for (float Zoom : { 6.0f, 7.0f, 8.0f })
+	{
+		const FWorldMapProjection V = FWiesbadenMinimap::MakeZoomedProjection(
+			ScreenFit, Zoom, NetCentre);
+		TestTrue(FString::Printf(TEXT("Zoom %.0f: Vektoren statt vergroesserter Textur"), Zoom),
+			FWiesbadenMinimap::ShouldDrawVectorStreets(V, BaseFit));
+	}
+
+	// Zoom ist monotone Funktion des Massstabs: dichter als die Textur heisst
+	// hineingezoomt. Bei Zoom 3 liegt die Sicht UNTER der Texeldichte.
+	TestTrue(TEXT("Schwelle liegt ueber Zoom 3"),
+		ScreenFit.ScalePxPerCm * 3.0f < BaseFit.ScalePxPerCm * FWiesbadenMinimap::WorldMapVectorSwitchMagnification);
+	TestTrue(TEXT("Zoom 6 ueberschreitet die Schwelle"),
+		ScreenFit.ScalePxPerCm * 6.0f >= BaseFit.ScalePxPerCm * FWiesbadenMinimap::WorldMapVectorSwitchMagnification);
+
+	return true;
+}
+
 // Wegpunkt auf der Minikarte: dieselbe Dreh-/Massstab-Abbildung wie die Strassen,
 // Randklemmung ausserhalb der Reichweite, planare Distanz. Ohne Canvas pruefbar.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMinimapWaypointTest,

@@ -183,3 +183,51 @@ bool FMinimapLinesTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMinimapStreetSearchTest,
+	"WiesbadenReal.UI.Minimap.StreetSearch",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Die Weltkarten-Suche findet eine Strasse per (Teil-)Name und liefert ihren
+ * Mittelpunkt in Welt-XY, damit das Eingabefeld die Karte darauf zentrieren kann.
+ */
+bool FMinimapStreetSearchTest::RunTest(const FString& Parameters)
+{
+	FRoadNetwork Network;
+	// Wilhelmstrasse aus ZWEI Segmenten: Mittel aller Mittellinienpunkte = (10000, 0).
+	Network.Segments.Add(MakeNamedSegment(0,
+		FVector2D(0.0, 0.0), FVector2D(10000.0, 0.0),
+		TEXT("Wilhelmstrasse"), EOSMHighwayType::Secondary));
+	Network.Segments.Add(MakeNamedSegment(1,
+		FVector2D(10000.0, 0.0), FVector2D(20000.0, 0.0),
+		TEXT("Wilhelmstrasse"), EOSMHighwayType::Secondary));
+	// Eine andere Strasse weit im Norden.
+	Network.Segments.Add(MakeNamedSegment(2,
+		FVector2D(0.0, 50000.0), FVector2D(2000.0, 50000.0),
+		TEXT("Platter Strasse"), EOSMHighwayType::Residential));
+
+	FVector2D Centre;
+	TestTrue(TEXT("Exakter Name wird gefunden"),
+		FWiesbadenMinimap::FindStreetCenter(Network, TEXT("Wilhelmstrasse"), Centre));
+	TestTrue(TEXT("Mittelpunkt liegt auf der Wilhelmstrasse (10000,0)"),
+		FVector2D::Distance(Centre, FVector2D(10000.0, 0.0)) < 1.0);
+
+	// Gross-/Kleinschreibung egal - der Nutzer tippt selten exakt.
+	TestTrue(TEXT("Suche ist case-insensitive"),
+		FWiesbadenMinimap::FindStreetCenter(Network, TEXT("wilhelmSTRASSE"), Centre));
+
+	// Teiltreffer: "Platter" trifft die Platter Strasse (weit im Norden).
+	FVector2D Partial;
+	TestTrue(TEXT("Teiltreffer per enthaltenem Text"),
+		FWiesbadenMinimap::FindStreetCenter(Network, TEXT("Platter"), Partial));
+	TestTrue(TEXT("Teiltreffer trifft die richtige Strasse (Y~50000)"),
+		FMath::Abs(Partial.Y - 50000.0) < 1.0);
+
+	// Kein Treffer -> false.
+	FVector2D None;
+	TestFalse(TEXT("Unbekannter Name liefert false"),
+		FWiesbadenMinimap::FindStreetCenter(Network, TEXT("Gibtsnichtstrasse"), None));
+
+	return true;
+}

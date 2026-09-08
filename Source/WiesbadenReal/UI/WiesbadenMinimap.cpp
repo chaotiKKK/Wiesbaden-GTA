@@ -119,6 +119,43 @@ FWorldMapProjection FWiesbadenMinimap::MakeZoomedProjection(
 	return Proj;
 }
 
+void FWiesbadenMinimap::ComputeVisibleWorldBounds(
+	const FWorldMapProjection& ViewProj, const FVector2D& ScreenSizePx,
+	FVector2D& OutWorldMin, FVector2D& OutWorldMax)
+{
+	if (!ViewProj.IsValid() || ScreenSizePx.X <= 0.0f || ScreenSizePx.Y <= 0.0f)
+	{
+		// Keine gueltige Sicht: auf das Blickzentrum zurueckfallen (wie Unproject).
+		OutWorldMin = OutWorldMax = ViewProj.ViewCentreWorld;
+		return;
+	}
+
+	// Bildschirm-Ecken der Sicht zurueck in Weltkoordinaten. Oben = Norden
+	// (Project rechnet Welt-Y mit -Zeichen), also zeigt (0,0) auf Welt
+	// (min X, max Y) und unten-rechts (ScreenSizePx) auf (max X, min Y).
+	const FVector2D WorldTL = ViewProj.Unproject(FVector2D::ZeroVector);
+	const FVector2D WorldBR = ViewProj.Unproject(ScreenSizePx);
+	OutWorldMin = FVector2D(WorldTL.X, WorldBR.Y);
+	OutWorldMax = FVector2D(WorldBR.X, WorldTL.Y);
+}
+
+bool FWiesbadenMinimap::ShouldDrawVectorStreets(
+	const FWorldMapProjection& ViewProj, const FWorldMapProjection& BaseFit)
+{
+	if (!ViewProj.IsValid() || !BaseFit.IsValid() || BaseFit.ScalePxPerCm <= 0.0f)
+	{
+		return false;
+	}
+
+	// Umstellen, sobald die Sicht die Texeldichte der Basis-Textur um mehr als
+	// WorldMapVectorSwitchMagnification uebersteigt: Bis dahin ist die (mit
+	// kSuperSample ueberabgetastete) Textur schaerfer oder gleichwertig, danach
+	// vergroessert der Blitt nur noch Pixel - dann liefern live gezeichnete
+	// Vektoren das Detail, das beim Hineinzoomen fehlt.
+	return ViewProj.ScalePxPerCm
+		>= BaseFit.ScalePxPerCm * WorldMapVectorSwitchMagnification;
+}
+
 void FWiesbadenMinimap::BuildWorldMapLines(
 	const FRoadNetwork& Network, const FWorldMapProjection& Proj,
 	int32 MaxLines, float MinSegmentPx, TArray<FMinimapLine>& OutLines)
@@ -382,6 +419,67 @@ FMinimapWaypoint FWiesbadenMinimap::ProjectWaypointToMinimap(
 	}
 	Out.ScreenPos = CenterPx + Offset;
 	return Out;
+}
+
+bool FWiesbadenMinimap::FindStreetCenter(
+	const FRoadNetwork& Network, const FString& Query, FVector2D& OutWorldXY)
+{
+	const FString Q = Query.TrimStartAndEnd();
+	if (Q.IsEmpty())
+	{
+		return false;
+	}
+
+	// Zwei Durchgaenge: erst EXAKTER Name (case-insensitive), dann Teiltreffer.
+	// So gewinnt der exakte Tipp gegen laengere Strassen, ein Teiltext findet aber
+	// trotzdem etwas.
+	for (int32 Pass = 0; Pass < 2; ++Pass)
+	{
+		FString MatchedName;
+		FVector2D Sum = FVector2D::ZeroVector;
+		int32 PointCount = 0;
+
+		for (const FRoadSegment& Segment : Network.Segments)
+		{
+			if (Segment.StreetName.IsEmpty())
+			{
+				continue;
+			}
+			const bool bMatch = (Pass == 0)
+				? Segment.StreetName.Equals(Q, ESearchCase::IgnoreCase)
+				: Segment.StreetName.Contains(Q, ESearchCase::IgnoreCase);
+			if (!bMatch)
+			{
+				continue;
+			}
+			// Beim ersten Treffer den Namen festhalten; danach nur Segmente
+			// DESSELBEN Namens mitteln, sonst mischt ein Teiltext mehrere Strassen.
+			if (PointCount == 0)
+			{
+				MatchedName = Segment.StreetName;
+			}
+			else if (!Segment.StreetName.Equals(MatchedName, ESearchCase::IgnoreCase))
+			{
+				continue;
+			}
+
+			const TArray<FVector>& Line = Segment.Centerline.Num() >= 1
+				? Segment.Centerline : Segment.TrimmedCenterline;
+			for (const FVector& P : Line)
+			{
+				Sum += FVector2D(P.X, P.Y);
+				++PointCount;
+			}
+		}
+
+		if (PointCount > 0)
+		{
+			OutWorldXY = Sum / static_cast<double>(PointCount);
+			return true;
+		}
+	}
+
+	return false;
 }
 
 FString FWiesbadenMinimap::FindStreetName(
