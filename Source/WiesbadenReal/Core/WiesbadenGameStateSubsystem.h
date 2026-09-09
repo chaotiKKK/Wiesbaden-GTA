@@ -14,6 +14,12 @@ DECLARE_MULTICAST_DELEGATE(FOnUnlocksChanged);
  */
 namespace WiesbadenEconomy
 {
+	/** Startguthaben eines frischen Spiels (ohne Speicherstand). */
+	constexpr int32 StartGuthaben = 4000;
+
+	/** Anfangs-Kontostand: gespeicherter Wert, sonst das Startguthaben. */
+	int32 InitialGuthaben(bool bHasSave, int32 SavedGuthaben);
+
 	/** Guthaben + Delta, aber nie unter 0. */
 	int32 ApplyDelta(int32 Guthaben, int32 Delta);
 

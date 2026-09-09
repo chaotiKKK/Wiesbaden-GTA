@@ -32,5 +32,11 @@ bool FGameStateEconomyTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("spend ungedeckt"), TrySpend(100, 250, New));
 	TestEqual(TEXT("spend ungedeckt unveraendert"), New, 100);
 
+	// InitialGuthaben: frisches Spiel -> Startguthaben; mit Speicherstand -> dessen Wert.
+	TestEqual(TEXT("frisch -> Startguthaben"), InitialGuthaben(false, 0), StartGuthaben);
+	TestEqual(TEXT("frisch ignoriert Save-Wert"), InitialGuthaben(false, 999), StartGuthaben);
+	TestEqual(TEXT("mit Save -> Save-Wert"), InitialGuthaben(true, 250), 250);
+	TestEqual(TEXT("mit Save 0 -> 0"), InitialGuthaben(true, 0), 0);
+
 	return true;
 }

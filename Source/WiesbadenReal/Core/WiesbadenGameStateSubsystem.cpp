@@ -7,6 +7,11 @@
 
 namespace WiesbadenEconomy
 {
+	int32 InitialGuthaben(bool bHasSave, int32 SavedGuthaben)
+	{
+		return bHasSave ? SavedGuthaben : StartGuthaben;
+	}
+
 	int32 ApplyDelta(int32 Guthaben, int32 Delta)
 	{
 		return FMath::Max(0, Guthaben + Delta);
@@ -105,7 +110,7 @@ void UWiesbadenGameStateSubsystem::Load()
 			return;
 		}
 	}
-	Guthaben = 0;
+	Guthaben = WiesbadenEconomy::InitialGuthaben(false, 0);
 	OwnedUnlocks.Empty();
-	UE_LOG(LogWbCore, Log, TEXT("Kein Guthaben-Speicherstand - starte mit 0."));
+	UE_LOG(LogWbCore, Log, TEXT("Kein Speicherstand - starte mit %d Guthaben."), Guthaben);
 }
