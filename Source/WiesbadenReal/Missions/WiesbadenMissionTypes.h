@@ -9,12 +9,15 @@
 // docs/superpowers/specs/2026-09-08-missions-framework-design.md
 
 /** Ziel-Typen. ReachLocation (ankommen), LeaveArea (Gebiet verlassen, Flucht),
- *  Dwell (X Sekunden im Radius halten); spaeter Eliminate/Deliver/Survive. */
+ *  Dwell (X Sekunden im Radius halten), PickUpCargo/DropOffCargo (Fracht mit
+ *  mitgefuehrtem Zustand aufnehmen/abgeben); spaeter Eliminate/Survive. */
 enum class EObjectiveType : uint8
 {
 	ReachLocation,
 	LeaveArea,
 	Dwell,
+	PickUpCargo,
+	DropOffCargo,
 };
 
 /**
@@ -31,6 +34,10 @@ struct FMissionContext
 	/** Bisher ununterbrochen im Radius des aktuellen Ziels verbrachte Zeit
 	 *  (Sekunden) - fuer Verweil-Ziele (Dwell). Vom Subsystem fortgeschrieben. */
 	double SecondsInRadius = 0.0;
+
+	/** Traegt der Spieler gerade die Missions-Fracht? - fuer DropOffCargo. Wird vom
+	 *  Subsystem bei der Aufnahme (PickUpCargo) gesetzt und bei der Abgabe geloescht. */
+	bool bCarryingCargo = false;
 };
 
 /**

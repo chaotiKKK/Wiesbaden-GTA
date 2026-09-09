@@ -120,6 +120,43 @@ bool FMissionObjectiveDwellTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// Fracht-Ziele: Aufnahme (PickUpCargo) ist an der Position erfuellt; Abgabe
+// (DropOffCargo) NUR an der Position UND wenn Fracht getragen wird - der erste
+// Zieltyp jenseits von Position/Zeit (mitgefuehrter Zustand Ctx.bCarryingCargo).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionObjectiveCargoTest,
+	"WiesbadenReal.Missions.ObjectiveCargo",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMissionObjectiveCargoTest::RunTest(const FString& Parameters)
+{
+	auto Ctx = [](double X, double Y, double Z, bool bCargo) -> FMissionContext
+	{
+		FMissionContext C;
+		C.PlayerLocation = FVector(X, Y, Z);
+		C.bCarryingCargo = bCargo;
+		return C;
+	};
+
+	// Aufnahme: an der Position erfuellt, egal ob man schon Fracht traegt.
+	FMissionObjective Pick;
+	Pick.Type = EObjectiveType::PickUpCargo;
+	Pick.Location = FVector(1000.0, 2000.0, 500.0);
+	Pick.RadiusCm = 800.0;
+	TestTrue(TEXT("Aufnahme: am Ort -> erfuellt"), Pick.IsComplete(Ctx(1000.0, 2000.0, 0.0, false)));
+	TestFalse(TEXT("Aufnahme: fern -> offen"), Pick.IsComplete(Ctx(5000.0, 2000.0, 0.0, false)));
+
+	// Abgabe: nur an der Position UND mit Fracht (Zustands-Gate).
+	FMissionObjective Drop;
+	Drop.Type = EObjectiveType::DropOffCargo;
+	Drop.Location = FVector(1000.0, 2000.0, 500.0);
+	Drop.RadiusCm = 800.0;
+	TestFalse(TEXT("Abgabe: am Ort OHNE Fracht -> offen"), Drop.IsComplete(Ctx(1000.0, 2000.0, 0.0, false)));
+	TestTrue(TEXT("Abgabe: am Ort MIT Fracht -> erfuellt"), Drop.IsComplete(Ctx(1000.0, 2000.0, 0.0, true)));
+	TestFalse(TEXT("Abgabe: fern MIT Fracht -> offen"), Drop.IsComplete(Ctx(5000.0, 2000.0, 0.0, true)));
+
+	return true;
+}
+
 // Loader: gueltiges JSON -> korrekte Missionen; kaputt -> leer + Fehler;
 // unbekannter Ziel-Typ -> uebersprungen + Fehler geloggt.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionLoaderTest,
@@ -209,6 +246,27 @@ bool FMissionLoaderTest::RunTest(const FString& Parameters)
 			const FMissionObjective& O = DR.Missions[0].Objectives[0];
 			TestTrue(TEXT("dwell: Typ Dwell"), O.Type == EObjectiveType::Dwell);
 			TestTrue(TEXT("dwell: Haltezeit 8 s"), FMath::IsNearlyEqual(O.HoldSeconds, 8.0));
+		}
+	}
+
+	// -- Fracht-Zieltypen (pickup_cargo/dropoff_cargo) werden geparst --
+	const FString CargoJson = TEXT(
+		"{ \"missions\": [ { \"id\": \"m5\", \"title\": \"Fracht\","
+		"  \"objectives\": ["
+		"    { \"type\": \"pickup_cargo\", \"label\": \"Ware holen\", \"x\": 1, \"y\": 2, \"radius_cm\": 800 },"
+		"    { \"type\": \"dropoff_cargo\", \"label\": \"Ware abgeben\", \"x\": 3, \"y\": 4, \"radius_cm\": 800 } ] } ] }");
+	FMissionLoadResult CR = FWiesbadenMissionLoader::ParseMissions(CargoJson);
+	TestTrue(TEXT("cargo: geparst"), CR.bParsed);
+	TestEqual(TEXT("cargo: 1 Mission"), CR.Missions.Num(), 1);
+	if (CR.Missions.Num() == 1)
+	{
+		TestEqual(TEXT("cargo: 2 Ziele erkannt"), CR.Missions[0].Objectives.Num(), 2);
+		if (CR.Missions[0].Objectives.Num() == 2)
+		{
+			TestTrue(TEXT("cargo: Ziel0 PickUpCargo"),
+				CR.Missions[0].Objectives[0].Type == EObjectiveType::PickUpCargo);
+			TestTrue(TEXT("cargo: Ziel1 DropOffCargo"),
+				CR.Missions[0].Objectives[1].Type == EObjectiveType::DropOffCargo);
 		}
 	}
 

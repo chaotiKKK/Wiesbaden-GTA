@@ -99,4 +99,9 @@ private:
 	// Ununterbrochene Verweildauer im Radius des AKTUELLEN Ziels (fuer Dwell-Ziele).
 	// Bei Zielwechsel und Missionsstart auf 0 zurueckgesetzt.
 	double ActiveObjectiveDwell = 0.0;
+
+	// Traegt der Spieler gerade die Missions-Fracht? Bei PickUpCargo-Abschluss
+	// gesetzt, bei DropOffCargo-Abschluss und Missionsstart geloescht (Ctx-Zustand
+	// fuer DropOffCargo).
+	bool bMissionCarryingCargo = false;
 };

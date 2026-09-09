@@ -83,6 +83,14 @@ FMissionLoadResult FWiesbadenMissionLoader::ParseMissions(const FString& Json)
 				{
 					Objective.Type = EObjectiveType::Dwell;
 				}
+				else if (TypeStr == TEXT("pickup_cargo"))
+				{
+					Objective.Type = EObjectiveType::PickUpCargo;
+				}
+				else if (TypeStr == TEXT("dropoff_cargo"))
+				{
+					Objective.Type = EObjectiveType::DropOffCargo;
+				}
 				else
 				{
 					Result.Errors.Add(FString::Printf(

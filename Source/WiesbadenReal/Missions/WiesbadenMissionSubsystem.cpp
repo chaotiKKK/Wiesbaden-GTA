@@ -50,6 +50,7 @@ void UWiesbadenMissionSubsystem::BeginMission(const FMission& Mission)
 	ActiveMissionElapsed = 0.0;
 	RemainingLogAccumulator = 0.0;
 	ActiveObjectiveDwell = 0.0;
+	bMissionCarryingCargo = false;
 
 	// Auto-Modus: faire, distanzabhaengige Frist aus der Route (Spielerposition ->
 	// Ziele) berechnen, damit jede befristete Mission SCHAFFBAR bleibt. Danach ist
@@ -253,11 +254,26 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 	Ctx.PlayerLocation = PlayerLocation;
 	Ctx.ElapsedSeconds = ActiveMissionElapsed;
 	Ctx.SecondsInRadius = ActiveObjectiveDwell;
+	Ctx.bCarryingCargo = bMissionCarryingCargo;
 	const FMissionProgressResult Result = FWiesbadenMissionRunner::Step(
 		ActiveMission, ActiveObjectiveIndex, Ctx);
 	if (!Result.bAdvanced)
 	{
 		return;
+	}
+
+	// Fracht-Zustand am gerade abgeschlossenen Ziel fortschreiben (der Index steht
+	// noch auf dem erfuellten Ziel): Aufnahme setzt "traegt Fracht", Abgabe loescht.
+	if (const FMissionObjective* Done = GetCurrentObjective())
+	{
+		if (Done->Type == EObjectiveType::PickUpCargo)
+		{
+			bMissionCarryingCargo = true;
+		}
+		else if (Done->Type == EObjectiveType::DropOffCargo)
+		{
+			bMissionCarryingCargo = false;
+		}
 	}
 
 	ActiveObjectiveIndex = Result.NextObjectiveIndex;

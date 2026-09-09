@@ -18,6 +18,10 @@ bool FMissionObjective::IsComplete(const FMissionContext& Ctx) const
 		return DistSq >= RadiusSq; // Gebiet verlassen (Fluchtpunkt)
 	case EObjectiveType::Dwell:
 		return Ctx.SecondsInRadius >= HoldSeconds; // lange genug gehalten
+	case EObjectiveType::PickUpCargo:
+		return DistSq <= RadiusSq; // an der Aufnahme angekommen -> Fracht aufnehmen
+	case EObjectiveType::DropOffCargo:
+		return DistSq <= RadiusSq && Ctx.bCarryingCargo; // am Ziel UND mit Fracht
 	default:
 		return false;
 	}
