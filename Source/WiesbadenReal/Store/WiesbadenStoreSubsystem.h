@@ -8,6 +8,7 @@
 
 class IConsoleObject;
 class UWiesbadenGameStateSubsystem;
+enum class EWiesbadenUiSound : uint8;
 
 DECLARE_MULTICAST_DELEGATE(FOnStoreChanged);
 
@@ -53,6 +54,9 @@ private:
 	void LoadCatalog();
 	void RegisterConsoleCommands();
 	UWiesbadenGameStateSubsystem* GameState() const;
+
+	/** Kurzes Kauf-Feedback: erzeugt den prozeduralen Ton und spielt ihn 2D. */
+	void PlayUiSound(EWiesbadenUiSound Kind) const;
 
 	TArray<FStoreItem> Catalog;
 	bool bPanelOpen = false;
