@@ -11,7 +11,17 @@ namespace
 		{
 			for (const FMissionObjective& O : M.Objectives)
 			{
-				if (O.Type == EObjectiveType::ReachLocation)
+				if (O.Type != EObjectiveType::ReachLocation)
+				{
+					continue;
+				}
+				// Dubletten auslassen: derselbe Ort darf nur EINMAL als Routing-Punkt
+				// stehen. Sonst koennen zwei verschiedene Indizes dieselbe Koordinate
+				// treffen -> Abholung==Lieferung (0-Distanz-Job). Die geteilte
+				// Platter-Lieferung/Nerotal-Abholung ist genau so ein Dublett.
+				const bool bDuplicate = OutPoints.ContainsByPredicate(
+					[&O](const FVector& P) { return P.Equals(O.Location, 1.0); });
+				if (!bDuplicate)
 				{
 					OutPoints.Add(O.Location);
 				}
@@ -25,6 +35,17 @@ namespace
 		O.Type = EObjectiveType::ReachLocation;
 		O.Location = Loc;
 		O.RadiusCm = 800.0;
+		O.Label = Label;
+		return O;
+	}
+
+	// Fluchtpunkt: erfuellt, sobald der Spieler RadiusCm vom Ort entfernt ist.
+	FMissionObjective MakeLeave(const FVector& Loc, double RadiusCm, const TCHAR* Label)
+	{
+		FMissionObjective O;
+		O.Type = EObjectiveType::LeaveArea;
+		O.Location = Loc;
+		O.RadiusCm = RadiusCm;
 		O.Label = Label;
 		return O;
 	}
@@ -78,14 +99,25 @@ FMissionDispatchResult FWiesbadenMissionDispatcher::NextMission(
 		Delivery = Pickup + FVector(80000.0, 0.0, 0.0);
 	}
 
+	// Jeder dritte Auftrag ist eine Fluchtfahrt: mit heisser Ware erst aus dem
+	// Gebiet um die Abholung heraus (LeaveArea), dann liefern - bricht die
+	// Abhol->Liefer-Monotonie des endlosen Kurier-Loops. Deterministisch am Cursor.
+	const bool bGetaway = (Seq % 3 == 2);
+
 	FMission M;
 	M.Id = FName(*FString::Printf(TEXT("kurier_auto_%d"), Seq + 1));
-	M.Title = FString::Printf(TEXT("Kurierfahrt Nr. %d"), CompletedCount + 1);
-	M.Reward.Guthaben = 250;
+	M.Title = bGetaway
+		? FString::Printf(TEXT("Fluchtfahrt Nr. %d"), CompletedCount + 1)
+		: FString::Printf(TEXT("Kurierfahrt Nr. %d"), CompletedCount + 1);
+	M.Reward.Guthaben = bGetaway ? 350 : 250; // heikler -> bessere Praemie
 	// Auto-Frist: das Subsystem rechnet beim Start eine faire, distanzabhaengige
 	// Deadline aus der Route. So sind auch die endlosen prozeduralen Jobs befristet.
 	M.DeadlineSeconds = FMission::AutoDeadline;
 	M.Objectives.Add(MakeReach(Pickup, TEXT("Fahre zur Abholung")));
+	if (bGetaway)
+	{
+		M.Objectives.Add(MakeLeave(Pickup, 15000.0, TEXT("Bring die Ware aus dem Gebiet")));
+	}
 	M.Objectives.Add(MakeReach(Delivery, TEXT("Liefere die Sendung")));
 
 	Result.bHasMission = true;

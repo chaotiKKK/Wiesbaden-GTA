@@ -49,6 +49,7 @@ void UWiesbadenMissionSubsystem::BeginMission(const FMission& Mission)
 	ActiveObjectiveIndex = 0;
 	ActiveMissionElapsed = 0.0;
 	RemainingLogAccumulator = 0.0;
+	ActiveObjectiveDwell = 0.0;
 
 	// Auto-Modus: faire, distanzabhaengige Frist aus der Route (Spielerposition ->
 	// Ziele) berechnen, damit jede befristete Mission SCHAFFBAR bleibt. Danach ist
@@ -213,6 +214,7 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 	{
 		return;
 	}
+	const float SinceLastCheck = CheckAccumulator; // fuer die Verweildauer-Fortschreibung
 	CheckAccumulator = 0.0f;
 
 	FVector PlayerLocation;
@@ -236,9 +238,21 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 		return;
 	}
 
+	// Verweil-Ziele: die ununterbrochene Zeit im Radius fortschreiben (im Radius
+	// aufaddieren, sonst zuruecksetzen), bevor die Erfuellung geprueft wird.
+	if (const FMissionObjective* Current = GetCurrentObjective())
+	{
+		if (Current->Type == EObjectiveType::Dwell)
+		{
+			ActiveObjectiveDwell =
+				Current->AdvanceDwell(ActiveObjectiveDwell, PlayerLocation, SinceLastCheck);
+		}
+	}
+
 	FMissionContext Ctx;
 	Ctx.PlayerLocation = PlayerLocation;
 	Ctx.ElapsedSeconds = ActiveMissionElapsed;
+	Ctx.SecondsInRadius = ActiveObjectiveDwell;
 	const FMissionProgressResult Result = FWiesbadenMissionRunner::Step(
 		ActiveMission, ActiveObjectiveIndex, Ctx);
 	if (!Result.bAdvanced)
@@ -285,6 +299,8 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 	}
 	else
 	{
+		// Neues Ziel -> Verweildauer zuruecksetzen (jedes Dwell-Ziel haelt frisch).
+		ActiveObjectiveDwell = 0.0;
 		if (const FMissionObjective* Next = GetCurrentObjective())
 		{
 			UE_LOG(LogWbCore, Log, TEXT("Ziel erreicht - naechstes Ziel: %s"), *Next->Label);

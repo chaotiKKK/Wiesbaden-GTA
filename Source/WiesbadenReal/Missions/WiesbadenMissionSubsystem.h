@@ -95,4 +95,8 @@ private:
 
 	// Drosselt den Restzeit-Log auf ~1 Hz, damit die Deadline nicht jeden Frame spammt.
 	double RemainingLogAccumulator = 0.0;
+
+	// Ununterbrochene Verweildauer im Radius des AKTUELLEN Ziels (fuer Dwell-Ziele).
+	// Bei Zielwechsel und Missionsstart auf 0 zurueckgesetzt.
+	double ActiveObjectiveDwell = 0.0;
 };

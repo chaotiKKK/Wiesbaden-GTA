@@ -75,6 +75,14 @@ FMissionLoadResult FWiesbadenMissionLoader::ParseMissions(const FString& Json)
 				{
 					Objective.Type = EObjectiveType::ReachLocation;
 				}
+				else if (TypeStr == TEXT("leave_area"))
+				{
+					Objective.Type = EObjectiveType::LeaveArea;
+				}
+				else if (TypeStr == TEXT("dwell"))
+				{
+					Objective.Type = EObjectiveType::Dwell;
+				}
 				else
 				{
 					Result.Errors.Add(FString::Printf(
@@ -90,6 +98,8 @@ FMissionLoadResult FWiesbadenMissionLoader::ParseMissions(const FString& Json)
 				(*ObjObj)->TryGetNumberField(TEXT("radius_cm"), Radius);
 				Objective.Location = FVector(X, Y, 0.0);
 				Objective.RadiusCm = Radius;
+				// Nur fuer Dwell relevant; fehlt es, bleibt 0 (sofort erfuellt).
+				(*ObjObj)->TryGetNumberField(TEXT("hold_seconds"), Objective.HoldSeconds);
 
 				Mission.Objectives.Add(Objective);
 			}

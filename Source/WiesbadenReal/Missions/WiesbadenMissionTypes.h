@@ -8,10 +8,13 @@
 // Welt/Tick unit-testbar ist. Spec:
 // docs/superpowers/specs/2026-09-08-missions-framework-design.md
 
-/** Ziel-Typen. v1 nur ReachLocation; spaeter Eliminate/Deliver/Survive. */
+/** Ziel-Typen. ReachLocation (ankommen), LeaveArea (Gebiet verlassen, Flucht),
+ *  Dwell (X Sekunden im Radius halten); spaeter Eliminate/Deliver/Survive. */
 enum class EObjectiveType : uint8
 {
 	ReachLocation,
+	LeaveArea,
+	Dwell,
 };
 
 /**
@@ -24,6 +27,10 @@ struct FMissionContext
 
 	/** Vergangene Zeit seit Missionsstart in Sekunden - fuer Zeitlimit-Ziele. */
 	double ElapsedSeconds = 0.0;
+
+	/** Bisher ununterbrochen im Radius des aktuellen Ziels verbrachte Zeit
+	 *  (Sekunden) - fuer Verweil-Ziele (Dwell). Vom Subsystem fortgeschrieben. */
+	double SecondsInRadius = 0.0;
 };
 
 /**
@@ -37,11 +44,23 @@ struct FMissionObjective
 	double RadiusCm = 0.0;
 	FString Label;
 
+	/** Nur fuer Dwell: geforderte Verweildauer im Radius (Sekunden). */
+	double HoldSeconds = 0.0;
+
 	/**
-	 * True, wenn das Ziel im gegebenen Kontext erfuellt ist. ReachLocation
-	 * misst HORIZONTAL (2D-Distanz), damit Hang/Hoehe nicht stoeren.
+	 * True, wenn das Ziel im gegebenen Kontext erfuellt ist. ReachLocation misst
+	 * HORIZONTAL (2D-Distanz), damit Hang/Hoehe nicht stoeren; Dwell prueft die
+	 * vom Subsystem gefuehrte Verweildauer (Ctx.SecondsInRadius).
 	 */
 	bool IsComplete(const FMissionContext& Ctx) const;
+
+	/**
+	 * Fortschreibung der Verweildauer fuer Dwell-Ziele: im Radius aufaddieren,
+	 * ausserhalb auf 0 zuruecksetzen (kontinuierliches Halten). Rein/testbar; das
+	 * Subsystem ruft dies je Tick und legt das Ergebnis in Ctx.SecondsInRadius.
+	 */
+	double AdvanceDwell(double CurrentDwellSeconds, const FVector& PlayerLocation,
+		double DeltaSeconds) const;
 };
 
 /** Belohnung bei Missionsabschluss (v1 nur Guthaben). */

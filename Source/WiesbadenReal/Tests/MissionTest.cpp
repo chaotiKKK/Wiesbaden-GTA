@@ -42,6 +42,84 @@ bool FMissionObjectiveReachLocationTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// Ziel-Erfuellung LeaveArea (Fluchtpunkt): horizontale (2D) Distanz >= Radius -
+// die Umkehrung von ReachLocation. Man ist fertig, sobald man das Gebiet um den
+// Ort verlassen hat.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionObjectiveLeaveAreaTest,
+	"WiesbadenReal.Missions.ObjectiveLeaveArea",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMissionObjectiveLeaveAreaTest::RunTest(const FString& Parameters)
+{
+	FMissionObjective Obj;
+	Obj.Type = EObjectiveType::LeaveArea;
+	Obj.Location = FVector(1000.0, 2000.0, 500.0);
+	Obj.RadiusCm = 800.0;
+
+	auto Ctx = [](double X, double Y, double Z) -> FMissionContext
+	{
+		FMissionContext C;
+		C.PlayerLocation = FVector(X, Y, Z);
+		return C;
+	};
+
+	// Genau am Ort -> noch IM Gebiet -> NICHT erfuellt.
+	TestFalse(TEXT("am Ort: noch drin"), Obj.IsComplete(Ctx(1000.0, 2000.0, 500.0)));
+	// 700 cm entfernt (< 800) -> noch drin -> NICHT erfuellt.
+	TestFalse(TEXT("knapp drin"), Obj.IsComplete(Ctx(1700.0, 2000.0, 500.0)));
+	// 900 cm entfernt (> 800) -> Gebiet verlassen -> erfuellt.
+	TestTrue(TEXT("raus"), Obj.IsComplete(Ctx(1900.0, 2000.0, 500.0)));
+	// Diagonale exakt am Rand (480,640 -> 800 cm) -> erfuellt (>=).
+	TestTrue(TEXT("am Rand raus"), Obj.IsComplete(Ctx(1480.0, 2640.0, 500.0)));
+	// XY am Ort, nur 8500 cm hoeher -> horizontal drin (Hoehe ignoriert) -> NICHT erfuellt.
+	TestFalse(TEXT("Hoehe ignoriert: drin"), Obj.IsComplete(Ctx(1000.0, 2000.0, 9000.0)));
+	// Weit weg -> erfuellt.
+	TestTrue(TEXT("weit weg"), Obj.IsComplete(Ctx(6000.0, 2000.0, 500.0)));
+
+	return true;
+}
+
+// Verweil-Ziel (Dwell), Naht 1 - Verweildauer-Fortschreibung: im Radius wird
+// aufaddiert, ausserhalb auf 0 zurueckgesetzt (kontinuierliches Halten).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionObjectiveDwellTest,
+	"WiesbadenReal.Missions.ObjectiveDwell",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMissionObjectiveDwellTest::RunTest(const FString& Parameters)
+{
+	FMissionObjective Obj;
+	Obj.Type = EObjectiveType::Dwell;
+	Obj.Location = FVector(1000.0, 2000.0, 500.0);
+	Obj.RadiusCm = 800.0;
+	Obj.HoldSeconds = 3.0;
+
+	auto Loc = [](double X, double Y, double Z) { return FVector(X, Y, Z); };
+
+	// Im Radius -> aufaddieren.
+	TestTrue(TEXT("am Ort: +delta (2.0->2.5)"),
+		FMath::IsNearlyEqual(Obj.AdvanceDwell(2.0, Loc(1000.0, 2000.0, 0.0), 0.5), 2.5, 0.0001));
+	TestTrue(TEXT("knapp drin: +delta (1.0->1.5)"),
+		FMath::IsNearlyEqual(Obj.AdvanceDwell(1.0, Loc(1700.0, 2000.0, 0.0), 0.5), 1.5, 0.0001));
+	// XY am Ort, nur hoeher -> horizontal drin (Hoehe ignoriert).
+	TestTrue(TEXT("Hoehe ignoriert: +delta (1.0->1.25)"),
+		FMath::IsNearlyEqual(Obj.AdvanceDwell(1.0, Loc(1000.0, 2000.0, 9000.0), 0.25), 1.25, 0.0001));
+	// Ausserhalb (900 > 800) -> Reset auf 0, egal wie viel vorher.
+	TestTrue(TEXT("draussen: Reset 0"),
+		FMath::IsNearlyEqual(Obj.AdvanceDwell(2.9, Loc(1900.0, 2000.0, 0.0), 0.5), 0.0, 0.0001));
+
+	// Naht 2 - IsComplete: erfuellt, sobald die Verweildauer die Schwelle erreicht.
+	auto Ctx = [](double SecondsInRadius) -> FMissionContext
+	{
+		FMissionContext C; C.SecondsInRadius = SecondsInRadius; return C;
+	};
+	TestFalse(TEXT("2.9 s < 3 -> offen"), Obj.IsComplete(Ctx(2.9)));
+	TestTrue(TEXT("3.0 s >= 3 -> erfuellt"), Obj.IsComplete(Ctx(3.0)));
+	TestTrue(TEXT("3.5 s -> erfuellt"), Obj.IsComplete(Ctx(3.5)));
+	TestFalse(TEXT("0 s -> offen"), Obj.IsComplete(Ctx(0.0)));
+
+	return true;
+}
+
 // Loader: gueltiges JSON -> korrekte Missionen; kaputt -> leer + Fehler;
 // unbekannter Ziel-Typ -> uebersprungen + Fehler geloggt.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionLoaderTest,
@@ -98,6 +176,41 @@ bool FMissionLoaderTest::RunTest(const FString& Parameters)
 			FMath::IsNearlyEqual(UR.Missions[0].DeadlineSeconds, 0.0));
 	}
 	TestTrue(TEXT("unknown: Fehler geloggt"), UR.Errors.Num() > 0);
+
+	// -- LeaveArea-Zieltyp wird als eigener Typ geparst --
+	const FString Leave = TEXT(
+		"{ \"missions\": [ { \"id\": \"m3\", \"title\": \"Flucht\","
+		"  \"objectives\": [ { \"type\": \"leave_area\", \"label\": \"Weg hier\", \"x\": 10, \"y\": 20, \"radius_cm\": 15000 } ] } ] }");
+	FMissionLoadResult LR = FWiesbadenMissionLoader::ParseMissions(Leave);
+	TestTrue(TEXT("leave: geparst"), LR.bParsed);
+	TestEqual(TEXT("leave: 1 Mission"), LR.Missions.Num(), 1);
+	if (LR.Missions.Num() == 1)
+	{
+		TestEqual(TEXT("leave: 1 Ziel (leave_area erkannt)"), LR.Missions[0].Objectives.Num(), 1);
+		if (LR.Missions[0].Objectives.Num() == 1)
+		{
+			TestTrue(TEXT("leave: Typ LeaveArea"),
+				LR.Missions[0].Objectives[0].Type == EObjectiveType::LeaveArea);
+		}
+	}
+
+	// -- Dwell-Zieltyp mit Haltezeit (hold_seconds) wird geparst --
+	const FString DwellJson = TEXT(
+		"{ \"missions\": [ { \"id\": \"m4\", \"title\": \"Halten\","
+		"  \"objectives\": [ { \"type\": \"dwell\", \"label\": \"Position halten\", \"x\": 5, \"y\": 6, \"radius_cm\": 1200, \"hold_seconds\": 8 } ] } ] }");
+	FMissionLoadResult DR = FWiesbadenMissionLoader::ParseMissions(DwellJson);
+	TestTrue(TEXT("dwell: geparst"), DR.bParsed);
+	TestEqual(TEXT("dwell: 1 Mission"), DR.Missions.Num(), 1);
+	if (DR.Missions.Num() == 1)
+	{
+		TestEqual(TEXT("dwell: 1 Ziel (dwell erkannt)"), DR.Missions[0].Objectives.Num(), 1);
+		if (DR.Missions[0].Objectives.Num() == 1)
+		{
+			const FMissionObjective& O = DR.Missions[0].Objectives[0];
+			TestTrue(TEXT("dwell: Typ Dwell"), O.Type == EObjectiveType::Dwell);
+			TestTrue(TEXT("dwell: Haltezeit 8 s"), FMath::IsNearlyEqual(O.HoldSeconds, 8.0));
+		}
+	}
 
 	return true;
 }
@@ -211,6 +324,66 @@ bool FMissionDispatcherTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(TEXT("det: gleiche Abholung"),
 			P0b.Mission.Objectives[0].Location.Equals(P0.Mission.Objectives[0].Location, 0.01));
+	}
+
+	// -- Abwechslung: jeder 3. prozedurale Job (Seq%3==2) ist eine Fluchtfahrt:
+	//    Abholung -> Gebiet verlassen (LeaveArea) -> Lieferung. --
+	FMissionDispatchResult G = FWiesbadenMissionDispatcher::NextMission(Pool, Pool.Num() + 2); // Seq=2
+	TestTrue(TEXT("getaway: prozedural"), G.bProcedural);
+	TestEqual(TEXT("getaway: 3 Ziele"), G.Mission.Objectives.Num(), 3);
+	if (G.Mission.Objectives.Num() == 3)
+	{
+		TestTrue(TEXT("getaway: Ziel0 Abholung (ReachLocation)"),
+			G.Mission.Objectives[0].Type == EObjectiveType::ReachLocation);
+		TestTrue(TEXT("getaway: Ziel1 Flucht (LeaveArea)"),
+			G.Mission.Objectives[1].Type == EObjectiveType::LeaveArea);
+		TestTrue(TEXT("getaway: Ziel2 Lieferung (ReachLocation)"),
+			G.Mission.Objectives[2].Type == EObjectiveType::ReachLocation);
+	}
+	// Ein Nicht-Fluchtjob (Seq=0) bleibt die schlichte 2-Ziel-Fahrt.
+	FMissionDispatchResult NG = FWiesbadenMissionDispatcher::NextMission(Pool, Pool.Num());
+	TestEqual(TEXT("normal: 2 Ziele"), NG.Mission.Objectives.Num(), 2);
+	TestTrue(TEXT("getaway: bessere Praemie als normal"),
+		G.Mission.Reward.Guthaben > NG.Mission.Reward.Guthaben);
+
+	return true;
+}
+
+// Dubletten-Punkte: enthaelt der Pool denselben Ort mehrfach (in echt z. B. die
+// geteilte Platter-Lieferung == Nerotal-Abholung), darf KEIN prozeduraler Job
+// Abholung==Lieferung (0-Distanz) erzeugen. Sonst waere die Fahrt sofort erfuellt.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionDispatcherNoZeroLegTest,
+	"WiesbadenReal.Missions.DispatcherNoZeroLeg",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMissionDispatcherNoZeroLegTest::RunTest(const FString& Parameters)
+{
+	// m0 besucht (1000,0); m1 holt am SELBEN Ort ab -> der Punkt (1000,0) steht
+	// doppelt in der Routing-Liste (Indizes 0 und 1).
+	FMission M0;
+	M0.Id = FName(TEXT("m0"));
+	FMissionObjective O0; O0.Type = EObjectiveType::ReachLocation;
+	O0.Location = FVector(1000.0, 0.0, 0.0); O0.RadiusCm = 800.0;
+	M0.Objectives.Add(O0);
+
+	TArray<FMission> Pool;
+	Pool.Add(M0);
+	Pool.Add(MakeCourierMission(TEXT("m1"), FVector(1000.0, 0.0, 0.0), FVector(5000.0, 0.0, 0.0), 250));
+
+	// Viele prozedurale Jobs durchgehen; keiner darf ein 0-Distanz-Bein haben.
+	for (int32 C = Pool.Num(); C < Pool.Num() + 12; ++C)
+	{
+		const FMissionDispatchResult R = FWiesbadenMissionDispatcher::NextMission(Pool, C);
+		if (!R.bProcedural || R.Mission.Objectives.Num() < 2)
+		{
+			continue;
+		}
+		const FVector Pickup = R.Mission.Objectives[0].Location;
+		const FVector Delivery = R.Mission.Objectives.Last().Location;
+		const double DistSq =
+			FMath::Square(Pickup.X - Delivery.X) + FMath::Square(Pickup.Y - Delivery.Y);
+		TestTrue(FString::Printf(TEXT("Job %d: Abholung != Lieferung (Distanz > 0)"), C),
+			DistSq > 1.0);
 	}
 
 	return true;
@@ -336,6 +509,58 @@ bool FMissionDeadlineWindowTest::RunTest(const FString& Parameters)
 		TArray<FMissionObjective> Objs = { Obj(100000.0, 0.0, 0.0) };
 		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Objs, Q);
 		TestTrue(TEXT("Parameter wirken -> 100 s"), FMath::IsNearlyEqual(W, 100.0, 0.01));
+	}
+
+	return true;
+}
+
+// Distanz-Frist mit LeaveArea-Bein (Fluchtfahrt): der erzwungene Umweg aus dem
+// Gebiet muss als Fahrtstrecke zaehlen, sonst ist die Frist zu knapp. Erwartungs-
+// werte hand gerechnet (Tempo 700 cm/s, Puffer 30 s), nicht aus der Formel.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionDeadlineGetawayTest,
+	"WiesbadenReal.Missions.DeadlineGetaway",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMissionDeadlineGetawayTest::RunTest(const FString& Parameters)
+{
+	auto Reach = [](double X, double Y) -> FMissionObjective
+	{
+		FMissionObjective O; O.Type = EObjectiveType::ReachLocation; O.Location = FVector(X, Y, 0.0); return O;
+	};
+	auto Leave = [](double X, double Y, double R) -> FMissionObjective
+	{
+		FMissionObjective O; O.Type = EObjectiveType::LeaveArea; O.Location = FVector(X, Y, 0.0); O.RadiusCm = R; return O;
+	};
+	const FMissionDeadlineParams P; // 700 cm/s, 30 s, Untergrenze 45 s
+
+	// (1) Lieferung INNERHALB des Fluchtradius -> der Umweg wird budgetiert.
+	//   Start(0,0) -> Abholung(0,0) -> Flucht(Zentrum 0,0, R=10000) -> Lieferung(4000,0)
+	//   Minimal: 0 + [raus Richtung Lieferung bis Radius: 10000] + [(10000,0)->(4000,0): 6000] = 16000
+	//   Fenster = 16000/700 + 30 = 52.857 s. (Ohne Fix nur 4000 cm -> Untergrenze 45 s.)
+	{
+		TArray<FMissionObjective> Flucht = { Reach(0.0, 0.0), Leave(0.0, 0.0, 10000.0), Reach(4000.0, 0.0) };
+		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Flucht, P);
+		TestTrue(TEXT("Flucht nah -> 52.857 s (Umweg gezaehlt)"), FMath::IsNearlyEqual(W, 52.857, 0.02));
+	}
+
+	// (2) Ferne Lieferung -> der Ausstieg passiert unterwegs "gratis": gleiches
+	//   Fenster wie ein reiner Kurier ueber dieselbe Strecke (Regressions-Waechter).
+	//   Beide: 100000 cm -> 100000/700 + 30 = 172.857 s.
+	{
+		TArray<FMissionObjective> Flucht = { Reach(0.0, 0.0), Leave(0.0, 0.0, 10000.0), Reach(100000.0, 0.0) };
+		TArray<FMissionObjective> Kurier = { Reach(0.0, 0.0), Reach(100000.0, 0.0) };
+		const double Wf = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Flucht, P);
+		const double Wk = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Kurier, P);
+		TestTrue(TEXT("Flucht fern -> 172.857 s"), FMath::IsNearlyEqual(Wf, 172.857, 0.02));
+		TestTrue(TEXT("Flucht fern == Kurier (kein Aufschlag)"), FMath::IsNearlyEqual(Wf, Wk, 0.01));
+	}
+
+	// (3) Regressions-Waechter: reine ReachLocation-Route bleibt unveraendert.
+	//   Start(0,0) -> (70000,0): 70000/700 + 30 = 130 s.
+	{
+		TArray<FMissionObjective> Kurier = { Reach(70000.0, 0.0) };
+		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Kurier, P);
+		TestTrue(TEXT("reine Reach-Route unveraendert -> 130 s"), FMath::IsNearlyEqual(W, 130.0, 0.01));
 	}
 
 	return true;
