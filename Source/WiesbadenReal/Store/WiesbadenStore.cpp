@@ -36,3 +36,18 @@ FName FWiesbadenStore::KurierlizenzId()
 {
 	return FName(TEXT("kurierlizenz"));
 }
+
+FName FWiesbadenStore::HelikopterHangarId()
+{
+	return FName(TEXT("helikopter_hangar"));
+}
+
+FName FWiesbadenStore::PremiumStadtplanId()
+{
+	return FName(TEXT("premium_stadtplan"));
+}
+
+bool FWiesbadenStore::MayEnterHelicopter(bool bHasHangarUnlock)
+{
+	return bHasHangarUnlock;
+}

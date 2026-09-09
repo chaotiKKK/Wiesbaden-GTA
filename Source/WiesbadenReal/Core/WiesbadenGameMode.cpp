@@ -18,6 +18,9 @@
 #include "Vehicles/WiesbadenFootPawn.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 #include "UI/WiesbadenVehicleHUD.h"
+#include "Core/WiesbadenGameStateSubsystem.h"
+#include "Store/WiesbadenStore.h"
+#include "Engine/GameInstance.h"
 #include "World/WiesbadenStreamingSource.h"
 #include "WorldPartition/WorldPartitionSubsystem.h"
 #include "Engine/World.h"
@@ -718,6 +721,28 @@ void AWiesbadenGameMode::TogglePlayerVehicle()
 			UE_LOG(LogWbVehicles, Log,
 				TEXT("Einsteigen: kein Fahrzeug innerhalb von %.0f m."), EntryRadiusMeters);
 			return;
+		}
+
+		// Helikopter-Hangar (Ausgabe-Senke, TP2 Stueck 3): der Ka-52 ist nur mit
+		// gekaufter Freischaltung einsteigbar. Ohne sie nicht uebernehmen, sondern
+		// einen HUD-Hinweis zeigen. Autos/Verkehrsfahrzeuge bleiben unberuehrt.
+		if (Cast<AWiesbadenHelicopter>(Vehicle))
+		{
+			const UGameInstance* GI = GetGameInstance();
+			const UWiesbadenGameStateSubsystem* GS =
+				GI ? GI->GetSubsystem<UWiesbadenGameStateSubsystem>() : nullptr;
+			const bool bHasHangar =
+				GS && GS->HasUnlock(FWiesbadenStore::HelikopterHangarId());
+			if (!FWiesbadenStore::MayEnterHelicopter(bHasHangar))
+			{
+				UE_LOG(LogWbVehicles, Log,
+					TEXT("Einsteigen: Helikopter gesperrt - Helikopter-Hangar (750 EUR) erforderlich."));
+				if (AWiesbadenVehicleHUD* HUD = Cast<AWiesbadenVehicleHUD>(PC->GetHUD()))
+				{
+					HUD->ShowTransientHint(TEXT("Helikopter-Hangar erforderlich (750 EUR)"));
+				}
+				return;
+			}
 		}
 
 		PC->UnPossess();

@@ -86,3 +86,27 @@ bool FStorePurchaseTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+// Freischaltungs-Effekte: Heli-Tor (nur mit Hangar) + Katalog-Ids der Effekte.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoreUnlockEffectsTest,
+	"WiesbadenReal.Store.UnlockEffects",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FStoreUnlockEffectsTest::RunTest(const FString& Parameters)
+{
+	// Heli-Tor: ohne Hangar gesperrt, mit Hangar einsteigbar.
+	TestFalse(TEXT("ohne Hangar gesperrt"), FWiesbadenStore::MayEnterHelicopter(false));
+	TestTrue(TEXT("mit Hangar erlaubt"), FWiesbadenStore::MayEnterHelicopter(true));
+
+	// Effekt-Ids passend zum Katalog (Data/Store/unlocks.json), gesetzt und verschieden.
+	TestEqual(TEXT("Hangar-Id"), FWiesbadenStore::HelikopterHangarId().ToString(),
+		FString(TEXT("helikopter_hangar")));
+	TestEqual(TEXT("Stadtplan-Id"), FWiesbadenStore::PremiumStadtplanId().ToString(),
+		FString(TEXT("premium_stadtplan")));
+	TestTrue(TEXT("Hangar-Id != None"), FWiesbadenStore::HelikopterHangarId() != NAME_None);
+	TestTrue(TEXT("Stadtplan-Id != None"), FWiesbadenStore::PremiumStadtplanId() != NAME_None);
+	TestTrue(TEXT("Ids verschieden"),
+		FWiesbadenStore::HelikopterHangarId() != FWiesbadenStore::PremiumStadtplanId());
+
+	return true;
+}

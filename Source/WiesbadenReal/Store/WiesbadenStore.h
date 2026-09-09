@@ -21,4 +21,13 @@ public:
 
 	/** Katalog-Id der Kurierlizenz - die Freischaltung mit Praemien-Effekt. */
 	static FName KurierlizenzId();
+
+	/** Katalog-Id des Helikopter-Hangars - Freischaltung fuer den Heli-Einstieg. */
+	static FName HelikopterHangarId();
+
+	/** Katalog-Id des Premium-Stadtplans - schaltet die Karten-Beschriftung frei. */
+	static FName PremiumStadtplanId();
+
+	/** Darf der Spieler den Helikopter betreten? Nur mit gekauftem Hangar. Rein/testbar. */
+	static bool MayEnterHelicopter(bool bHasHangarUnlock);
 };

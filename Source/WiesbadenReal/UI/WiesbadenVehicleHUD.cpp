@@ -27,6 +27,7 @@
 #include "Core/WiesbadenGameStateSubsystem.h"
 #include "Store/WiesbadenStoreSubsystem.h"
 #include "Store/WiesbadenStoreTypes.h"
+#include "Store/WiesbadenStore.h"
 #include "Engine/GameInstance.h"
 #include "UI/WiesbadenWorldMapView.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -713,6 +714,7 @@ void AWiesbadenVehicleHUD::DrawHUD()
 
 	DrawStreetName(Width * 0.5f, 28.0f);
 	DrawVehicleBanner(Width * 0.5f, Height * 0.16f);
+	DrawTransientHint(Width, Height);
 	DrawMissionPanel(Width, Height);
 
 	// Guthaben oben rechts (aus dem persistenten Spielzustand).
@@ -1396,6 +1398,37 @@ void AWiesbadenVehicleHUD::DrawStorePanel(float Width, float Height)
 	}
 }
 
+void AWiesbadenVehicleHUD::ShowTransientHint(const FString& Text)
+{
+	TransientHintText = Text;
+	TransientHintShownAt = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+}
+
+void AWiesbadenVehicleHUD::DrawTransientHint(float Width, float Height)
+{
+	if (TransientHintText.IsEmpty())
+	{
+		return;
+	}
+	const float Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+	const float Age = Now - TransientHintShownAt;
+	const float HoldSeconds = 3.5f;
+	if (Age < 0.0f || Age > HoldSeconds)
+	{
+		return;
+	}
+	// Letzte 1 s ausblenden.
+	const float Alpha = Age > (HoldSeconds - 1.0f) ? (HoldSeconds - Age) : 1.0f;
+
+	const float PanelW = 460.0f;
+	const float PanelH = 40.0f;
+	const float X = (Width - PanelW) * 0.5f;
+	const float Y = Height * 0.24f;
+	DrawPanelBackdrop(X, Y, PanelW, PanelH, 8.0f, FLinearColor(0.14f, 0.05f, 0.05f), 0.78f * Alpha);
+	DrawText(TransientHintText, FLinearColor(1.0f, 0.78f, 0.42f, Alpha),
+		X + 18.0f, Y + 10.0f, GEngine ? GEngine->GetMediumFont() : nullptr, 1.0f);
+}
+
 void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 {
 	if (!Canvas)
@@ -1700,6 +1733,17 @@ void AWiesbadenVehicleHUD::DrawWorldMapLabels(
 	const FRoadNetwork& Network, const FWorldMapProjection& Proj, float Width, float Height)
 {
 	if (!Canvas || !Proj.IsValid())
+	{
+		return;
+	}
+
+	// Premium-Stadtplan (Ausgabe-Senke): Strassennamen nur mit gekaufter
+	// Freischaltung. Ohne sie bleibt die Karte mit Netz, aber ohne Beschriftung.
+	const UWorld* MapWorld = GetWorld();
+	const UGameInstance* MapGI = MapWorld ? MapWorld->GetGameInstance() : nullptr;
+	const UWiesbadenGameStateSubsystem* MapGameState =
+		MapGI ? MapGI->GetSubsystem<UWiesbadenGameStateSubsystem>() : nullptr;
+	if (!MapGameState || !MapGameState->HasUnlock(FWiesbadenStore::PremiumStadtplanId()))
 	{
 		return;
 	}

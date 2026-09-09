@@ -32,6 +32,10 @@ public:
 
 	virtual void DrawHUD() override;
 
+	/** Zeigt kurz einen Hinweistext oben mittig (z. B. "Helikopter-Hangar
+	 *  erforderlich"). Von aussen (GameMode) bei gesperrten Aktionen aufgerufen. */
+	void ShowTransientHint(const FString& Text);
+
 	/**
 	 * Fuellgrad des Drehzahlbands, 0..1.
 	 *
@@ -162,6 +166,9 @@ private:
 	/** Freischaltungs-Katalog (Ausgabe-Senke) - Liste mit Kosten/Besitz/Deckung,
 	 *  nur wenn per Konsole "Wb.Store" geoeffnet. */
 	void DrawStorePanel(float Width, float Height);
+
+	/** Kurzer, ausblendender Hinweistext oben mittig (per ShowTransientHint gesetzt). */
+	void DrawTransientHint(float Width, float Height);
 
 	// Die volle Instrumententafel laeuft ueber die Steuernaht-Familie, damit sie
 	// fuer JEDES Fahrzeug (Kaefer wie ChaosCar) identisch funktioniert.
@@ -295,6 +302,10 @@ private:
 	TWeakObjectPtr<class APawn> LastBannerPawn;
 	FString VehicleBannerText;
 	float VehicleBannerAge = 0.0f;
+
+	/** Transienter Hinweis (ShowTransientHint): Text + Weltzeit beim Setzen. */
+	FString TransientHintText;
+	float TransientHintShownAt = -1000.0f;
 
 	/** Kreisbogen aus kurzen Linien - Canvas kennt keine Bogenprimitive. */
 	void DrawArc(float CenterX, float CenterY, float Radius,
