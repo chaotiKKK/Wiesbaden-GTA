@@ -389,6 +389,42 @@ bool FMissionDispatcherNoZeroLegTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// Abwechslung: jeder 3. prozedurale Job (Seq%3==1) ist ein Beobachtungsauftrag:
+// Anfahrt -> Position halten (Dwell) -> melden. Bringt das Verweil-Ziel in den Loop.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionDispatcherObservationTest,
+	"WiesbadenReal.Missions.DispatcherObservation",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMissionDispatcherObservationTest::RunTest(const FString& Parameters)
+{
+	TArray<FMission> Pool;
+	Pool.Add(MakeCourierMission(TEXT("m0"), FVector(0.0, 0.0, 0.0), FVector(1000.0, 0.0, 0.0), 250));
+	Pool.Add(MakeCourierMission(TEXT("m1"), FVector(2000.0, 0.0, 0.0), FVector(3000.0, 0.0, 0.0), 300));
+
+	// Seq=1 -> CompletedCount = Pool.Num() + 1.
+	FMissionDispatchResult R = FWiesbadenMissionDispatcher::NextMission(Pool, Pool.Num() + 1);
+	TestTrue(TEXT("obs: prozedural"), R.bProcedural);
+	TestEqual(TEXT("obs: 3 Ziele"), R.Mission.Objectives.Num(), 3);
+	if (R.Mission.Objectives.Num() == 3)
+	{
+		TestTrue(TEXT("obs: Ziel0 Anfahrt (ReachLocation)"),
+			R.Mission.Objectives[0].Type == EObjectiveType::ReachLocation);
+		TestTrue(TEXT("obs: Ziel1 Halten (Dwell)"),
+			R.Mission.Objectives[1].Type == EObjectiveType::Dwell);
+		TestTrue(TEXT("obs: Ziel1 Haltezeit > 0"),
+			R.Mission.Objectives[1].HoldSeconds > 0.0);
+		TestTrue(TEXT("obs: Ziel2 melden (ReachLocation)"),
+			R.Mission.Objectives[2].Type == EObjectiveType::ReachLocation);
+	}
+	// Normaler Job (Seq=0) bleibt die schlichte 2-Ziel-Fahrt; Beobachtung zahlt mehr.
+	FMissionDispatchResult NG = FWiesbadenMissionDispatcher::NextMission(Pool, Pool.Num());
+	TestEqual(TEXT("normal: 2 Ziele"), NG.Mission.Objectives.Num(), 2);
+	TestTrue(TEXT("obs: bessere Praemie als normal"),
+		R.Mission.Reward.Guthaben > NG.Mission.Reward.Guthaben);
+
+	return true;
+}
+
 // Zeitlimit-Ziel: Mission scheitert (ohne Praemie), wenn die Frist verstreicht,
 // bevor alle Ziele erfuellt sind; rechtzeitige Erfuellung hat Vorrang.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionDeadlineTest,
@@ -561,6 +597,53 @@ bool FMissionDeadlineGetawayTest::RunTest(const FString& Parameters)
 		TArray<FMissionObjective> Kurier = { Reach(70000.0, 0.0) };
 		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Kurier, P);
 		TestTrue(TEXT("reine Reach-Route unveraendert -> 130 s"), FMath::IsNearlyEqual(W, 130.0, 0.01));
+	}
+
+	return true;
+}
+
+// Distanz-Frist mit Dwell-Bein (Verweil-/Beobachtungsziel): die Haltezeit zaehlt
+// als reine ZEIT oben drauf (nicht ueber das Tempo). Werte hand gerechnet
+// (Tempo 700 cm/s, Puffer 30 s).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionDeadlineDwellTest,
+	"WiesbadenReal.Missions.DeadlineDwell",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMissionDeadlineDwellTest::RunTest(const FString& Parameters)
+{
+	auto Reach = [](double X, double Y) -> FMissionObjective
+	{
+		FMissionObjective O; O.Type = EObjectiveType::ReachLocation; O.Location = FVector(X, Y, 0.0); return O;
+	};
+	auto Dwell = [](double X, double Y, double Hold) -> FMissionObjective
+	{
+		FMissionObjective O; O.Type = EObjectiveType::Dwell; O.Location = FVector(X, Y, 0.0);
+		O.RadiusCm = 2000.0; O.HoldSeconds = Hold; return O;
+	};
+	const FMissionDeadlineParams P; // 700 cm/s, 30 s, Untergrenze 45 s
+
+	// (1) Anfahrt (70000 cm -> 100 s) PLUS Haltezeit 10 s + Puffer 30 = 140 s.
+	{
+		TArray<FMissionObjective> Obs = { Dwell(70000.0, 0.0, 10.0) };
+		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Obs, P);
+		TestTrue(TEXT("Dwell: Anfahrt + Haltezeit -> 140 s"), FMath::IsNearlyEqual(W, 140.0, 0.02));
+	}
+
+	// (2) Regressions-Waechter: reines ReachLocation-Fenster unveraendert (Haltezeit
+	//   zaehlt nur bei Dwell) -> 70000/700 + 30 = 130 s.
+	{
+		TArray<FMissionObjective> R = { Reach(70000.0, 0.0) };
+		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, R, P);
+		TestTrue(TEXT("Reach unveraendert -> 130 s"), FMath::IsNearlyEqual(W, 130.0, 0.01));
+	}
+
+	// (3) Beobachtungsroute: Anfahrt(70000) -> Halten(10 s am Ort) -> Lieferung(zurueck
+	//   70000). Strecke 140000 -> 200 s; + Halt 10 + Puffer 30 = 240 s.
+	{
+		TArray<FMissionObjective> Route =
+			{ Reach(70000.0, 0.0), Dwell(70000.0, 0.0, 10.0), Reach(0.0, 0.0) };
+		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Route, P);
+		TestTrue(TEXT("Beobachtungsroute -> 240 s"), FMath::IsNearlyEqual(W, 240.0, 0.02));
 	}
 
 	return true;

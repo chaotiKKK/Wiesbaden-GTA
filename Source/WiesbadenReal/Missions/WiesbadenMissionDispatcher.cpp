@@ -49,6 +49,19 @@ namespace
 		O.Label = Label;
 		return O;
 	}
+
+	// Verweilpunkt: erfuellt, sobald der Spieler HoldSeconds ununterbrochen im
+	// Radius war (Beobachtung/Stakeout).
+	FMissionObjective MakeDwell(const FVector& Loc, double HoldSeconds, const TCHAR* Label)
+	{
+		FMissionObjective O;
+		O.Type = EObjectiveType::Dwell;
+		O.Location = Loc;
+		O.RadiusCm = 2000.0; // 20-m-Beobachtungszone
+		O.HoldSeconds = HoldSeconds;
+		O.Label = Label;
+		return O;
+	}
 }
 
 FMissionDispatchResult FWiesbadenMissionDispatcher::NextMission(
@@ -99,26 +112,38 @@ FMissionDispatchResult FWiesbadenMissionDispatcher::NextMission(
 		Delivery = Pickup + FVector(80000.0, 0.0, 0.0);
 	}
 
-	// Jeder dritte Auftrag ist eine Fluchtfahrt: mit heisser Ware erst aus dem
-	// Gebiet um die Abholung heraus (LeaveArea), dann liefern - bricht die
-	// Abhol->Liefer-Monotonie des endlosen Kurier-Loops. Deterministisch am Cursor.
-	const bool bGetaway = (Seq % 3 == 2);
+	// Prozedurale Abwechslung, deterministisch am Cursor (Seq % 3) - bricht die
+	// Abhol->Liefer-Monotonie des endlosen Kurier-Loops:
+	//   0 = schlichter Kurier (Abholung -> Lieferung)
+	//   1 = Beobachtungsauftrag (Anfahrt -> Position halten (Dwell) -> melden)
+	//   2 = Fluchtfahrt (Abholung -> Gebiet verlassen (LeaveArea) -> Lieferung)
+	const int32 Variant = Seq % 3;
+	const bool bObservation = (Variant == 1);
+	const bool bGetaway = (Variant == 2);
 
 	FMission M;
 	M.Id = FName(*FString::Printf(TEXT("kurier_auto_%d"), Seq + 1));
-	M.Title = bGetaway
-		? FString::Printf(TEXT("Fluchtfahrt Nr. %d"), CompletedCount + 1)
-		: FString::Printf(TEXT("Kurierfahrt Nr. %d"), CompletedCount + 1);
-	M.Reward.Guthaben = bGetaway ? 350 : 250; // heikler -> bessere Praemie
+	const int32 Nr = CompletedCount + 1;
+	M.Title = bGetaway ? FString::Printf(TEXT("Fluchtfahrt Nr. %d"), Nr)
+		: bObservation ? FString::Printf(TEXT("Beobachtungsauftrag Nr. %d"), Nr)
+		: FString::Printf(TEXT("Kurierfahrt Nr. %d"), Nr);
+	M.Reward.Guthaben = bGetaway ? 350 : bObservation ? 300 : 250; // heikler/laenger -> mehr
 	// Auto-Frist: das Subsystem rechnet beim Start eine faire, distanzabhaengige
-	// Deadline aus der Route. So sind auch die endlosen prozeduralen Jobs befristet.
+	// Deadline aus der Route (inkl. Haltezeit). So sind auch die endlosen
+	// prozeduralen Jobs fair befristet.
 	M.DeadlineSeconds = FMission::AutoDeadline;
-	M.Objectives.Add(MakeReach(Pickup, TEXT("Fahre zur Abholung")));
+	M.Objectives.Add(MakeReach(Pickup, bObservation
+		? TEXT("Fahre zum Beobachtungspunkt") : TEXT("Fahre zur Abholung")));
+	if (bObservation)
+	{
+		M.Objectives.Add(MakeDwell(Pickup, 8.0, TEXT("Beobachte die Lage")));
+	}
 	if (bGetaway)
 	{
 		M.Objectives.Add(MakeLeave(Pickup, 15000.0, TEXT("Bring die Ware aus dem Gebiet")));
 	}
-	M.Objectives.Add(MakeReach(Delivery, TEXT("Liefere die Sendung")));
+	M.Objectives.Add(MakeReach(Delivery, bObservation
+		? TEXT("Melde deine Beobachtung") : TEXT("Liefere die Sendung")));
 
 	Result.bHasMission = true;
 	Result.bProcedural = true;

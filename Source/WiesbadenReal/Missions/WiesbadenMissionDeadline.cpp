@@ -16,6 +16,7 @@ double FWiesbadenMissionDeadline::ComputeSeconds(
 	};
 
 	double RouteCm = 0.0;
+	double HoldSeconds = 0.0; // Verweilzeit (Dwell) ist reine ZEIT, nicht Strecke
 	FVector Prev = Start;
 	for (int32 i = 0; i < Objectives.Num(); ++i)
 	{
@@ -43,9 +44,16 @@ double FWiesbadenMissionDeadline::ComputeSeconds(
 			RouteCm += Dist2D(Prev, O.Location);
 			Prev = O.Location;
 		}
+
+		// Verweil-Ziele kosten zusaetzlich ihre Haltezeit - reine Zeit, damit die
+		// Frist eines Beobachtungsauftrags das Warten fair einbudgetiert.
+		if (O.Type == EObjectiveType::Dwell)
+		{
+			HoldSeconds += O.HoldSeconds;
+		}
 	}
 
 	const double Pace = FMath::Max(1.0, Params.PaceCmPerSecond); // Division absichern
-	const double Window = RouteCm / Pace + Params.BufferSeconds;
+	const double Window = RouteCm / Pace + HoldSeconds + Params.BufferSeconds;
 	return FMath::Max(Window, Params.MinSeconds);
 }
