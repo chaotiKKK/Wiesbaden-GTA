@@ -55,3 +55,6 @@ skills-lock.json
 Tools/bau_neuerpc.cmd
 Tools/mat_neuerpc.bat
 _run_tests_neuerpc.bat
+
+# === Experimentelle Scratch-Karten (__-Praefix, nicht die ausgelieferten Alkis-Karten) ===
+Content/Maps/__*.umap
