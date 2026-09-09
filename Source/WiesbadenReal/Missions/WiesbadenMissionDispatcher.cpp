@@ -82,6 +82,9 @@ FMissionDispatchResult FWiesbadenMissionDispatcher::NextMission(
 	M.Id = FName(*FString::Printf(TEXT("kurier_auto_%d"), Seq + 1));
 	M.Title = FString::Printf(TEXT("Kurierfahrt Nr. %d"), CompletedCount + 1);
 	M.Reward.Guthaben = 250;
+	// Auto-Frist: das Subsystem rechnet beim Start eine faire, distanzabhaengige
+	// Deadline aus der Route. So sind auch die endlosen prozeduralen Jobs befristet.
+	M.DeadlineSeconds = FMission::AutoDeadline;
 	M.Objectives.Add(MakeReach(Pickup, TEXT("Fahre zur Abholung")));
 	M.Objectives.Add(MakeReach(Delivery, TEXT("Liefere die Sendung")));
 

@@ -84,6 +84,16 @@ bool FStorePurchaseTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("mit Lizenz abgerundet"), FWiesbadenStore::ApplyLicenseBonus(255, true), 382);
 	TestTrue(TEXT("Lizenz-Id gesetzt"), FWiesbadenStore::KurierlizenzId() != NAME_None);
 
+	// Vertragsstrafe bei Fehlschlag: 20% der entgangenen Praemie, abgerundet.
+	// Erwartungswerte hand gerechnet (250/5=50, 300/5=60, 255/5=51), nicht aus
+	// der Formel abgeleitet.
+	TestEqual(TEXT("Strafe 250 -> 50"), FWiesbadenStore::ComputeFailurePenalty(250), 50);
+	TestEqual(TEXT("Strafe 300 -> 60"), FWiesbadenStore::ComputeFailurePenalty(300), 60);
+	TestEqual(TEXT("Strafe abgerundet 255 -> 51"), FWiesbadenStore::ComputeFailurePenalty(255), 51);
+	TestEqual(TEXT("Strafe 0 -> 0"), FWiesbadenStore::ComputeFailurePenalty(0), 0);
+	TestEqual(TEXT("Strafe negativ -> 0 (keine Gutschrift)"),
+		FWiesbadenStore::ComputeFailurePenalty(-100), 0);
+
 	return true;
 }
 

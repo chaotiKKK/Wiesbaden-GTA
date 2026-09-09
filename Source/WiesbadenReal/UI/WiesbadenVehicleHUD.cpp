@@ -1328,12 +1328,27 @@ void AWiesbadenVehicleHUD::DrawMissionPanel(float Width, float Height)
 	DrawPanelBackdrop(X, Y, PanelW, PanelH, 10.0f, FLinearColor(0.08f, 0.10f, 0.13f), 0.72f);
 
 	const FLinearColor TitleColour(1.0f, 0.72f, 0.20f, 1.0f);
-	const FLinearColor BodyColour(0.92f, 0.94f, 0.96f, 1.0f);
+	FLinearColor BodyColour(0.92f, 0.94f, 0.96f, 1.0f);
 	DrawText(Missions->GetActiveMissionTitle(), TitleColour, X + 16.0f, Y + 8.0f,
 		GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
-	const FString ObjLine = DistText.IsEmpty()
+	FString ObjLine = DistText.IsEmpty()
 		? Obj->Label
 		: FString::Printf(TEXT("%s  -  %s"), *Obj->Label, *DistText);
+
+	// Zeitlimit-Countdown (nur bei befristeten Auftraegen): Restzeit anhaengen,
+	// unter 15 s die Zeile rot einfaerben. -1 = unbefristet -> nichts anzeigen.
+	const double Remaining = Missions->GetActiveMissionRemainingSeconds();
+	if (Remaining >= 0.0)
+	{
+		ObjLine += FString::Printf(TEXT("  -  Rest %02d:%02d"),
+			FMath::FloorToInt(Remaining / 60.0),
+			FMath::FloorToInt(FMath::Fmod(Remaining, 60.0)));
+		if (Remaining < 15.0)
+		{
+			BodyColour = FLinearColor(1.0f, 0.35f, 0.28f); // knappe Zeit -> rot
+		}
+	}
+
 	DrawText(ObjLine, BodyColour, X + 16.0f, Y + 28.0f,
 		GEngine ? GEngine->GetMediumFont() : nullptr, 1.0f);
 }

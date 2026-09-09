@@ -6,6 +6,7 @@
 #include "Missions/WiesbadenMissionLoader.h"
 #include "Missions/WiesbadenMissionRunner.h"
 #include "Missions/WiesbadenMissionDispatcher.h"
+#include "Missions/WiesbadenMissionDeadline.h"
 
 // Ziel-Erfuellung ReachLocation: horizontale (2D) Distanz <= Radius. Hoehe wird
 // bewusst ignoriert (Hang/Bahn-Umgebung), daher der Hoehen-Testfall.
@@ -54,6 +55,7 @@ bool FMissionLoaderTest::RunTest(const FString& Parameters)
 		"{ \"missions\": [ {"
 		"  \"id\": \"m1\", \"title\": \"Testfahrt\","
 		"  \"reward\": { \"guthaben\": 250 },"
+		"  \"deadline_seconds\": 90,"
 		"  \"objectives\": ["
 		"    { \"type\": \"reach_location\", \"label\": \"A\", \"x\": 100, \"y\": 200, \"radius_cm\": 800 },"
 		"    { \"type\": \"reach_location\", \"label\": \"B\", \"x\": 300, \"y\": 400, \"radius_cm\": 500 } ] } ] }");
@@ -65,6 +67,7 @@ bool FMissionLoaderTest::RunTest(const FString& Parameters)
 		const FMission& M = R.Missions[0];
 		TestEqual(TEXT("Titel"), M.Title, FString(TEXT("Testfahrt")));
 		TestEqual(TEXT("Guthaben"), M.Reward.Guthaben, 250);
+		TestTrue(TEXT("Zeitlimit geparst"), FMath::IsNearlyEqual(M.DeadlineSeconds, 90.0));
 		TestEqual(TEXT("2 Ziele"), M.Objectives.Num(), 2);
 		if (M.Objectives.Num() == 2)
 		{
@@ -91,6 +94,8 @@ bool FMissionLoaderTest::RunTest(const FString& Parameters)
 	if (UR.Missions.Num() == 1)
 	{
 		TestEqual(TEXT("unknown: 0 Ziele (uebersprungen)"), UR.Missions[0].Objectives.Num(), 0);
+		TestTrue(TEXT("unknown: kein Feld -> unbefristet (0)"),
+			FMath::IsNearlyEqual(UR.Missions[0].DeadlineSeconds, 0.0));
 	}
 	TestTrue(TEXT("unknown: Fehler geloggt"), UR.Errors.Num() > 0);
 
@@ -186,6 +191,9 @@ bool FMissionDispatcherTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("2: prozedural"), P0.bProcedural);
 	TestEqual(TEXT("2: 2 Ziele"), P0.Mission.Objectives.Num(), 2);
 	TestTrue(TEXT("2: Belohnung > 0"), P0.Mission.Reward.Guthaben > 0);
+	// Prozedurale Jobs sind auto-befristet (deadline_seconds < 0): das Subsystem
+	// berechnet daraus beim Start eine faire, distanzabhaengige Frist.
+	TestTrue(TEXT("2: auto-befristet (< 0)"), P0.Mission.DeadlineSeconds < 0.0);
 	if (P0.Mission.Objectives.Num() == 2)
 	{
 		TestFalse(TEXT("2: Abholung != Lieferung"),
@@ -203,6 +211,131 @@ bool FMissionDispatcherTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(TEXT("det: gleiche Abholung"),
 			P0b.Mission.Objectives[0].Location.Equals(P0.Mission.Objectives[0].Location, 0.01));
+	}
+
+	return true;
+}
+
+// Zeitlimit-Ziel: Mission scheitert (ohne Praemie), wenn die Frist verstreicht,
+// bevor alle Ziele erfuellt sind; rechtzeitige Erfuellung hat Vorrang.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionDeadlineTest,
+	"WiesbadenReal.Missions.Deadline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMissionDeadlineTest::RunTest(const FString& Parameters)
+{
+	// Ein Ziel bei (0,0,0), Radius 800, Belohnung 250, Zeitlimit 10 s.
+	FMission M;
+	M.Reward.Guthaben = 250;
+	M.DeadlineSeconds = 10.0;
+	FMissionObjective O; O.Location = FVector(0.0, 0.0, 0.0); O.RadiusCm = 800.0; M.Objectives.Add(O);
+
+	auto Ctx = [](double X, double Y, double Elapsed) -> FMissionContext
+	{
+		FMissionContext C; C.PlayerLocation = FVector(X, Y, 0.0); C.ElapsedSeconds = Elapsed; return C;
+	};
+
+	// Vor der Frist, Ziel fern -> offen (kein Fehlschlag, kein Fortschritt).
+	FMissionProgressResult R = FWiesbadenMissionRunner::Step(M, 0, Ctx(9000.0, 0.0, 5.0));
+	TestFalse(TEXT("vor Frist: kein Fehlschlag"), R.bMissionFailed);
+	TestFalse(TEXT("vor Frist: nicht vorgerueckt"), R.bAdvanced);
+
+	// Nach der Frist, Ziel fern -> GESCHEITERT, keine Praemie.
+	R = FWiesbadenMissionRunner::Step(M, 0, Ctx(9000.0, 0.0, 11.0));
+	TestTrue(TEXT("nach Frist: gescheitert"), R.bMissionFailed);
+	TestFalse(TEXT("nach Frist: nicht erfuellt"), R.bMissionCompleted);
+	TestEqual(TEXT("nach Frist: keine Praemie"), R.GuthabenAwarded, 0);
+
+	// Rechtzeitig am Ziel -> erfuellt + Praemie, kein Fehlschlag.
+	R = FWiesbadenMissionRunner::Step(M, 0, Ctx(0.0, 0.0, 9.0));
+	TestTrue(TEXT("rechtzeitig: erfuellt"), R.bMissionCompleted);
+	TestFalse(TEXT("rechtzeitig: nicht gescheitert"), R.bMissionFailed);
+	TestEqual(TEXT("rechtzeitig: Praemie 250"), R.GuthabenAwarded, 250);
+
+	// Erfuellung schlaegt Frist: am Ziel, aber ueber der Frist -> Erfolg.
+	R = FWiesbadenMissionRunner::Step(M, 0, Ctx(0.0, 0.0, 15.0));
+	TestTrue(TEXT("Erfuellung schlaegt Frist"), R.bMissionCompleted);
+	TestFalse(TEXT("Erfuellung schlaegt Frist: nicht gescheitert"), R.bMissionFailed);
+
+	// Ohne Zeitlimit (0) scheitert nie, egal wie viel Zeit vergeht.
+	FMission NoLimit = M; NoLimit.DeadlineSeconds = 0.0;
+	R = FWiesbadenMissionRunner::Step(NoLimit, 0, Ctx(9000.0, 0.0, 99999.0));
+	TestFalse(TEXT("ohne Limit: scheitert nie"), R.bMissionFailed);
+
+	return true;
+}
+
+// Distanzabhaengiges Zeitfenster: faire Frist aus der Routenlaenge. Erwartungs-
+// werte sind HAND gerechnet (Tempo 700 cm/s, Puffer 30 s, Untergrenze 45 s),
+// nicht aus der Formel abgeleitet - so kann der Test der Implementierung wirklich
+// widersprechen.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMissionDeadlineWindowTest,
+	"WiesbadenReal.Missions.DeadlineWindow",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMissionDeadlineWindowTest::RunTest(const FString& Parameters)
+{
+	auto Obj = [](double X, double Y, double Z) -> FMissionObjective
+	{
+		FMissionObjective O;
+		O.Location = FVector(X, Y, Z);
+		return O;
+	};
+	const FMissionDeadlineParams P; // Standard: 700 cm/s, 30 s, min 45 s
+
+	// -- Gerade Strecke: 70000 cm / 700 + 30 = 100 + 30 = 130 s --
+	{
+		TArray<FMissionObjective> Objs = { Obj(70000.0, 0.0, 0.0) };
+		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Objs, P);
+		TestTrue(TEXT("70000 cm -> 130 s"), FMath::IsNearlyEqual(W, 130.0, 0.01));
+	}
+
+	// -- Sehr kurz: 1000 cm -> 31.43 s < 45 -> auf Untergrenze 45 s --
+	{
+		TArray<FMissionObjective> Objs = { Obj(1000.0, 0.0, 0.0) };
+		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Objs, P);
+		TestTrue(TEXT("kurze Route -> Untergrenze 45 s"), FMath::IsNearlyEqual(W, 45.0, 0.01));
+	}
+
+	// -- Mehrere Beine summieren sich: 30000 + 40000 = 70000 -> 130 s --
+	{
+		TArray<FMissionObjective> Objs = { Obj(30000.0, 0.0, 0.0), Obj(30000.0, 40000.0, 0.0) };
+		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Objs, P);
+		TestTrue(TEXT("Beine summiert -> 130 s"), FMath::IsNearlyEqual(W, 130.0, 0.01));
+	}
+
+	// -- PLANAR: grosser Hoehenunterschied aendert das Fenster nicht (immer 130) --
+	{
+		TArray<FMissionObjective> Objs = { Obj(70000.0, 0.0, 500000.0) };
+		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Objs, P);
+		TestTrue(TEXT("Hoehe ignoriert -> 130 s"), FMath::IsNearlyEqual(W, 130.0, 0.01));
+	}
+
+	// -- Ohne Ziele: Untergrenze --
+	{
+		TArray<FMissionObjective> Objs;
+		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Objs, P);
+		TestTrue(TEXT("keine Ziele -> Untergrenze"), FMath::IsNearlyEqual(W, 45.0, 0.01));
+	}
+
+	// -- Deterministisch + monoton: laengere Route -> strikt groesseres Fenster --
+	{
+		TArray<FMissionObjective> Kurz = { Obj(70000.0, 0.0, 0.0) };
+		TArray<FMissionObjective> Lang = { Obj(700000.0, 0.0, 0.0) };
+		const double A1 = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Kurz, P);
+		const double A2 = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Kurz, P);
+		const double B  = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Lang, P);
+		TestTrue(TEXT("deterministisch"), FMath::IsNearlyEqual(A1, A2, 0.0001));
+		TestTrue(TEXT("laenger -> mehr Zeit"), B > A1 + 1.0);
+	}
+
+	// -- Parameter wirken: Tempo 1000, kein Puffer, keine Untergrenze --
+	// 100000 cm / 1000 + 0 = 100 s (kein Floor).
+	{
+		FMissionDeadlineParams Q; Q.PaceCmPerSecond = 1000.0; Q.BufferSeconds = 0.0; Q.MinSeconds = 0.0;
+		TArray<FMissionObjective> Objs = { Obj(100000.0, 0.0, 0.0) };
+		const double W = FWiesbadenMissionDeadline::ComputeSeconds(FVector::ZeroVector, Objs, Q);
+		TestTrue(TEXT("Parameter wirken -> 100 s"), FMath::IsNearlyEqual(W, 100.0, 0.01));
 	}
 
 	return true;

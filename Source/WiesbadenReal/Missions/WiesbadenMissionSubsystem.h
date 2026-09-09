@@ -43,12 +43,33 @@ public:
 	/** Wie viele Auftraege in dieser Sitzung bereits abgeschlossen wurden. */
 	int32 GetCompletedCount() const { return CompletedCount; }
 
+	/**
+	 * Restzeit des aktiven Auftrags in Sekunden (>= 0), oder -1 wenn kein Zeitlimit
+	 * gilt bzw. kein Auftrag laeuft. Billiger HUD-Haken fuer die Countdown-Anzeige.
+	 */
+	double GetActiveMissionRemainingSeconds() const;
+
 	FOnMissionObjectiveChanged OnObjectiveChanged;
 	FOnMissionCompleted OnMissionCompleted;
 
 private:
 	void LoadMissions();
 	void BeginMission(const FMission& Mission);
+
+	/** Beendet den aktiven Auftrag (Erfolg ODER Fehlschlag) und rueckt den Vergabe-
+	 *  Cursor vor - der gemeinsame Abschluss-Pfad beider Zweige. */
+	void EndActiveMission();
+
+	/** Loggt ~1x/s die Restzeit eines befristeten Auftrags (rein diagnostisch). */
+	void LogRemainingTime(float DeltaTime);
+
+	/** Persistenter Spielzustand (Guthaben) oder nullptr - fuer Belohnung/Strafe. */
+	class UWiesbadenGameStateSubsystem* GetGameStateSubsystem() const;
+
+	/** Schreibt die Missions-Praemie gut (inkl. Kurierlizenz-Bonus) - eigene
+	 *  Guthaben-Naht; die Praemien-Politik liegt in FWiesbadenStore::ApplyLicenseBonus. */
+	void CreditMissionReward(int32 BaseReward);
+
 	bool TryGetPlayerLocation(FVector& OutLocation) const;
 
 	// Handgeschriebene Vorlagen aus der JSON - Grundlage der Auftragsvergabe.
@@ -67,4 +88,11 @@ private:
 	int32 CompletedCount = 0;
 
 	float CheckAccumulator = 0.0f;
+
+	// Verstrichene Zeit seit Start des aktiven Auftrags (fuer Zeitlimit-Ziele).
+	// Laeuft pro Tick ungedrosselt mit; in BeginMission auf 0 zurueckgesetzt.
+	double ActiveMissionElapsed = 0.0;
+
+	// Drosselt den Restzeit-Log auf ~1 Hz, damit die Deadline nicht jeden Frame spammt.
+	double RemainingLogAccumulator = 0.0;
 };

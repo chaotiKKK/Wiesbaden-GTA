@@ -32,6 +32,13 @@ int32 FWiesbadenStore::ApplyLicenseBonus(int32 BaseReward, bool bLicensed)
 	return bLicensed ? (BaseReward * 3) / 2 : BaseReward;
 }
 
+int32 FWiesbadenStore::ComputeFailurePenalty(int32 Reward)
+{
+	// 20% der entgangenen Praemie, abgerundet - reine Ganzzahlarithmetik. Ohne
+	// Praemie (0 oder negativ) faellt keine Strafe an.
+	return Reward > 0 ? Reward / 5 : 0;
+}
+
 FName FWiesbadenStore::KurierlizenzId()
 {
 	return FName(TEXT("kurierlizenz"));

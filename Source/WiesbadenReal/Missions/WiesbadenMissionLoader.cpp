@@ -50,6 +50,9 @@ FMissionLoadResult FWiesbadenMissionLoader::ParseMissions(const FString& Json)
 			Mission.Reward.Guthaben = static_cast<int32>(Guthaben);
 		}
 
+		// Optionales Zeitlimit (Sekunden ab Start). Fehlt es, bleibt es 0 = unbefristet.
+		(*MissionObj)->TryGetNumberField(TEXT("deadline_seconds"), Mission.DeadlineSeconds);
+
 		const TArray<TSharedPtr<FJsonValue>>* ObjArr = nullptr;
 		if ((*MissionObj)->TryGetArrayField(TEXT("objectives"), ObjArr) && ObjArr)
 		{

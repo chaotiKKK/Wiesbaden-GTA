@@ -21,6 +21,9 @@ enum class EObjectiveType : uint8
 struct FMissionContext
 {
 	FVector PlayerLocation = FVector::ZeroVector;
+
+	/** Vergangene Zeit seit Missionsstart in Sekunden - fuer Zeitlimit-Ziele. */
+	double ElapsedSeconds = 0.0;
 };
 
 /**
@@ -54,4 +57,25 @@ struct FMission
 	FString Title;
 	TArray<FMissionObjective> Objectives;
 	FMissionReward Reward;
+
+	/**
+	 * Zeitlimit in Sekunden ab Missionsstart, in DREI Modi:
+	 *   > 0  festes Limit,
+	 *   0    unbefristet (kein Limit),
+	 *   < 0  "auto" (AutoDeadline) - das Subsystem berechnet beim Start eine faire,
+	 *        distanzabhaengige Frist und ersetzt diesen Platzhalter.
+	 * Ueberschreiten vor Erfuellung -> GESCHEITERT (keine Belohnung), siehe
+	 * FWiesbadenMissionRunner. Die Modi liest man ueber IsAutoDeadline()/HasDeadline(),
+	 * nicht ueber rohe Vorzeichen-Vergleiche.
+	 */
+	double DeadlineSeconds = 0.0;
+
+	/** Platzhalter fuer "Frist automatisch aus der Route berechnen" (Modus < 0). */
+	static constexpr double AutoDeadline = -1.0;
+
+	/** Soll die Frist beim Start distanzabhaengig berechnet werden? (Modus < 0) */
+	bool IsAutoDeadline() const { return DeadlineSeconds < 0.0; }
+
+	/** Gilt ein konkretes, positives Zeitlimit? (Modus > 0; 0/auto zaehlen nicht) */
+	bool HasDeadline() const { return DeadlineSeconds > 0.0; }
 };

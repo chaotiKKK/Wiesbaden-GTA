@@ -10,6 +10,8 @@ struct FMissionProgressResult
 	int32 NextObjectiveIndex = 0;
 	bool bAdvanced = false;
 	bool bMissionCompleted = false;
+	/** Zeitlimit ueberschritten, bevor die Mission erfuellt war -> keine Belohnung. */
+	bool bMissionFailed = false;
 	int32 GuthabenAwarded = 0;
 };
 

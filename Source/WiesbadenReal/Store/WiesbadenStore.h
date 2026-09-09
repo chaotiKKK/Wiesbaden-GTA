@@ -19,6 +19,13 @@ public:
 	/** Missions-Praemie mit Kurierlizenz (+50%, abgerundet); sonst unveraendert. */
 	static int32 ApplyLicenseBonus(int32 BaseReward, bool bLicensed);
 
+	/**
+	 * Vertragsstrafe bei Missions-Fehlschlag: 20% der entgangenen Praemie
+	 * (abgerundet), damit Zeitdruck etwas kostet. Rein rechnend; die "nie ins
+	 * Minus"-Klemmung macht FWiesbadenGameState::ApplyDelta beim Abbuchen.
+	 */
+	static int32 ComputeFailurePenalty(int32 Reward);
+
 	/** Katalog-Id der Kurierlizenz - die Freischaltung mit Praemien-Effekt. */
 	static FName KurierlizenzId();
 
