@@ -6,6 +6,7 @@
 #include "GIS/BuildingGenerator.h"
 #include "UI/WiesbadenWorldMapView.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
+#include "Vehicles/WiesbadenCar.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleHUDTest,
 	"WiesbadenReal.Vehicles.HUD",
@@ -639,6 +640,51 @@ bool FWorldMapViewNeedsRerenderTest::RunTest(const FString& Parameters)
 	// Bildgroesse gewechselt -> neu rendern.
 	TestTrue(TEXT("Groessenwechsel: neu rendern"),
 		UWiesbadenWorldMapView::NeedsRerender(true, &NetA, Size, &NetA, FVector2D(1280.0, 720.0)));
+
+	return true;
+}
+
+// Kaefer-Mesh-Auswahl: bevorzugt die radlose Karosserie + 4 Einzelraeder, weil
+// das Herbie-Voll-Mesh ein Hinterrad vermissen laesst. Herbie nur als Notfall.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBeetleAssemblyTest,
+	"WiesbadenReal.Vehicles.BeetleAssembly",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FBeetleAssemblyTest::RunTest(const FString& Parameters)
+{
+	// Alles verfuegbar -> radlose Karosserie + 4 Einzelraeder (NICHT Herbie).
+	{
+		const FBeetleAssembly A = AWiesbadenCar::ChooseBeetleAssembly(true, true, true);
+		TestTrue(TEXT("alles: SeparateWheelBody"), A.Body == EBeetleBodyMesh::SeparateWheelBody);
+		TestTrue(TEXT("alles: 4 Einzelraeder sichtbar"), A.bSeparateWheels);
+	}
+
+	// Body+Rad ohne Herbie -> ebenso radlose Karosserie + 4 Raeder.
+	{
+		const FBeetleAssembly A = AWiesbadenCar::ChooseBeetleAssembly(true, true, false);
+		TestTrue(TEXT("body+rad: SeparateWheelBody"), A.Body == EBeetleBodyMesh::SeparateWheelBody);
+		TestTrue(TEXT("body+rad: 4 Raeder"), A.bSeparateWheels);
+	}
+
+	// Kein Rad-Mesh (aber Herbie) -> Herbie-Notfall (eigene Raeder, keine separaten).
+	{
+		const FBeetleAssembly A = AWiesbadenCar::ChooseBeetleAssembly(true, false, true);
+		TestTrue(TEXT("kein Rad: HerbieFull"), A.Body == EBeetleBodyMesh::HerbieFull);
+		TestFalse(TEXT("kein Rad: keine Einzelraeder"), A.bSeparateWheels);
+	}
+
+	// Keine Karosserie (aber Herbie) -> Herbie-Notfall.
+	{
+		const FBeetleAssembly A = AWiesbadenCar::ChooseBeetleAssembly(false, true, true);
+		TestTrue(TEXT("kein Body: HerbieFull"), A.Body == EBeetleBodyMesh::HerbieFull);
+	}
+
+	// Nichts verfuegbar -> Ersatzquader.
+	{
+		const FBeetleAssembly A = AWiesbadenCar::ChooseBeetleAssembly(false, false, false);
+		TestTrue(TEXT("nichts: Cube"), A.Body == EBeetleBodyMesh::Cube);
+		TestFalse(TEXT("nichts: keine Einzelraeder"), A.bSeparateWheels);
+	}
 
 	return true;
 }

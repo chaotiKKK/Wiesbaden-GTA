@@ -23,6 +23,31 @@ namespace
 	constexpr double MetersToCm = 100.0;
 }
 
+FBeetleAssembly AWiesbadenCar::ChooseBeetleAssembly(
+	bool bBodyMeshAvailable, bool bWheelMeshAvailable, bool bHerbieMeshAvailable)
+{
+	FBeetleAssembly Choice;
+	if (bBodyMeshAvailable && bWheelMeshAvailable)
+	{
+		// Robuster Weg: radlose Karosserie + 4 vermessene Einzelraeder -> immer
+		// vier Raeder (das Herbie-Voll-Mesh vermisst ein Hinterrad).
+		Choice.Body = EBeetleBodyMesh::SeparateWheelBody;
+		Choice.bSeparateWheels = true;
+	}
+	else if (bHerbieMeshAvailable)
+	{
+		// Notfall: Herbie mit seinen eigenen (unvollstaendigen) Raedern.
+		Choice.Body = EBeetleBodyMesh::HerbieFull;
+		Choice.bSeparateWheels = false;
+	}
+	else
+	{
+		Choice.Body = EBeetleBodyMesh::Cube;
+		Choice.bSeparateWheels = false;
+	}
+	return Choice;
+}
+
 AWiesbadenCar::AWiesbadenCar()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -59,47 +84,73 @@ AWiesbadenCar::AWiesbadenCar()
 		TEXT("/Game/Vehicles/Beetle/SM_VWBeetle_Wheel.SM_VWBeetle_Wheel"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube"));
 
+	// Herbie-Lackierung fuer die radlose Karosserie: die vier Material-Instanzen
+	// wurden von make_herbie.py auf DIESE Karosserie gebacken (UVs passen).
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> HerbieMat0(
+		TEXT("/Game/Vehicles/Beetle/MI_VWBeetleHerbie_1001.MI_VWBeetleHerbie_1001"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> HerbieMat1(
+		TEXT("/Game/Vehicles/Beetle/MI_VWBeetleHerbie_1002.MI_VWBeetleHerbie_1002"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> HerbieMat2(
+		TEXT("/Game/Vehicles/Beetle/MI_VWBeetleHerbie_1003.MI_VWBeetleHerbie_1003"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> HerbieMat3(
+		TEXT("/Game/Vehicles/Beetle/MI_VWBeetleHerbie_1004.MI_VWBeetleHerbie_1004"));
+	UMaterialInterface* HerbieMats[4] = {
+		HerbieMat0.Succeeded() ? HerbieMat0.Object : nullptr,
+		HerbieMat1.Succeeded() ? HerbieMat1.Object : nullptr,
+		HerbieMat2.Succeeded() ? HerbieMat2.Object : nullptr,
+		HerbieMat3.Succeeded() ? HerbieMat3.Object : nullptr,
+	};
+
 	UStaticMesh* Cube = CubeMesh.Object;
 	UStaticMesh* Herbie = HerbieMesh.Succeeded() ? HerbieMesh.Object : nullptr;
 	UStaticMesh* Beetle = BeetleMesh.Succeeded() ? BeetleMesh.Object : nullptr;
 	UStaticMesh* BeetleWheel = BeetleWheelMesh.Succeeded() ? BeetleWheelMesh.Object : nullptr;
 
-	// Bringt das Herbie-Modell die Raeder selbst mit -> die separaten Rad-
-	// Komponenten unten werden ausgeblendet (sonst doppelte Raeder / Z-Fighting).
-	bool bBodyIncludesWheels = false;
+	// Karosserie + Rad-Darstellung aus den verfuegbaren Meshes waehlen (rein/
+	// getestet, s. ChooseBeetleAssembly). Das Herbie-Voll-Mesh vermisst ein
+	// Hinterrad, daher bevorzugt die radlose Karosserie + 4 Einzelraeder.
+	// bBodyIncludesWheels steuert unten das Ausblenden der separaten Raeder.
+	const FBeetleAssembly Assembly = ChooseBeetleAssembly(
+		Beetle != nullptr, BeetleWheel != nullptr, Herbie != nullptr);
+	const bool bBodyIncludesWheels = !Assembly.bSeparateWheels;
 
 	BodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BodyMesh"));
 	BodyMesh->SetupAttachment(SceneRoot);
 
-	if (Herbie)
+	switch (Assembly.Body)
 	{
-		// Modell ist 4,95 m lang, LAENGSACHSE im Import auf +Y (gemessene Bounds:
-		// X=202, Y=495, Z=184 cm) - ohne Drehung stand der Wagen 90 Grad quer.
-		// Die FRONT des Modells liegt dabei auf -Y: -90 Grad legte zwar die
-		// Laengsachse auf +X, drehte die Front aber nach HINTEN - der Kaefer fuhr
-		// "verkehrt herum" (Front zeigte zur Verfolgerkamera). +90 Grad legt die
-		// Laengsachse ebenfalls auf +X UND bringt die Front nach vorne (+X).
-		// Auf Kaefer-Maszstab skalieren (0.838 -> 4,15 m).
+	case EBeetleBodyMesh::SeparateWheelBody:
+		// Radlose Karosserie, massstaeblich (4,15 m), Ursprung auf Radaufstands-
+		// hoehe - weder skaliert noch versetzt. Die 4 Einzelraeder kommen unten.
+		BodyMesh->SetStaticMesh(Beetle);
+		BodyMesh->SetRelativeLocation(FVector::ZeroVector);
+		BodyMesh->SetRelativeScale3D(FVector::OneVector);
+		// Herbie-Lackierung auf die Karosserie legen (auf diese UVs gebacken).
+		for (int32 Slot = 0; Slot < 4; ++Slot)
+		{
+			if (HerbieMats[Slot])
+			{
+				BodyMesh->SetMaterial(Slot, HerbieMats[Slot]);
+			}
+		}
+		break;
+
+	case EBeetleBodyMesh::HerbieFull:
+		// Notfall: Herbie-Voll-Mesh. Laengsachse im Import auf +Y, Front auf -Y ->
+		// +90 Grad legt die Laengsachse auf +X UND die Front nach vorne; auf
+		// Kaefer-Maszstab skalieren (0.838 -> 4,15 m). Bringt eigene Raeder mit.
 		BodyMesh->SetStaticMesh(Herbie);
 		BodyMesh->SetRelativeLocation(FVector::ZeroVector);
 		BodyMesh->SetRelativeRotation(FRotator(0.0f, 90.0f, 0.0f));
 		BodyMesh->SetRelativeScale3D(FVector(0.838f));
-		bBodyIncludesWheels = true;
-	}
-	else if (Beetle)
-	{
-		// Das Modell ist massstaeblich (4,15 m lang) und hat seinen Ursprung
-		// auf Radaufstandshoehe - es wird weder skaliert noch versetzt.
-		BodyMesh->SetStaticMesh(Beetle);
-		BodyMesh->SetRelativeLocation(FVector::ZeroVector);
-		BodyMesh->SetRelativeScale3D(FVector::OneVector);
-	}
-	else if (Cube)
-	{
+		break;
+
+	default: // EBeetleBodyMesh::Cube
 		// Ersatzquader in PKW-Groesse: 440 x 180 x 60 cm, Sitzhoehe ~75 cm.
 		BodyMesh->SetStaticMesh(Cube);
 		BodyMesh->SetRelativeLocation(FVector(0.0f, 0.0f, 75.0f));
 		BodyMesh->SetRelativeScale3D(FVector(4.4f, 1.8f, 0.6f));
+		break;
 	}
 
 	// Radpositionen, am Modell vermessen (Reifenmitten, cm im Fahrzeug-

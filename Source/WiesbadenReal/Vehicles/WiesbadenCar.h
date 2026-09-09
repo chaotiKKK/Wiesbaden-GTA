@@ -22,6 +22,21 @@ class UStaticMeshComponent;
 // FWiesbadenCarControl liegt jetzt im neutralen Header WiesbadenVehicleControl.h
 // (gemeinsame Steuernaht beider Fahrzeuge), von hier aus mit-inkludiert.
 
+/** Welche Kaefer-Karosserie gezeichnet wird. */
+enum class EBeetleBodyMesh : uint8
+{
+	SeparateWheelBody, // radlose Karosserie (SM_VWBeetle1969_Body) + 4 Einzelraeder
+	HerbieFull,        // Herbie-Voll-Mesh mit eingebackenen Raedern (Notfall)
+	Cube,              // Engine-Ersatzquader
+};
+
+/** Ergebnis der Kaefer-Mesh-Auswahl: Karosserie + ob die 4 Einzelraeder sichtbar sind. */
+struct FBeetleAssembly
+{
+	EBeetleBodyMesh Body = EBeetleBodyMesh::Cube;
+	bool bSeparateWheels = false;
+};
+
 /**
  * Fahrbarer PKW-Pawn mit Platzhalter-Geometrie (Engine-Basis-Shapes).
  *
@@ -41,6 +56,15 @@ class WIESBADENREAL_API AWiesbadenCar : public APawn, public IWiesbadenVehicleCo
 
 public:
 	AWiesbadenCar();
+
+	/**
+	 * Waehlt Kaefer-Karosserie + Rad-Darstellung aus den verfuegbaren Meshes.
+	 * Bevorzugt die radlose Karosserie + 4 Einzelraeder, weil das Herbie-Voll-Mesh
+	 * ein Hinterrad vermissen laesst; Herbie nur als Notfall, sonst der Ersatzquader.
+	 * Rein/statisch, ohne Welt testbar (Test Vehicles.BeetleAssembly).
+	 */
+	static FBeetleAssembly ChooseBeetleAssembly(
+		bool bBodyMeshAvailable, bool bWheelMeshAvailable, bool bHerbieMeshAvailable);
 
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
