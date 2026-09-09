@@ -17,6 +17,7 @@
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "Vehicles/WiesbadenVehicleTestHarness.h"
 #include "World/WiesbadenCitySubsystem.h"
+#include "NPC/WiesbadenPursuerActor.h"
 
 void AWiesbadenPlayerController::WbTeleport(int32 Ziel)
 {
@@ -301,4 +302,23 @@ void AWiesbadenPlayerController::WbHeliOff()
 	{
 		UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeliOff - kein Autopilot aktiv."));
 	}
+}
+
+void AWiesbadenPlayerController::WbSpawnPursuer()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+	const APawn* P = GetPawn();
+	const FVector Base = P ? P->GetActorLocation() : FVector::ZeroVector;
+	// 40 m versetzt -> innerhalb des Detect-Radius (50 m), faengt sofort an zu verfolgen.
+	const FVector Spawn = Base + FVector(4000.0, 0.0, 0.0);
+	FActorSpawnParameters Sp;
+	Sp.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	const AWiesbadenPursuerActor* Pursuer = World->SpawnActor<AWiesbadenPursuerActor>(
+		AWiesbadenPursuerActor::StaticClass(), Spawn, FRotator::ZeroRotator, Sp);
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbSpawnPursuer - Verfolger %s bei (%.0f, %.0f)."),
+		Pursuer ? TEXT("gespawnt") : TEXT("NICHT gespawnt"), Spawn.X, Spawn.Y);
 }

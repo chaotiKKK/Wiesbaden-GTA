@@ -89,6 +89,10 @@ public:
 	UFUNCTION(Exec)
 	void WbHeliOff();
 
+	// Spawnt einen reaktiven Verfolger 40 m vor dem Spieler (Dev/Test).
+	UFUNCTION(Exec)
+	void WbSpawnPursuer();
+
 private:
 	// Schreibt den Gesundheitsbericht JETZT (JSON + Log). Gemeinsame Endstrecke von
 	// WbHealth (sofort) und dem Gate-Poll.
