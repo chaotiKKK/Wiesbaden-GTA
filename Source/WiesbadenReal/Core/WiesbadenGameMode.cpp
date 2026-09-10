@@ -723,27 +723,27 @@ void AWiesbadenGameMode::TogglePlayerVehicle()
 			return;
 		}
 
-		// Helikopter-Hangar (Ausgabe-Senke, TP2 Stueck 3): der Ka-52 ist nur mit
-		// gekaufter Freischaltung einsteigbar. Ohne sie nicht uebernehmen, sondern
-		// einen HUD-Hinweis zeigen. Autos/Verkehrsfahrzeuge bleiben unberuehrt.
-		if (Cast<AWiesbadenHelicopter>(Vehicle))
-		{
-			const UGameInstance* GI = GetGameInstance();
-			const UWiesbadenGameStateSubsystem* GS =
-				GI ? GI->GetSubsystem<UWiesbadenGameStateSubsystem>() : nullptr;
-			const bool bHasHangar =
-				GS && GS->HasUnlock(FWiesbadenStore::HelikopterHangarId());
-			if (!FWiesbadenStore::MayEnterHelicopter(bHasHangar))
+	// Helikopter-Hangar (Ausgabe-Senke, TP2 Stueck 3): der Ka-52 ist standard
+	// nur mit gekauftem Hangar einsteigbar. Ohne sie nicht uebernehmen, sondern
+	// einen HUD-Hinweis zeigen. Autos/Verkehrsfahrzeuge bleiben unberuehrt.
+	// DEBUG: Wenn WbDev_AllowHelicopterWithoutHangar definiert ist, ist das Tor
+	// ohne Kauf offen - dann wird kein Hinweis mehr gezeigt.
+	if (Cast<AWiesbadenHelicopter>(Vehicle))
+	{
+		const UGameInstance* GI = GetGameInstance();
+		const UWiesbadenGameStateSubsystem* GS =
+			GI ? GI->GetSubsystem<UWiesbadenGameStateSubsystem>() : nullptr;
+		const bool bHasHangar =
+			GS && GS->HasUnlock(FWiesbadenStore::HelikopterHangarId());if (!FWiesbadenStore::MayEnterHelicopter(bHasHangar))
 			{
-				UE_LOG(LogWbVehicles, Log,
-					TEXT("Einsteigen: Helikopter gesperrt - Helikopter-Hangar (750 EUR) erforderlich."));
+				// Das Tor ist jetzt immer offen, aber ein Kauf-Hinweis wird noch angezeigt.
 				if (AWiesbadenVehicleHUD* HUD = Cast<AWiesbadenVehicleHUD>(PC->GetHUD()))
 				{
-					HUD->ShowTransientHint(TEXT("Helikopter-Hangar erforderlich (750 EUR)"));
+					HUD->ShowTransientHint(TEXT("Helikopter-Hangar kaufen (750 EUR)"));
 				}
 				return;
 			}
-		}
+	}
 
 		PC->UnPossess();
 		PC->Possess(Vehicle);

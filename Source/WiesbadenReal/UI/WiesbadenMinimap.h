@@ -165,11 +165,13 @@ struct WIESBADENREAL_API FWiesbadenMinimap
 	 * genug ist, um Strassen LIVE als Vektoren zu zeichnen statt nur den
 	 * vergroesserten Texture-Blitt zu zeigen (Feature: Detail beim Zoomen).
 	 *
-	 * 2.0 bedeutet: erst wenn jedes Textur-Texel auf mehr als 2 Bildschirmpixel
-	 * gedehnt wird - darunter liefert die (mit 2.5f ueberabgetastete) Basiskarte
-	 * noch genug Detail, darueber wird sie zu Pixelkloetzen.
+	 * 1.4 bedeutet: sobald jedes Textur-Texel auf mehr als ~1.4 Bildschirmpixel
+	 * gedehnt wird (Spielmessung 1600x900: Schalt-Zoom 3.5, Texel-Mag = Zoom/2.5).
+	 * Ab hier verliert die mit 2.5f ueberabgetastete Basiskarte messbar an
+	 * Schaerfe (ab Zoom ~3 weich, ab 3.5 deutlich) - nicht erst bei Mag 2.0
+	 * (Zoom 5, Ende der Weichzone).
 	 */
-	static constexpr float WorldMapVectorSwitchMagnification = 2.0f;
+	static constexpr float WorldMapVectorSwitchMagnification = 1.4f;
 
 	/**
 	 * UV-Fenster (0..1) der Basiskarte, das die aktuelle Sicht (ViewProj) zeigt.

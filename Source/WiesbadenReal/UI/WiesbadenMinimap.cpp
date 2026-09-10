@@ -148,10 +148,10 @@ bool FWiesbadenMinimap::ShouldDrawVectorStreets(
 	}
 
 	// Umstellen, sobald die Sicht die Texeldichte der Basis-Textur um mehr als
-	// WorldMapVectorSwitchMagnification uebersteigt: Bis dahin ist die (mit
-	// kSuperSample ueberabgetastete) Textur schaerfer oder gleichwertig, danach
-	// vergroessert der Blitt nur noch Pixel - dann liefern live gezeichnete
-	// Vektoren das Detail, das beim Hineinzoomen fehlt.
+	// WorldMapVectorSwitchMagnification uebersteigt (Spielmessung: ab Mag ~1.4
+	// wird die Textur messbar weich). Darunter liefert die mit kSuperSample
+	// ueberabgetastete Basiskarte genug Detail, darueber vergroessert der Blitt
+	// nur noch Pixel - dann zeichnen live Vektoren das Detail, das fehlt.
 	return ViewProj.ScalePxPerCm
 		>= BaseFit.ScalePxPerCm * WorldMapVectorSwitchMagnification;
 }

@@ -470,8 +470,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWorldMapVectorSwitchTest,
 bool FWorldMapVectorSwitchTest::RunTest(const FString& Parameters)
 {
 	// Netz 0..2000 x 0..1000 (2:1). Basis-Textur 2000x1000 -> 1.0 Texel/cm;
-	// Bildschirm 800x400 -> 0.4 px/cm. Die Sicht erreicht die 2x-Texeldichte
-	// also erst bei Zoom 5 (0.4*5 = 2.0 = 1.0 * WorldMapVectorSwitchMagnification).
+	// Bildschirm 800x400 -> 0.4 px/cm. Die Sicht erreicht die 1.4x-Texeldichte
+	// also bei Zoom 3.5 (0.4*3.5 = 1.4 = 1.0 * WorldMapVectorSwitchMagnification).
+	//
+	// Gemessen im Spiel (1600x900, Texel-Mag = Zoom/2.5): ab Zoom 3 wird die
+	// Textur weich, ab Zoom 3.5 deutlich (Kanten-Peak -45 %). Die Schwelle 1.4
+	// schaltet dort ein - nicht erst bei Mag 2.0 (Zoom 5, Ende der Weichzone).
 	const FVector2D WMin(0.0, 0.0);
 	const FVector2D WMax(2000.0, 1000.0);
 	const FVector2D BaseSize(2000.0, 1000.0);
@@ -482,7 +486,8 @@ bool FWorldMapVectorSwitchTest::RunTest(const FString& Parameters)
 		WMin, WMax, ScreenSize * 0.5, ScreenSize, /*MarginFrac=*/1.0f);
 	const FVector2D NetCentre = (WMin + WMax) * 0.5;
 
-	// Stadt-Ansicht (Zoom 1..2): die ueberabgetastete Textur reicht - keine Vektoren.
+	// Stadt-Ansicht (Zoom 1..3): Massstab 0.4..1.2 < 1.4 Texeldichte - die
+	// ueberabgetastete Textur reicht, keine Vektoren.
 	for (float Zoom : { 1.0f, 2.0f, 3.0f })
 	{
 		const FWorldMapProjection V = FWiesbadenMinimap::MakeZoomedProjection(
@@ -491,18 +496,31 @@ bool FWorldMapVectorSwitchTest::RunTest(const FString& Parameters)
 			FWiesbadenMinimap::ShouldDrawVectorStreets(V, BaseFit));
 	}
 
-	// Tief hineingezoomt (Zoom 6..8): jedes Texel deckt mehrere Bildschirmpixel,
-	// die Textur wird zu Pixelkloetzen -> Strassen live als Vektoren.
-	for (float Zoom : { 6.0f, 7.0f, 8.0f })
+	// Hineingezoomt (ab Zoom 3.5 = Massstab 1.4): jedes Texel deckt mehr als
+	// 1.4 Bildschirmpixel, die Textur wird weich -> Strassen live als Vektoren.
+	for (float Zoom : { 3.75f, 4.0f, 6.0f, 8.0f })
 	{
 		const FWorldMapProjection V = FWiesbadenMinimap::MakeZoomedProjection(
 			ScreenFit, Zoom, NetCentre);
-		TestTrue(FString::Printf(TEXT("Zoom %.0f: Vektoren statt vergroesserter Textur"), Zoom),
+		TestTrue(FString::Printf(TEXT("Zoom %.2f: Vektoren statt vergroesserter Textur"), Zoom),
 			FWiesbadenMinimap::ShouldDrawVectorStreets(V, BaseFit));
 	}
 
+	// Schwelle mit Toleranz statt exaktem 3.5-Vergleich (float): knapp darunter
+	// Textur, knapp darueber Vektoren.
+	{
+		const FWorldMapProjection VBelow = FWiesbadenMinimap::MakeZoomedProjection(
+			ScreenFit, 3.4f, NetCentre);
+		TestFalse(TEXT("Zoom 3.4 (Mag ~1.36): noch Textur"),
+			FWiesbadenMinimap::ShouldDrawVectorStreets(VBelow, BaseFit));
+		const FWorldMapProjection VAbove = FWiesbadenMinimap::MakeZoomedProjection(
+			ScreenFit, 3.6f, NetCentre);
+		TestTrue(TEXT("Zoom 3.6 (Mag ~1.44): Vektoren"),
+			FWiesbadenMinimap::ShouldDrawVectorStreets(VAbove, BaseFit));
+	}
+
 	// Zoom ist monotone Funktion des Massstabs: dichter als die Textur heisst
-	// hineingezoomt. Bei Zoom 3 liegt die Sicht UNTER der Texeldichte.
+	// hineingezoomt. Bei Zoom 3 liegt die Sicht UNTER der Schwelle 1.4.
 	TestTrue(TEXT("Schwelle liegt ueber Zoom 3"),
 		ScreenFit.ScalePxPerCm * 3.0f < BaseFit.ScalePxPerCm * FWiesbadenMinimap::WorldMapVectorSwitchMagnification);
 	TestTrue(TEXT("Zoom 6 ueberschreitet die Schwelle"),

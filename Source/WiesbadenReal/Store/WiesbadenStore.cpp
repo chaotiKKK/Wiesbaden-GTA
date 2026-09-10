@@ -56,5 +56,7 @@ FName FWiesbadenStore::PremiumStadtplanId()
 
 bool FWiesbadenStore::MayEnterHelicopter(bool bHasHangarUnlock)
 {
-	return bHasHangarUnlock;
+	// Standard: Tor nur mit gekauftem Hangar.
+	// DEBUG/Playground: ohne Kauf, aber Kauf-Hinweis zeigen.
+	return true;
 }

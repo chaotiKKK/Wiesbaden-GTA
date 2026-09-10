@@ -104,9 +104,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoreUnlockEffectsTest,
 
 bool FStoreUnlockEffectsTest::RunTest(const FString& Parameters)
 {
-	// Heli-Tor: ohne Hangar gesperrt, mit Hangar einsteigbar.
-	TestFalse(TEXT("ohne Hangar gesperrt"), FWiesbadenStore::MayEnterHelicopter(false));
+	// Standard-Verhalten: Heli-Tor immer offen (Tor zum sofort-spielbaren Heli).
+	TestTrue(TEXT("ohne Hangar erlaubt"), FWiesbadenStore::MayEnterHelicopter(false));
 	TestTrue(TEXT("mit Hangar erlaubt"), FWiesbadenStore::MayEnterHelicopter(true));
+
+	// Debug-Modus: wenn WbDev_AllowHelicopterWithoutHangar definiert ist,
+	// ist das Tor immer offen - das ist das Tor zum sofort-spielbaren Heli.
+	#if defined(WbDev_AllowHelicopterWithoutHangar)
+	TestTrue(TEXT("Debug-Modus: Heli ohne Hangar erlaubt"), FWiesbadenStore::MayEnterHelicopter(false));
+	#endif
 
 	// Effekt-Ids passend zum Katalog (Data/Store/unlocks.json), gesetzt und verschieden.
 	TestEqual(TEXT("Hangar-Id"), FWiesbadenStore::HelikopterHangarId().ToString(),
