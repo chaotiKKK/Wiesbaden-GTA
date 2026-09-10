@@ -141,6 +141,9 @@ protected:
 	 */
 	void TogglePlayerVehicle();
 
+	/** Prueft NPC-Haendler-Interaktion fuer einen fuß-Pawn. */
+	bool TryMerchantInteraction(class AWiesbadenFootPawn* FootPawn);
+
 	/** Findet das naechste uebernehmbare Fahrzeug um eine Position. */
 	APawn* FindNearbyVehicle(const FVector& Location) const;
 

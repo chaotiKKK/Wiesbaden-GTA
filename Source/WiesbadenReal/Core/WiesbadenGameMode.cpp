@@ -16,6 +16,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "Vehicles/WiesbadenFootPawn.h"
+#include "NPC/WiesbadenStoreMerchant.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 #include "UI/WiesbadenVehicleHUD.h"
 #include "Core/WiesbadenGameStateSubsystem.h"
@@ -558,6 +559,16 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 		return;
 	}
 
+	// NPC-Händler-Interaktion (Nordfriedhof). Es wird nur zu Fuss geprüft;
+	// im Fahrzeug gilt weiterhin F = ein-/aussteigen.
+	if (APawn* Pawn = PC->GetPawn())
+	{
+		if (AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(Pawn))
+		{
+			TryMerchantInteraction(Foot);
+		}
+	}
+
 	// Flankenerkennung: ohne sie wuerde der Wechsel jeden Frame ausgeloest,
 	// solange die Taste gehalten wird.
 	// Y am Gamepad neben F auf der Tastatur.
@@ -571,6 +582,19 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 		|| PC->IsInputKeyDown(EKeys::Gamepad_FaceButton_Top);
 	if (bDown && !bEntryKeyHeld)
 	{
+		// Wenn der Spieler zu Fuss ist und in Reichweite eines NPCs, wird
+		// der NPC zuerst gefragt. Wenn die NPC-Interaktion erfolgreich ist,
+		// wird kein Fahrzeug-Fahrzeug-Wechsel durchgefuehrt.
+		if (APawn* Pawn = PC->GetPawn())
+		{
+			if (AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(Pawn))
+			{
+				if (TryMerchantInteraction(Foot))
+				{
+					return;
+				}
+			}
+		}
 		TogglePlayerVehicle();
 	}
 	bEntryKeyHeld = bDown;
