@@ -94,7 +94,6 @@ Bahn in die Landschaft ein, ohne grossflaechige Terrain-Aenderungen.
 Nach jeder Stufe laufen die passenden Automation-Tests; zum Abschluss folgen
 ein Unreal-Editor-Build und eine Spielpruefung mit Xbox-Gamepad.
 
-## Nicht im Umfang
 ## Standalone-Auslieferung
 
 Nach der Spielpruefung wird die vorhandene Release-Pipeline
@@ -111,4 +110,6 @@ zurueckgesetzt werden.
 
 
 Keine neue allgemeine Wirtschaft, kein vollstaendiger NPC-Dialogbaum, keine
+## Nicht im Umfang
+
 Simulationsphysik und keine grosse Landschafts-Neugenerierung.
