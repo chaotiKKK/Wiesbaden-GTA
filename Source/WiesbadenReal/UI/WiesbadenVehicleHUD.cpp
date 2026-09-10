@@ -877,8 +877,11 @@ void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString
 		OutLines.Add(TEXT("L                   Licht        R  Rueckwaertsgang"));
 		OutLines.Add(TEXT("B                   Hupe         X  Aufblenden"));
 		OutLines.Add(TEXT("Maus                Umsehen      F  Aussteigen"));
-		OutLines.Add(TEXT("Gamepad   A Hupe  B Handbremse  X Rueckwaerts  Y Aussteigen"));
-		OutLines.Add(TEXT("          LB RB Blinker   Kreuz hoch Licht   runter Warnblinker"));
+	OutLines.Add(TEXT("Gamepad   A Hupe  B Handbremse  X Rueckwaerts  Y Aussteigen"));
+	OutLines.Add(TEXT("          LB RB Blinker   Kreuz hoch Licht   runter Warnblinker"));
+	// Helikopter-Belegung nur bei eingestegtem Fahrzeug sichtbar (WiesbadenHelicopter::ReadInput).
+	OutLines.Add(TEXT("Helikopter:  RT hoch  LT runter  LR Kreuz links/rechts  rechter Stick Nick/Roll"));
+	OutLines.Add(TEXT("            A aussteigen  B:nicht belegt"));
 		return;
 	}
 
