@@ -26,7 +26,7 @@ Zuerst uebersetzen wir das Editor-Target - das bestaetigt, dass deine Werkzeugke
 steht. Kopiere das in PowerShell:
 
 ```powershell
-$build = "C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Build\BatchFiles\Build.bat"
+$build = "C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat"
 $proj  = "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject"
 & $build WiesbadenRealEditor Win64 Development -project="$proj" -waitmutex
 ```
@@ -45,7 +45,7 @@ meist der Compiler nicht gefunden - dann fehlt Visual Studio.)
 Jetzt starten wir das Spiel in einem Fenster. Kopiere:
 
 ```powershell
-$exe = "C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
+$exe = "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
 $proj = "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject"
 Start-Process -FilePath $exe -ArgumentList @("`"$proj`"","-game","-windowed","-resx=1600","-resy=900")
 ```
@@ -99,7 +99,7 @@ in Schritt 6. Damit dein erster Flug aber garantiert gelingt, lassen wir zuerst 
 **Autopiloten** fliegen. Schliesse das Spielfenster und starte es so:
 
 ```powershell
-$exe = "C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
+$exe = "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
 $proj = "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject"
 Start-Process -FilePath $exe -ArgumentList @("`"$proj`"","-game","-windowed","-resx=1600","-resy=900","-ExecCmds=`"WbHeli,WbHeliGoto 100 0 40`"")
 ```

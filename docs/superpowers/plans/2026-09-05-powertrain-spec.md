@@ -12,12 +12,12 @@
 
 ## Global Constraints
 
-- **Engine/paths:** UE 5.8 at `C:\freebuff\WiesbadenReal_Sicherung\UE_5.8`; project `WiesbadenReal.uproject`. Module deps already include `ChaosVehicles`, `ProceduralMeshComponent`, `FunctionalTesting` — no `.Build.cs` change needed.
+- **Engine/paths:** UE 5.8 at `C:\Program Files\Epic Games\UE_5.8`; project `WiesbadenReal.uproject`. Module deps already include `ChaosVehicles`, `ProceduralMeshComponent`, `FunctionalTesting` — no `.Build.cs` change needed.
 - **Test workflow (two steps — `run_tests.cmd` only builds):** `run_tests.cmd` calls `Build.bat` without `call`, so control never returns and its automation line never runs; the script therefore ONLY builds. Verify a cycle in two steps:
   1. **Build:** run `run_tests.cmd`; confirm `build_test.log` shows `Build OK` / `Result: Succeeded` and NOT `BUILD FEHLGESCHLAGEN`. (TDD "RED" = a build failure, e.g. a missing header, which shows here.)
   2. **Test:** run the automation command directly and read its own log:
      ```
-     "C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject" -ExecCmds="Automation RunTests WiesbadenReal.Vehicles; Quit" -unattended -nop4 -nullrhi -stdout -log -log=autotest.log
+     "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject" -ExecCmds="Automation RunTests WiesbadenReal.Vehicles; Quit" -unattended -nop4 -nullrhi -stdout -log -log=autotest.log
      ```
      Then grep `Saved\Logs\autotest.log` for `Result={Success}` / `Result={Fail}` and the test `Name={...}`. Narrow the `RunTests` argument to one test's full name to run just that one. Confirm no `UnrealEditor-Cmd` process is left running afterward.
 - **TABU — do not touch:** `AWiesbadenChaosCar`'s PhysicsAsset / belly-collision logic (`RestsOnWheels`, the `SetSimulatePhysics`/sleep logic in `BeginPlay`), and anything under `WiesbadenCityChunk`. The **only** permitted edit to `WiesbadenChaosCar.cpp` is the constructor's `EngineSetup`/`TransmissionSetup`/`Mass` block, and it must be **behavior-preserving**.

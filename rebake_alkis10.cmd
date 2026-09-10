@@ -9,5 +9,5 @@ set WB_SOURCE_MAP=/Game/Maps/WiesbadenCity_Alkis3
 set WB_TARGET_MAP=/Game/Maps/WiesbadenCity_Alkis10
 set WB_MAX_SEGMENT_CM=220
 set WB_USE_OSM_TREES=1
-"C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" -ExecCmds="py C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Tools\rebuild_city.py" -unattended -nosplash -nop4 > "%LOG%" 2>&1
+"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" -ExecCmds="py C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Tools\rebuild_city.py" -unattended -nosplash -nop4 > "%LOG%" 2>&1
 exit /b %ERRORLEVEL%

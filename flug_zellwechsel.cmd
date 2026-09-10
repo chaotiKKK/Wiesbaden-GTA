@@ -13,5 +13,5 @@ REM   - stat unit im Reiseflug-Screenshot (WbShot=300)
 REM Alles in Saved\Logs\WiesbadenReal.log; Shot in Saved\Diagnose\Messstelle*.
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\flug_zellwechsel.log
-"C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis3 -game -windowed -ResX=1280 -ResY=720 -WbAutoDrive=250 -WbAutoDriveStart=260 -WbShot=300 -WbQuitAfter=325 -ExecCmds="stat unit" -stdout -unattended -nop4 > "%LOG%" 2>&1
+"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis3 -game -windowed -ResX=1280 -ResY=720 -WbAutoDrive=250 -WbAutoDriveStart=260 -WbShot=300 -WbQuitAfter=325 -ExecCmds="stat unit" -stdout -unattended -nop4 > "%LOG%" 2>&1
 exit /b %ERRORLEVEL%

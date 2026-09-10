@@ -33,7 +33,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root   = "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal"
-$Editor = "C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
+$Editor = "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
 $Proj   = Join-Path $Root "WiesbadenReal.uproject"
 $Durchfall = Join-Path $Root "Saved\Diagnose\Durchfall.txt"
 

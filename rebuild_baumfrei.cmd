@@ -19,5 +19,5 @@ REM zu machen. Umgeschaltet wird erst nach dem Abgleich.
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set WB_TARGET_MAP=/Game/Maps/WiesbadenCity_Alkis3
 set WB_SOURCE_MAP=/Game/Maps/WiesbadenCity_Alkis3
-"C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" -ExecCmds="py C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Tools\build_city.py" -unattended -nosplash -nop4 > C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\rebuild_baumfrei.log 2>&1
+"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" -ExecCmds="py C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Tools\build_city.py" -unattended -nosplash -nop4 > C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\rebuild_baumfrei.log 2>&1
 exit /b %ERRORLEVEL%

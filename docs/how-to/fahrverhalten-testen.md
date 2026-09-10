@@ -30,7 +30,7 @@ liefe `WbDrive` ins Leere ("kein Fahrzeug besessen"). Fahr- und Heli-Nachweise
 gehoeren daher in getrennte Sitzungen.
 
 ```powershell
-$exe  = "C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
+$exe  = "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
 $proj = "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject"
 $log  = "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Saved\Logs\WbDrive.log"
 Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process -Force

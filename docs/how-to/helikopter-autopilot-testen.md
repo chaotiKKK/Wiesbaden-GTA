@@ -33,7 +33,7 @@ interaktiv (Schritt 5) oder eine eigene, spaeter gestartete Sitzung.
 Beispiel (PowerShell; Pfade ggf. anpassen), Ziel 300 m nach vorn und 60 m hoch:
 
 ```powershell
-$exe  = "C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
+$exe  = "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
 $proj = "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject"
 $log  = "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Saved\Logs\WbAutopilot.log"
 Start-Process -FilePath $exe -ArgumentList @(

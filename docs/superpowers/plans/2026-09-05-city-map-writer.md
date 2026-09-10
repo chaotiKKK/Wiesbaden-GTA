@@ -19,9 +19,9 @@
   If the output is **non-empty**, STOP and report — the WIP has not landed; splitting now would clobber work that isn't ours.
 - **TABU:** do not modify anything under `WiesbadenCityChunk` (`.h/.cpp`). The writer must NOT depend on `AWiesbadenCityChunk` — the actor gathers chunk package names and passes them in the request.
 - **Behaviour-preserving:** the produced `Durchfall.txt`-equivalent here is the saved `.umap` + `DefaultEngine.ini` wiring. The Chaos car / city output must be byte-for-byte the same save; this is a refactor, not a feature.
-- **Engine/paths & test workflow:** UE 5.8 at `C:\freebuff\WiesbadenReal_Sicherung\UE_5.8`. Build with `Build.bat WiesbadenRealEditor Win64 Development` (confirm `Result: Succeeded`), then run tests directly (`run_tests.cmd` only builds — see the powertrain plan's note):
+- **Engine/paths & test workflow:** UE 5.8 at `C:\Program Files\Epic Games\UE_5.8`. Build with `Build.bat WiesbadenRealEditor Win64 Development` (confirm `Result: Succeeded`), then run tests directly (`run_tests.cmd` only builds — see the powertrain plan's note):
   ```
-  "C:/freebuff/WiesbadenReal_Sicherung/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" "C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/WiesbadenReal.uproject" -ExecCmds="Automation RunTests <NAME>; Quit" -unattended -nop4 -nullrhi -stdout -log=cmw.log
+  "C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" "C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/WiesbadenReal.uproject" -ExecCmds="Automation RunTests <NAME>; Quit" -unattended -nop4 -nullrhi -stdout -log=cmw.log
   ```
   grep `Saved/Logs/cmw.log` for `Result={Success}`/`{Fail}`.
 - **Never commit red; never fabricate consent.** If a test fails, stop and report.
@@ -103,7 +103,7 @@ bool FCityMapWriterChunkPackagesTest::RunTest(const FString& Parameters)
 
 - [ ] **Step 2: Run the build to verify it fails**
 
-Build: `MSYS_NO_PATHCONV=1 "C:/freebuff/WiesbadenReal_Sicherung/UE_5.8/Engine/Build/BatchFiles/Build.bat" WiesbadenRealEditor Win64 Development -project="C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/WiesbadenReal.uproject" -waitmutex`
+Build: `MSYS_NO_PATHCONV=1 "C:/Program Files/Epic Games/UE_5.8/Engine/Build/BatchFiles/Build.bat" WiesbadenRealEditor Win64 Development -project="C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/WiesbadenReal.uproject" -waitmutex`
 Expected: FAILS — `WiesbadenCityMapWriter.h` does not exist.
 
 - [ ] **Step 3: Create the header**
@@ -184,7 +184,7 @@ bool WiesbadenCityMapWriter::AllChunksInSeparatePackages(
 - [ ] **Step 5: Build + run the test to verify it passes**
 
 Build (as Step 2), then:
-`"C:/freebuff/WiesbadenReal_Sicherung/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" "C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/WiesbadenReal.uproject" -ExecCmds="Automation RunTests WiesbadenReal.GIS.CityMapWriter; Quit" -unattended -nop4 -nullrhi -stdout -log=cmw.log`
+`"C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" "C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/WiesbadenReal.uproject" -ExecCmds="Automation RunTests WiesbadenReal.GIS.CityMapWriter; Quit" -unattended -nop4 -nullrhi -stdout -log=cmw.log`
 Expected: `WiesbadenReal.GIS.CityMapWriter.ChunkPackages` → `Result={Success}`.
 
 - [ ] **Step 6: Commit**

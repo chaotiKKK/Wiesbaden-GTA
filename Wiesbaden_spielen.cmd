@@ -21,7 +21,7 @@ REM  Steuerung einblenden: F1.
 REM  Protokoll (alle 15 s Bildzeit/Aussetzer/Straenge): Saved\Logs\WiesbadenReal.log
 REM ===========================================================================
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
-set EXE=C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe
+set EXE=C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe
 set MAP=%~1
 if "%MAP%"=="" set MAP=WiesbadenCity_Alkis9
 start "" "%EXE%" "%PROJ%" /Game/Maps/%MAP% -game -windowed -ResX=1600 -ResY=900 -nop4

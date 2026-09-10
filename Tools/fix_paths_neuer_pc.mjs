@@ -19,7 +19,7 @@ const PAIRS = [
   ['C:/Users/ssonn/aivideo/WiesbadenReal', 'C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal'],
   // Engine (beide Slash-Formen)
   ['C:\\Program Files\\Epic Games\\UE_5.8', 'C:\\freebuff\\WiesbadenReal_Sicherung\\UE_5.8'],
-  ['C:/Program Files/Epic Games/UE_5.8', 'C:/freebuff/WiesbadenReal_Sicherung/UE_5.8'],
+  ['C:/Program Files/Epic Games/UE_5.8', 'C:/Program Files/Epic Games/UE_5.8'],
 ];
 
 const files = [];

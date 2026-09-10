@@ -8,7 +8,7 @@ Was fehlt, erzeugt Unreal beim ersten Start selbst.
 ```
 WiesbadenReal_Sicherung\
   WiesbadenReal\        das Unreal-Projekt (Quelltext, Inhalte, Rohdaten)
-  UE_5.8\               die komplette Unreal Engine 5.8
+  UE_5.8\               Unreal Engine 5.8.1 - nur noch RUECKFALL (installiert ist 5.8.2)
   Epic\
     Launcher\           der Epic Games Launcher
     ProgramData_Epic\   die Manifeste, an denen er Installationen erkennt
@@ -22,7 +22,7 @@ WiesbadenReal_Sicherung\
 
 | | |
 |---|---|
-| Unreal Engine | **5.8** - liegt auf dieser Platte, kein Download noetig |
+| Unreal Engine | **5.8** - auf diesem Rechner installiert als 5.8.2 unter `C:\Program Files\Epic Games\UE_5.8`; die 5.8.1 auf der Platte ist nur Rueckfall |
 | Visual Studio | 2022 oder neuer, mit **Desktopentwicklung mit C++** und **Spieleentwicklung mit C++** |
 | Windows SDK | 10.0.22621 oder neuer |
 | Blender | 4.x, falls die Modelle bearbeitet werden sollen |
@@ -36,6 +36,12 @@ meldet dann nur, dass kein Compiler gefunden wurde.
 **1. Engine an ihren Platz kopieren**
 
 `UE_5.8` von dieser Platte nach `C:\Program Files\Epic Games\UE_5.8`.
+
+Auf diesem Rechner ist das bereits erledigt: Dort liegt die **5.8.2**
+(Launcher-Installation, CL 56702186), und alle `.cmd`-Dateien/Tools zeigen
+auf diesen Pfad. Die Plattenkopie `WiesbadenReal_Sicherung\UE_5.8` (5.8.1,
+CL 56057345) ist nur noch Rueckfall - ein Wechsel zurueck erfordert einen
+Rebuild, weil `Intermediate`/`Binaries` gegen 5.8.2 gebaut werden.
 
 Genau dieser Pfad: Die Registrierung des Altrechners lautete
 
