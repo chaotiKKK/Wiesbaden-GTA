@@ -35,9 +35,10 @@ public:
 	/** Katalog-Id des Premium-Stadtplans - schaltet die Karten-Beschriftung frei. */
 	static FName PremiumStadtplanId();
 
-	/** Darf der Spieler den Helikopter betreten?
+	/**
+	 * Darf der Spieler den Helikopter betreten?
 	 * Standard: nur mit gekauftem Hangar (Rein/testbar).
-	 * DEBUG-Modus: bei definiertem WbDev_AllowHelicopterWithoutHangar immer true.
+	 * DEBUG: bei definiertem WbDev_AllowHelicopterWithoutHangar immer true.
 	 */
 	static bool MayEnterHelicopter(bool bHasHangarUnlock);
 };

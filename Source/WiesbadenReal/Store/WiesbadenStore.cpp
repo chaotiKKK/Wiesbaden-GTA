@@ -57,6 +57,7 @@ FName FWiesbadenStore::PremiumStadtplanId()
 bool FWiesbadenStore::MayEnterHelicopter(bool bHasHangarUnlock)
 {
 	// Standard: Tor nur mit gekauftem Hangar.
-	// DEBUG/Playground: ohne Kauf, aber Kauf-Hinweis zeigen.
-	return true;
+	// DEBUG: wenn WbDev_AllowHelicopterWithoutHangar definiert ist, ist das Tor
+	// ohne Kauf offen — aber kein Kauf-Hinweis mehr (Entwicklerwahl).
+	return bHasHangarUnlock || (true && defined(WbDev_AllowHelicopterWithoutHangar));
 }
