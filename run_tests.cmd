@@ -7,7 +7,7 @@ set ERR=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\build_test.err
 echo === Build startet: %date% %time% === > "%LOG%"
 
 REM 1) Editor-Target kompilieren (UBT) - der erste Lauf erzeugt Binaries.
-"C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat" WiesbadenRealEditor Win64 Development -project="%PROJ%" -waitmutex >> "%LOG%" 2>&1
+call "C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat" WiesbadenRealEditor Win64 Development -project="%PROJ%" -waitmutex >> "%LOG%" 2>&1
 if errorlevel 1 (
   echo === BUILD FEHLGESCHLAGEN: %date% %time% === >> "%LOG%"
   exit /b 1
