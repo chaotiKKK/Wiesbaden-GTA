@@ -24,6 +24,7 @@ bool FStoreMerchantTypesTest::RunTest(const FString& Parameters)
 	Empty.InteractRangeCm = 350.0f;
 	Empty.Title = TEXT("Nordfriedhof-Haendler");
 	TestEqual(TEXT("weiterer Titel auslesbar"), Empty.Title, TEXT("Nordfriedhof-Haendler"));
+	TestTrue(TEXT("leere Marker-Anlage bleibt versteckt"), Empty.Marker->IsHiddenInGame());
 
 	return true;
 }

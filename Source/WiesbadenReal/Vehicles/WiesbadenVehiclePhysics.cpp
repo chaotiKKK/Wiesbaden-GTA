@@ -280,11 +280,19 @@ void FWiesbadenVehiclePhysics::Tick(
 	const float Vx = SpeedMetersPerS;
 	if (Vx > LowSpeedBlendMetersPerS)
 	{
-		const float L = FMath::Max(WheelbaseM, 0.5f);
-		const float aFront = L * (1.0f - FrontWeightFraction);   // CG -> Vorderachse
-		const float bRear = L * FrontWeightFraction;             // CG -> Hinterachse
-		const float m = FMath::Max(Powertrain.MassKg, 1.0f);
-		const float Iz = FMath::Max(YawInertiaKgM2, 1.0f);
+	const float L = FMath::Max(WheelbaseM, 0.5f);
+	const float aFront = L * (1.0f - FrontWeightFraction);   // CG -> Vorderachse
+	const float bRear = L * FrontWeightFraction;             // CG -> Hinterachse
+	const float m = FMath::Max(Powertrain.MassKg, 1.0f);
+	const float Iz = FMath::Max(YawInertiaKgM2, 1.0f);
+
+	// Kurzschluss-Lenkrate bei vollem Anschlag und niedrigem Tempo dampfen:
+	// ohne diesen Schritt würde ein aufgedrücktes Lenkrad in ein bis zwei Bildern
+	// 90° drehen und das Fahrzeug sofort ins Trudeln bringen. Der Kaefer lenkt
+	// ohne Servounterstuetzung, also mit handlichem Aufwand - schneller als 1,2
+	// rad/s fühlt sich nach nichts an, was in reellen Rädern steht.
+	YawRateRadPerS = FMath::Min(YawRateRadPerS, 1.2f);
+	YawRateRadPerS = FMath::Max(YawRateRadPerS, -1.2f);
 
 		const float UsableSteerDeg = ComputeUsableSteerAngleDeg(
 			MaxSteerAngleDeg, Vx, SteerFalloffSpeedMetersPerS);
