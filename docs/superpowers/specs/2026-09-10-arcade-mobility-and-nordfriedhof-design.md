@@ -8,12 +8,13 @@ Helikopter sowie eine voll nutzbare Nerobergbahn als Panorama-Erlebnis.
 
 ## Umfang und Reihenfolge
 
-Die Umsetzung erfolgt in vier abgeschlossenen vertikalen Ausbaustufen:
+Die Umsetzung erfolgt in fuenf abgeschlossenen vertikalen Ausbaustufen:
 
 1. Nordfriedhof-Haendler, Shop und Helikopterhangar.
 2. Arcade-Abstimmung der Pkw-Fahrphysik.
 3. Xbox-Gamepad-Steuerung und Arcade-Flugverhalten des Helikopters.
 4. Begeh- und befahrbare Nerobergbahn mit eingepasster Szenerie.
+5. Gepruefte Standalone-Auslieferung mit Desktop-Verknuepfung.
 
 Jede Stufe bleibt fuer sich baubar, testbar und im Spiel nutzbar.
 
@@ -94,6 +95,20 @@ Nach jeder Stufe laufen die passenden Automation-Tests; zum Abschluss folgen
 ein Unreal-Editor-Build und eine Spielpruefung mit Xbox-Gamepad.
 
 ## Nicht im Umfang
+## Standalone-Auslieferung
+
+Nach der Spielpruefung wird die vorhandene Release-Pipeline
+`Tools/build_release.cmd` verwendet. Sie baut zuerst Editor und Automation-
+Tests, fuehrt den Rauchtest aus und paketiert nur bei vollstaendig gruenem
+Ergebnis die Windows-Standalone nach `Saved/Package/Windows`.
+
+Die Pipeline erneuert danach die Desktop-Verknuepfung
+`Wiesbaden Real (Paket).lnk`. Sie zeigt auf die paketierte
+`WiesbadenReal.exe`, nicht auf den Unreal Editor. Das vorherige Paket wird
+vorher unter `Saved/Package_previous` gesichert; ein fehlgeschlagener oder
+unerwuenschter Release kann mit `Tools/build_release.cmd -Rollback`
+zurueckgesetzt werden.
+
 
 Keine neue allgemeine Wirtschaft, kein vollstaendiger NPC-Dialogbaum, keine
 Simulationsphysik und keine grosse Landschafts-Neugenerierung.
