@@ -36,6 +36,18 @@ public:
 	static FName PremiumStadtplanId();
 
 	/**
+	 * DEBUG-Schalter WbDev_AllowHelicopterWithoutHangar als Abfrage.
+	 *
+	 * Der Schalter ist eine Compile-Zeit-Wahl und liegt bewusst nur hier -
+	 * sonst tragen GameMode und UI dieselbe `defined(...)`-Verzweigung doppelt
+	 * (und genau dort stand sie frueher faelschlich in einer Laufzeit-`if`).
+	 */
+	static bool IsHangarGateForcedOpen();
+
+	/** Soll der Kauf-Hinweis erscheinen, obwohl das Tor zu ist? (kein DEBUG-Tor) */
+	static bool ShouldShowHangarPurchaseHint();
+
+	/**
 	 * Darf der Spieler den Helikopter betreten?
 	 * Standard: nur mit gekauftem Hangar (Rein/testbar).
 	 * DEBUG: bei definiertem WbDev_AllowHelicopterWithoutHangar immer true.

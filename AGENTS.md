@@ -2009,3 +2009,86 @@ Fahr-Evidenz statt Geometrie (held>0 -> wirksam; wenige Anfahrten -> kein Fehler
 >=20 Anfahrten ohne Halten -> echter Defekt). "Ampeln 0.0 ms" bleibt ERWARTET
 (Phase faul in IsConnectionGreen). MERKE (drittes Mal diese Sitzung): eine einzelne
 Selbstdiagnose-Warnung erst gegen die Fahr-/Gesamtbilanz pruefen, bevor man sie glaubt.
+
+## Werkzeug-Fallstricke (Ergänzung 11.09.2026): Zeilenenden bei Skript-Edits
+
+Die UE-Quellen (`Source/**`, `AGENTS.md`) sind CRLF; einzelne Zeilen darin nicht
+(fremde `str_replace`-Edits hinterlassen LF-only-Zeilen). Fallstricke:
+
+- `Path.read_text()`/`write_text()` benutzen Universal-Newlines: beim Schreiben
+  wird daraus LF -> git meldet die GANZE Datei als geändert (statt ~250 waren
+  2060 Zeilen im Diff). In Skripten deshalb `read_bytes`/`write_bytes` (oder
+  `newline=""` beim Öffnen) verwenden und das EOL des Ziels vorher messen.
+- Unfall-Reparatur: `data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")`
+  (Vorlage: `.freebuff/fix_crlf.py`). Danach MUSS `git diff --numstat` wieder in
+  der Größenordnung der echten Änderung liegen, sonst ist WIP unsichtbar zermahlen.
+- `str_replace` trifft CRLF-Dateien nur, wenn der Suchstring die `\r` enthält.
+- Verifikations-Muster fürs Umbenennen/Extrahieren ohne Compiler: Build über
+  `cmd //c <absoluter Pfad>\build_only.cmd` (~25 s inkrementell), danach die volle
+  Suite headless über `.freebuff/launch_tests.ps1` + Zählung der
+  `Test Completed. Result={Success}`-Zeilen im Saved-Log (grün = 195).
+
+## GameMode-Tick: Tastenflanke nur EINMAL pro Frame auswerten (11.09.2026)
+
+`AWiesbadenGameMode::Tick` fragte `WasInputKeyJustPressed(InteractKey)` ZWEIMAL im
+selben Frame ab (einmal in einem verworfenen Zweig, einmal im gewerteten). Die
+Abfrage gilt fuer den ganzen Frame -> ein einziger Tastendruck loeste zwei Aktionen
+aus; zusaetzlich blieb der Flankenmerker `bEntryKeyHeld` nach einer NPC-Interaktion
+stehen und wechselte einen Frame spaeter doch noch ins Fahrzeug (Geister-Einstieg).
+Regel: Tastenzustand einmal am Tick-Anfang lesen, in einer Lokalen halten, an alle
+Zweige weitergeben; wer den Merker setzt, muss ihn im selben Tick konsumieren.
+
+Die Auswahlregel "naechster Haendler in Reichweite" liegt jetzt als reine Funktion
+`SelectMerchantInReach(...)` (static, ohne Welt/Pawn) bereit und ist damit ohne
+`UWorld` testbar (Tests/StoreMerchantInReachTest.cpp, Muster wie
+PickupSpawnerTest). Such-/Auswahlregeln von Seiteneffekten trennen: dann ist die
+Regel ein billiger Unit-Test statt eines Integrationstests.
+
+Testerwartung: volle Suite jetzt 197 Success (vorher 194/195), 0 Fail, EXIT CODE 0.
+
+## Testnamen duerfen kein Praefix eines anderen Testnamens sein (11.09.2026)
+
+Der Kommandozeilen-Runner sammelt nur BLATTKNOTEN des Testbaums
+(`FAutomationReport::GetEnabledTestNames` sammelt nur Knoten mit
+`ChildReports.Num() == 0`). Ein Testname, unter dem weitere Tests haengen, wird
+zum Zwischenknoten und laeuft STILL nie - ohne Fehler, ohne Warnung, und die
+Suite meldet weiter "0 Fail". Genau das war der Fall:
+
+- `WiesbadenReal.Vehicles.HUD` (Eltern von ...HUD.ControlLegend, ...HUD.MapDistance)
+  -> jetzt `WiesbadenReal.Vehicles.HUD.Instruments`
+- `WiesbadenReal.Vehicles.CarLights` (Eltern von ...CarLights.AutomaticHeadlights)
+  -> jetzt `WiesbadenReal.Vehicles.CarLights.Signals`
+
+Damit liefen zwei Tests nie mit: 197 definiert, aber nur 195 ausgefuehrt (und
+die Zahlen "194/195 gruen" der letzten Sitzungen waren entsprechend blind).
+Invariante ab jetzt: definierte Testnamen == "Test Completed"-Zeilen im Log.
+Pruefbefehl fuer beide Seiten:
+
+    find Source -name "*.cpp" | xargs awk '/IMPLEMENT_(SIMPLE|COMPLEX)_AUTOMATION_TEST/{l=1;next} l==1 && match($0, /"[A-Za-z0-9_.]+"/) {print substr($0,RSTART+1,RLENGTH-2); l=0}' | sort -u | wc -l
+    # und: grep -c "Test Completed" Saved/Logs/WiesbadenReal.log
+
+Praefix-Kollisionen findet man am schnellsten, wenn man die Namen sammelt und
+paarweise prueft, ob ein Name ein Praefix (mit Punkt) eines anderen ist.
+
+## HUD-Haendlerhinweis: Actor und Spielerstandort, nicht Ursprung (11.09.2026)
+
+`ResolveMerchantCue` konnte nie konkret werden:
+
+- `CachedFootMerchant` (TWeakObjectPtr) wurde nie zugewiesen - der Suchlauf
+  speicherte nur Entfernungen (`NearestOf` gab ein `double` zurueck).
+- `DescribeNearestMerchantInReach` nahm einen Skalar `PlayerCm` und las ihn als
+  X-Koordinate (`FVector(PlayerCm, 0, 0)`): gemessen wurde ab dem WELTURSPRUNG.
+  Im Wiesbadener Massstab lag damit jeder Haendler ausserhalb der Reichweite,
+  der Hinweis fiel dauerhaft auf "nah ran und F" zurueck.
+
+Fix: der Suchlauf merkt Entfernung UND Actor (lokales `FNearest`), der Cue misst
+ab dem Spielerstandort (`TryGetPlayerPlanarPos`) und benutzt die EIGENE
+`InteractRangeCm` des Haendlers - dieselbe Regel wie
+`AWiesbadenGameMode::PickMerchantInReach`, damit Hinweis und Interaktion
+dieselbe Reichweite haben (ein Cue auf etwas, das F nicht erreicht, waere
+schlimmer als keiner).
+
+MERKE: der alte Test war gruen, weil er Haendler UND Spieler im Ursprung
+annahm (`NewObject` ohne Wurzel + `PlayerCm = 0.0`) - er spiegelte den Fehler,
+statt ihn zu finden. Eine Regression mit weit entferntem Spielerstandort steht
+jetzt daneben.

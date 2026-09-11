@@ -13,8 +13,16 @@
  * als statische Funktionen ausgelagert sind: eine Blinkfrequenz laesst sich
  * nicht sinnvoll "durch Hinsehen" pruefen.
  */
+// Der Testname darf KEIN Praefix eines anderen Testnamens sein.
+//
+// Der Kommandozeilen-Runner sammelt nur BLATTKNOTEN des Testbaums
+// (FAutomationReport::GetEnabledTestNames: ChildReports.Num() == 0). Ein Name,
+// unter dem weitere Tests haengen, wird zum Zwischenknoten und laeuft still
+// nie. Genau das war hier der Fall: "WiesbadenReal.Vehicles.CarLights" war
+// Elternknoten von ...CarLights.AutomaticHeadlights, Schaltlogik und Blinktakt
+// unten sind deshalb nie geprueft worden.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCarLightsTest,
-	"WiesbadenReal.Vehicles.CarLights",
+	"WiesbadenReal.Vehicles.CarLights.Signals",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
 bool FCarLightsTest::RunTest(const FString& Parameters)

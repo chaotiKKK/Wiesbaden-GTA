@@ -34,6 +34,34 @@ public:
 	/** Versucht die Interaktion mit einem Fuß-Pawn in Reichweite. */
 	bool TryInteract(APawn* Pawn);
 
+	/**
+	 * Stable query the HUD uses to name a concrete approach cue for the
+	 * nearest in-reach merchant. This is not a dialog tree and not new
+	 * economy — only a shared way to turn an actor scan into a short,
+	 * fulfillable cue, so the foot prompt can be specific instead of an
+	 * unspecified 'F ... somehow'.
+	 *
+	 * Cue text is intentionally brief and actionable: it describes the
+	 * next action, not the figure.
+	 *
+	 * Es zaehlt nur, wer in SEINER EIGENEN InteractRangeCm steht - dieselbe
+	 * Regel wie AWiesbadenGameMode::PickMerchantInReach. Hinweis und
+	 * Interaktion benutzen damit eine Reichweite: ein Hinweis auf einen
+	 * Haendler, den F nicht erreicht, waere schlimmer als kein Hinweis.
+	 *
+	 * @param Merchants     Kandidaten; nullptr-Eintraege werden uebersprungen.
+	 * @param FromLocation  Standort des Spielers - NICHT der Weltursprung.
+	 * @param OutCue        Hinweistext des naechsten Treffers, sonst leer.
+	 * @return              Derselbe Text wie OutCue (leer, wenn keiner passt).
+	 */
+	static FString DescribeNearestMerchantInReach(
+		const TArray<AActor*>& Merchants,
+		const FVector& FromLocation,
+		FString& OutCue);
+
+	/** True, solange der Marker-Standort nicht sichtbar geschaltet ist. */
+	bool IsMarkerHidden() const;
+
 	/** Reichweite der Interaktion, in cm. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Haendler", meta = (ClampMin = "100.0"))
 	float InteractRangeCm = 350.0f;

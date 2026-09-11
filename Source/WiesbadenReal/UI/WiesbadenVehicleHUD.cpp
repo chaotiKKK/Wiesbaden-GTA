@@ -13,6 +13,7 @@
 #include "Engine/Engine.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "NPC/WiesbadenStoreMerchant.h"
 #include "Vehicles/WiesbadenCar.h"
 #include "Vehicles/WiesbadenVehicleControl.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
@@ -606,6 +607,11 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		}
 	}
 
+	// Spieleingangshilfe (First-Run): die Zustandsmaschine steht in
+	// UpdateFirstRunOnboarding() - DrawHUD zeichnet nur noch. Der Block lag
+	// vorher inline hier und machte DrawHUD zur halben State-Machine.
+	UpdateFirstRunOnboarding();
+
 	// Pausemenue zuerst: es liegt ueber allem und haelt die Zeit an.
 	UpdatePauseMenu();
 	if (bPaused)
@@ -810,10 +816,19 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 
 	const FVector Here = Pawn->GetActorLocation();
 
-	auto NearestOf = [&Here](const TArray<AActor*>& Actors) -> double
+	// Naehe als Paar: Entfernung UND Actor. Die Entfernung braucht jeder
+	// Hinweis, den Actor nur der Haendler-Cue (Reichweite und Text haengen am
+	// einzelnen Haendler).
+	struct FNearest
 	{
-		double Best = -1.0;
-		for (const AActor* Actor : Actors)
+		AActor* Actor = nullptr;
+		double DistanceCm = -1.0;
+	};
+
+	auto NearestOf = [&Here](const TArray<AActor*>& Actors) -> FNearest
+	{
+		FNearest Best;
+		for (AActor* Actor : Actors)
 		{
 			if (!Actor)
 			{
@@ -821,9 +836,10 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 			}
 			const FVector Delta = Actor->GetActorLocation() - Here;
 			const double Flat = FMath::Sqrt(Delta.X * Delta.X + Delta.Y * Delta.Y);
-			if (Best < 0.0 || Flat < Best)
+			if (Best.DistanceCm < 0.0 || Flat < Best.DistanceCm)
 			{
-				Best = Flat;
+				Best.Actor = Actor;
+				Best.DistanceCm = Flat;
 			}
 		}
 		return Best;
@@ -838,12 +854,20 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 		TArray<AActor*> Cars;
 		TArray<AActor*> Helicopters;
 		TArray<AActor*> Funiculars;
+		TArray<AActor*> Merchants;
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenCar::StaticClass(), Cars);
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenHelicopter::StaticClass(), Helicopters);
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenNerobergbahn::StaticClass(), Funiculars);
+		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenStoreMerchant::StaticClass(), Merchants);
 		Cars.Append(Helicopters);
-		CachedFootVehicleCm = NearestOf(Cars);
-		CachedFootFunicularCm = NearestOf(Funiculars);
+		CachedFootVehicleCm = NearestOf(Cars).DistanceCm;
+		CachedFootFunicularCm = NearestOf(Funiculars).DistanceCm;
+
+		// Der Haendler wird als Actor gemerkt, nicht nur als Entfernung.
+		// Ohne diese Zuweisung blieb CachedFootMerchant dauerhaft leer und
+		// ResolveMerchantCue fiel auf den allgemeinen Hinweis zurueck.
+		CachedFootMerchant = Cast<AWiesbadenStoreMerchant>(NearestOf(Merchants).Actor);
+
 		FootPromptScanAge = 0.0f;
 	}
 
@@ -869,7 +893,8 @@ void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString
 
 	if (bInVehicle)
 	{
-		OutLines.Add(TEXT("W / Pfeil hoch      Gas"));
+		OutLines.Add(TEXT("W / Pfeil hoch      Gas"
+			"        Rechter Trigger"));
 		OutLines.Add(TEXT("S / Pfeil runter    Bremse, im Stand rueckwaerts"));
 		OutLines.Add(TEXT("A D / Pfeile        Lenken"));
 		OutLines.Add(TEXT("Leertaste           Handbremse"));
@@ -877,11 +902,12 @@ void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString
 		OutLines.Add(TEXT("L                   Licht        R  Rueckwaertsgang"));
 		OutLines.Add(TEXT("B                   Hupe         X  Aufblenden"));
 		OutLines.Add(TEXT("Maus                Umsehen      F  Aussteigen"));
-	OutLines.Add(TEXT("Gamepad   A Hupe  B Handbremse  X Rueckwaerts  Y Aussteigen"));
-	OutLines.Add(TEXT("          LB RB Blinker   Kreuz hoch Licht   runter Warnblinker"));
-	// Helikopter-Belegung nur bei eingestegtem Fahrzeug sichtbar (WiesbadenHelicopter::ReadInput).
-	OutLines.Add(TEXT("Helikopter:  RT hoch  LT runter  LR Kreuz links/rechts  rechter Stick Nick/Roll"));
-	OutLines.Add(TEXT("            A aussteigen  B:nicht belegt"));
+		OutLines.Add(TEXT("C                   Kamera       M  Karte zeigen/verbergen"));
+		OutLines.Add(TEXT("Gamepad   A Hupe  B Handbremse  X Rueckwaerts  Y Aussteigen"));
+		OutLines.Add(TEXT("          LB RB Blinker   Kreuz hoch Licht   runter Warnblinker"));
+		// Helikopter-Belegung nur bei eingestegtem Fahrzeug sichtbar (WiesbadenHelicopter::ReadInput).
+		OutLines.Add(TEXT("Helikopter:  RT hoch  LT runter  LR Kreuz links/rechts  rechter Stick Nick/Roll"));
+		OutLines.Add(TEXT("            A aussteigen  B:nicht belegt"));
 		return;
 	}
 
@@ -925,6 +951,7 @@ void AWiesbadenVehicleHUD::GetPauseMenuEntries(TArray<FString>& OutEntries)
 	OutEntries.Reset();
 	OutEntries.Add(TEXT("Weiterspielen"));
 	OutEntries.Add(TEXT("Steuerung einblenden"));
+	OutEntries.Add(TEXT("Karte zeigen / verbergen (M)"));
 	// Entwicklerbefehle. Ohne sie kostet jede Pruefung eine Fahrt quer durch
 	// die Stadt - der Weg zur Platter Strasse dauert im Spiel Minuten.
 	OutEntries.Add(TEXT("Entwickler: zurueck zur Platter Strasse 146"));
@@ -1098,6 +1125,13 @@ void AWiesbadenVehicleHUD::DrawPauseMenu(float Width, float Height)
 
 	DrawText(TEXT("Pfeile waehlen   Eingabe bestaetigen   Esc schliesst"),
 		TellTaleOff, X + 24.0f, Y + BoxHeight - 24.0f, GEngine->GetSmallFont(), 1.0f);
+
+	if (PauseSelection == 2)
+	{
+		DrawText(TEXT("Karte im Spiel: M (Tastatur) / Gamepad-Start"),
+			DialScale, X + 24.0f, Y + 60.0f + (PauseSelection + 1) * LineHeight,
+			GEngine->GetSmallFont(), 1.0f);
+	}
 }
 
 const FRoadNetwork* AWiesbadenVehicleHUD::FindRoadNetwork()
@@ -1946,3 +1980,229 @@ void AWiesbadenVehicleHUD::DrawVehicleBanner(float CenterX, float Y)
 		TextWidth + PadX * 2.0f, TextHeight + PadY * 2.0f);
 	DrawText(VehicleBannerText, Fg, CenterX - TextWidth * 0.5f, Y, Font, 1.0f);
 }
+
+bool AWiesbadenVehicleHUD::IsFirstRunPromptArmed() const
+{
+	if (!FirstRun.bArmed)
+	{
+		return false;
+	}
+	const UWorld* W = GetWorld();
+	if (!W)
+	{
+		return false;
+	}
+	return W->GetTimeSeconds() < FirstRun.ExpiresAt;
+}
+
+namespace
+{
+	/** Planarer Abstand (XY) in cm - Drift-, Ziel- und Naehe-Rechnungen. */
+	double WbPlanarDistanceCm(const FVector2D& A, const FVector2D& B)
+	{
+		const double Dx = A.X - B.X;
+		const double Dy = A.Y - B.Y;
+		return FMath::Sqrt(Dx * Dx + Dy * Dy);
+	}
+}
+
+bool AWiesbadenVehicleHUD::IsPlayerIdle() const
+{
+	// 'Gas' gibt es an der Steuernaht nicht als Live-Wert - Idle-Proxi ist die
+	// Fahrzeuggeschwindigkeit (Tempo ~0 = kein Gas). Zu Fuss oder ohne Fahrzeug
+	// gibt es keinen Leerlauf-Hinweis.
+	const IWiesbadenVehicleControl* Control = GetPlayerVehicleControl();
+	return Control && FMath::IsNearlyZero(Control->GetSpeedKmh());
+}
+
+bool AWiesbadenVehicleHUD::TryGetPlayerPlanarPos(FVector2D& OutPlanarPos) const
+{
+	const APlayerController* PC = GetOwningPlayerController();
+	const APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+	if (!Pawn)
+	{
+		return false;
+	}
+	const FVector Location = Pawn->GetActorLocation();
+	OutPlanarPos = FVector2D(Location.X, Location.Y);
+	return true;
+}
+
+AWiesbadenVehicleHUD::EFirstRunContext AWiesbadenVehicleHUD::ResolveFirstRunContext() const
+{
+	// Kontext aus den Naehe-Koerben, die der Zu-Fuss-Pfad ohnehin pflegt.
+	if (GetPlayerVehicleControl())
+	{
+		return EFirstRunContext::VehicleIdle;
+	}
+	if (CachedFootVehicleCm >= 0.0 && CachedFootVehicleCm <= FootVehicleReachCm)
+	{
+		return EFirstRunContext::FootNearVehicle;
+	}
+	if (CachedFootFunicularCm >= 0.0 && CachedFootFunicularCm <= FootFunicularReachCm)
+	{
+		return EFirstRunContext::FootNearFunicular;
+	}
+	return EFirstRunContext::FootNearNPC;
+}
+
+void AWiesbadenVehicleHUD::UpdateFirstRunOnboarding()
+{
+	const UWorld* HudWorld = GetWorld();
+	if (!HudWorld)
+	{
+		return;
+	}
+
+	const UWiesbadenCitySubsystem* City = HudWorld->GetSubsystem<UWiesbadenCitySubsystem>();
+	const bool bPlayerIdle = IsPlayerIdle();
+
+	// Einmaliger Einblend-Hinweis direkt nach dem Streaming.
+	if (bPlayerIdle && !bWishPromptShown && City && City->IsCityStreamingComplete())
+	{
+		bWishPromptShown = true;
+		ShowTransientHint(TEXT("W gasen, A/D lenken - F steigt aus"));
+	}
+
+	if (!FirstRun.bArmed)
+	{
+		ArmFirstRunPrompt(*HudWorld, City, bPlayerIdle);
+	}
+
+	if (FirstRun.bArmed && FirstRun.Title.IsEmpty())
+	{
+		ComposeFirstRunText(HudWorld);
+	}
+
+	// Zeigen, solange verdient und nicht zurueckgenommen.
+	if (FirstRun.bArmed && !FirstRun.Title.IsEmpty())
+	{
+		ShowFirstRunContextHintOnce();
+		ShowTransientHint(
+			FString::Printf(TEXT("%s — %s"), *FirstRun.Title, *FirstRun.Subtitle));
+	}
+
+	// Ehrlich zuruecknehmen: abgelaufen, nicht mehr im Leerlauf oder abgedriftet.
+	if (FirstRun.bArmed && ShouldWithdrawFirstRunPrompt(*HudWorld, bPlayerIdle))
+	{
+		FirstRun.bArmed = false;
+	}
+}
+
+void AWiesbadenVehicleHUD::ArmFirstRunPrompt(
+	const UWorld& World, const UWiesbadenCitySubsystem* City, bool bPlayerIdle)
+{
+	// Verdient: erst wenn die Stadt fertig gestreamt ist UND der Spieler noch
+	// nichts getan hat.
+	if (!City || !City->IsCityStreamingComplete() || !bPlayerIdle)
+	{
+		return;
+	}
+
+	FirstRun.bArmed = true;
+	FirstRun.ArmingStartedAt = World.GetTimeSeconds();
+	FirstRun.ExpiresAt = FirstRun.ArmingStartedAt + 60.0f;
+
+	FVector2D ArmPos;
+	if (TryGetPlayerPlanarPos(ArmPos))
+	{
+		FirstRun.ArmWorldPos = ArmPos;
+	}
+
+	FirstRun.Context = ResolveFirstRunContext();
+}
+
+void AWiesbadenVehicleHUD::ComposeFirstRunText(const UWorld* HudWorld)
+{
+	FirstRun.Title = CurrentStreetName.IsEmpty()
+		? FString(TEXT("Wiesbaden"))
+		: CurrentStreetName;
+
+	// Untertitel: nahes aktives Missionsziel, sonst bewusst leer.
+	const UWiesbadenMissionSubsystem* Missions =
+		HudWorld ? HudWorld->GetSubsystem<UWiesbadenMissionSubsystem>() : nullptr;
+	const FMissionObjective* Objective = Missions ? Missions->GetCurrentObjective() : nullptr;
+	if (!Objective || Objective->Location.IsZero() || FirstRun.ArmWorldPos.IsZero())
+	{
+		return;
+	}
+
+	const FVector2D ObjectivePos(Objective->Location.X, Objective->Location.Y);
+	const double FlatCm = WbPlanarDistanceCm(ObjectivePos, FirstRun.ArmWorldPos);
+	if (FlatCm <= 50000.0)
+	{
+		FirstRun.Subtitle = FString::Printf(
+			TEXT("zum Ziel %s %.0f m"), *Objective->Label, FlatCm / 100.0);
+	}
+}
+
+void AWiesbadenVehicleHUD::ShowFirstRunContextHintOnce()
+{
+	if (FirstRun.bModeSpecificHintShown)
+	{
+		return;
+	}
+	FirstRun.bModeSpecificHintShown = true;
+
+	switch (FirstRun.Context)
+	{
+	case EFirstRunContext::VehicleIdle:
+		ShowTransientHint(TEXT("W gasen, A/D lenken — F steigt aus"));
+		break;
+	case EFirstRunContext::FootNearVehicle:
+		ShowTransientHint(TEXT("F einsteigen / E mitfahren"));
+		break;
+	case EFirstRunContext::FootNearFunicular:
+		ShowTransientHint(TEXT("E mitfahren — Nerobergbahn"));
+		break;
+	case EFirstRunContext::FootNearNPC:
+		ShowTransientHint(ResolveMerchantCue());
+		break;
+	default:
+		break;
+	}
+}
+
+FString AWiesbadenVehicleHUD::ResolveMerchantCue() const
+{
+	// Der Suchlauf hat den naechsten Haendler hinterlegt; hier wird nur noch
+	// sein Text geholt, und zwar ab dem Spielerstandort gemessen - nicht ab
+	// dem Weltursprung, sonst liegt jeder Haendler ausserhalb der Reichweite.
+	FVector2D PlayerPos;
+	if (!TryGetPlayerPlanarPos(PlayerPos))
+	{
+		return FString(TEXT("nah ran und F"));
+	}
+
+	TArray<AActor*> Merchants;
+	if (CachedFootMerchant.IsValid())
+	{
+		Merchants.Add(CachedFootMerchant.Get());
+	}
+
+	FString Cue;
+	AWiesbadenStoreMerchant::DescribeNearestMerchantInReach(
+		Merchants, FVector(PlayerPos.X, PlayerPos.Y, 0.0), Cue);
+	return Cue.IsEmpty() ? FString(TEXT("nah ran und F")) : Cue;
+}
+
+bool AWiesbadenVehicleHUD::ShouldWithdrawFirstRunPrompt(
+	const UWorld& World, bool bPlayerIdle) const
+{
+	if (World.GetTimeSeconds() >= FirstRun.ExpiresAt || !bPlayerIdle)
+	{
+		return true;
+	}
+	if (FirstRun.ArmWorldPos.IsZero())
+	{
+		return false;
+	}
+
+	FVector2D PlayerPos;
+	if (!TryGetPlayerPlanarPos(PlayerPos))
+	{
+		return false;
+	}
+	return WbPlanarDistanceCm(PlayerPos, FirstRun.ArmWorldPos) > 20000.0;
+}
+

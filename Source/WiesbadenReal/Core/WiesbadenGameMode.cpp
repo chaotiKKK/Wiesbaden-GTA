@@ -553,24 +553,19 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 
 	const UWorld* World = GetWorld();
-	const APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
 	if (!PC)
 	{
 		return;
 	}
 
-	// NPC-Händler-Interaktion (Nordfriedhof). Es wird nur zu Fuss geprüft;
-	// im Fahrzeug gilt weiterhin F = ein-/aussteigen.
-	if (APawn* Pawn = PC->GetPawn())
-	{
-		if (AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(Pawn))
-		{
-			TryMerchantInteraction(Foot);
-		}
-	}
-
-	// Flankenerkennung: ohne sie wuerde der Wechsel jeden Frame ausgeloest,
-	// solange die Taste gehalten wird.
+	// Die Interaktionstaste wird genau EINMAL je Bild ausgewertet.
+	//
+	// Zuvor lief dieselbe Abfrage zweimal: einmal am Bildanfang mit verworfenem
+	// Ergebnis, einmal im Ein-/Ausstiegszweig. WasInputKeyJustPressed gilt fuer
+	// das ganze Bild - derselbe Tastendruck zaehlte damit als zwei Interaktionen
+	// am NPC.
+	//
 	// Y am Gamepad neben F auf der Tastatur.
 	//
 	// Ein- und Aussteigen war das letzte Stueck, das sich NUR ueber die
@@ -578,25 +573,35 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 	// Aussteigen zur Tastatur greifen. Y ist an dieser Stelle die uebliche
 	// Belegung; A, B und X sind im Fahrzeug schon belegt (Hupe, Handbremse,
 	// Rueckwaertsgang).
+	//
+	// Flankenerkennung: ohne sie wuerde der Wechsel jeden Frame ausgeloest,
+	// solange die Taste gehalten wird.
 	const bool bDown = PC->IsInputKeyDown(EKeys::F)
 		|| PC->IsInputKeyDown(EKeys::Gamepad_FaceButton_Top);
-	if (bDown && !bEntryKeyHeld)
+	const bool bJustPressed = PC->WasInputKeyJustPressed(EKeys::F)
+		|| PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Top);
+
+	if (bJustPressed && !bEntryKeyHeld)
 	{
-		// Wenn der Spieler zu Fuss ist und in Reichweite eines NPCs, wird
-		// der NPC zuerst gefragt. Wenn die NPC-Interaktion erfolgreich ist,
-		// wird kein Fahrzeug-Fahrzeug-Wechsel durchgefuehrt.
+		// NPC-Haendler-Interaktion (Nordfriedhof). Es wird nur zu Fuss geprueft;
+		// im Fahrzeug gilt weiterhin F = ein-/aussteigen. Zu Fuss hat der NPC
+		// Vorrang: war die Interaktion erfolgreich, wird kein Fahrzeugwechsel
+		// ausgeloest.
+		AWiesbadenFootPawn* Foot = nullptr;
 		if (APawn* Pawn = PC->GetPawn())
 		{
-			if (AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(Pawn))
-			{
-				if (TryMerchantInteraction(Foot))
-				{
-					return;
-				}
-			}
+			Foot = Cast<AWiesbadenFootPawn>(Pawn);
 		}
-		TogglePlayerVehicle();
+
+		if (!Foot || !TryMerchantInteraction(Foot))
+		{
+			TogglePlayerVehicle();
+		}
 	}
+
+	// Merker immer nachziehen - auch nach einer NPC-Interaktion. Blieb er stehen,
+	// loeste das noch gehaltene F im naechsten Bild doch noch den Fahrzeugwechsel
+	// aus: Man sass nach dem Gespraech im Auto.
 	bEntryKeyHeld = bDown;
 
 	// Selbsttaetig aussteigen, wenn -WbZuFuss=<Sekunden> gesetzt ist.
@@ -611,6 +616,54 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 		UE_LOG(LogWbVehicles, Log,
 			TEXT("-WbZuFuss: nach %.1f s ausgestiegen."), ElapsedSeconds);
 	}
+}
+
+bool AWiesbadenGameMode::TryMerchantInteraction(AWiesbadenFootPawn* Foot)
+{
+	// Die Tastenflanke wertet der Tick aus und ruft nur dann hier an - eine
+	// zweite Abfrage hier waere dieselbe Flanke ein zweites Mal.
+	if (!Foot)
+	{
+		return false;
+	}
+
+	AWiesbadenStoreMerchant* Merchant = FindMerchantInReach(*Foot);
+	return Merchant ? Merchant->TryInteract(Foot) : false;
+}
+
+AWiesbadenStoreMerchant* AWiesbadenGameMode::PickMerchantInReach(
+	const TArray<AWiesbadenStoreMerchant*>& Merchants, const FVector& FromLocation)
+{
+	// Naechster Haendler innerhalb SEINER eigenen Interaktionsreichweite -
+	// gleiche Suchform wie FindNearbyVehicle, nur mit Actor-Reichweite.
+	AWiesbadenStoreMerchant* Nearest = nullptr;
+	double NearestDist = -1.0;
+	for (AWiesbadenStoreMerchant* Merchant : Merchants)
+	{
+		if (!Merchant)
+		{
+			continue;
+		}
+
+		const double Dist = FVector::Dist(Merchant->GetActorLocation(), FromLocation);
+		if (Dist <= Merchant->InteractRangeCm && (NearestDist < 0.0 || Dist < NearestDist))
+		{
+			Nearest = Merchant;
+			NearestDist = Dist;
+		}
+	}
+	return Nearest;
+}
+
+AWiesbadenStoreMerchant* AWiesbadenGameMode::FindMerchantInReach(const APawn& Foot) const
+{
+	// Der Weltsuchlauf laeuft nur beim Tastendruck (siehe Tick), nicht je Bild.
+	TArray<AWiesbadenStoreMerchant*> Merchants;
+	for (TActorIterator<AWiesbadenStoreMerchant> It(GetWorld()); It; ++It)
+	{
+		Merchants.Add(*It);
+	}
+	return PickMerchantInReach(Merchants, Foot.GetActorLocation());
 }
 
 APawn* AWiesbadenGameMode::FindNearbyVehicle(const FVector& Location) const
@@ -759,8 +812,9 @@ void AWiesbadenGameMode::TogglePlayerVehicle()
 			GS && GS->HasUnlock(FWiesbadenStore::HelikopterHangarId());
 		if (!FWiesbadenStore::MayEnterHelicopter(bHasHangar))
 		{
-			// Tor ist noch geschlossen. Kauf-Hinweis, wenn kein DEBUG-Tor.
-			if (!defined(WbDev_AllowHelicopterWithoutHangar))
+			// Tor ist noch geschlossen. Kauf-Hinweis, wenn kein DEBUG-Tor -
+			// die DEBUG-Wahl kennt nur FWiesbadenStore, nicht der GameMode.
+			if (FWiesbadenStore::ShouldShowHangarPurchaseHint())
 			{
 				if (AWiesbadenVehicleHUD* HUD = Cast<AWiesbadenVehicleHUD>(PC->GetHUD()))
 				{

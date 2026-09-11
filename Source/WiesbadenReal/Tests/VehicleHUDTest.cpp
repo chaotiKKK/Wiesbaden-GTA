@@ -7,9 +7,18 @@
 #include "UI/WiesbadenWorldMapView.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
 #include "Vehicles/WiesbadenCar.h"
+#include "NPC/WiesbadenStoreMerchant.h"
 
+// Der Testname darf KEIN Praefix eines anderen Testnamens sein.
+//
+// Der Kommandozeilen-Runner sammelt nur BLATTKNOTEN des Testbaums
+// (FAutomationReport::GetEnabledTestNames: ChildReports.Num() == 0). Ein Name,
+// unter dem weitere Tests haengen, wird zum Zwischenknoten und laeuft still
+// nie. Genau das war hier der Fall: "WiesbadenReal.Vehicles.HUD" war
+// Elternknoten von ...HUD.ControlLegend und ...HUD.MapDistance, die
+// Instrumentenwerte unten sind deshalb nie geprueft worden.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleHUDTest,
-	"WiesbadenReal.Vehicles.HUD",
+	"WiesbadenReal.Vehicles.HUD.Instruments",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
 /**
@@ -142,6 +151,7 @@ bool FVehicleHUDControlLegendTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Lenken genannt"), VehicleText.Contains(TEXT("Lenken")));
 	TestTrue(TEXT("Blinker genannt"), VehicleText.Contains(TEXT("Blinker")));
 	TestTrue(TEXT("Licht genannt"), VehicleText.Contains(TEXT("Licht")));
+	TestTrue(TEXT("Kamera genannt"), VehicleText.Contains(TEXT("Kamera")));
 
 	// AWiesbadenGameMode::Tick - Ein- und Aussteigen liegt auf F.
 	TestTrue(TEXT("Aussteigen genannt"), VehicleText.Contains(TEXT("Aussteigen")));
@@ -200,6 +210,70 @@ bool FVehicleHUDControlLegendTest::RunTest(const FString& Parameters)
 		// Entfernung 0 durchgehen - sonst stuende der Hinweis dauerhaft da.
 		TestTrue(TEXT("Kein Fahrzeug vorhanden -> kein Hinweis"),
 			FHud::BuildFootPrompt(-1.0, -1.0, CarReach, RailReach).IsEmpty());
+	}
+
+	// -- Konkreter Haendler-Cue ----------------------------------------------
+	//
+	// DescribeNearestMerchantInReach ist statisch; der reine Selektionsregel-Test
+	// hier macht die Cue-Konkretheit testbar, ohne eine ganze Spielwelt zu
+	// simulieren. Gemessen wird AB DEM SPIELERSTANDORT (Parameter) zur Position
+	// des Haendlers - genau diese Messung fehlte zuvor.
+	{
+		using HM = AWiesbadenStoreMerchant;
+		constexpr double MerchantReach = 400.0;
+
+		// Kein Haendler im Suchlauf: kein Cue.
+		{
+			FString Cue;
+			TArray<AActor*> Merchants;
+			TestTrue(TEXT("kein Haendler -> kein Cue"),
+				HM::DescribeNearestMerchantInReach(Merchants, FVector::ZeroVector, Cue).IsEmpty());
+			TestTrue(TEXT("kein Cue -> OutCue leer"), Cue.IsEmpty());
+		}
+
+		AWiesbadenStoreMerchant* Merchant = NewObject<AWiesbadenStoreMerchant>();
+		if (TestNotNull(TEXT("Haendler angelegt"), Merchant))
+		{
+			// Ohne Wurzel liegt der Actor im Ursprung; der Abstand kommt damit
+			// allein aus dem uebergebenen Spielerstandort.
+			TestTrue(TEXT("Haendler ohne Wurzel liegt im Ursprung"),
+				Merchant->GetActorLocation().IsZero());
+
+			Merchant->InteractRangeCm = static_cast<float>(MerchantReach);
+			Merchant->ApproachHint = TEXT("[F]  Haendler ansprechen");
+
+			TArray<AActor*> Merchants;
+			Merchants.Add(Merchant);
+			FString Cue;
+
+			// In Reichweite: der Cue ist konkret und uebernimmt den Autor-Text.
+			TestTrue(TEXT("in-reach Haendler -> konkreter Cue"),
+				!HM::DescribeNearestMerchantInReach(Merchants, FVector(100.0, 0.0, 0.0), Cue).IsEmpty());
+			TestEqual(TEXT("Cue uebernimmt den Autor-Text"), Cue,
+				FString(TEXT("[F]  Haendler ansprechen")));
+
+			// REGRESSION: der Spieler steht weit weg (30 m - im Wiesbadener
+			// Massstab nahe), der Haendler aber im Ursprung. Frueher wurde ab dem
+			// Ursprung gemessen, damit galt jeder Haendler als erreichbar; hier
+			// muss der Cue leer bleiben.
+			Cue.Reset();
+			TestTrue(TEXT("weit entfernter Spieler -> kein Cue"),
+				HM::DescribeNearestMerchantInReach(Merchants, FVector(3000.0, 0.0, 0.0), Cue).IsEmpty());
+			TestTrue(TEXT("weit weg -> OutCue leer"), Cue.IsEmpty());
+
+			// Die EIGENE Reichweite des Haendlers zaehlt, nicht die des Hinweises:
+			// ein Cue auf etwas, das F nicht erreicht, waere schlimmer als keiner.
+			Merchant->InteractRangeCm = 50.0f;
+			TestTrue(TEXT("ausserhalb der eigenen Reichweite -> kein Cue"),
+				HM::DescribeNearestMerchantInReach(Merchants, FVector(100.0, 0.0, 0.0), Cue).IsEmpty());
+
+			// Leerer Autor-Text faellt auf den kurzen Standardhinweis zurueck.
+			Merchant->InteractRangeCm = static_cast<float>(MerchantReach);
+			Merchant->ApproachHint.Reset();
+			TestTrue(TEXT("leerer Autor-Text -> konkret bleibender Standardhinweis"),
+				HM::DescribeNearestMerchantInReach(Merchants, FVector(100.0, 0.0, 0.0), Cue)
+					.Contains(TEXT("Händler")));
+		}
 	}
 
 	return true;

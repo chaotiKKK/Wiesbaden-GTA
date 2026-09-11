@@ -54,10 +54,26 @@ FName FWiesbadenStore::PremiumStadtplanId()
 	return FName(TEXT("premium_stadtplan"));
 }
 
+bool FWiesbadenStore::IsHangarGateForcedOpen()
+{
+	// Der Entwickler-Schalter ist eine Compile-Zeit-Wahl. Er steht hier an EINER
+	// Stelle, damit GameMode/UI kein Praeprozessor-Wissen mittragen.
+#if defined(WbDev_AllowHelicopterWithoutHangar)
+	return true;
+#else
+	return false;
+#endif
+}
+
+bool FWiesbadenStore::ShouldShowHangarPurchaseHint()
+{
+	return !IsHangarGateForcedOpen();
+}
+
 bool FWiesbadenStore::MayEnterHelicopter(bool bHasHangarUnlock)
 {
 	// Standard: Tor nur mit gekauftem Hangar.
-	// DEBUG: wenn WbDev_AllowHelicopterWithoutHangar definiert ist, ist das Tor
-	// ohne Kauf offen — aber kein Kauf-Hinweis mehr (Entwicklerwahl).
-	return bHasHangarUnlock || (true && defined(WbDev_AllowHelicopterWithoutHangar));
+	// DEBUG: bei definiertem WbDev_AllowHelicopterWithoutHangar ist das Tor
+	// ohne Kauf offen - dann entfaellt auch der Kauf-Hinweis (Entwicklerwahl).
+	return bHasHangarUnlock || IsHangarGateForcedOpen();
 }

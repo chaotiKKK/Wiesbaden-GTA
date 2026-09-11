@@ -10,7 +10,10 @@
 class AWiesbadenCar;
 class IWiesbadenVehicleControl;
 class AWiesbadenHelicopter;
+class AWiesbadenStoreMerchant;
 class UWiesbadenWorldMapView;
+class UWorld;
+class UWiesbadenCitySubsystem;
 
 /**
  * Fahrzeug-HUD: Tacho, Drehzahl, Gang und Kontrollleuchten.
@@ -280,14 +283,21 @@ private:
 	float MinimapCacheAge = 1000.0f;
 
 	/**
-	 * Zu-Fuss-Hinweis: naechste Fahrzeug-/Bahn-Entfernung. Der Suchlauf
-	 * (GetAllActorsOfClass ueber alle Actors, dreimal) ist teuer und wird nur
-	 * ein paar Mal je Sekunde erneuert, nicht je Bild - ein Naeherungshinweis
-	 * braucht keine Bild-genaue Entfernung.
+	 * Zu-Fuss-Hinweis: naechste Fahrzeug-/Bahn-Entfernung und naechster
+	 * Haendler. Der Suchlauf (GetAllActorsOfClass ueber alle Actors, dreimal)
+	 * ist teuer und wird nur ein paar Mal je Sekunde erneuert, nicht je Bild -
+	 * ein Naeherungshinweis braucht keine Bild-genaue Entfernung.
 	 */
 	float FootPromptScanAge = 1000.0f;
 	double CachedFootVehicleCm = -1.0;
 	double CachedFootFunicularCm = -1.0;
+
+	/**
+	 * Naechster Haendler aus demselben Suchlauf. Der Text-Cue braucht den
+	 * Actor, nicht nur eine Entfernung: Reichweite und Hinweistext haengen am
+	 * einzelnen Haendler (siehe DescribeNearestMerchantInReach).
+	 */
+	TWeakObjectPtr<AWiesbadenStoreMerchant> CachedFootMerchant;
 
 	/**
 	 * Zuletzt bestimmter Strassenname und wann er bestimmt wurde.
@@ -322,6 +332,56 @@ private:
 	/** Umschaltzustand und Halte-Flanke der F1-Taste. */
 	bool bShowControlLegend = true;
 	bool bLegendKeyHeld = false;
+
+	/** Spieleingangshilfe: Einblend-Hinweis wird einmal gezeigt, sobald die Stadt
+	 *  streamingfertig und das Fahrzeug noch gar nicht aktiv ist (kein Gas, kein
+	 *  Lenken, kein Licht, keine Waffe). Damit beginnt die erste Fahrt mit einer
+	 *  konkreten Einladung und nicht damit, dass der Wagen von selbst durch die
+	 *  Stadt schiebt, bis der Neue spielt. */
+	bool bWishPromptShown = false;
+
+	// --- compositional first-run onboarding ---
+	// One first-contact message set, chosen by the starting context and
+	// withdrawn honestly once the player has demonstrated they can act.
+	enum class EFirstRunContext : uint8
+	{
+		Unknown,
+		VehicleIdle,
+		FootNearVehicle,
+		FootNearFunicular,
+		FootNearNPC
+	};
+
+	struct FFirstRunPrompt
+	{
+		bool bArmed = false;                 // earned after stream-complete + idle
+		float ArmingStartedAt = -1000.0f;    // world time when first earned
+		float ExpiresAt = -1000.0f;          // world time when the prompt should
+											// stop nagging even if still idle
+		FVector2D ArmWorldPos = FVector2D::ZeroVector; // planar arm position for drift + distance
+		FString Title;                       // e.g. 'Platter Strasse'
+		FString Subtitle;                    // e.g. 'zum Ziel Haltestelle Nerobergbahn 120 m'
+		bool bModeSpecificHintShown = false; // 'W gasen ...' / 'F einsteigen ...' / etc.
+		EFirstRunContext Context = EFirstRunContext::Unknown;
+	};
+
+	FFirstRunPrompt FirstRun;
+
+	bool IsFirstRunPromptArmed() const;
+
+	// --- First-Run-Fuehrung (aus DrawHUD herausgezogen) --------------------
+	// DrawHUD zeichnet, diese Methoden entscheiden: verdienen -> komponieren
+	// -> zeigen -> ehrlich zuruecknehmen.
+	void UpdateFirstRunOnboarding();
+	void ArmFirstRunPrompt(const UWorld& World,
+		const UWiesbadenCitySubsystem* City, bool bPlayerIdle);
+	void ComposeFirstRunText(const UWorld* HudWorld);
+	void ShowFirstRunContextHintOnce();
+	FString ResolveMerchantCue() const;
+	EFirstRunContext ResolveFirstRunContext() const;
+	bool ShouldWithdrawFirstRunPrompt(const UWorld& World, bool bPlayerIdle) const;
+	bool TryGetPlayerPlanarPos(FVector2D& OutPlanarPos) const;
+	bool IsPlayerIdle() const;
 
 	// -- Weltkarte (M / Gamepad-Select) --------------------------------------
 	/** True, solange die Vollbild-Weltkarte offen ist. */

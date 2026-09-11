@@ -12,6 +12,7 @@
 #include "WiesbadenGameMode.generated.h"
 
 class UWiesbadenCitySubsystem;
+class AWiesbadenStoreMerchant;
 
 /**
  * GameMode des Wiesbaden-Core-Moduls.
@@ -95,6 +96,19 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Wiesbaden")
 	FOnWiesbadenCityStatus OnCityStatus;
 
+	/**
+	 * Naechster Haendler aus einer Kandidatenliste, dessen EIGENE Reichweite den
+	 * Standort einschliesst.
+	 *
+	 * Bewusst ohne Welt: die Regel "der naechste gewinnt, aber nur innerhalb
+	 * seiner eigenen Reichweite" ist so ohne Spielsitzung pruefbar. Die
+	 * Weltsuche steckt in FindMerchantInReach.
+	 *
+	 * @return Der naechste passende Haendler oder nullptr.
+	 */
+	static AWiesbadenStoreMerchant* PickMerchantInReach(
+		const TArray<AWiesbadenStoreMerchant*>& Merchants, const FVector& FromLocation);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -141,8 +155,16 @@ protected:
 	 */
 	void TogglePlayerVehicle();
 
-	/** Prueft NPC-Haendler-Interaktion fuer einen fuß-Pawn. */
+	/**
+	 * Prueft NPC-Haendler-Interaktion fuer einen fuß-Pawn.
+	 *
+	 * Die Tastenflanke wertet der Tick aus; hier wird nur noch gesucht und
+	 * delegiert.
+	 */
 	bool TryMerchantInteraction(class AWiesbadenFootPawn* FootPawn);
+
+	/** Naechster Haendler, dessen eigene Reichweite den Fuss-Pawn einschliesst. */
+	class AWiesbadenStoreMerchant* FindMerchantInReach(const APawn& FootPawn) const;
 
 	/** Findet das naechste uebernehmbare Fahrzeug um eine Position. */
 	APawn* FindNearbyVehicle(const FVector& Location) const;
