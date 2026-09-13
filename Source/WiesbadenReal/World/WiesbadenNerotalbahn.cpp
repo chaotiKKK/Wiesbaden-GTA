@@ -7,9 +7,14 @@
 
 #include "Engine/World.h"
 #include "GIS/GeoCoordinateConverter.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
+#include "InputCoreTypes.h"
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Vehicles/WiesbadenFootPawn.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
 
 namespace
 {
@@ -72,8 +77,19 @@ AWiesbadenNerotalbahn::AWiesbadenNerotalbahn()
 	// Reines Schmuckband; das Gelaende darunter traegt die Kollision.
 	TrackMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
+	// Wagen: ein Pivot, der die Strecke abfaehrt, plus der Wagenkasten als
+	// Bandgeometrie daran. Kein Kollisionskoerper - der Fahrgast wird
+	// ANGEHAENGT, nicht physikalisch mitgeschoben (wie bei der Nerobergbahn).
+	Car = CreateDefaultSubobject<USceneComponent>(TEXT("Car"));
+	Car->SetupAttachment(Root);
+
+	CarMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("CarMesh"));
+	CarMesh->SetupAttachment(Car);
+	CarMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
 	// Dieselbe Vertexfarben-Trasse wie die Nerobergbahn: Pflasterbett dunkel,
-	// Rillenschienen hell - drei Abschnitte, ein Material.
+	// Rillenschienen hell - drei Abschnitte, ein Material. Der Wagenkasten nutzt
+	// dasselbe Vertexfarben-Material.
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> TrackMat(
 		TEXT("/Game/Materials/City/M_WbVertexFarbe.M_WbVertexFarbe"));
 	if (TrackMat.Succeeded())
@@ -82,6 +98,7 @@ AWiesbadenNerotalbahn::AWiesbadenNerotalbahn()
 		{
 			TrackMesh->SetMaterial(Section, TrackMat.Object);
 		}
+		CarMesh->SetMaterial(0, TrackMat.Object);
 	}
 }
 
@@ -90,6 +107,7 @@ void AWiesbadenNerotalbahn::BeginPlay()
 	Super::BeginPlay();
 	BuildTrack();
 	BuildTrackMesh();
+	BuildCarMesh();
 
 	UE_LOG(LogWbStreaming, Log,
 		TEXT("Nerotalbahn: Strecke %.0f m, Terminus bei (%.0f, %.0f)."),
@@ -220,6 +238,7 @@ bool AWiesbadenNerotalbahn::ResolveHeights()
 		}
 
 		BuildTrackMesh();
+		RefreshCarPath();
 
 		double MinZ = TNumericLimits<double>::Max();
 		double MaxZ = TNumericLimits<double>::Lowest();
@@ -314,4 +333,240 @@ void AWiesbadenNerotalbahn::Tick(float DeltaSeconds)
 			ResolveHeights();
 		}
 	}
+
+	// -- Wagen fahren --------------------------------------------------------
+	// Erst wenn die Strecke auf dem Gelaende liegt; vorher stuende der Wagen auf
+	// der flachen Rueckfalllinie unter dem Hang.
+	if (bCarPathReady && Car)
+	{
+		const double SpeedCmPerS = SpeedKmh * 100000.0 / 3600.0;
+		WiesbadenRailTransport::AdvanceShuttle(
+			Shuttle, TotalLength, SpeedCmPerS, DwellSeconds, DeltaSeconds);
+
+		FVector Pos, Tangent;
+		if (WiesbadenRailTransport::SamplePolyline(
+			CarPathPos, CarPathArc, Shuttle.PositionCm, Pos, Tangent))
+		{
+			Car->SetWorldLocation(Pos + FVector(0, 0, CarLiftCm));
+			// Voller Tangens (Nick + Gier, kein Rollen): der Strassenbahnwagen
+			// liegt auf der gepflasterten Trasse und folgt ihrem sanften Gefaelle.
+			Car->SetWorldRotation(FRotationMatrix::MakeFromX(Tangent).Rotator());
+		}
+	}
+
+	// -- Mitfahren -----------------------------------------------------------
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!PC)
+	{
+		return;
+	}
+	const bool bBoardDown = PC->IsInputKeyDown(EKeys::E);
+	if (bBoardDown && !bBoardKeyHeld)
+	{
+		ToggleBoarding();
+	}
+	bBoardKeyHeld = bBoardDown;
+}
+
+void AWiesbadenNerotalbahn::RefreshCarPath()
+{
+	CarPathPos.Reset();
+	CarPathArc.Reset();
+	CarPathPos.Reserve(Points.Num());
+	CarPathArc.Reserve(Points.Num());
+	for (const FTrackPoint& Point : Points)
+	{
+		CarPathPos.Add(Point.Position);
+		CarPathArc.Add(Point.ArcLength);
+	}
+	// Der Wagen startet am oberen Terminus (Nerotal) und faehrt talwaerts.
+	Shuttle = WiesbadenRailTransport::FWiesbadenShuttleState{};
+	bCarPathReady = CarPathPos.Num() >= 2;
+	if (bCarPathReady && CarMesh)
+	{
+		CarMesh->SetVisibility(true);
+	}
+}
+
+void AWiesbadenNerotalbahn::BuildCarMesh()
+{
+	if (!CarMesh)
+	{
+		return;
+	}
+	CarMesh->ClearAllMeshSections();
+
+	TArray<FVector> Vertices;
+	TArray<int32> Triangles;
+	TArray<FVector> Normals;
+	TArray<FVector2D> UV0;
+	TArray<FLinearColor> Colours;
+
+	// Ein achsenparalleler Kasten in lokalen Wagenkoordinaten: X vorwaerts,
+	// Y quer, Z hoch, Pivot am Boden der Wagenmitte.
+	auto AddBox = [&](const FVector& Min, const FVector& Max, const FLinearColor& Colour)
+	{
+		const FVector P[8] = {
+			{ Min.X, Min.Y, Min.Z }, { Max.X, Min.Y, Min.Z },
+			{ Max.X, Max.Y, Min.Z }, { Min.X, Max.Y, Min.Z },
+			{ Min.X, Min.Y, Max.Z }, { Max.X, Min.Y, Max.Z },
+			{ Max.X, Max.Y, Max.Z }, { Min.X, Max.Y, Max.Z },
+		};
+		// Sechs Flaechen, je zwei Dreiecke, mit nach aussen zeigenden Normalen.
+		const int32 Faces[6][4] = {
+			{ 0, 1, 2, 3 },   // unten  (-Z)
+			{ 4, 7, 6, 5 },   // oben   (+Z)
+			{ 0, 4, 5, 1 },   // vorn   (-Y)
+			{ 3, 2, 6, 7 },   // hinten (+Y)
+			{ 0, 3, 7, 4 },   // links  (-X)
+			{ 1, 5, 6, 2 },   // rechts (+X)
+		};
+		const FVector FaceNormals[6] = {
+			{ 0, 0, -1 }, { 0, 0, 1 }, { 0, -1, 0 },
+			{ 0, 1, 0 }, { -1, 0, 0 }, { 1, 0, 0 },
+		};
+		for (int32 F = 0; F < 6; ++F)
+		{
+			const int32 Base = Vertices.Num();
+			for (int32 C = 0; C < 4; ++C)
+			{
+				Vertices.Add(P[Faces[F][C]]);
+				Normals.Add(FaceNormals[F]);
+				UV0.Add(FVector2D((C == 1 || C == 2) ? 1.0f : 0.0f,
+								  (C >= 2) ? 1.0f : 0.0f));
+				Colours.Add(Colour);
+			}
+			Triangles.Append({ Base, Base + 1, Base + 2, Base, Base + 2, Base + 3 });
+		}
+	};
+
+	// Historischer Wiesbadener Triebwagen, gemuetliche Maße: ~10 m lang, 2,1 m
+	// breit. Elfenbein/Creme-Kasten, dunkelrote Schuerze, dunkles Fensterband,
+	// helles Dach mit leichtem Ueberstand.
+	const float HalfLen = 500.0f;   // 10 m
+	const float HalfWid = 100.0f;   // 2,0 m Kasten
+	const FLinearColor Cream(0.86f, 0.82f, 0.70f);
+	const FLinearColor Skirt(0.34f, 0.07f, 0.09f);   // dunkelrot
+	const FLinearColor Glass(0.09f, 0.11f, 0.14f);   // dunkles Fensterband
+	const FLinearColor Roof(0.90f, 0.88f, 0.80f);    // helles Dach
+
+	AddBox(FVector(-HalfLen, -HalfWid - 5, 20), FVector(HalfLen, HalfWid + 5, 90), Skirt);
+	AddBox(FVector(-HalfLen, -HalfWid, 90), FVector(HalfLen, HalfWid, 240), Cream);
+	AddBox(FVector(-HalfLen + 30, -HalfWid - 2, 150),
+		   FVector(HalfLen - 30, HalfWid + 2, 210), Glass);
+	AddBox(FVector(-HalfLen - 20, -HalfWid - 10, 240),
+		   FVector(HalfLen + 20, HalfWid + 10, 275), Roof);
+
+	CarMesh->CreateMeshSection_LinearColor(
+		0, Vertices, Triangles, Normals, UV0, Colours,
+		TArray<FProcMeshTangent>(), /*bCreateCollision=*/false);
+
+	// Verborgen, bis die Strecke auf dem Gelaende ruht - sonst stuende der
+	// Wagen bis zur Hoehenaufloesung am Weltursprung.
+	CarMesh->SetVisibility(false);
+}
+
+void AWiesbadenNerotalbahn::CreatePassengerCamera()
+{
+	if (PassengerCamera || !RideSession.GetPassenger() || !Car)
+	{
+		return;
+	}
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!PC)
+	{
+		return;
+	}
+	PassengerCamera = NewObject<UWiesbadenVehicleCameraComponent>(
+		this, TEXT("NerotalbahnPassengerCamera"));
+	PassengerCamera->SetupAttachment(Car);
+	PassengerCamera->CameraOffset = FVector(0.0f, 0.0f, 150.0f);
+	PassengerCamera->FollowArmLength = 320.0f;
+	PassengerCamera->ZoomMinArmLength = 90.0f;
+	PassengerCamera->ZoomMaxArmLength = 800.0f;
+	// Horizont waagerecht fuer die Aussenansicht; die Cockpit-Ansicht (C) erbt
+	// die sanfte Wagenneigung und zeigt die Trasse voraus.
+	PassengerCamera->bLevelHorizon = true;
+	PassengerCamera->CockpitOffset = FVector(180.0f, 0.0f, 170.0f);
+	PassengerCamera->RegisterComponent();
+	PassengerCamera->ActivateExternalView(PC, Car, RideSession.GetPassenger());
+}
+
+void AWiesbadenNerotalbahn::DestroyPassengerCamera()
+{
+	if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+	{
+		if (APawn* PassengerPawn = RideSession.GetPassenger())
+		{
+			PC->SetViewTarget(PassengerPawn);
+		}
+	}
+	if (PassengerCamera)
+	{
+		PassengerCamera->DeactivateExternalView();
+		PassengerCamera->DestroyComponent();
+		PassengerCamera = nullptr;
+	}
+}
+
+void AWiesbadenNerotalbahn::ToggleBoarding()
+{
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+	if (!Pawn || !Car)
+	{
+		return;
+	}
+
+	// Aussteigen: neben dem Wagen absetzen und die Fusssteuerung freigeben.
+	if (RideSession.IsRiding())
+	{
+		APawn* Passenger = RideSession.GetPassenger();
+		if (!RideSession.BeginExiting() || !Passenger)
+		{
+			return;
+		}
+		Passenger->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		const FVector Side = Car->GetRightVector() * 250.0f + FVector(0, 0, 60.0f);
+		Passenger->SetActorLocation(Car->GetComponentLocation() + Side);
+		if (AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(Passenger))
+		{
+			Foot->SetRiding(false);
+		}
+		DestroyPassengerCamera();
+		UE_LOG(LogWbStreaming, Log, TEXT("Nerotalbahn: Fahrgast ausgestiegen."));
+		RideSession.CompleteExit();
+		return;
+	}
+
+	// Einsteigen: nur der Spieler ZU FUSS, nur nahe am Wagen.
+	AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(Pawn);
+	if (!Foot)
+	{
+		return;
+	}
+	const float Dist = FVector::Dist(Pawn->GetActorLocation(), Car->GetComponentLocation());
+	if (Dist > BoardRangeCm)
+	{
+		return;
+	}
+	if (!RideSession.BeginBoarding(Pawn, 0))
+	{
+		return;
+	}
+	Foot->SetRiding(true);
+	Pawn->AttachToComponent(Car, FAttachmentTransformRules::KeepWorldTransform);
+	if (!RideSession.ConfirmRiding())
+	{
+		Pawn->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		Foot->SetRiding(false);
+		RideSession.Reset();
+		return;
+	}
+	CreatePassengerCamera();
+	Pawn->SetActorLocation(Car->GetComponentLocation() + FVector(0, 0, 150.0f));
+	UE_LOG(LogWbStreaming, Log, TEXT("Nerotalbahn: Fahrgast eingestiegen."));
 }

@@ -63,6 +63,35 @@ namespace WiesbadenRailTransport
 	WIESBADENREAL_API double OpposingCablePosition(
 		double CablePositionCm, double TrackLengthCm, bool bOpposingCar);
 
+	/** Zustand eines einzelnen Pendelwagens auf einer Strecke [0, Length]. */
+	struct FWiesbadenShuttleState
+	{
+		double PositionCm = 0.0;      // Bogenlaenge ab Start-Terminus
+		int32 Direction = +1;         // +1 vorwaerts, -1 rueckwaerts
+		float DwellRemaining = 0.0f;  // restliche Haltezeit am Terminus
+	};
+
+	/**
+	 * Bewegt den Pendelwagen um einen Zeitschritt. Am Streckenende kehrt er um
+	 * und haelt DwellSeconds; waehrend der Haltezeit ruht er. Ueberschiessen bei
+	 * grossem DeltaSeconds wird auf das Streckenende geklemmt (kein Runaway) -
+	 * anders als eine Seilbahn faehrt der Tram allein, es gibt keinen Gegenwagen.
+	 */
+	WIESBADENREAL_API void AdvanceShuttle(
+		FWiesbadenShuttleState& State, double TrackLengthCm,
+		double SpeedCmPerSec, float DwellSeconds, float DeltaSeconds);
+
+	/**
+	 * Interpoliert Position und normierte Tangente bei Bogenlaenge S auf einem
+	 * Polygonzug. Positions und ArcLengthsCm muessen gleich lang (>= 2) und die
+	 * ArcLengthsCm aufsteigend sein; S wird auf [erste, letzte ArcLength]
+	 * geklemmt. False bei zu wenigen Punkten - dann liefert Out den Ursprung
+	 * bzw. die X-Achse.
+	 */
+	WIESBADENREAL_API bool SamplePolyline(
+		const TArray<FVector>& Positions, const TArray<double>& ArcLengthsCm,
+		double S, FVector& OutPos, FVector& OutTangent);
+
 	enum class ERideState : uint8
 	{
 		OnFoot,

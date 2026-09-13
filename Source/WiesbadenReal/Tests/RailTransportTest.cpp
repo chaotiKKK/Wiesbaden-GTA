@@ -199,3 +199,112 @@ bool FRailTransportRideStateTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Boarding ohne Passagier wird abgelehnt"), Session.BeginBoarding(nullptr, 0));
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRailTransportShuttleTest,
+	"WiesbadenReal.World.RailTransport.Shuttle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+
+bool FRailTransportShuttleTest::RunTest(const FString& Parameters)
+{
+	using WiesbadenRailTransport::FWiesbadenShuttleState;
+	using WiesbadenRailTransport::AdvanceShuttle;
+
+	const double Length = 1000.0;
+	const double Speed = 100.0;   // cm/s
+	const float Dwell = 5.0f;
+
+	// Faehrt vom Start vorwaerts.
+	{
+		FWiesbadenShuttleState S;
+		AdvanceShuttle(S, Length, Speed, Dwell, 1.0f);
+		TestEqual(TEXT("Vorwaerts 100 cm nach 1 s"), S.PositionCm, 100.0);
+		TestEqual(TEXT("Richtung bleibt vorwaerts"), S.Direction, +1);
+		TestEqual(TEXT("Keine Haltezeit unterwegs"), S.DwellRemaining, 0.0f);
+	}
+
+	// Am Ende: klemmen, umkehren, Haltezeit setzen - auch bei Ueberschuss.
+	{
+		FWiesbadenShuttleState S;
+		S.PositionCm = 950.0;
+		AdvanceShuttle(S, Length, Speed, Dwell, 1.0f);   // 1050 -> geklemmt
+		TestEqual(TEXT("Am Ende geklemmt"), S.PositionCm, Length);
+		TestEqual(TEXT("Kehrt um"), S.Direction, -1);
+		TestEqual(TEXT("Haltezeit gesetzt"), S.DwellRemaining, Dwell);
+	}
+
+	// Waehrend der Haltezeit: kein Vortrieb, Haltezeit zaehlt runter.
+	{
+		FWiesbadenShuttleState S;
+		S.PositionCm = Length;
+		S.Direction = -1;
+		S.DwellRemaining = Dwell;
+		AdvanceShuttle(S, Length, Speed, Dwell, 2.0f);
+		TestEqual(TEXT("Steht waehrend Haltezeit"), S.PositionCm, Length);
+		TestEqual(TEXT("Haltezeit zaehlt runter"), S.DwellRemaining, 3.0f);
+	}
+
+	// Nach der Haltezeit faehrt er in die neue Richtung zurueck.
+	{
+		FWiesbadenShuttleState S;
+		S.PositionCm = Length;
+		S.Direction = -1;
+		S.DwellRemaining = 0.0f;
+		AdvanceShuttle(S, Length, Speed, Dwell, 1.0f);
+		TestEqual(TEXT("Faehrt rueckwaerts"), S.PositionCm, 900.0);
+		TestEqual(TEXT("Richtung rueckwaerts"), S.Direction, -1);
+	}
+
+	// Am Startterminus: klemmen auf 0, umkehren auf +1, Haltezeit.
+	{
+		FWiesbadenShuttleState S;
+		S.PositionCm = 50.0;
+		S.Direction = -1;
+		AdvanceShuttle(S, Length, Speed, Dwell, 1.0f);   // -50 -> geklemmt 0
+		TestEqual(TEXT("Am Start geklemmt"), S.PositionCm, 0.0);
+		TestEqual(TEXT("Kehrt vorwaerts um"), S.Direction, +1);
+		TestEqual(TEXT("Haltezeit am Start"), S.DwellRemaining, Dwell);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRailTransportSampleTest,
+	"WiesbadenReal.World.RailTransport.SamplePolyline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::SmokeFilter)
+
+bool FRailTransportSampleTest::RunTest(const FString& Parameters)
+{
+	using WiesbadenRailTransport::SamplePolyline;
+
+	// Zwei-Punkt-Gerade entlang X, 0..1000 cm.
+	const TArray<FVector> Line = { FVector(0, 0, 0), FVector(1000, 0, 0) };
+	const TArray<double> Arc = { 0.0, 1000.0 };
+	FVector Pos, Tan;
+
+	TestTrue(TEXT("Sampling gelingt"), SamplePolyline(Line, Arc, 250.0, Pos, Tan));
+	TestTrue(TEXT("Position auf einem Viertel"), Pos.Equals(FVector(250, 0, 0), 0.01f));
+	TestTrue(TEXT("Tangente zeigt +X"), Tan.Equals(FVector(1, 0, 0), 0.01f));
+
+	// Ueber das Ende hinaus klemmen.
+	SamplePolyline(Line, Arc, 5000.0, Pos, Tan);
+	TestTrue(TEXT("Ende geklemmt"), Pos.Equals(FVector(1000, 0, 0), 0.01f));
+
+	// Unter null klemmen.
+	SamplePolyline(Line, Arc, -100.0, Pos, Tan);
+	TestTrue(TEXT("Start geklemmt"), Pos.Equals(FVector(0, 0, 0), 0.01f));
+
+	// Mehr-Segment-Zug mit Knick: erst entlang X, dann entlang Y.
+	const TArray<FVector> Bend = {
+		FVector(0, 0, 0), FVector(100, 0, 0), FVector(100, 100, 0) };
+	const TArray<double> BendArc = { 0.0, 100.0, 200.0 };
+	SamplePolyline(Bend, BendArc, 150.0, Pos, Tan);   // 50 cm ins zweite Segment
+	TestTrue(TEXT("Position im zweiten Segment"), Pos.Equals(FVector(100, 50, 0), 0.01f));
+	TestTrue(TEXT("Tangente zeigt +Y"), Tan.Equals(FVector(0, 1, 0), 0.01f));
+
+	// Zu wenige Punkte -> false, sichere Ausgabe.
+	const TArray<FVector> One = { FVector(7, 7, 7) };
+	const TArray<double> OneArc = { 0.0 };
+	TestFalse(TEXT("Ein Punkt ist zu wenig"), SamplePolyline(One, OneArc, 0.0, Pos, Tan));
+
+	return true;
+}

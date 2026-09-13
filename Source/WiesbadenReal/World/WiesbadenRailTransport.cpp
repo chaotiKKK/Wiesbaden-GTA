@@ -131,6 +131,68 @@ namespace WiesbadenRailTransport
 		return bOpposingCar ? FMath::Max(TrackLengthCm, 0.0) - Position : Position;
 	}
 
+	void AdvanceShuttle(
+		FWiesbadenShuttleState& State, double TrackLengthCm,
+		double SpeedCmPerSec, float DwellSeconds, float DeltaSeconds)
+	{
+		if (TrackLengthCm <= 0.0 || DeltaSeconds <= 0.0f)
+		{
+			return;
+		}
+
+		// Am Terminus haelt der Wagen; erst danach faehrt er in die (bereits beim
+		// Umkehren gesetzte) neue Richtung an.
+		if (State.DwellRemaining > 0.0f)
+		{
+			State.DwellRemaining = FMath::Max(0.0f, State.DwellRemaining - DeltaSeconds);
+			return;
+		}
+
+		if (State.Direction == 0)
+		{
+			State.Direction = +1;
+		}
+		State.PositionCm += State.Direction * SpeedCmPerSec * DeltaSeconds;
+
+		// Umkehren an beiden Enden, Ueberschuss auf das Ende klemmen.
+		if (State.PositionCm >= TrackLengthCm)
+		{
+			State.PositionCm = TrackLengthCm;
+			State.Direction = -1;
+			State.DwellRemaining = DwellSeconds;
+		}
+		else if (State.PositionCm <= 0.0)
+		{
+			State.PositionCm = 0.0;
+			State.Direction = +1;
+			State.DwellRemaining = DwellSeconds;
+		}
+	}
+
+	bool SamplePolyline(
+		const TArray<FVector>& Positions, const TArray<double>& ArcLengthsCm,
+		double S, FVector& OutPos, FVector& OutTangent)
+	{
+		OutPos = FVector::ZeroVector;
+		OutTangent = FVector::ForwardVector;
+		if (Positions.Num() < 2 || Positions.Num() != ArcLengthsCm.Num())
+		{
+			return false;
+		}
+
+		S = FMath::Clamp(S, ArcLengthsCm[0], ArcLengthsCm.Last());
+		int32 i = 1;
+		while (i < ArcLengthsCm.Num() - 1 && ArcLengthsCm[i] < S)
+		{
+			++i;
+		}
+		const double SegLen = FMath::Max(ArcLengthsCm[i] - ArcLengthsCm[i - 1], 1.0);
+		const double T = FMath::Clamp((S - ArcLengthsCm[i - 1]) / SegLen, 0.0, 1.0);
+		OutPos = FMath::Lerp(Positions[i - 1], Positions[i], static_cast<float>(T));
+		OutTangent = (Positions[i] - Positions[i - 1]).GetSafeNormal();
+		return true;
+	}
+
 	bool CanTransitionRideState(ERideState From, ERideState To)
 	{
 		if (From == To)

@@ -5,10 +5,13 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 
+#include "World/WiesbadenRailTransport.h"
+
 #include "WiesbadenNerotalbahn.generated.h"
 
 class UProceduralMeshComponent;
 class USceneComponent;
+class UWiesbadenVehicleCameraComponent;
 
 /**
  * Die Nerotalbahn - Wiesbadens historische Talstrassenbahn.
@@ -21,9 +24,14 @@ class USceneComponent;
  * OpenStreetMap (Taunusstrasse), Terminus im Nerotal ergaenzt.
  *
  * Anders als die Nerobergbahn ist dies eine EINGEBETTETE Strassenbahn: eine
- * gepflasterte Trasse mit meterspurigen Rillenschienen, kein Viadukt, keine
- * Wagen (folgt bei Bedarf). Der Zweck ist die STRECKE, sauber auf dem
- * Gelaende.
+ * gepflasterte Trasse mit meterspurigen Rillenschienen, kein Viadukt. Ein
+ * einzelner historischer Triebwagen pendelt die Strecke auf und ab und haelt
+ * an beiden Endpunkten (Nerotal-Kopf und Kranzplatz) - anders als die
+ * gegenlaeufige Nerobergbahn faehrt er allein.
+ *
+ * Der Spieler kann MITFAHREN: E-Taste neben dem haltenden Wagen steigt ein,
+ * E-Taste erneut steigt aus - dasselbe Fahrgast-Rig wie bei der Nerobergbahn
+ * (Aussen-/Innenkamera ueber UWiesbadenVehicleCameraComponent).
  *
  * Die Gleishoehen werden zur Laufzeit vom Gelaende abgetastet und ueber
  * denselben korrigierten Profil-Pfad wie die Nerobergbahn gelegt
@@ -50,6 +58,18 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Nerotalbahn", meta = (ClampMin = "0.0"))
 	float RailClearanceCm = 6.0f;
 
+	/** Fahrgeschwindigkeit des Triebwagens in km/h (historische Talbahn, gemaechlich). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Nerotalbahn", meta = (ClampMin = "1.0"))
+	float SpeedKmh = 18.0f;
+
+	/** Haltezeit an den beiden Endpunkten, Sekunden. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Nerotalbahn", meta = (ClampMin = "0.0"))
+	float DwellSeconds = 8.0f;
+
+	/** Einstiegsreichweite um den haltenden Wagen, cm. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Nerotalbahn", meta = (ClampMin = "100.0"))
+	float BoardRangeCm = 450.0f;
+
 private:
 	struct FTrackPoint
 	{
@@ -68,11 +88,33 @@ private:
 	/** Baut Pflasterbett und zwei Rillenschienen als Bandgeometrie. */
 	void BuildTrackMesh();
 
+	/** Baut den historischen Triebwagen als einfache Bandgeometrie (Kasten,
+	 *  Fensterband, Dach) mit Vertexfarben - kein externes Mesh noetig. */
+	void BuildCarMesh();
+
+	/** Uebernimmt die aufgeloesten Gleispunkte in den Fahrpfad des Wagens. */
+	void RefreshCarPath();
+
+	/** Kamera des mitfahrenden Spielers ueber das gemeinsame Fahrzeug-Rig. */
+	void CreatePassengerCamera();
+	void DestroyPassengerCamera();
+
+	/** Ein- oder Aussteigen des Spielers am haltenden Wagen. */
+	void ToggleBoarding();
+
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Nerotalbahn")
 	USceneComponent* Root = nullptr;
 
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Nerotalbahn")
 	UProceduralMeshComponent* TrackMesh = nullptr;
+
+	/** Pivot des Triebwagens - wird je Tick auf die Strecke gesetzt. */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Nerotalbahn")
+	USceneComponent* Car = nullptr;
+
+	/** Wagenkasten als Bandgeometrie, am Pivot haengend. */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Nerotalbahn")
+	UProceduralMeshComponent* CarMesh = nullptr;
 
 	TArray<FTrackPoint> Points;
 	double TotalLength = 0.0;
@@ -82,4 +124,25 @@ private:
 
 	/** Naechster Abtastversuch fuer die Hoehen. */
 	float HeightRetryRemaining = 0.0f;
+
+	/** Fahrpfad des Wagens (aus Points nach der Hoehenaufloesung). */
+	TArray<FVector> CarPathPos;
+	TArray<double> CarPathArc;
+	bool bCarPathReady = false;
+
+	/** Pendel-Fahrzustand des Wagens auf [0, TotalLength]. */
+	WiesbadenRailTransport::FWiesbadenShuttleState Shuttle;
+
+	/** Anhebung des Wagenpivots ueber die Schienenoberkante, cm. */
+	float CarLiftCm = 10.0f;
+
+	/** Besitz- und Zustandsdaten der aktuellen Fahrt. */
+	WiesbadenRailTransport::FWiesbadenRideSession RideSession;
+
+	/** Flanke der Einstiegstaste. */
+	bool bBoardKeyHeld = false;
+
+	/** Gemeinsames Kamera-Rig fuer Follow/Orbit/Cockpit und Mausradzoom. */
+	UPROPERTY(Transient)
+	UWiesbadenVehicleCameraComponent* PassengerCamera = nullptr;
 };
