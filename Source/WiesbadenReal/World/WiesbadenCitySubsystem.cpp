@@ -12,6 +12,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Core/WiesbadenGameInstance.h"
+#include "Core/WiesbadenDevActions.h"
 #include "World/BuildingCollisionSpawnerComponent.h"
 #include "LandscapeHeightfieldCollisionComponent.h"
 #include "LandscapeProxy.h"
@@ -894,6 +895,45 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 										FallMonitor.CurrentMaxSturzM(), FallMonitor.CurrentPeakSinkMs());
 								}
 							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Pawn + Streaming-Quelle an eine beliebige Weltkoordinate setzen:
+	// -WbTeleportTo=<X,Y,Z> (cm). Einmalig, verzoegert (WbTeleportToStart, Default
+	// 5 s), damit Pawn und erstes Streaming stehen. Der WP-Streaming-Radius folgt
+	// dem Pawn - so laden ferne Bauwerke (Tunnel/Bruecken) rechtzeitig fuer eine
+	// gezielte Aufnahme, statt zum Shot-Zeitpunkt noch leer zu sein.
+	{
+		FString TpSpec;
+		// bShouldStopOnSeparator=false: sonst liest FParse::Value nur bis zum ersten
+		// Komma ("193459") statt des ganzen Tripels "193459,-187390,12173".
+		if (!bTeleportToDone
+			&& FParse::Value(FCommandLine::Get(), TEXT("WbTeleportTo="), TpSpec, false))
+		{
+			TeleportToElapsed += DeltaTime;
+			float StartAfter = 5.0f;
+			FParse::Value(FCommandLine::Get(), TEXT("WbTeleportToStart="), StartAfter);
+
+			FVector Target;
+			if (TeleportToElapsed > StartAfter
+				&& FWiesbadenDevActions::ParseWorldTarget(TpSpec, Target))
+			{
+				if (UWorld* TpWorld = GetWorld())
+				{
+					if (APlayerController* PC = TpWorld->GetFirstPlayerController())
+					{
+						if (APawn* Pawn = PC->GetPawn())
+						{
+							Pawn->SetActorLocation(Target + FVector(0.0, 0.0, 300.0),
+								/*bSweep=*/false, nullptr, ETeleportType::TeleportPhysics);
+							bTeleportToDone = true;
+							UE_LOG(LogWbStreaming, Log,
+								TEXT("WbTeleportTo: Pawn + Streaming-Quelle nach (%.0f, %.0f, %.0f) gesetzt."),
+								Target.X, Target.Y, Target.Z);
 						}
 					}
 				}

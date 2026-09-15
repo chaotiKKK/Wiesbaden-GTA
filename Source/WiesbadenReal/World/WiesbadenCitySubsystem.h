@@ -300,6 +300,13 @@ private:
 	/** Startpunkt der Fahrt - fuer die zurueckgelegte Strecke im Protokoll. */
 	FVector AutoDriveOrigin = FVector::ZeroVector;
 
+	/** -WbTeleportTo=<X,Y,Z> (cm): setzt Pawn + Streaming-Quelle EINMALIG an eine
+	 *  beliebige Koordinate, damit ferne Bauwerke (Tunnel/Bruecken) zum Shot-
+	 *  Zeitpunkt gestreamt sind. Verzoegert (WbTeleportToStart, Default 5 s), bis
+	 *  Pawn + erstes Streaming stehen. */
+	float TeleportToElapsed = 0.0f;
+	bool bTeleportToDone = false;
+
 	// Durchfall-Waechter (-WbAutoDrive): Liegt unter dem schnell fahrenden Pawn
 	// jederzeit geladene WorldStatic-Kollision? Die Mess-/Verdikt-Logik liegt
 	// datenrein + getestet im FWbFallThroughMonitor (World.FallThroughMonitor);
