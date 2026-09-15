@@ -12,6 +12,8 @@
 #include "Misc/PackageName.h"
 #include "HAL/FileManager.h"
 
+#include <limits>
+
 // Baut ein triviales ProcMesh (ein Quad = zwei Dreiecke) und laesst den Baker
 // daraus ein StaticMesh mit gekochter Complex-as-Simple-Kollision erzeugen.
 // Prueft: Asset entsteht, Render-Daten vorhanden, BodySetup auf Trimesh gesetzt.
@@ -111,6 +113,65 @@ bool FChunkStaticMeshBakerTest::RunTest(const FString& Parameters)
 	const FString NaniteFileName = FPackageName::LongPackageNameToFilename(
 		NanitePath, FPackageName::GetAssetPackageExtension());
 	IFileManager::Get().Delete(*NaniteFileName, /*RequireExists=*/false, /*EvenReadOnly=*/true);
+
+	return true;
+}
+
+// Eine Section mit einer NaN-Vertexposition (degenerierte Quellgeometrie - beim
+// Alkis10-Bake nachgewiesen) darf NICHT in NaN-Bounds resultieren: sonst meldet
+// FStaticMeshRenderData::Serialize beim Laden "found NaN in Bounds" und der
+// Renderer kann kippen. Der Baker muss solche Sections wie leere fuehren und die
+// uebrige (gute) Geometrie behalten.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FChunkStaticMeshBakerNaNTest,
+	"WiesbadenReal.GIS.ChunkStaticMeshBaker.DropsNaNSection",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FChunkStaticMeshBakerNaNTest::RunTest(const FString& Parameters)
+{
+	UProceduralMeshComponent* Pm = NewObject<UProceduralMeshComponent>(GetTransientPackage());
+	if (!TestNotNull(TEXT("ProcMesh angelegt"), Pm))
+	{
+		return false;
+	}
+
+	const TArray<int32> Tris = { 0, 1, 2, 0, 2, 3 };
+	const TArray<FVector> Normals = {
+		FVector::UpVector, FVector::UpVector, FVector::UpVector, FVector::UpVector };
+	const TArray<FVector2D> UVs = {
+		FVector2D(0, 0), FVector2D(1, 0), FVector2D(1, 1), FVector2D(0, 1) };
+	const TArray<FColor> Colors = {
+		FColor::White, FColor::White, FColor::White, FColor::White };
+	const TArray<FProcMeshTangent> Tangents;
+
+	// Section 0: sauberes Quad. Section 1: Quad mit EINEM NaN-Vertex.
+	const TArray<FVector> Good = {
+		FVector(0, 0, 0), FVector(100, 0, 0), FVector(100, 100, 0), FVector(0, 100, 0) };
+	Pm->CreateMeshSection(0, Good, Tris, Normals, UVs, Colors, Tangents, /*bCreateCollision=*/false);
+
+	const double NaN = std::numeric_limits<double>::quiet_NaN();
+	const TArray<FVector> Bad = {
+		FVector(300, 0, 0), FVector(400, 0, 0), FVector(400, 100, 0), FVector(NaN, NaN, NaN) };
+	Pm->CreateMeshSection(1, Bad, Tris, Normals, UVs, Colors, Tangents, /*bCreateCollision=*/false);
+
+	const FString PackagePath = TEXT("/Game/Generated/Test/SM_ChunkBakerNaN");
+	FString Err;
+	UStaticMesh* Mesh = WiesbadenChunkStaticMeshBaker::BakeFromProcMesh(
+		Pm, PackagePath, /*bCookComplexCollision=*/false, /*bEnableNanite=*/false, Err);
+
+	if (!TestNotNull(TEXT("StaticMesh erzeugt (gute Section ueberlebt)"), Mesh))
+	{
+		return false;
+	}
+
+	const FBoxSphereBounds B = Mesh->GetBounds();
+	const bool bFinite = !B.Origin.ContainsNaN() && !B.BoxExtent.ContainsNaN()
+		&& FMath::IsFinite(B.SphereRadius);
+	TestTrue(TEXT("Bounds endlich trotz NaN-Section"), bFinite);
+	TestTrue(TEXT("Gute Geometrie erhalten (Radius > 0)"), B.SphereRadius > 0.0f);
+
+	const FString FileName = FPackageName::LongPackageNameToFilename(
+		PackagePath, FPackageName::GetAssetPackageExtension());
+	IFileManager::Get().Delete(*FileName, /*RequireExists=*/false, /*EvenReadOnly=*/true);
 
 	return true;
 }
