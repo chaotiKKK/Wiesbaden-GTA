@@ -34,5 +34,29 @@ bool FDevActionsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Yaw bleibt"), Auf.Rotator().Yaw, 90.0);
 	TestEqual(TEXT("Z +150"), Auf.GetLocation().Z, 650.0);
 	TestEqual(TEXT("X/Y bleiben"), FVector2D(Auf.GetLocation()), FVector2D(100.0, 200.0));
+
+	// ParseWorldTarget: "X,Y,Z" (cm) -> Vektor, fuer -WbTeleportTo.
+	{
+		FVector Out;
+		TestTrue(TEXT("Gueltiges Tripel wird geparst"),
+			FWiesbadenDevActions::ParseWorldTarget(TEXT("193459,-187390,12000"), Out));
+		TestEqual(TEXT("Tripel korrekt"), Out, FVector(193459.0, -187390.0, 12000.0));
+
+		FVector Sp;
+		TestTrue(TEXT("Leerzeichen werden toleriert"),
+			FWiesbadenDevActions::ParseWorldTarget(TEXT(" 10 , 20 , 30 "), Sp));
+		TestEqual(TEXT("Getrimmtes Tripel korrekt"), Sp, FVector(10.0, 20.0, 30.0));
+
+		FVector Ignored;
+		TestFalse(TEXT("Zu wenige Felder"),
+			FWiesbadenDevActions::ParseWorldTarget(TEXT("1,2"), Ignored));
+		TestFalse(TEXT("Zu viele Felder"),
+			FWiesbadenDevActions::ParseWorldTarget(TEXT("1,2,3,4"), Ignored));
+		TestFalse(TEXT("Nicht-numerisch"),
+			FWiesbadenDevActions::ParseWorldTarget(TEXT("1,zwei,3"), Ignored));
+		TestFalse(TEXT("Leer"),
+			FWiesbadenDevActions::ParseWorldTarget(TEXT(""), Ignored));
+	}
+
 	return true;
 }

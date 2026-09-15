@@ -67,13 +67,41 @@ UStaticMesh* BakeFromProcMesh(UProceduralMeshComponent* Source, const FString& P
 	FBox GeoBounds(ForceInit);
 
 	int32 ValidSections = 0;
+	int32 NaNSectionsDropped = 0;
 	for (int32 S = 0; S < NumSections; ++S)
 	{
 		const FName SlotName(*FString::Printf(TEXT("Slot%d"), S));
 		const FProcMeshSection* Sec = Source->GetProcMeshSection(S);
-		if (!Sec || Sec->ProcIndexBuffer.Num() < 3 || Sec->ProcVertexBuffer.Num() == 0)
+
+		// Degenerierte Quellgeometrie mit NaN-Vertexpositionen abfangen: eine
+		// einzige NaN-Position schlaegt sowohl in die Mesh-Vertices als auch in
+		// GeoBounds durch -> die "sichere" Bounds-Ueberschreibung unten wird selbst
+		// NaN -> FStaticMeshRenderData::Serialize meldet beim Laden "found NaN in
+		// Bounds" und der Renderer kann kippen. Solche Sections sind ohnehin
+		// unsichtbar/kaputt; sie wie eine leere Section fuehren (die gute Geometrie
+		// der uebrigen Sections bleibt erhalten).
+		bool bSectionHasNaN = false;
+		if (Sec)
 		{
-			// Leere Section trotzdem als benannten Slot fuehren, damit die Indizes passen.
+			for (const FProcMeshVertex& V : Sec->ProcVertexBuffer)
+			{
+				if (V.Position.ContainsNaN())
+				{
+					bSectionHasNaN = true;
+					break;
+				}
+			}
+		}
+
+		if (!Sec || Sec->ProcIndexBuffer.Num() < 3 || Sec->ProcVertexBuffer.Num() == 0
+			|| bSectionHasNaN)
+		{
+			// Leere/degenerierte Section trotzdem als benannten Slot fuehren, damit
+			// die Slot-Indizes zur per-Section-Materialzuweisung passen.
+			if (bSectionHasNaN)
+			{
+				++NaNSectionsDropped;
+			}
 			SlotNames[MeshDesc.CreatePolygonGroup()] = SlotName;
 			continue;
 		}
@@ -233,8 +261,10 @@ UStaticMesh* BakeFromProcMesh(UProceduralMeshComponent* Source, const FString& P
 	}
 
 	UE_LOG(LogWbCore, Log,
-		TEXT("ChunkStaticMeshBaker: %s gebacken (%d Sections, Kollision %s, Nanite %s) -> %s"),
-		*AssetName, NumSections, bCookComplexCollision ? TEXT("gekocht") : TEXT("keine"),
+		TEXT("ChunkStaticMeshBaker: %s gebacken (%d Sections, %d NaN-Sections verworfen, ")
+		TEXT("Kollision %s, Nanite %s) -> %s"),
+		*AssetName, NumSections, NaNSectionsDropped,
+		bCookComplexCollision ? TEXT("gekocht") : TEXT("keine"),
 		bEnableNanite ? TEXT("an") : TEXT("aus"), *FileName);
 	return Mesh;
 #endif // WITH_EDITOR

@@ -30,3 +30,26 @@ FTransform FWiesbadenDevActions::UprightTransform(const FTransform& Current)
 		Current.GetLocation() + FVector(0.0, 0.0, 150.0),
 		FVector::OneVector);
 }
+
+bool FWiesbadenDevActions::ParseWorldTarget(const FString& Spec, FVector& OutCm)
+{
+	TArray<FString> Parts;
+	Spec.ParseIntoArray(Parts, TEXT(","), /*bCullEmpty=*/true);
+	if (Parts.Num() != 3)
+	{
+		return false;
+	}
+
+	double Vals[3] = { 0.0, 0.0, 0.0 };
+	for (int32 i = 0; i < 3; ++i)
+	{
+		if (!LexTryParseString(Vals[i], *Parts[i].TrimStartAndEnd())
+			|| !FMath::IsFinite(Vals[i]))
+		{
+			return false;
+		}
+	}
+
+	OutCm = FVector(Vals[0], Vals[1], Vals[2]);
+	return true;
+}

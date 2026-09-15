@@ -25,4 +25,10 @@ struct WIESBADENREAL_API FWiesbadenDevActions
 
 	// Aufrichten: Nick/Roll auf 0, Yaw + Ort behalten, 150 cm anheben.
 	static FTransform UprightTransform(const FTransform& Current);
+
+	// Parst "X,Y,Z" (Weltkoordinaten in cm) in einen Vektor. False bei falscher
+	// Feldzahl oder nicht-endlichen Werten. Fuer das Dev-Flag -WbTeleportTo=<X,Y,Z>,
+	// das Pawn + Streaming-Quelle an eine beliebige Koordinate setzt (gezielte
+	// Aufnahmen ferner Bauwerke wie Tunnel/Bruecken).
+	static bool ParseWorldTarget(const FString& Spec, FVector& OutCm);
 };
