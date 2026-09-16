@@ -2672,6 +2672,31 @@ void URoadNetworkGenerator::BuildLaneMarkings(
 	FRoadMeshSection& Section = FindOrAddSection(
 		OutMeshData, ERoadMeshChannel::LaneMarking, EOSMSurfaceType::Asphalt);
 
+	// Hoehe der Markierung aus der interpolierten Fahrbahn-Mittellinie am
+	// jeweiligen Punkt (nicht ueber Index/2 auf Line gemappt: OffsetPolyline
+	// aendert die Punktzahl, dann sass die Z falsch -> Markierung dippte/schwebte).
+	auto CenterlineZ = [&Line](const FVector2D& P) -> double
+	{
+		double BestD = TNumericLimits<double>::Max();
+		double BestZ = Line[0].Z;
+		for (int32 i = 0; i + 1 < Line.Num(); ++i)
+		{
+			const FVector2D A(Line[i].X, Line[i].Y);
+			const FVector2D AB = FVector2D(Line[i + 1].X, Line[i + 1].Y) - A;
+			const double L2 = AB.SizeSquared();
+			const double T = (L2 > 1.0)
+				? FMath::Clamp(FVector2D::DotProduct(P - A, AB) / L2, 0.0, 1.0) : 0.0;
+			const FVector2D Proj = A + AB * T;
+			const double D = FVector2D::DistSquared(P, Proj);
+			if (D < BestD)
+			{
+				BestD = D;
+				BestZ = FMath::Lerp(Line[i].Z, Line[i + 1].Z, T);
+			}
+		}
+		return BestZ;
+	};
+
 	// Markierung auf jeder Spurgrenze. Die Trennlinie zwischen den
 	// Fahrtrichtungen wird ueber die Vertexfarbe als durchgezogene Mittellinie
 	// gekennzeichnet, alle uebrigen als unterbrochene Leitlinie - das
@@ -2704,12 +2729,10 @@ void URoadNetworkGenerator::BuildLaneMarkings(
 
 		for (int32 Index = 0; Index < Vertices2D.Num(); ++Index)
 		{
-			const int32 CenterIndex = FMath::Clamp(Index / 2, 0, Line.Num() - 1);
-
 			Section.Vertices.Add(FVector(
 				Vertices2D[Index].X,
 				Vertices2D[Index].Y,
-				Line[CenterIndex].Z + Settings.MarkingOffsetCm));
+				CenterlineZ(Vertices2D[Index]) + Settings.MarkingOffsetCm));
 
 			Section.Normals.Add(FVector::UpVector);
 			Section.UVs.Add(UVs[Index]);
