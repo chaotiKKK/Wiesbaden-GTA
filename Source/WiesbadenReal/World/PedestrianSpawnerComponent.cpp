@@ -227,6 +227,58 @@ void UPedestrianSpawnerComponent::UpdateInstances(const TArray<FPlacedPedestrian
 		FootLiftCm = -LocalBottom * Scale.Z;
 	}
 
+	// Boden-Snap gegen "im Boden steckende" Figuren.
+	//
+	// SampleSidewalk liefert die Fusshoehe aus der GEBACKENEN Gehweghoehe
+	// (Mittellinie + Bordstein). Zur Laufzeit weicht das gestreamte Gelaende
+	// davon ab - dann stecken die Figuren im Boden oder schweben. Darum die
+	// Figur per kurzem Down-Trace auf die tatsaechliche Oberflaeche direkt unter
+	// ihr setzen (Gehweg-/Strassenmesh, sonst Landscape). Traces gegen einfache
+	// Kollision; die ISM-Instanzen selbst haben keine, der Owner wird ignoriert.
+	//
+	// DISTANZ-CULL: ein Trace je Figur je Frame ist bei vielen NPCs teuer. Nur
+	// Figuren nahe der Kamera snappen (dort faellt der Versatz auf); ferne
+	// behalten ihre gebackene Hoehe (auf Distanz nicht sichtbar). Die Blickpunkt-
+	// Position wird EINMAL geholt, nicht je Figur.
+	UWorld* const PedWorld = GetWorld();
+	AActor* const PedOwner = GetOwner();
+	constexpr double SnapCullDistCm = 7000.0;   // ~70 m
+	const double SnapCullDistSq = SnapCullDistCm * SnapCullDistCm;
+	FVector ViewLoc = FVector::ZeroVector;
+	bool bHaveView = false;
+	if (PedWorld)
+	{
+		if (APlayerController* PC = PedWorld->GetFirstPlayerController())
+		{
+			FVector CamLoc; FRotator CamRot;
+			PC->GetPlayerViewPoint(CamLoc, CamRot);
+			ViewLoc = CamLoc;
+			bHaveView = true;
+		}
+	}
+	auto GroundSnap = [PedWorld, PedOwner, ViewLoc, bHaveView, SnapCullDistSq](const FVector& Foot) -> FVector
+	{
+		if (!PedWorld)
+		{
+			return Foot;
+		}
+		// Ferne Figuren nicht tracen (nur die nahe Kamera; spart die Raycasts).
+		if (bHaveView && FVector::DistSquared(Foot, ViewLoc) > SnapCullDistSq)
+		{
+			return Foot;
+		}
+		FHitResult Hit;
+		const FVector Start(Foot.X, Foot.Y, Foot.Z + 500.0);
+		const FVector End(Foot.X, Foot.Y, Foot.Z - 1500.0);
+		FCollisionQueryParams Params(FName(TEXT("WbPedGround")), /*bTraceComplex=*/false, PedOwner);
+		if (PedWorld->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params)
+			&& !Hit.bStartPenetrating)
+		{
+			return FVector(Foot.X, Foot.Y, Hit.Location.Z);
+		}
+		return Foot;
+	};
+
 	const int32 Needed = Placed.Num();
 	const bool bAnimated = (PoseInstances.Num() == WalkPoseCount);
 
@@ -285,7 +337,7 @@ void UPedestrianSpawnerComponent::UpdateInstances(const TArray<FPlacedPedestrian
 				Pool->UpdateInstanceTransform(
 					i,
 					FTransform(Walker.Rotation,
-						Walker.Location + FVector(0.0, 0.0, FootLiftCm),
+						GroundSnap(Walker.Location) + FVector(0.0, 0.0, FootLiftCm),
 						Scale * Walker.ScaleFactor),
 					/*bWorldSpace=*/true,
 					/*bMarkRenderStateDirty=*/false);
@@ -314,7 +366,7 @@ void UPedestrianSpawnerComponent::UpdateInstances(const TArray<FPlacedPedestrian
 			const FPlacedPedestrian& Walker = Placed[Index];
 			Instances->UpdateInstanceTransform(
 				Index,
-				FTransform(Walker.Rotation, Walker.Location + FVector(0.0, 0.0, FootLiftCm), Scale * Walker.ScaleFactor),
+				FTransform(Walker.Rotation, GroundSnap(Walker.Location) + FVector(0.0, 0.0, FootLiftCm), Scale * Walker.ScaleFactor),
 				/*bWorldSpace=*/true,
 				/*bMarkRenderStateDirty=*/false);
 		}
