@@ -8,6 +8,16 @@
 
 #include "WiesbadenTrafficLights.generated.h"
 
+/** Signalbegriff einer Ampelgruppe (deutsche Reihenfolge). */
+UENUM(BlueprintType)
+enum class ESignalAspect : uint8
+{
+    Red      UMETA(DisplayName = "Rot"),
+    RedAmber UMETA(DisplayName = "Rot-Gelb"),
+    Green    UMETA(DisplayName = "Gruen"),
+    Amber    UMETA(DisplayName = "Gelb")
+};
+
 /** Parameter der Ampel-Steuerung. */
 USTRUCT(BlueprintType)
 struct WIESBADENREAL_API FWiesbadenTrafficLightSettings
@@ -38,6 +48,18 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSettings
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights")
 	int32 RandomSeed = 20260814;
+
+    /** Rot-Gelb-Dauer vor Gruen (s). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "0.0"))
+    double RedAmberSeconds = 1.0;
+
+    /** Gelb-Dauer am Ende der Gruenzeit (s). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "0.0"))
+    double AmberSeconds = 3.0;
+
+    /** Allrot-Raeumzeit nach Gelb, bevor die andere Achse startet (s). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "0.0"))
+    double AllRedSeconds = 2.0;
 };
 
 /** Eine einzelne Ampel an einer Kreuzung (datenrein). */
@@ -116,6 +138,12 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSystem
 	 * Einschraenkung).
 	 */
 	bool IsConnectionGreen(int32 ConnectionIndex) const;
+
+    /** Signalbegriff einer Verbindung (Rot/RotGelb/Gruen/Gelb). */
+    ESignalAspect GetConnectionAspect(int32 ConnectionIndex) const;
+
+    /** Signalbegriff einer Richtungsgruppe (0..GroupCount-1). */
+    ESignalAspect GetGroupAspect(int32 LightIndex, int32 Group) const;
 
 	/** True, wenn diese Verbindung ueberhaupt von einer Ampel kontrolliert wird
 	 *  (Kreuzung mit TrafficSignals). Diagnose: unterscheidet "keine Ampel an der

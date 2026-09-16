@@ -69,7 +69,7 @@ void FWiesbadenTrafficLightSystem::Initialize(
 		FWiesbadenTrafficLight Light;
 		Light.NodeId = Intersection.NodeId;
 		Light.Location = Intersection.Location;
-		Light.GroupCount = FMath::Max(Intersection.GetArmCount(), 1);
+		Light.GroupCount = 2; // Zwei Achsen-Gruppen (0/180 vs 90/270).
 
 		// Deterministischer Phasen-Offset aus Node-Id + Seed, damit nicht alle
 		// Ampeln der Stadt synchron schalten.
@@ -128,36 +128,62 @@ bool FWiesbadenTrafficLightSystem::HasTrafficLightAt(int64 NodeId) const
 	return false;
 }
 
+ESignalAspect FWiesbadenTrafficLightSystem::GetGroupAspect(int32 LightIndex, int32 Group) const
+{
+    if (!Lights.IsValidIndex(LightIndex))
+    {
+        return ESignalAspect::Green;
+    }
+    const FWiesbadenTrafficLight& Light = Lights[LightIndex];
+    const int32 Groups = FMath::Max(Light.GroupCount, 1);
+
+    const double Cycle = FMath::Max(Settings.CycleSeconds, MinCycleSeconds);
+    const double Half = Cycle / static_cast<double>(Groups);
+    double Phase = FMath::Fmod(ElapsedSeconds + Light.PhaseOffsetSeconds, Cycle);
+    if (Phase < 0.0)
+    {
+        Phase += Cycle;
+    }
+
+    // Nur die gerade aktive Achse ist ueberhaupt nicht-rot.
+    const int32 Active = FMath::Clamp(static_cast<int32>(Phase / Half), 0, Groups - 1);
+    if (Group != Active)
+    {
+        return ESignalAspect::Red;
+    }
+
+    const double RA = FMath::Max(Settings.RedAmberSeconds, 0.0);
+    const double AM = FMath::Max(Settings.AmberSeconds, 0.0);
+    const double AR = FMath::Max(Settings.AllRedSeconds, 0.0);
+    const double GreenAvail = FMath::Max(Half - RA - AM - AR, 0.0);
+    const double G = FMath::Clamp(Settings.GreenSecondsPerCycle, 0.0, GreenAvail);
+
+    const double T = Phase - static_cast<double>(Active) * Half;
+    if (T < RA) { return ESignalAspect::RedAmber; }
+    if (T < RA + G) { return ESignalAspect::Green; }
+    if (T < RA + G + AM) { return ESignalAspect::Amber; }
+    return ESignalAspect::Red; // Allrot-Raeumzeit
+}
+
+ESignalAspect FWiesbadenTrafficLightSystem::GetConnectionAspect(int32 ConnectionIndex) const
+{
+    const int32* LightIdx = ConnectionToLight.Find(ConnectionIndex);
+    if (!LightIdx || !Lights.IsValidIndex(*LightIdx))
+    {
+        return ESignalAspect::Green;
+    }
+    const FWiesbadenTrafficLight& Light = Lights[*LightIdx];
+    const int32* GroupPtr = Light.ConnectionGroups.Find(ConnectionIndex);
+    if (!GroupPtr)
+    {
+        return ESignalAspect::Green;
+    }
+    return GetGroupAspect(*LightIdx, *GroupPtr);
+}
+
 bool FWiesbadenTrafficLightSystem::IsConnectionGreen(int32 ConnectionIndex) const
 {
-	const int32* LightIdx = ConnectionToLight.Find(ConnectionIndex);
-	if (!LightIdx || !Lights.IsValidIndex(*LightIdx))
-	{
-		// Keine Ampel an dieser Verbindung - keine Einschraenkung.
-		return true;
-	}
-
-	const FWiesbadenTrafficLight& Light = Lights[*LightIdx];
-	const int32* GroupPtr = Light.ConnectionGroups.Find(ConnectionIndex);
-	if (!GroupPtr || Light.GroupCount <= 0)
-	{
-		return true;
-	}
-
-	// Zeitfenster der Gruppe im Zyklus: Gruppe g ist gruen im Fenster
-	// [g * Slot, g * Slot + Green), Slot = Cycle / GroupCount (nicht
-	// ueberlappend - nie zwei Achsen gleichzeitig gruen).
-	const double Cycle = FMath::Max(Settings.CycleSeconds, MinCycleSeconds);
-	const double Slot = Cycle / static_cast<double>(Light.GroupCount);
-	const double Green = FMath::Clamp(Settings.GreenSecondsPerCycle, 0.0, Slot);
-	const double CyclePhase = FMath::Fmod(ElapsedSeconds + Light.PhaseOffsetSeconds, Cycle);
-	if (CyclePhase < 0.0)
-	{
-		return false;
-	}
-
-	const double SlotStart = static_cast<double>(*GroupPtr) * Slot;
-	return CyclePhase >= SlotStart && CyclePhase < SlotStart + Green;
+    return GetConnectionAspect(ConnectionIndex) == ESignalAspect::Green;
 }
 
 bool FWiesbadenTrafficLightSystem::AnyControlledConnectionRed() const

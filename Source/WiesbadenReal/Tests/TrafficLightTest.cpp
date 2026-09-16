@@ -92,8 +92,8 @@ namespace
 	FWiesbadenTrafficLightSettings MakeLightSettings()
 	{
 		FWiesbadenTrafficLightSettings Settings;
-		Settings.CycleSeconds = 10.0;
-		Settings.GreenSecondsPerCycle = 5.0;
+		Settings.CycleSeconds = 30.0;
+		Settings.GreenSecondsPerCycle = 15.0;
 		Settings.RandomSeed = 424242;
 		return Settings;
 	}
@@ -129,7 +129,7 @@ bool FTrafficLightSystemTest::RunTest(const FString& Parameters)
 	A.Initialize(ScopedNetwork2, MakeLightSettings());
 	const FRoadNetwork ScopedNetwork3 = MakeSignalNetwork();
 	B.Initialize(ScopedNetwork3, MakeLightSettings());
-	for (int32 t = 0; t < 40; ++t)
+	for (int32 t = 0; t < 80; ++t)
 	{
 		A.Tick(0.5f);
 		B.Tick(0.5f);
@@ -147,7 +147,7 @@ bool FTrafficLightSystemTest::RunTest(const FString& Parameters)
 		bool bSawGreenA = false;
 		bool bSawGreenB = false;
 		bool bNeverBoth = true;
-		for (int32 t = 0; t < 40; ++t)
+		for (int32 t = 0; t < 80; ++t)
 		{
 			System.Tick(0.5f);
 			const bool GreenA = System.IsConnectionGreen(0);
@@ -214,5 +214,45 @@ bool FTrafficLightSystemTest::RunTest(const FString& Parameters)
 			Sim.Vehicles[0].SpeedCmS > 100.0);
 	}
 
-	return true;
+	    // -- 5. Aspektmodell: Konfliktfreiheit, Dauern, Gruen-Delegation. --------
+    {
+        FWiesbadenTrafficLightSettings S;
+        S.CycleSeconds = 30.0;
+        S.GreenSecondsPerCycle = 15.0; // wird auf GreenAvail (9 s) geklemmt
+        S.RedAmberSeconds = 1.0;
+        S.AmberSeconds = 3.0;
+        S.AllRedSeconds = 2.0;
+        S.RandomSeed = 1;
+        FWiesbadenTrafficLightSystem Sys;
+        const FRoadNetwork Net = MakeSignalNetwork();
+        Sys.Initialize(Net, S);
+
+        const double Dt = 0.05;
+        double Dur[4] = { 0.0, 0.0, 0.0, 0.0 };
+        bool bNeverBothNonRed = true;
+        bool bGreenDelegationOk = true;
+        const int32 StepsC = FMath::RoundToInt(30.0 / Dt);
+        for (int32 i = 0; i < StepsC; ++i)
+        {
+            const ESignalAspect A0 = Sys.GetGroupAspect(0, 0);
+            const ESignalAspect A1 = Sys.GetGroupAspect(0, 1);
+            Dur[static_cast<int32>(A0)] += Dt;
+            const bool N0 = A0 != ESignalAspect::Red;
+            const bool N1 = A1 != ESignalAspect::Red;
+            bNeverBothNonRed = bNeverBothNonRed && !(N0 && N1);
+            bGreenDelegationOk = bGreenDelegationOk
+                && (Sys.IsConnectionGreen(0) == (Sys.GetConnectionAspect(0) == ESignalAspect::Green));
+            Sys.Tick(static_cast<float>(Dt));
+        }
+        TestTrue(TEXT("Aspekt: nie zwei Gruppen gleichzeitig nicht-rot"), bNeverBothNonRed);
+        TestTrue(TEXT("Aspekt: Gruen-Delegation stimmt mit Aspekt ueberein"), bGreenDelegationOk);
+        TestTrue(TEXT("Aspekt: Rot-Gelb ~1 s"),
+            FMath::Abs(Dur[static_cast<int32>(ESignalAspect::RedAmber)] - 1.0) < 0.3);
+        TestTrue(TEXT("Aspekt: Gruen ~9 s"),
+            FMath::Abs(Dur[static_cast<int32>(ESignalAspect::Green)] - 9.0) < 0.3);
+        TestTrue(TEXT("Aspekt: Gelb ~3 s"),
+            FMath::Abs(Dur[static_cast<int32>(ESignalAspect::Amber)] - 3.0) < 0.3);
+    }
+
+    return true;
 }
