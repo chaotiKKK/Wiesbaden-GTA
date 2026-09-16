@@ -37,6 +37,7 @@ void AWiesbadenLandmarks::BeginPlay()
 	// Echte Standorte (OSM/Karte), Heading grob an der Laengsachse.
 	Specs.Add({ ELandmarkKind::Marktkirche,    50.08255, 8.24135, 90.0 });
 	Specs.Add({ ELandmarkKind::RussischeKirche, 50.09425, 8.23195,  0.0 });
+	Specs.Add({ ELandmarkKind::Shuttle,          50.13412, 8.22006,  0.0 });
 }
 
 bool AWiesbadenLandmarks::ResolveGround(const FVector& WorldXY, double& OutZ) const
@@ -93,6 +94,10 @@ void AWiesbadenLandmarks::Tick(float DeltaSeconds)
 		if (Spec.Kind == ELandmarkKind::Marktkirche)
 		{
 			BuildMarktkirche(Base, Yaw);
+		}
+		else if (Spec.Kind == ELandmarkKind::Shuttle)
+		{
+			BuildShuttle(Base, Yaw);
 		}
 		else
 		{
@@ -224,4 +229,37 @@ void AWiesbadenLandmarks::BuildRussianChurch(const FVector& BaseWorld, const FRo
 	{
 		AddOnionDome(BaseWorld, Yaw, O[0], O[1], 1400.0, 190.0, GoldMat);
 	}
+}
+
+void AWiesbadenLandmarks::BuildShuttle(const FVector& BaseWorld, const FRotator& Yaw)
+{
+    UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/Props/Shuttle/SM_SpaceShuttle.SM_SpaceShuttle"));
+    if (!Mesh)
+    {
+        UE_LOG(LogWbLandmark, Warning, TEXT("Shuttle: Mesh nicht gefunden."));
+        return;
+    }
+    const FVector Size = Mesh->GetBoundingBox().GetSize();
+    const double Longest = FMath::Max3(Size.X, Size.Y, Size.Z);
+    const double TargetCm = 3700.0; // laengste (Hoch-)Achse ~37 m
+    const double S = (Longest > 1.0) ? (TargetCm / Longest) : 1.0;
+
+    UStaticMeshComponent* Comp = NewObject<UStaticMeshComponent>(this);
+    Comp->SetStaticMesh(Mesh);
+    Comp->SetupAttachment(Root);
+    Comp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Comp->RegisterComponent();
+    Comp->SetWorldScale3D(FVector(S));
+    // Das glTF landet mit seiner Hochachse auf UE-Y -> per Roll -90 auf +Z aufrichten.
+    Comp->SetWorldRotation(FRotator(0.0, Yaw.Yaw, -90.0));
+    Comp->SetWorldLocation(BaseWorld);
+    Comp->UpdateBounds();
+    // Unterkante exakt auf den Boden: echte Weltbounds nach Transform auswerten.
+    const FBoxSphereBounds WB = Comp->Bounds;
+    const double WorldMinZ = WB.Origin.Z - WB.BoxExtent.Z;
+    Comp->AddWorldOffset(FVector(0.0, 0.0, BaseWorld.Z - WorldMinZ));
+    Parts.Add(Comp);
+    UE_LOG(LogWbLandmark, Log,
+        TEXT("Shuttle bei (%.0f, %.0f, %.0f), Skala %.2f, Bounds %.0f x %.0f x %.0f cm."),
+        BaseWorld.X, BaseWorld.Y, BaseWorld.Z, S, WB.BoxExtent.X * 2, WB.BoxExtent.Y * 2, WB.BoxExtent.Z * 2);
 }
