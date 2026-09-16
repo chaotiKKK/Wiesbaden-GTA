@@ -35,7 +35,7 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
-	enum class ELandmarkKind : uint8 { Marktkirche, RussischeKirche };
+	enum class ELandmarkKind : uint8 { Marktkirche, RussischeKirche, Shuttle };
 
 	struct FLandmarkSpec
 	{
@@ -87,6 +87,7 @@ private:
 
 	void BuildMarktkirche(const FVector& BaseWorld, const FRotator& Yaw);
 	void BuildRussianChurch(const FVector& BaseWorld, const FRotator& Yaw);
+	void BuildShuttle(const FVector& BaseWorld, const FRotator& Yaw);
 
 	bool ResolveGround(const FVector& WorldXY, double& OutZ) const;
 };
