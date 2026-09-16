@@ -122,8 +122,11 @@ public:
 	 * nach Umschalten auf Orbit - so wie es die Steuerungshilfe verspricht
 	 * ("Maus - Umsehen"). Ohne Eingabe kehrt der Blick sanft nach hinten zurueck.
 	 */
+	// Standard 0: freie Sicht - die Kamera bleibt stehen, wo man hinschaut, und
+	// springt NICHT staendig hinter das Fahrzeug zurueck (auf Wunsch). Ein Wert
+	// > 0 aktiviert das sanfte Zuruecklaufen wieder.
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "0.0"))
-	float FollowRecenterSpeed = 3.0f;
+	float FollowRecenterSpeed = 0.0f;
 
 	/** Glattung der Kamera-Bewegung. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "0.01"))

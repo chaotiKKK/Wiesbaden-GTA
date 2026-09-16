@@ -210,11 +210,11 @@ public:
 	 * schraeg fliegt, wird nicht gegen sich selbst arbeiten muessen.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Helikopter|Steuerung", meta = (ClampMin = "0.0"))
-	float AutoLevelStrength = 0.065f;   // staerkere Selbstnivellierung
+	float AutoLevelStrength = 0.12f;   // deutlich staerkere Selbstnivellierung: kippt nicht mehr so leicht um
 
 	/** Groesster Ausschlag, den die Selbststabilisierung allein erzeugt. */
 	UPROPERTY(EditAnywhere, Category = "Helikopter|Steuerung", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float AutoLevelMaxAuthority = 0.55f;
+	float AutoLevelMaxAuthority = 0.72f;
 
 	/**
 	 * Schwebehilfe: Daempfung der Vertikalgeschwindigkeit bei neutralem
@@ -406,6 +406,16 @@ private:
 
 	bool bEngineToggleHeld = false;
 	bool bGrounded = false;
+
+	// Boden-Cache: ApplyGroundConstraint fuellt ihn einmal pro Frame; der
+	// visuelle Pfad (GetAltitudeMeters, Downwash-Staub) liest ihn, statt eigene
+	// Down-Traces zu schiessen -> ein Boden-Raycast pro Frame statt drei bis vier.
+	bool bGroundCacheValid = false;
+	float CachedGroundZ = 0.0f;
+
+	/** Gecachter Pilot-Controller (in PossessedBy gesetzt) - spart ~17 Casts/Frame. */
+	UPROPERTY(Transient)
+	APlayerController* CachedPlayerController = nullptr;
 
 	/** Externe Steuerung (KI/Zwischensequenz/Test), siehe SetExternalControl. */
 	FWiesbadenHeliControl ExternalControl;

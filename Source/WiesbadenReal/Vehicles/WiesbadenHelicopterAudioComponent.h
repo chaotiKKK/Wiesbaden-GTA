@@ -86,7 +86,7 @@ public:
 
 	/** Abspiel-Lautstaerke des Flugsounds (Master). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Audio", meta = (ClampMin = "0.0"))
-	float MasterVolume = 0.8f;
+	float MasterVolume = 0.55f;
 
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Audio")

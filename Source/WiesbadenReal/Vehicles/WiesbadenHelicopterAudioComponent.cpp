@@ -128,12 +128,13 @@ void UWiesbadenHelicopterAudioComponent::UpdateAssetAudio()
 	}
 
 	// Asset-Parameter: Pitch folgt der Drehzahl, Lautstaerke der Blattlast.
-	const float RotorPitch = FMath::Max(Params.MainRotorRpm, 0.0f) / 420.0f;
+	// Groesserer Divisor = tiefere Tonhoehe (war zu hoch/schrill).
+	const float RotorPitch = FMath::Max(Params.MainRotorRpm, 0.0f) / 560.0f;
 	RotorAudio->SetPitchMultiplier(RotorPitch);
 	RotorAudio->SetVolumeMultiplier(
 		MasterVolume * (0.3f + 0.7f * Params.Collective));
 
-	const float EnginePitch = FMath::Max(Params.EngineRpm, 0.0f) / 3000.0f;
+	const float EnginePitch = FMath::Max(Params.EngineRpm, 0.0f) / 3800.0f;
 	EngineAudio->SetPitchMultiplier(EnginePitch);
 	EngineAudio->SetVolumeMultiplier(Params.bEngineRunning ? MasterVolume : 0.0f);
 }

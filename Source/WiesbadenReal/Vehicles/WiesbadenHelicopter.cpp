@@ -348,9 +348,11 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	// 400 Grad/s durchdrehen.
 	RotorPhysics.CoaxialYawAuthority = 16000.0f;
 	RotorPhysics.MaxForwardSpeedMetersPerS = 85.0f;
-	RotorPhysics.CyclicPitchMomentAuthority = 1500.0f;
-	RotorPhysics.CyclicRollMomentAuthority = 1500.0f;
-	RotorPhysics.RotorAngularDamping = 1400.0f;
+	// Weniger kippelig/ueberschiessend: geringere Zyklik-Autoritaet + mehr
+	// Drehdaempfung -> die Lage baut sich ruhiger auf und schwingt nicht ueber.
+	RotorPhysics.CyclicPitchMomentAuthority = 1150.0f;
+	RotorPhysics.CyclicRollMomentAuthority = 1150.0f;
+	RotorPhysics.RotorAngularDamping = 2200.0f;
 
 	// Flachere Kollektiv-Kennlinie fuer moderate Steig-/Sinkraten.
 	//
@@ -363,9 +365,11 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	RotorPhysics.MaxCollectivePitchDeg = 6.0f;
 	RotorPhysics.MinCollectivePitchDeg = 3.0f;
 
+	// Weniger schrill/nervig: flacherer Blattschlag + tiefere Filter-Grundfrequenz
+	// (dumpfer, weniger Hoehen). Master-Lautstaerke ist im Audio-Component gesenkt.
 	HelicopterAudio->BladeCount = 3;
-	HelicopterAudio->BladeSlapDepth = 0.55f;
-	HelicopterAudio->RotorCutoffBaseHz = 110.0f;
+	HelicopterAudio->BladeSlapDepth = 0.35f;
+	HelicopterAudio->RotorCutoffBaseHz = 85.0f;
 
 	if (!Cube)
 	{
@@ -377,6 +381,10 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 void AWiesbadenHelicopter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	// Boden-Cache pro Frame invalidieren; ApplyGroundConstraint fuellt ihn im
+	// Flugpfad neu. Bleibt er ungueltig (geparkt), tracen die Leser selbst.
+	bGroundCacheValid = false;
 
 	// Ohne Pilot wird nicht geflogen.
 	//
@@ -447,9 +455,12 @@ void AWiesbadenHelicopter::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
 
-	if (APlayerController* PC = Cast<APlayerController>(NewController))
+	// Pilot-Controller einmalig cachen (der Typ ist hier bereits geprueft) -
+	// ReadInput fragt ihn pro Frame ~17x ab, sonst je ein Cast.
+	CachedPlayerController = Cast<APlayerController>(NewController);
+	if (CachedPlayerController)
 	{
-		PC->SetViewTarget(this);
+		CachedPlayerController->SetViewTarget(this);
 	}
 
 	// Triebwerk laeuft nur mit Pilot an Bord.
@@ -463,6 +474,7 @@ void AWiesbadenHelicopter::UnPossessed()
 	Super::UnPossessed();
 
 	bEngineRunning = false;
+	CachedPlayerController = nullptr;
 
 	UE_LOG(LogWbVehicles, Log, TEXT("Helikopter %s wurde freigegeben."), *GetName());
 }
@@ -500,6 +512,12 @@ float AWiesbadenHelicopter::GetVerticalSpeedMs() const
 float AWiesbadenHelicopter::GetAltitudeMeters() const
 {
 	const FVector Location = GetActorLocation();
+	// Gecachten Bodenwert dieses Frames nutzen (aus ApplyGroundConstraint),
+	// sonst selbst tracen (geparkt / Aufruf ausserhalb des Flug-Ticks).
+	if (bGroundCacheValid)
+	{
+		return (Location.Z - CachedGroundZ) * 0.01f;
+	}
 	if (const UWorld* HeliWorld = GetWorld())
 	{
 		FHitResult Hit;
@@ -873,6 +891,11 @@ void AWiesbadenHelicopter::ApplyGroundConstraint(float DeltaSeconds)
 	bGrounded = false;
 	if (GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params))
 	{
+		// Boden fuer den visuellen Pfad cachen (Hoehenanzeige + Downwash-Staub
+		// lesen diesen Wert und tracen nicht selbst nochmal).
+		CachedGroundZ = Hit.Location.Z;
+		bGroundCacheValid = true;
+
 		const float Altitude = Hit.Distance;
 		if (Altitude < MinGroundClearanceCm)
 		{
@@ -998,16 +1021,21 @@ void AWiesbadenHelicopter::UpdateVisualEffects(float DeltaSeconds)
 		}
 		if (bDust)
 		{
-			// Boden direkt unter dem Heli finden.
-			FVector GroundLoc = GetActorLocation() - FVector(0.0f, 0.0f, 800.0f);
-			if (UWorld* World = GetWorld())
+			// Boden direkt unter dem Heli - aus dem Frame-Cache (ApplyGround-
+			// Constraint hat diesen Frame bereits getract); nur zur Not selbst.
+			const FVector HeliLoc = GetActorLocation();
+			FVector GroundLoc = HeliLoc - FVector(0.0f, 0.0f, 800.0f);
+			if (bGroundCacheValid)
+			{
+				GroundLoc = FVector(HeliLoc.X, HeliLoc.Y, CachedGroundZ + 8.0f);
+			}
+			else if (UWorld* World = GetWorld())
 			{
 				FHitResult Hit;
 				FCollisionQueryParams Params(SCENE_QUERY_STAT(WbHeliDownwash), true);
 				Params.AddIgnoredActor(this);
-				const FVector Start = GetActorLocation();
 				if (World->LineTraceSingleByChannel(
-						Hit, Start, Start - FVector(0.0f, 0.0f, 100000.0f), ECC_WorldStatic, Params)
+						Hit, HeliLoc, HeliLoc - FVector(0.0f, 0.0f, 100000.0f), ECC_WorldStatic, Params)
 					&& !Hit.bStartPenetrating)
 				{
 					GroundLoc = Hit.Location + FVector(0.0f, 0.0f, 8.0f);
@@ -1043,6 +1071,12 @@ void AWiesbadenHelicopter::UpdateAudio(float DeltaSeconds)
 
 APlayerController* AWiesbadenHelicopter::GetHeliController()
 {
+	// Gecachten Pilot-Controller nutzen; nur wenn keiner da ist (z.B. KI-Besitz
+	// vor PossessedBy), einmalig casten.
+	if (CachedPlayerController)
+	{
+		return CachedPlayerController;
+	}
 	return Cast<APlayerController>(GetController());
 }
 
