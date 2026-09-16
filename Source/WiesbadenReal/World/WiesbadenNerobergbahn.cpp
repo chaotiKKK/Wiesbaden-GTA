@@ -378,6 +378,21 @@ bool AWiesbadenNerobergbahn::ResolveHeights()
 			TEXT("Hoehe %.0f bis %.0f m ueber Null, Steigung %.0f m."),
 			MinZ / 100.0, MaxZ / 100.0, (MaxZ - MinZ) / 100.0);
 
+		// NN-Datum an der Talfuss-Hoehe kalibrieren: das Gelaende-Datum liegt
+		// rund 70 m unter NN, die Talstation aber real bei ~160 m ue. NN. Der
+		// Versatz macht die Trasse NN-bewusst (Log/Beschilderung/Hoehenmesser),
+		// ohne die Geometrie zu verschieben - die bleibt am Gelaende, sonst
+		// loesten sich die Stationen von Stadt und Berg (das braeuchte einen
+		// weltweiten Re-Bake). Bergstation = Talstation + gemessene Steigung.
+		NNDatumOffsetMeters = RealTalstationNNMeters - (MinZ / 100.0);
+		TalstationNNMeters = MinZ / 100.0 + NNDatumOffsetMeters;
+		BergstationNNMeters = MaxZ / 100.0 + NNDatumOffsetMeters;
+		UE_LOG(LogWbStreaming, Log,
+			TEXT("Nerobergbahn: NN-Datum kalibriert (Versatz %.0f m). ")
+			TEXT("Talstation %.0f m ue. NN, Bergstation %.0f m ue. NN ")
+			TEXT("(Vorbild 160 / 245 m)."),
+			NNDatumOffsetMeters, TalstationNNMeters, BergstationNNMeters);
+
 		// Und sofort sagen, wenn das Ergebnis nicht stimmen KANN.
 		//
 		// Geprueft wird der HOEHENUNTERSCHIED, nicht die absolute Lage. Das
@@ -545,11 +560,18 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 	// Von beiden Bettkanten eine Boeschung hinab zum Gelaende. Wo die Trasse
 	// ueber dem Terrain liegt, entsteht ein Damm; wo sie darunter liegt, ist die
 	// Boeschung ~0 (Einschnitt). Dadurch schmiegt sich die Bahn an den Hang.
+	int32 EmbStartSection = INDEX_NONE;   // erste Damm-Sektion (bekommt Klinker statt Vertexfarbe)
+	TArray<int32> RailSections;           // Gelaender-Sektionen (bekommen Blau statt Klinker)
 	if (UWorld* EmbWorld = GetWorld())
 	{
 		constexpr float BedHalf = 130.0f;
 		constexpr float BedTopLift = 6.0f;
-		const FLinearColor EarthColour(0.13f, 0.20f, 0.09f);   // begruenter Bahndamm - an die Landschafts-Wiese (Foto-Textur, olivgruen ~15-20% Albedo) angeglichen, damit der Damm nahtlos ins Gras uebergeht
+		// F Erst-Pass: der reale Nerobergbahn-Damm ist eine BACKSTEIN-Stuetzmauer
+		// (110 m, spaeter mit 5 Rundboegen), kein gruener Erddamm. Ziegelfarbe +
+		// steile (nahezu senkrechte) Wand statt 35-Grad-Boeschung; das Klinker-
+		// Material wird den Damm-Sektionen unten gezielt zugewiesen.
+		const FLinearColor EarthColour(0.60f, 0.34f, 0.26f);   // Klinker-Ziegel (vom Backstein-Material texturiert)
+		EmbStartSection = Section;
 
 		// Wie beim Hoehen-Trace: Stadt-Chunks ausnehmen, sonst misst die Boeschung
 		// gegen ein Dach und zieht eine riesige dunkle Schuerze in die Luft.
@@ -558,35 +580,118 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 		{
 			EmbChunks.Add(*It);
 		}
+
+		// Genau 5 Rundboegen a 12,5 m in der unteren Viadukt-Sektion (Vorbild:
+		// Bruecke 110 m mit 5 Boegen je 12,5 m). Das Bogenfenster wird um den
+		// Viadukt-Ankerpunkt zentriert (gleiche Formel wie die Viadukt-Struktur
+		// in PlaceStructures); ausserhalb bleibt die Wand Vollmauer.
+		constexpr int32 ViaductArchCount = 5;
+		constexpr double ArchSpanCm = 1250.0;                       // 12,5 m Spannweite
+		constexpr double PierWidthCm = 260.0;                       // Pfeilerbreite zwischen den Boegen
+		constexpr double SpringHeightCm = 200.0;                    // Kaempferlinie ueber Grund
+		constexpr double MinSpandrelCm = 180.0;                     // Restmauer ueberm Scheitel
+		constexpr double ArchMinElevationCm = 500.0;                // nur wo die Mauer hoch genug ist
+		const double ArchWindowLen = ViaductArchCount * ArchSpanCm; // 62,5 m
+		const double ViaductCenterS = FMath::Min(5500.0, TrackA.TotalLength * 0.18);
+		const double ArchWindowStart = FMath::Clamp(
+			ViaductCenterS - 0.5 * ArchWindowLen, 0.0,
+			FMath::Max(0.0, TrackA.TotalLength - ArchWindowLen));
+		const double ArchWindowEnd = ArchWindowStart + ArchWindowLen;
+		const double ArchHalf = 0.5 * (ArchSpanCm - PierWidthCm);
+
 		for (const FTrack* Track : { &TrackA, &TrackB })
 		{
+			// Nur die Hauptspur ummauern: TrackB laeuft auf dem Damm deckungs-
+			// gleich mit TrackA (Abt-Ausweiche nur in der Mitte). Zwei Ziegel-
+			// mauern wuerden z-fighten und die Geometrie verdoppeln (Draw-Calls).
+			if (Track != &TrackA)
+			{
+				continue;
+			}
 			for (int32 SideSign = -1; SideSign <= 1; SideSign += 2)
 			{
 				TArray<FVector> V; TArray<int32> Tri; TArray<FVector> N;
 				TArray<FVector2D> UV; TArray<FLinearColor> C;
-				for (int32 i = 0; i < Track->Points.Num(); ++i)
+				// Blaues Gelaender oben auf der Mauerkrone - nur am erhoehten Damm.
+				TArray<FVector> RV; TArray<int32> RTri;
+				TArray<FVector2D> RUV; TArray<FLinearColor> RC;
+				const FLinearColor RailBlue(0.09f, 0.20f, 0.52f);
+				int32 PrevWallTop = -1;   // laufender Vertex-Index der Mauerkrone
+
+				// Echtes Gelaender (Pfosten + zwei Handlaeufe) als MASSIVE Quader
+				// statt eines flachen Bandes -> von beiden Seiten sichtbar (ein
+				// Solid-Kasten zeigt aussen aus jeder Richtung eine Flaeche). Das
+				// NbBlau-Material wird zusaetzlich zweiseitig gesetzt (Absicherung).
+				FVector PrevRailCrown = FVector::ZeroVector;
+				bool bHavePrevRailCrown = false;
+				auto AppendRailBox = [&](const FVector& C0, const FVector& C1,
+										 const FVector& AxisU, const FVector& AxisV,
+										 float HalfU, float HalfV)
 				{
-					const FVector& P = Track->Points[i].Position;
-					FVector Tangent = FVector::ForwardVector;
-					if (i + 1 < Track->Points.Num())
+					const FVector U = AxisU * HalfU;
+					const FVector Wv = AxisV * HalfV;
+					const int32 B = RV.Num();
+					RV.Add(C0 - U - Wv); RV.Add(C0 + U - Wv);
+					RV.Add(C0 + U + Wv); RV.Add(C0 - U + Wv);
+					RV.Add(C1 - U - Wv); RV.Add(C1 + U - Wv);
+					RV.Add(C1 + U + Wv); RV.Add(C1 - U + Wv);
+					for (int32 k = 0; k < 8; ++k)
 					{
-						Tangent = (Track->Points[i + 1].Position - P).GetSafeNormal();
+						RUV.Add(FVector2D((k >= 4) ? 1.0f : 0.0f, (k % 2) ? 1.0f : 0.0f));
+						RC.Add(RailBlue);
 					}
-					else if (i > 0)
+					auto Quad = [&](int32 a, int32 b, int32 c, int32 d)
 					{
-						Tangent = (P - Track->Points[i - 1].Position).GetSafeNormal();
+						RTri.Append({ B + a, B + b, B + c, B + a, B + c, B + d });
+					};
+					Quad(1, 5, 6, 2);  // +U-Seite
+					Quad(0, 3, 7, 4);  // -U-Seite
+					Quad(3, 2, 6, 7);  // Oberseite
+					Quad(1, 0, 4, 5);  // Unterseite
+					Quad(4, 5, 6, 7);  // Ende bei C1
+					Quad(0, 3, 2, 1);  // Ende bei C0
+				};
+
+				// Die Rohpunkte stehen sehr ungleich (2 m bis >100 m Abstand).
+				// Fuer runde Boegen UND eine glatte Mauer die Trasse mit festem
+				// Schritt neu abtasten (Position/Tangente linear interpoliert).
+				constexpr double StepCm = 60.0;
+				const double Total = Track->TotalLength;
+				const int32 StepCount = FMath::Max(1, FMath::CeilToInt(Total / StepCm));
+				for (int32 Step = 0; Step <= StepCount; ++Step)
+				{
+					const double S = FMath::Min(Total, Step * StepCm);
+
+					// Trasse bei Bogenlaenge S abtasten.
+					FVector P = Track->Points[0].Position;
+					FVector Tangent = FVector::ForwardVector;
+					for (int32 j = 0; j + 1 < Track->Points.Num(); ++j)
+					{
+						const double A = Track->Points[j].ArcLength;
+						const double Bl = Track->Points[j + 1].ArcLength;
+						if (S <= Bl || j + 2 == Track->Points.Num())
+						{
+							const double Denom = FMath::Max(1.0, Bl - A);
+							const double T = FMath::Clamp((S - A) / Denom, 0.0, 1.0);
+							P = FMath::Lerp(Track->Points[j].Position, Track->Points[j + 1].Position, T);
+							Tangent = (Track->Points[j + 1].Position - Track->Points[j].Position).GetSafeNormal();
+							break;
+						}
 					}
 					const FVector Right = FVector::CrossProduct(Tangent, FVector::UpVector).GetSafeNormal();
-					const float BedLift = Track->Points[i].ArcLength >= TrackBedStartCm ? 6.0f : 0.0f;
+					const float BedLift = S >= TrackBedStartCm ? 6.0f : 0.0f;
 					const double BedTopZ = P.Z + BedTopLift + BedLift;
 
-					// Gelaende unter dem Punkt.
+					// Gelaende an der MAUERKANTE abtasten (nicht Gleismitte), damit
+					// beide Seiten ihrem eigenen Hang folgen.
+					const FVector EdgeXY(P.X + Right.X * (SideSign * BedHalf),
+										 P.Y + Right.Y * (SideSign * BedHalf), 0.0);
 					double TerrainZ = P.Z;
 					FHitResult Hit;
 					FCollisionQueryParams EmbParams(SCENE_QUERY_STAT(WbBahnDamm), true);
 					EmbParams.AddIgnoredActor(this);
 					EmbParams.AddIgnoredActors(EmbChunks);
-					const FVector TS(P.X, P.Y, P.Z + 200.0);
+					const FVector TS(EdgeXY.X, EdgeXY.Y, BedTopZ + 200.0);
 					if (EmbWorld->LineTraceSingleByChannel(Hit, TS,
 							TS - FVector(0, 0, 100000.0), ECC_WorldStatic, EmbParams)
 						&& !Hit.bStartPenetrating)
@@ -594,28 +699,86 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 						TerrainZ = Hit.Location.Z;
 					}
 					const double Height = FMath::Max(0.0, BedTopZ - TerrainZ);
-					const double Run = Height * 1.4;   // ~35-Grad-Boeschung
 
-					const FVector EdgeTop(P.X + Right.X * (SideSign * BedHalf),
-										  P.Y + Right.Y * (SideSign * BedHalf), BedTopZ);
-					const FVector EdgeBot(P.X + Right.X * (SideSign * (BedHalf + Run)),
-										  P.Y + Right.Y * (SideSign * (BedHalf + Run)), TerrainZ);
-					V.Add(EdgeTop); V.Add(EdgeBot);
-					const float Vc = static_cast<float>(Track->Points[i].ArcLength / 100.0);
-					UV.Add(FVector2D(0.0f, Vc)); UV.Add(FVector2D(1.0f, Vc));
-					C.Add(EarthColour); C.Add(EarthColour);
-					if (i > 0)
+					// Viadukt-Boegen: NUR im 62,5-m-Fenster (5 Boegen) und nur wo
+					// die Mauer hoch genug ist. Dort folgt die Mauer-Unterkante dem
+					// Halbkreis-Intrados (Durchblick), an den Pfeilern zum Boden.
+					double WallBottomZ = TerrainZ;
+					if (S >= ArchWindowStart && S < ArchWindowEnd && Height > ArchMinElevationCm)
 					{
-						const int32 B = (i - 1) * 2;
-						// Windung je Seite, damit die Oberseite nach aussen zeigt.
+						const double Local = FMath::Fmod(S - ArchWindowStart, ArchSpanCm);
+						const double Dx = Local - 0.5 * ArchSpanCm;
+						if (FMath::Abs(Dx) < ArchHalf)
+						{
+							const double SpringZ = TerrainZ + SpringHeightCm;
+							const double Intrados = SpringZ
+								+ FMath::Sqrt(FMath::Max(0.0, ArchHalf * ArchHalf - Dx * Dx));
+							WallBottomZ = FMath::Clamp(Intrados, TerrainZ, BedTopZ - MinSpandrelCm);
+						}
+					}
+
+					const double WallHeight = FMath::Max(0.0, BedTopZ - WallBottomZ);
+					const double Run = WallHeight * 0.12;   // leichter Anzug der Backsteinmauer
+
+					const FVector EdgeTop(EdgeXY.X, EdgeXY.Y, BedTopZ);
+					const FVector EdgeBot(P.X + Right.X * (SideSign * (BedHalf + Run)),
+										  P.Y + Right.Y * (SideSign * (BedHalf + Run)), WallBottomZ);
+					const int32 TopIdx = V.Add(EdgeTop);
+					const int32 BotIdx = V.Add(EdgeBot);
+					// Welt-skalierte UVs (~3 m je Kachel): U entlang der Trasse,
+					// V die Mauer hinab -> gleichmaessige Ziegel statt Zerrung.
+					const float Uarc = static_cast<float>(S / 300.0);
+					const float Vwall = static_cast<float>(WallHeight / 300.0);
+					UV.Add(FVector2D(Uarc, 0.0f)); UV.Add(FVector2D(Uarc, Vwall));
+					C.Add(EarthColour); C.Add(EarthColour);
+					if (PrevWallTop >= 0)
+					{
+						const int32 B = PrevWallTop;   // B=PrevTop, B+1=PrevBot
 						if (SideSign < 0)
 						{
-							Tri.Append({ B, B + 2, B + 1, B + 1, B + 2, B + 3 });
+							Tri.Append({ B, TopIdx, B + 1, B + 1, TopIdx, BotIdx });
 						}
 						else
 						{
-							Tri.Append({ B, B + 1, B + 2, B + 1, B + 3, B + 2 });
+							Tri.Append({ B, B + 1, TopIdx, TopIdx, B + 1, BotIdx });
 						}
+					}
+					PrevWallTop = TopIdx;
+
+					// Echtes Gelaender nur wo die Bahn spuerbar ueberm Gelaende
+					// liegt (Damm/Viadukt). Alle ~240 cm ein Knoten: ein Pfosten
+					// (vertikaler Quader) plus zwei Handlaeufe (oben/mitte) als
+					// horizontale Quader zum vorigen Knoten.
+					constexpr double RailMinHeight = 200.0;   // ab ~2 m Mauer
+					constexpr double RailTopZ = 120.0;         // oberer Handlauf
+					constexpr double RailMidZ = 66.0;          // unterer Handlauf
+					constexpr double PostBottomZ = 8.0;        // Pfostenfuss ueber Krone
+					constexpr int32 RailNodeEvery = 4;         // 4 * 60 cm = 240 cm
+					// Gelaender VORERST AUS: die blinde Kasten-Geometrie erzeugte
+					// riesige schwebende blaue/weisse Platten. Erst Wand/Boegen
+					// visuell verifizieren, dann das Gelaender neu + kontrolliert.
+					constexpr bool bBuildRailing = false;
+					const FVector Up = FVector::UpVector;
+					if (bBuildRailing && Height > RailMinHeight && (Step % RailNodeEvery == 0))
+					{
+						const FVector Crown(EdgeTop.X, EdgeTop.Y, BedTopZ);
+						// Pfosten.
+						AppendRailBox(Crown + Up * PostBottomZ, Crown + Up * (RailTopZ + 4.0),
+									  Right, Tangent, 6.0f, 6.0f);
+						// Zwei Handlaeufe zum vorigen Knoten.
+						if (bHavePrevRailCrown)
+						{
+							AppendRailBox(PrevRailCrown + Up * RailTopZ, Crown + Up * RailTopZ,
+										  Right, Up, 5.0f, 4.0f);
+							AppendRailBox(PrevRailCrown + Up * RailMidZ, Crown + Up * RailMidZ,
+										  Right, Up, 4.0f, 3.5f);
+						}
+						PrevRailCrown = Crown;
+						bHavePrevRailCrown = true;
+					}
+					else if (Height <= RailMinHeight)
+					{
+						bHavePrevRailCrown = false;   // Luecke -> Handlauf nicht ueberbruecken
 					}
 				}
 				// Normalen aus der Geometrie ableiten statt fix UpVector: Auf der
@@ -629,17 +792,44 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 				TrackMesh->CreateMeshSection_LinearColor(
 					Section++, V, Tri, N, UV, C, Tang,
 					/*bCreateCollision=*/false);
+
+				// Gelaender-Sektion (blau) getrennt, damit sie NbBlau statt
+				// Klinker bekommt.
+				if (RV.Num() >= 4 && RTri.Num() >= 3)
+				{
+					TArray<FVector> RN; TArray<FProcMeshTangent> RTang;
+					UKismetProceduralMeshLibrary::CalculateTangentsForMesh(RV, RTri, RUV, RN, RTang);
+					RailSections.Add(Section);
+					TrackMesh->CreateMeshSection_LinearColor(
+						Section++, RV, RTri, RN, RUV, RC, RTang,
+						/*bCreateCollision=*/false);
+				}
 			}
 		}
 	}
 
-	// Vertexfarben-Material fuer ALLE Sektionen (Bett/Schienen/Boeschung).
-	if (UMaterialInterface* TrackMat = LoadObject<UMaterialInterface>(
-			nullptr, TEXT("/Game/Materials/City/M_WbVertexFarbe.M_WbVertexFarbe")))
+	// Materialien: Bett/Schienen -> Vertexfarbe; Damm-Sektionen -> Backstein
+	// (Klinker), damit die steile Stuetzmauer wie das reale Ziegel-Viadukt wirkt.
+	UMaterialInterface* TrackMat = LoadObject<UMaterialInterface>(
+		nullptr, TEXT("/Game/Materials/City/M_WbVertexFarbe.M_WbVertexFarbe"));
+	UMaterialInterface* KlinkerMat = LoadObject<UMaterialInterface>(
+		nullptr, TEXT("/Game/Materials/City/MI_WbFacade_Klinker.MI_WbFacade_Klinker"));
+	UMaterialInterface* RailMat = LoadObject<UMaterialInterface>(
+		nullptr, TEXT("/Game/Nerobergbahn/Materials/MI_Nb_NbBlau.MI_Nb_NbBlau"));
+	for (int32 S = 0; S < Section; ++S)
 	{
-		for (int32 S = 0; S < Section; ++S)
+		UMaterialInterface* Mat = TrackMat;
+		if (RailSections.Contains(S) && RailMat)
 		{
-			TrackMesh->SetMaterial(S, TrackMat);
+			Mat = RailMat;   // blaues Gelaender
+		}
+		else if (EmbStartSection != INDEX_NONE && S >= EmbStartSection && KlinkerMat)
+		{
+			Mat = KlinkerMat;   // Backstein-Stuetzmauer
+		}
+		if (Mat)
+		{
+			TrackMesh->SetMaterial(S, Mat);
 		}
 	}
 }
@@ -683,11 +873,17 @@ void AWiesbadenNerobergbahn::PlaceStructures()
 	Place(Talstation, 0.0, 650.0, -150.0, GroundDrop);
 	Place(Bergstation, TrackA.TotalLength, 700.0, 150.0, GroundDrop);
 
-	// Viadukt im unteren Streckendrittel: die Deckoberkante (rund 7,7 m ueber
-	// der Pfeilerbasis) traegt das Gleis, die Boegen ueberspannen den Talgrund.
-	constexpr double ViaduktDeckTopCm = 770.0;
-	const double ViaduktS = FMath::Min(5500.0, TrackA.TotalLength * 0.18);
-	Place(Viadukt, ViaduktS, 0.0, 0.0, ViaduktDeckTopCm);
+	// Viadukt: das separate Blender-Mesh SM_WbNbViadukt (5 Boegen a 6 m, nur
+	// 39 m lang) wird NICHT mehr platziert. Die prozeduralen 12,5-m-Boegen in
+	// der Backstein-Stuetzmauer (BuildTrackMeshes) sind dimensionsgetreu
+	// (Vorbild: 5 x 12,5 m) und folgen dem Gelaende; zwei Viadukte am selben
+	// Ort wuerden sich ueberlagern. Das Mesh bleibt als Asset erhalten und
+	// versteckt (MakeStructure -> SetHiddenInGame(true)), falls wir es spaeter
+	// massstabskorrigiert doch bevorzugen wollen.
+	if (Viadukt)
+	{
+		Viadukt->SetHiddenInGame(true);
+	}
 
 	// KEINE Stuetzpfeiler mehr (die wirkten wie Stelzen und trafen die Referenz
 	// nicht). Stattdessen schmiegt sich die Trasse ueber eine Erd-Boeschung an

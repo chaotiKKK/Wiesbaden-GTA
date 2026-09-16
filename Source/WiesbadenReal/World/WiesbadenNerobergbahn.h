@@ -58,6 +58,24 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bahn", meta = (ClampMin = "100.0"))
 	float BoardRangeCm = 450.0f;
 
+	/** Reale Talstations-Hoehe (ESWE/Vorbild, ~160 m ue. NN) - Anker fuers NN-Datum. */
+	static constexpr double RealTalstationNNMeters = 160.0;
+
+	/**
+	 * Welt-Z (cm) -> reale Hoehe ueber NN (m). Das Gelaende-Datum liegt rund
+	 * 70 m unter NN; ResolveHeights kalibriert den Versatz an der abgetasteten
+	 * Talstations-Hoehe. Gedacht fuer Beschilderung/Hoehenmesser - die
+	 * Geometrie bleibt am Gelaende (kein Verschieben ins Absolute).
+	 */
+	double WorldZToNNMeters(double WorldZCm) const
+	{
+		return WorldZCm / 100.0 + NNDatumOffsetMeters;
+	}
+
+	/** Reale NN-Hoehen der Stationen (m), nach der Hoehenaufloesung gueltig. */
+	double GetTalstationNNMeters() const { return TalstationNNMeters; }
+	double GetBergstationNNMeters() const { return BergstationNNMeters; }
+
 private:
 	struct FTrackPoint
 	{
@@ -156,6 +174,12 @@ private:
 
 	/** Alle Hoehen aus dem Gelaende geloest und Geometrie neu gebaut? */
 	bool bHeightsFinal = false;
+
+	/** NN-Datum: Versatz Welt-Z(m) -> reale Hoehe ue. NN, in ResolveHeights aus
+	 *  der Talfuss-Hoehe kalibriert (Gelaende-Datum liegt ~70 m unter NN). */
+	double NNDatumOffsetMeters = 0.0;
+	double TalstationNNMeters = RealTalstationNNMeters;
+	double BergstationNNMeters = 0.0;
 
 	/** Naechster Abtastversuch fuer die Hoehen. */
 	float HeightRetryRemaining = 0.0f;
