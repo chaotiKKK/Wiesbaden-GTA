@@ -67,13 +67,12 @@ bool FWiesbadenStore::IsHangarGateForcedOpen()
 
 bool FWiesbadenStore::ShouldShowHangarPurchaseHint()
 {
-	return !IsHangarGateForcedOpen();
+	// Hangar-Kauf entfernt: nie ein Kauf-Hinweis.
+	return false;
 }
 
-bool FWiesbadenStore::MayEnterHelicopter(bool bHasHangarUnlock)
+bool FWiesbadenStore::MayEnterHelicopter(bool /*bHasHangarUnlock*/)
 {
-	// Standard: Tor nur mit gekauftem Hangar.
-	// DEBUG: bei definiertem WbDev_AllowHelicopterWithoutHangar ist das Tor
-	// ohne Kauf offen - dann entfaellt auch der Kauf-Hinweis (Entwicklerwahl).
-	return bHasHangarUnlock || IsHangarGateForcedOpen();
+	// Hangar-Kauf entfernt: der Ka-52 ist immer einsteigbar (kein Hangar noetig).
+	return true;
 }

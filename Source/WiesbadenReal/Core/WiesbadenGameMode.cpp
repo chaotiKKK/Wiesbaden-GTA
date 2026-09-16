@@ -17,6 +17,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Vehicles/WiesbadenFootPawn.h"
 #include "NPC/WiesbadenStoreMerchant.h"
+#include "Missions/WiesbadenMissionSubsystem.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 #include "UI/WiesbadenVehicleHUD.h"
 #include "Core/WiesbadenGameStateSubsystem.h"
@@ -628,7 +629,28 @@ bool AWiesbadenGameMode::TryMerchantInteraction(AWiesbadenFootPawn* Foot)
 	}
 
 	AWiesbadenStoreMerchant* Merchant = FindMerchantInReach(*Foot);
-	return Merchant ? Merchant->TryInteract(Foot) : false;
+	if (!Merchant)
+	{
+		return false;
+	}
+
+	// Der NPC am Nordfriedhof macht ZWEIERLEI: Laden (Freischaltungen kaufen)
+	// und Auftragsvergabe. Der automatische Missionsstart wurde entfernt - neue
+	// Auftraege gibt es NUR noch hier im Gespraech. Laeuft schon einer, gibt der
+	// NPC keinen neuen (RequestNextMission liefert dann false).
+	const bool bStore = Merchant->TryInteract(Foot);
+	bool bMission = false;
+	if (const UWorld* World = GetWorld())
+	{
+		if (UWiesbadenMissionSubsystem* Missions =
+			World->GetSubsystem<UWiesbadenMissionSubsystem>())
+		{
+			bMission = Missions->RequestNextMission();
+		}
+	}
+	// true, wenn etwas geschah (Kauf ODER neuer Auftrag) -> kein Fahrzeugwechsel.
+	// Sonst false, damit F am NPC nicht das Einsteigen blockiert.
+	return bStore || bMission;
 }
 
 AWiesbadenStoreMerchant* AWiesbadenGameMode::PickMerchantInReach(
@@ -940,6 +962,11 @@ bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 		if (UMaterialInterface* Paint = LoadObject<UMaterialInterface>(
 			nullptr, TEXT("/Game/Materials/City/M_WbHelicopter.M_WbHelicopter")))
 		{
+			// Rotorblaetter tragen ein eigenes dunkles Rotor-Material, NICHT die
+			// Zell-Tarnung - ein Tarnmuster auf drehenden Blaettern sieht falsch aus.
+			UMaterialInterface* RotorPaint = LoadObject<UMaterialInterface>(
+				nullptr, TEXT("/Game/Assets/Landmarks/M_HeliRotorBase.M_HeliRotorBase"));
+
 			TArray<UStaticMeshComponent*> Meshes;
 			PlayerHelicopter->GetComponents<UStaticMeshComponent>(Meshes);
 			for (UStaticMeshComponent* Mesh : Meshes)
@@ -954,6 +981,12 @@ bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 				const FString CompName = Mesh->GetName();
 				if (CompName.Contains(TEXT("Blur")) || CompName.Contains(TEXT("Dust")))
 				{
+					continue;
+				}
+				// Solide Rotorblaetter -> Rotor-Material; alles andere -> Zell-Tarnung.
+				if (CompName.Contains(TEXT("Rotor")) && RotorPaint)
+				{
+					Mesh->SetMaterial(0, RotorPaint);
 					continue;
 				}
 				Mesh->SetMaterial(0, Paint);
