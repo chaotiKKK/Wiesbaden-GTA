@@ -394,6 +394,15 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 						Hit, WheelXY + FVector(0, 0, 300.0), WheelXY - FVector(0, 0, 500.0),
 						ECC_Visibility, TraceParams))
 				{
+					// Strassenmoebel verwerfen (Schild-/Laternen-/Poller-Oberkante):
+					// ein "Boden" deutlich UEBER der Fahrspur ist keiner. Sonst nimmt
+					// der Trace die Pfosten-Oberkante als Boden und das Fahrzeug wird
+					// auf Pfostenhoehe + Radradius gesetzt -> es schwebt auf dem Pfosten.
+					if (Hit.Location.Z > Candidate.Z + 90.0)
+					{
+						bAllHit = false;
+						break;
+					}
 					MinGround = FMath::Min(MinGround, Hit.Location.Z);
 					MaxGround = FMath::Max(MaxGround, Hit.Location.Z);
 				}
