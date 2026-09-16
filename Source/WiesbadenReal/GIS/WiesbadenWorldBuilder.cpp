@@ -1070,6 +1070,22 @@ void AWiesbadenWorldBuilder::SpawnCityChunks(const FRoadMeshData& RoadMesh, cons
 		ChunkedRegionAssets += ChunkMesh.RegionAssets.Num();
 	}
 
+	// Commit-OOM-Behebung (2026-09-16): ALLE frisch gebackenen Chunk-Meshes
+	// freigeben, sobald ihre Pakete gesichert sind. Ohne diesen Schritt blieben
+	// ~4600 Chunks x 3 StaticMesh-Assets (RenderData + gekochte Kollision,
+	// zusammen mehrere GiB Commit) bis zum Ende von BuildCity geladen, obwohl
+	// sie nur fuer das Speichern der Karte gebraucht werden - der Bake starb
+	// reproduzierbar bei ~78 GiB Commit. Die Material-Setter oben mussten VOR
+	// diesem Schritt laufen (sie brauchen die Slots der Meshes noch).
+	for (AWiesbadenCityChunk* Chunk : CityChunks)
+	{
+		if (Chunk)
+		{
+			Chunk->UnloadBakedChunkMeshes();
+		}
+	}
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+
 	UE_LOG(LogWbCore, Log,
 		TEXT("Stadt in %d World-Partition-Zellen aufgeteilt (%.0f m Zellen), ")
 		TEXT("darin %d Regionsobjekte (Baeume/Ufer/Industrie)."),

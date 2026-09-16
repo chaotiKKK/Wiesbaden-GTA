@@ -169,6 +169,39 @@ for name in ("osm_file_path", "dem_file_path", "alkis_file_path",
     except Exception as exc:
         log("Pfad %s nicht umbiegbar: %s" % (name, exc))
 
+# -- 2c/2d) Optionale amtliche Quellen (LoD2-angereicherte ALKIS + DGM1) -----
+# Set-then-verify: der Wert wird gesetzt UND per get_editor_property
+# zurueckgelesen. Nimmt er nicht (oder wird ein noetiges Import-Flag nicht
+# aktiv), bricht der Lauf HIER ab - besser als ein 2h-Bake, der die injizierten
+# Daten still ignoriert (z. B. bImportDem am Quell-Actor stand auf False).
+def _norm(p):
+    return str(p).replace("\\", "/").rstrip("/") if p else ""
+
+
+def set_and_verify(prop, value, is_path=False):
+    builder.set_editor_property(prop, value)
+    got = builder.get_editor_property(prop)
+    ok = (_norm(got) == _norm(value)) if is_path else (got == value)
+    if not ok:
+        raise RuntimeError("Override %s hat NICHT gegriffen: gesetzt %r, gelesen %r"
+                           % (prop, value, got))
+    log("Override %s = %r (verifiziert)" % (prop, got))
+
+
+# ALKIS wird allein durch nicht-leeren Pfad importiert (kein Flag; Pipeline
+# prueft !AlkisFilePath.IsEmpty()).
+alkis_override = os.environ.get("WB_ALKIS_FILE")
+if alkis_override:
+    set_and_verify("alkis_file_path", alkis_override, is_path=True)
+
+# DGM1: der Import ist an bImportDem gekoppelt (Pipeline: bImportDem &&
+# !DemFilePath.IsEmpty()) - der Quell-Actor kann False geerbt haben, daher
+# import_dem hier ZWINGEND auf True setzen und beides zurueckpruefen.
+dem_override = os.environ.get("WB_DEM_FILE")
+if dem_override:
+    set_and_verify("dem_file_path", dem_override, is_path=True)
+    set_and_verify("import_dem", True)
+
 # -- 3) Die VOLLE Stadt ----------------------------------------------------
 builder.set_editor_property("generate_roads", True)
 builder.set_editor_property("generate_terrain", True)

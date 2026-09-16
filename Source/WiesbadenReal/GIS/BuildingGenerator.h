@@ -507,8 +507,15 @@ public:
 	 * Setzt LevelCount/HeightCm (und fuer 142 BuildingType/RoofShape) auf OutBuilding
 	 * und gibt true zurueck, wenn ein Zweig griff. MetersPerLevel skaliert die Hoehe
 	 * konsistent zur restlichen Generierung. Rein datenbasiert -> direkt testbar.
+	 *
+	 * bHasReliableHeight: liegt eine verlaessliche, amtliche Hoehe vor (height/
+	 * building:height-Tag, wie ihn der LoD2-Injektor aus den Hessen-Daten setzt),
+	 * weicht der Override komplett zurueck (return false, keine Aenderung) - die
+	 * echten Gebaeudehoehen gewinnen und ersetzen so das hartcodierte Raten. Der
+	 * Override bleibt nur noch Fallback fuer Footprints ohne amtliche Hoehe.
 	 */
-	static bool ApplyPlatterAddressOverride(FGeneratedBuilding& OutBuilding, double MetersPerLevel);
+	static bool ApplyPlatterAddressOverride(FGeneratedBuilding& OutBuilding, double MetersPerLevel,
+		bool bHasReliableHeight = false);
 
 	/**
 	 * Deterministische gewichtete Stil-Auswahl aus den Prompt-Gewichten

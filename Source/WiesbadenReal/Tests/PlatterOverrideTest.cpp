@@ -74,6 +74,28 @@ bool FPlatterAddressOverrideTest::RunTest(const FString& Parameters)
 			B.BuildingType == EOSMBuildingType::Generic);
 	}
 
+	// LoD2-Ersatz: liegt eine verlaessliche amtliche Hoehe vor (bHasReliableHeight),
+	// weicht der Override KOMPLETT zurueck - die echten Hessen-LoD2-Hoehen gewinnen
+	// und ersetzen das hartcodierte Raten. Gilt auch fuer 140 (das strittige Haus)
+	// und automatisch fuer Suffix-/Duplikat-Footprints (140a, 142a/b/c), weil die
+	// per alkis:id ihre eigene amtliche Hoehe bekommen.
+	{
+		FGeneratedBuilding B = MakeBuilding(TEXT("Platter Strasse 140"));
+		TestFalse(TEXT("140 weicht bei amtlicher Hoehe zurueck"),
+			UBuildingGenerator::ApplyPlatterAddressOverride(B, MetersPerLevel, /*bHasReliableHeight=*/true));
+		TestEqual(TEXT("140 LevelCount unveraendert -> LoD2 gewinnt"), B.LevelCount, 3);
+		TestTrue(TEXT("140 HeightCm unveraendert -> LoD2 gewinnt"),
+			FMath::IsNearlyEqual(B.HeightCm, 3.0 * 3.2 * 100.0, 1.0));
+	}
+	{
+		FGeneratedBuilding B = MakeBuilding(TEXT("Platter Straße 142"));
+		TestFalse(TEXT("142 weicht bei amtlicher Hoehe zurueck"),
+			UBuildingGenerator::ApplyPlatterAddressOverride(B, MetersPerLevel, /*bHasReliableHeight=*/true));
+		TestEqual(TEXT("142 LevelCount unveraendert -> LoD2 gewinnt"), B.LevelCount, 3);
+		TestTrue(TEXT("142 Typ unveraendert -> LoD2 gewinnt"),
+			B.BuildingType == EOSMBuildingType::Generic);
+	}
+
 	// Kein Treffer: Nachbar-Hausnummer, fremde Strasse, leere Adresse -> unveraendert
 	{
 		FGeneratedBuilding B = MakeBuilding(TEXT("Platter Straße 148"));
