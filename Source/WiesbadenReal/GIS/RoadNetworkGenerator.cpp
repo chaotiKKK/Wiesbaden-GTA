@@ -2381,6 +2381,34 @@ void URoadNetworkGenerator::BuildSegmentMesh(
 		SegmentTypeDef.SidewalkWidthMeters * MetersToCm,
 		100.0);
 
+	// Hoehe an der FAHRBAHN-Mittellinie sampeln, nicht an der (versetzten)
+	// Gehweg-/Bordsteinposition. Sonst tastet der Gehweg das Gelaende mehrere
+	// Meter neben der Strasse ab, weicht dort in der Hoehe ab und "schwebt"
+	// bzw. verspringt gegenueber der Fahrbahn. So bleibt der Gehweg buendig auf
+	// Strassenniveau + Bordstein und folgt der Strasse.
+	auto NearestOnLine = [&](const FVector2D& P) -> FVector2D
+	{
+		FVector2D Best = Line2D.Num() > 0 ? Line2D[0] : P;
+		double BestD = TNumericLimits<double>::Max();
+		for (int32 i = 0; i + 1 < Line2D.Num(); ++i)
+		{
+			const FVector2D A = Line2D[i];
+			const FVector2D AB = Line2D[i + 1] - A;
+			const double L2 = AB.SizeSquared();
+			const double T = (L2 > KINDA_SMALL_NUMBER)
+				? FMath::Clamp(FVector2D::DotProduct(P - A, AB) / L2, 0.0, 1.0) : 0.0;
+			const FVector2D Proj = A + AB * T;
+			const double D = FVector2D::DistSquared(P, Proj);
+			if (D < BestD) { BestD = D; Best = Proj; }
+		}
+		return Best;
+	};
+	auto SampleRoadZ = [&](const FVector2D& P) -> double
+	{
+		return (HeightSampler && HeightSampler->HasValidData())
+			? HeightSampler->SampleHeightCm(NearestOnLine(P)) : 0.0;
+	};
+
 	auto BuildSidewalk = [&](double SideSign)
 	{
 		// Achse des Gehwegs: halbe Fahrbahnbreite plus halbe Gehwegbreite.
@@ -2412,11 +2440,10 @@ void URoadNetworkGenerator::BuildSegmentMesh(
 		{
 			const FVector2D& Point = Vertices2D[Index];
 
-			// Der Gehweg folgt dem Terrain eigenstaendig - er kann mehrere
-			// Meter neben der Fahrbahn liegen, wo die Hoehe abweicht.
-			const double TerrainZ = (HeightSampler && HeightSampler->HasValidData())
-				? HeightSampler->SampleHeightCm(Point)
-				: 0.0;
+			// Hoehe an der Fahrbahn-Mittellinie (nicht an der versetzten Gehweg-
+			// position) -> Gehweg bleibt buendig auf Strassenniveau + Bordstein,
+			// schwebt nicht ueberm Gras und verspringt nicht gegen die Fahrbahn.
+			const double TerrainZ = SampleRoadZ(Point);
 
 			Section.Vertices.Add(FVector(
 				Point.X, Point.Y,
@@ -2495,9 +2522,9 @@ void URoadNetworkGenerator::BuildSegmentMesh(
 				AccumulatedLength += FVector2D::Distance(KerbLine[Index - 1], KerbLine[Index]);
 			}
 
-			const double TerrainZ = (HeightSampler && HeightSampler->HasValidData())
-				? HeightSampler->SampleHeightCm(KerbLine[Index])
-				: 0.0;
+			// Wie der Gehweg: Hoehe an der Fahrbahn-Mittellinie, damit Bordstein-
+			// Oberkante und Gehwegniveau exakt zusammenpassen (keine Stufe).
+			const double TerrainZ = SampleRoadZ(KerbLine[Index]);
 
 			const double BaseZ = TerrainZ + Settings.RoadSurfaceOffsetCm + Segment.Layer * Settings.LayerHeightCm;
 
