@@ -560,8 +560,10 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 	// Von beiden Bettkanten eine Boeschung hinab zum Gelaende. Wo die Trasse
 	// ueber dem Terrain liegt, entsteht ein Damm; wo sie darunter liegt, ist die
 	// Boeschung ~0 (Einschnitt). Dadurch schmiegt sich die Bahn an den Hang.
-	int32 EmbStartSection = INDEX_NONE;   // erste Damm-Sektion (bekommt Klinker statt Vertexfarbe)
-	TArray<int32> RailSections;           // Gelaender-Sektionen (bekommen Blau statt Klinker)
+	int32 EmbStartSection = INDEX_NONE;   // erste Damm-Sektion (Spandrel: heller Sandstein)
+	TArray<int32> RailSections;           // Gelaender-Sektionen (Metall)
+	TArray<int32> RingSections;           // Bogenring-/Sockelband-Sektionen (roter Klinker)
+	TArray<int32> FlagSections;           // Wimpel-Sektionen (Vertexfarbe orange/blau)
 	if (UWorld* EmbWorld = GetWorld())
 	{
 		constexpr float BedHalf = 130.0f;
@@ -601,13 +603,10 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 
 		for (const FTrack* Track : { &TrackA, &TrackB })
 		{
-			// Nur die Hauptspur ummauern: TrackB laeuft auf dem Damm deckungs-
-			// gleich mit TrackA (Abt-Ausweiche nur in der Mitte). Zwei Ziegel-
-			// mauern wuerden z-fighten und die Geometrie verdoppeln (Draw-Calls).
-			if (Track != &TrackA)
-			{
-				continue;
-			}
+			// BEIDE Spuren ummauern: die zwei Gleise liegen ~3-4 m auseinander
+			// (parallele Trassen, nicht deckungsgleich) und bilden die beiden
+			// Seiten des Viadukts. Wird nur TrackA ummauert, schwebt das Gleisbett
+			// von TrackB ohne Stuetze in der Luft (die weisse ueberkragende Platte).
 			for (int32 SideSign = -1; SideSign <= 1; SideSign += 2)
 			{
 				TArray<FVector> V; TArray<int32> Tri; TArray<FVector> N;
@@ -615,8 +614,23 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 				// Blaues Gelaender oben auf der Mauerkrone - nur am erhoehten Damm.
 				TArray<FVector> RV; TArray<int32> RTri;
 				TArray<FVector2D> RUV; TArray<FLinearColor> RC;
-				const FLinearColor RailBlue(0.09f, 0.20f, 0.52f);
-				int32 PrevWallTop = -1;   // laufender Vertex-Index der Mauerkrone
+				const FLinearColor RailMetal(0.62f, 0.64f, 0.67f);   // silbriges Metall (Viadukt-Handlauf), kein Blau
+				int32 PrevWallTop = -1;   // laufender Vertex-Index der hellen Spandrel-Krone
+
+				// Roter Ziegel-Bogenring/Sockelband als eigener Streifen unten an der
+				// Wand (folgt der Bogen-Unterkante) -> zweifarbiges Viadukt.
+				TArray<FVector> RingV; TArray<int32> RingTri;
+				TArray<FVector2D> RingUV; TArray<FLinearColor> RingC;
+				int32 PrevRingTop = -1;
+				const FLinearColor BrickTint(0.55f, 0.28f, 0.20f);
+				constexpr double RingBandHeightCm = 75.0;   // Hoehe des roten Bogenring-/Sockelbands
+
+				// Orange-blaue Wimpel auf schraegen Stangen entlang des Decks (Doku).
+				TArray<FVector> FlagV; TArray<int32> FlagTri;
+				TArray<FVector2D> FlagUV; TArray<FLinearColor> FlagC;
+				int32 RailNodeIdx = 0;
+				const FLinearColor FlagOrange(0.95f, 0.45f, 0.05f);
+				const FLinearColor FlagBlue(0.06f, 0.20f, 0.60f);
 
 				// Echtes Gelaender (Pfosten + zwei Handlaeufe) als MASSIVE Quader
 				// statt eines flachen Bandes -> von beiden Seiten sichtbar (ein
@@ -638,7 +652,7 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 					for (int32 k = 0; k < 8; ++k)
 					{
 						RUV.Add(FVector2D((k >= 4) ? 1.0f : 0.0f, (k % 2) ? 1.0f : 0.0f));
-						RC.Add(RailBlue);
+						RC.Add(RailMetal);
 					}
 					auto Quad = [&](int32 a, int32 b, int32 c, int32 d)
 					{
@@ -723,27 +737,55 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 					const FVector EdgeTop(EdgeXY.X, EdgeXY.Y, BedTopZ);
 					const FVector EdgeBot(P.X + Right.X * (SideSign * (BedHalf + Run)),
 										  P.Y + Right.Y * (SideSign * (BedHalf + Run)), WallBottomZ);
-					const int32 TopIdx = V.Add(EdgeTop);
-					const int32 BotIdx = V.Add(EdgeBot);
-					// Welt-skalierte UVs (~3 m je Kachel): U entlang der Trasse,
-					// V die Mauer hinab -> gleichmaessige Ziegel statt Zerrung.
+					// Zweifarbig: unten ein rotes Klinker-Band der Hoehe
+					// RingBandHeightCm (folgt der Bogen-Unterkante -> Bogenring bzw.
+					// Sockelband), darueber heller Sandstein-Spandrel. RingTop liegt
+					// auf der Wandflaeche (inkl. Anzug) zwischen EdgeTop und EdgeBot.
+					const double RingTopZ = FMath::Min(WallBottomZ + RingBandHeightCm, BedTopZ);
+					const double RingFrac = (WallHeight > 1.0)
+						? (BedTopZ - RingTopZ) / WallHeight : 0.0;
+					const FVector RingTop = FMath::Lerp(EdgeTop, EdgeBot, static_cast<float>(RingFrac));
 					const float Uarc = static_cast<float>(S / 300.0);
-					const float Vwall = static_cast<float>(WallHeight / 300.0);
-					UV.Add(FVector2D(Uarc, 0.0f)); UV.Add(FVector2D(Uarc, Vwall));
+
+					// Heller Sandstein-Spandrel: EdgeTop -> RingTop.
+					const int32 LTop = V.Add(EdgeTop);
+					const int32 LBot = V.Add(RingTop);
+					UV.Add(FVector2D(Uarc, 0.0f));
+					UV.Add(FVector2D(Uarc, static_cast<float>((BedTopZ - RingTopZ) / 300.0)));
 					C.Add(EarthColour); C.Add(EarthColour);
 					if (PrevWallTop >= 0)
 					{
-						const int32 B = PrevWallTop;   // B=PrevTop, B+1=PrevBot
+						const int32 B = PrevWallTop;
 						if (SideSign < 0)
 						{
-							Tri.Append({ B, TopIdx, B + 1, B + 1, TopIdx, BotIdx });
+							Tri.Append({ B, LTop, B + 1, B + 1, LTop, LBot });
 						}
 						else
 						{
-							Tri.Append({ B, B + 1, TopIdx, TopIdx, B + 1, BotIdx });
+							Tri.Append({ B, B + 1, LTop, LTop, B + 1, LBot });
 						}
 					}
-					PrevWallTop = TopIdx;
+					PrevWallTop = LTop;
+
+					// Rotes Klinker-Bogenring-/Sockelband: RingTop -> EdgeBot.
+					const int32 RTopIdx = RingV.Add(RingTop);
+					const int32 RBotIdx = RingV.Add(EdgeBot);
+					RingUV.Add(FVector2D(Uarc, 0.0f));
+					RingUV.Add(FVector2D(Uarc, static_cast<float>((RingTopZ - WallBottomZ) / 300.0)));
+					RingC.Add(BrickTint); RingC.Add(BrickTint);
+					if (PrevRingTop >= 0)
+					{
+						const int32 B = PrevRingTop;
+						if (SideSign < 0)
+						{
+							RingTri.Append({ B, RTopIdx, B + 1, B + 1, RTopIdx, RBotIdx });
+						}
+						else
+						{
+							RingTri.Append({ B, B + 1, RTopIdx, RTopIdx, B + 1, RBotIdx });
+						}
+					}
+					PrevRingTop = RTopIdx;
 
 					// Echtes Gelaender nur wo die Bahn spuerbar ueberm Gelaende
 					// liegt (Damm/Viadukt). Alle ~240 cm ein Knoten: ein Pfosten
@@ -751,28 +793,47 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 					// horizontale Quader zum vorigen Knoten.
 					constexpr double RailMinHeight = 200.0;   // ab ~2 m Mauer
 					constexpr double RailTopZ = 120.0;         // oberer Handlauf
-					constexpr double RailMidZ = 66.0;          // unterer Handlauf
-					constexpr double PostBottomZ = 8.0;        // Pfostenfuss ueber Krone
 					constexpr int32 RailNodeEvery = 4;         // 4 * 60 cm = 240 cm
-					// Gelaender VORERST AUS: die blinde Kasten-Geometrie erzeugte
-					// riesige schwebende blaue/weisse Platten. Erst Wand/Boegen
-					// visuell verifizieren, dann das Gelaender neu + kontrolliert.
-					constexpr bool bBuildRailing = false;
+					// Gelaender-Neuaufbau, ERSTER SCHRITT: nur der obere Handlauf als
+					// DUENNER Metallholm (silbrig, kein blaues Band - so wie am realen
+					// Viadukt laut Doku). Pfosten + zweiter Holm folgen, sobald der
+					// Handlauf visuell bestaetigt ist (kontrollierter Aufbau, nachdem
+					// die blinde Kasten-Geometrie zuvor riesige Platten erzeugt hatte).
+					constexpr bool bBuildRailing = true;
 					const FVector Up = FVector::UpVector;
 					if (bBuildRailing && Height > RailMinHeight && (Step % RailNodeEvery == 0))
 					{
 						const FVector Crown(EdgeTop.X, EdgeTop.Y, BedTopZ);
-						// Pfosten.
-						AppendRailBox(Crown + Up * PostBottomZ, Crown + Up * (RailTopZ + 4.0),
-									  Right, Tangent, 6.0f, 6.0f);
-						// Zwei Handlaeufe zum vorigen Knoten.
 						if (bHavePrevRailCrown)
 						{
+							// Duenner Handlauf (~6 x 4 cm) zum vorigen Knoten.
 							AppendRailBox(PrevRailCrown + Up * RailTopZ, Crown + Up * RailTopZ,
-										  Right, Up, 5.0f, 4.0f);
-							AppendRailBox(PrevRailCrown + Up * RailMidZ, Crown + Up * RailMidZ,
-										  Right, Up, 4.0f, 3.5f);
+										  Right, Up, 3.0f, 2.0f);
 						}
+
+						// Jeder 2. Knoten (~4,8 m): schraege Metall-Fahnenstange nach
+						// aussen + orange-blauer Wimpel (wie in der Doku).
+						if (RailNodeIdx % 2 == 0)
+						{
+							const FVector PoleBase = Crown + Up * 12.0;
+							const FVector PoleTip = Crown + Up * 145.0 + Right * (SideSign * 80.0);
+							AppendRailBox(PoleBase, PoleTip, Right, Tangent, 2.5f, 2.5f);
+							const FVector AlongPole = (PoleTip - PoleBase).GetSafeNormal();
+							const FVector Fly = Tangent;   // Wimpel weht laengs des Decks
+							const FVector FA = PoleTip;
+							const FVector FB = PoleTip - AlongPole * 38.0;
+							const FVector FC = FA + Fly * 55.0 - AlongPole * 6.0;
+							const FVector FD = FB + Fly * 42.0;
+							const int32 F = FlagV.Num();
+							FlagV.Add(FA); FlagV.Add(FB); FlagV.Add(FD); FlagV.Add(FC);
+							FlagUV.Add(FVector2D(0.0f, 0.0f)); FlagUV.Add(FVector2D(0.0f, 1.0f));
+							FlagUV.Add(FVector2D(1.0f, 1.0f)); FlagUV.Add(FVector2D(1.0f, 0.0f));
+							FlagC.Add(FlagOrange); FlagC.Add(FlagBlue);
+							FlagC.Add(FlagBlue); FlagC.Add(FlagOrange);
+							FlagTri.Append({ F, F + 1, F + 2, F, F + 2, F + 3 });
+						}
+						++RailNodeIdx;
+
 						PrevRailCrown = Crown;
 						bHavePrevRailCrown = true;
 					}
@@ -793,8 +854,18 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 					Section++, V, Tri, N, UV, C, Tang,
 					/*bCreateCollision=*/false);
 
-				// Gelaender-Sektion (blau) getrennt, damit sie NbBlau statt
-				// Klinker bekommt.
+				// Roter Klinker-Bogenring/Sockelband als eigene Sektion.
+				if (RingV.Num() >= 4 && RingTri.Num() >= 3)
+				{
+					TArray<FVector> RingN; TArray<FProcMeshTangent> RingTang;
+					UKismetProceduralMeshLibrary::CalculateTangentsForMesh(RingV, RingTri, RingUV, RingN, RingTang);
+					RingSections.Add(Section);
+					TrackMesh->CreateMeshSection_LinearColor(
+						Section++, RingV, RingTri, RingN, RingUV, RingC, RingTang,
+						/*bCreateCollision=*/false);
+				}
+
+				// Gelaender-Sektion (Metall) getrennt.
 				if (RV.Num() >= 4 && RTri.Num() >= 3)
 				{
 					TArray<FVector> RN; TArray<FProcMeshTangent> RTang;
@@ -804,28 +875,52 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 						Section++, RV, RTri, RN, RUV, RC, RTang,
 						/*bCreateCollision=*/false);
 				}
+
+				// Wimpel-Sektion (orange/blau, Vertexfarbe) getrennt.
+				if (FlagV.Num() >= 3 && FlagTri.Num() >= 3)
+				{
+					TArray<FVector> FlagN; TArray<FProcMeshTangent> FlagTang;
+					UKismetProceduralMeshLibrary::CalculateTangentsForMesh(FlagV, FlagTri, FlagUV, FlagN, FlagTang);
+					FlagSections.Add(Section);
+					TrackMesh->CreateMeshSection_LinearColor(
+						Section++, FlagV, FlagTri, FlagN, FlagUV, FlagC, FlagTang,
+						/*bCreateCollision=*/false);
+				}
 			}
 		}
 	}
 
-	// Materialien: Bett/Schienen -> Vertexfarbe; Damm-Sektionen -> Backstein
-	// (Klinker), damit die steile Stuetzmauer wie das reale Ziegel-Viadukt wirkt.
+	// Materialien (zweifarbiges Viadukt wie im Original):
+	//   Bett/Schienen        -> Vertexfarbe (dunkler Schotter)
+	//   Spandrel/Pfeiler-Wand -> heller Sandstein
+	//   Bogenring/Sockelband  -> roter Klinker
+	//   Gelaender             -> Metall
 	UMaterialInterface* TrackMat = LoadObject<UMaterialInterface>(
 		nullptr, TEXT("/Game/Materials/City/M_WbVertexFarbe.M_WbVertexFarbe"));
+	UMaterialInterface* SandsteinMat = LoadObject<UMaterialInterface>(
+		nullptr, TEXT("/Game/Materials/City/MI_WbFacade_Sandstein.MI_WbFacade_Sandstein"));
 	UMaterialInterface* KlinkerMat = LoadObject<UMaterialInterface>(
 		nullptr, TEXT("/Game/Materials/City/MI_WbFacade_Klinker.MI_WbFacade_Klinker"));
 	UMaterialInterface* RailMat = LoadObject<UMaterialInterface>(
-		nullptr, TEXT("/Game/Nerobergbahn/Materials/MI_Nb_NbBlau.MI_Nb_NbBlau"));
+		nullptr, TEXT("/Game/Nerobergbahn/Materials/MI_Nb_NbMetall.MI_Nb_NbMetall"));
 	for (int32 S = 0; S < Section; ++S)
 	{
 		UMaterialInterface* Mat = TrackMat;
-		if (RailSections.Contains(S) && RailMat)
+		if (FlagSections.Contains(S))
 		{
-			Mat = RailMat;   // blaues Gelaender
+			Mat = TrackMat;   // Wimpel: Vertexfarbe (orange/blau)
 		}
-		else if (EmbStartSection != INDEX_NONE && S >= EmbStartSection && KlinkerMat)
+		else if (RailSections.Contains(S) && RailMat)
 		{
-			Mat = KlinkerMat;   // Backstein-Stuetzmauer
+			Mat = RailMat;   // Metall-Gelaender
+		}
+		else if (RingSections.Contains(S) && KlinkerMat)
+		{
+			Mat = KlinkerMat;   // roter Bogenring/Sockelband
+		}
+		else if (EmbStartSection != INDEX_NONE && S >= EmbStartSection && SandsteinMat)
+		{
+			Mat = SandsteinMat;   // heller Spandrel/Pfeiler
 		}
 		if (Mat)
 		{
