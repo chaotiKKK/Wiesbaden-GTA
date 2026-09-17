@@ -187,6 +187,8 @@ void UWiesbadenAudioSubsystem::SetDuckingActive(bool bActive)
 	}
 	bDucked = bActive;
 	const float Fade = bActive ? DuckAttackSeconds : DuckReleaseSeconds;
+	UE_LOG(LogWbAudio, Log, TEXT("Ducking %s (%.2f s; Mix bereit=%d angewendet=%d)."),
+		bActive ? TEXT("AN") : TEXT("AUS"), Fade, bAssetsReady ? 1 : 0, bMixApplied ? 1 : 0);
 	ApplyBus(EWbAudioBus::Music, Fade);
 	ApplyBus(EWbAudioBus::Ambience, Fade);
 }

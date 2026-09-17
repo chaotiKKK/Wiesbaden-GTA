@@ -260,4 +260,8 @@ private:
 	// haltend an Halt N und schaltet den Fahrbetrieb ab. So steht garantiert je ein Bus
 	// beider Richtungen an einer bekannten Stelle - fuer Modell-/Zielanzeige-Aufnahmen.
 	int32 ParkStop = -1;
+
+	// Diagnose (-WbBusAnnounceTest): treibt die Halteansagen vom ERSTEN aktiven
+	// Kurs, ohne dass jemand einsteigt - fuer automatische Laeufe (kein E-Tastendruck).
+	bool bAnnounceDiag = false;
 };

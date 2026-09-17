@@ -290,6 +290,7 @@ void AWiesbadenBusRoute::BeginPlay()
 
 	bLogDiag = FParse::Param(FCommandLine::Get(), TEXT("WbBusLog"));
 	FParse::Value(FCommandLine::Get(), TEXT("WbBusParkStop="), ParkStop);
+	bAnnounceDiag = FParse::Param(FCommandLine::Get(), TEXT("WbBusAnnounceTest"));
 	if (ParkStop >= 0)
 	{
 		UE_LOG(LogWbBus, Log, TEXT("Bus-PARK-Diagnose: Halt %d - je ein Bus beider Richtungen steht dort (kein Fahrbetrieb)."), ParkStop);
@@ -564,6 +565,7 @@ void AWiesbadenBusRoute::Tick(float DeltaSeconds)
 			Used[Slot] = true;
 			if (SlotRunKey.IsValidIndex(Slot)) { SlotRunKey[Slot] = R.Index; }
 			PlaceBusAt(Slot, St, bLogThisTick);
+			if (bAnnounceDiag && !bRiding && Driving == 0) { UpdateStopAnnouncement(St); }
 			++Driving;
 		}
 		// Fahrgast-Kurs nicht mehr aktiv (Rundfahrt beendet) -> automatisch absetzen.
@@ -777,10 +779,9 @@ void AWiesbadenBusRoute::PlayStopAnnouncement(int32 StopIndex)
 		W->GetTimerManager().SetTimer(DuckTimer, this, &AWiesbadenBusRoute::EndDucking, Dur, false);
 	}
 
-	if (StopNames.IsValidIndex(StopIndex))
-	{
-		UE_LOG(LogWbBus, Log, TEXT("Bus-Ansage: Naechster Halt %s."), *StopNames[StopIndex]);
-	}
+	UE_LOG(LogWbBus, Log, TEXT("Bus-Ansage: Naechster Halt %s (Halt %d, spielt=%d, %.1f s)."),
+		StopNames.IsValidIndex(StopIndex) ? *StopNames[StopIndex] : TEXT("?"), StopIndex,
+		AnnounceAudio->IsPlaying() ? 1 : 0, Wave->GetDuration());
 }
 
 void AWiesbadenBusRoute::EndDucking()
