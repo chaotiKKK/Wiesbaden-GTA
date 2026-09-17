@@ -8,20 +8,19 @@ Relationen hier zu synthetischen geschlossenen Ways (landuse=forest) mit eigenen
 ID-Bereichen und in eine KOPIE der OSM-Datei geschrieben (Original bleibt).
 Bake: WB_OSM_FILE=<kopie> (rebuild_city.py).
 """
-import json, math, sys, urllib.request, urllib.parse
+import json, math, os, urllib.request, urllib.parse
 
 SRC = "Data/Raw/OSM/wiesbaden.osm.json"
 DST = "Data/Raw/OSM/wiesbaden.osm.forest.json"
+CACHE = "Data/Raw/OSM/forest_relations.overpass.json"
 
 d = json.load(open(SRC, encoding="utf-8"))
 els = d["elements"] if isinstance(d, dict) else d
-lats = [e["lat"] for e in els if e["type"] == "node" and "lat" in e]
-lons = [e["lon"] for e in els if e["type"] == "node" and "lon" in e]
-bbox = (min(lats), min(lons), max(lats), max(lons))
-print("Datenkasten:", bbox)
 
 # Auf die gespielte Stadt klippen: ~6 km um den Ursprung (50.0824 / 8.24). Ungeklippt
 # fuellt der Waldfueller den ganzen Taunus (8,6 Mio. Baeume, Bake stirbt beim Speichern).
+# Dasselbe Rechteck ist auch der Abfragekasten: Overpass liefert jede Relation, deren
+# Kasten es schneidet, Randstuecke gehen also nicht verloren.
 CENTER = (50.0824, 8.24)
 CLIP = (CENTER[0] - 0.055, CENTER[1] - 0.085, CENTER[0] + 0.055, CENTER[1] + 0.085)   # lat0, lon0, lat1, lon1
 
@@ -56,15 +55,12 @@ def ring_area_m2(ring):
         a += xy[i][0] * xy[i + 1][1] - xy[i + 1][0] * xy[i][1]
     return abs(a) / 2
 
-CACHE = "Data/Raw/OSM/forest_relations.overpass.json"
-QB = (CLIP[0] - 0.01, CLIP[1] - 0.015, CLIP[2] + 0.01, CLIP[3] + 0.015)   # Klipp-Rechteck + Rand
 q = f"""[out:json][timeout:180];
 (
-  relation["landuse"="forest"]({QB[0]},{QB[1]},{QB[2]},{QB[3]});
-  relation["natural"="wood"]({QB[0]},{QB[1]},{QB[2]},{QB[3]});
+  relation["landuse"="forest"]({CLIP[0]},{CLIP[1]},{CLIP[2]},{CLIP[3]});
+  relation["natural"="wood"]({CLIP[0]},{CLIP[1]},{CLIP[2]},{CLIP[3]});
 );
 out geom;"""
-import os
 if os.path.exists(CACHE):
     osm = json.load(open(CACHE, encoding="utf-8")); print("Overpass-Cache:", CACHE)
 else:
@@ -114,12 +110,9 @@ for r in rels:
         new_ways.append({"type": "way", "id": WAY_BASE + wid, "nodes": ids,
                          "tags": {"landuse": "forest", "source:relation": str(r["id"]), "name": r.get("tags", {}).get("name", "")}})
 print("synthetische Wald-Ways (geklippt):", len(new_ways), "Knoten:", len(new_nodes))
-total_m2 = sum(ring_area_m2([nodes_new_tmp for nodes_new_tmp in [(n["lat"], n["lon"]) for n in new_nodes if n["id"] in set(w["nodes"])]]) for w in new_ways) if False else 0.0
-areas = []
-_nn = {n["id"]: (n["lat"], n["lon"]) for n in new_nodes}
-for w in new_ways:
-    areas.append(ring_area_m2([_nn[i] for i in w["nodes"]]))
-print("Waldflaeche nachgeholt: %.1f km^2 -> ca. %d Fuell-Baeume bei 7,5-m-Raster" % (sum(areas) / 1e6, sum(areas) / 56.25))
+nodes_new = {n["id"]: (n["lat"], n["lon"]) for n in new_nodes}
+total_m2 = sum(ring_area_m2([nodes_new[i] for i in w["nodes"]]) for w in new_ways)
+print("Waldflaeche nachgeholt: %.1f km^2 -> ca. %d Fuell-Baeume bei 7,5-m-Raster" % (total_m2 / 1e6, total_m2 / 56.25))
 
 # Deckt es den Neroberg jetzt?
 def pip(p, cs):
@@ -128,7 +121,6 @@ def pip(p, cs):
         y1, x1 = cs[i]; y2, x2 = cs[(i + 1) % len(cs)]
         if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1 + 1e-12) + x1: inside = not inside
     return inside
-nodes_new = {n["id"]: (n["lat"], n["lon"]) for n in new_nodes}
 tests = {"Gipfel": (50.1005, 8.2255), "N Gipfel": (50.1030, 8.2250), "O": (50.1005, 8.2300), "NO": (50.1030, 8.2310), "W": (50.1005, 8.2200)}
 for name, p in tests.items():
     hit = [w["tags"]["name"] or w["tags"]["source:relation"] for w in new_ways if pip(p, [nodes_new[i] for i in w["nodes"]])]
