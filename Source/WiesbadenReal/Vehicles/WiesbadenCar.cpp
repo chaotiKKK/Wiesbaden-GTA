@@ -384,7 +384,7 @@ void AWiesbadenCar::ReadLightInput()
 		{
 			const FWiesbadenWeatherState WeatherState = City->GetWeatherState();
 			Lights->SetAutomaticHeadlights(
-				UWiesbadenCarLightsComponent::ShouldUseHeadlights(WeatherState.SunElevationFactor));
+				UWiesbadenCarLightsComponent::ShouldUseHeadlights(WeatherState.SunElevationFactor()));
 		}
 	}
 	if (Edge(EKeys::Q, bIndicatorLeftKeyHeld)

@@ -252,6 +252,13 @@ private:
 	/** True, sobald -WbTime einmal ausgewertet wurde. */
 	bool bTimeOverrideApplied = false;
 
+	/** Stunde aus dem City-Prompt (-1 = keine); geht in ResolveTimeSource ein. */
+	float PromptTimeOfDayHours = -1.0f;
+
+	/** EINZIGE Stelle, die die Zeitquelle waehlt: -WbTime vor Prompt-Stunde vor
+	 *  lokaler Systemzeit. */
+	void ResolveTimeSource();
+
 	/** True, sobald die Streaming-Reichweite einmal gesetzt wurde. */
 	bool bLoadingRangeApplied = false;
 

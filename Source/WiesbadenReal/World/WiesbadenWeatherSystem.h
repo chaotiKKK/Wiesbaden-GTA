@@ -8,6 +8,14 @@
 
 #include "WiesbadenWeatherSystem.generated.h"
 
+/** Zeitquelle der Spieluhr. */
+UENUM(BlueprintType)
+enum class EWiesbadenTimeSource : uint8
+{
+	SystemClock	UMETA(DisplayName = "Lokale Systemzeit"),
+	FixedHour	UMETA(DisplayName = "Feste Stunde")
+};
+
 /** Intensitaeten einer Wetterlage (fuer Rendering/HUD). */
 USTRUCT(BlueprintType)
 struct WIESBADENREAL_API FWiesbadenWeatherIntensity
@@ -45,26 +53,26 @@ struct WIESBADENREAL_API FWiesbadenWeatherState
 	UPROPERTY(BlueprintReadOnly, Category = "Weather")
 	float Blend01 = 1.0f;
 
-	/** Tageszeit in Stunden (0..24). */
+	/** Tageszeit in Stunden (0..24) - Systemuhr oder feste Stunde (Zeitquelle). */
 	UPROPERTY(BlueprintReadOnly, Category = "Weather")
-	float TimeOfDayHours = 9.0f;
+	float TimeOfDayHours = 12.0f;
 
-	/** Sonnenstand: -1 (tiefste Nacht) .. +1 (Zenit); 0 = Horizont. */
-	UPROPERTY(BlueprintReadOnly, Category = "Weather")
-	float SunElevationFactor = 0.0f;
-
-	/** True, wenn die Sonne unter dem Horizont steht. */
-	UPROPERTY(BlueprintReadOnly, Category = "Weather")
-	bool bIsNight = false;
-
-	/** Echter Sonnenstand in Grad: Hoehe ueber dem Horizont und Azimut ab Nord
-	 *  ueber Ost. Bei Uhr-Kopplung astronomisch (WiesbadenSolar), sonst aus der
-	 *  Spieluhr abgeleitet. Treibt die Drehung der Sonne (WeatherFX). */
+	/** Echter Sonnenstand in Grad (WiesbadenSolar): Hoehe ueber dem Horizont
+	 *  (negativ = Nacht) und Azimut ab Nord ueber Ost. Einzige Darstellung der
+	 *  Sonne; der Faktor unten ist daraus abgeleitet. */
 	UPROPERTY(BlueprintReadOnly, Category = "Weather")
 	float SunElevationDeg = 0.0f;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Weather")
 	float SunAzimuthDeg = 180.0f;
+
+	/** True, wenn die Sonne unter dem Horizont steht. */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather")
+	bool bIsNight = false;
+
+	/** Sonnenstand als Faktor -1..+1 (0 = Horizont, +1 = Zenit): der Sinus der
+	 *  Hoehe. Fuer Schwellwerte (Lichtautomatik, Mondlicht-Floor). */
+	float SunElevationFactor() const { return FMath::Sin(FMath::DegreesToRadians(SunElevationDeg)); }
 
 	/** Gemischte Intensitaeten (alt und neu ueber Blend01). */
 	UPROPERTY(BlueprintReadOnly, Category = "Weather")
@@ -85,28 +93,15 @@ struct WIESBADENREAL_API FWiesbadenWeatherSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather", meta = (ClampMin = "0.1"))
 	float TransitionSeconds = 8.0f;
 
-	/** Ingame-Stunden pro Real-Sekunde (SPEC 11: 1 Real-Stunde = 24 Ingame-Stunden). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather", meta = (ClampMin = "0.0"))
-	//
-	// Ein voller Tag dauerte hier 60 Minuten - nach einer halben Stunde Spielen
-	// war Nacht, und weil die Stadt nachts keine eigene Lichtquelle hatte, war
-	// sie ab da unbenutzbar. Drei Stunden je Tag lassen rund anderthalb Stunden
-	// Tageslicht am Stueck und machen den Wechsel trotzdem erlebbar.
-	float HoursPerRealSecond = 24.0f / 10800.0f;
-
-	/**
-	 * Uhr an die lokale Systemzeit koppeln: die Spieluhr zeigt die echte Uhrzeit,
-	 * der Sonnenstand folgt astronomisch dem Datum (WiesbadenSolar). Aus = die
-	 * Spieluhr laeuft frei mit HoursPerRealSecond (fuer -WbTime, Prompts, Tests).
-	 * Default AUS, damit die datenreine Maschine deterministisch bleibt; das
-	 * CitySubsystem schaltet die Kopplung im Spiel ein.
-	 */
+	/** Woher die Uhr kommt: lokale Systemzeit (Spiel) oder eine feste Stunde
+	 *  (-WbTime, Prompt). Beide treiben dieselbe astronomische Sonne fuer das
+	 *  heutige Datum; bei fester Stunde steht nur die Uhr still. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather")
-	bool bFollowSystemClock = false;
+	EWiesbadenTimeSource TimeSource = EWiesbadenTimeSource::SystemClock;
 
-	/** Start-Tageszeit (Stunden 0..24). */
+	/** Feste Stunde 0..24 (nur bei TimeSource = FixedHour). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather", meta = (ClampMin = "0.0", ClampMax = "24.0"))
-	float StartTimeOfDayHours = 9.0f;
+	float FixedHours = 12.0f;
 };
 
 /**
@@ -115,8 +110,8 @@ struct WIESBADENREAL_API FWiesbadenWeatherSettings
  * - Wetterlagen kommen als ECityWeatherPreset (z. B. aus dem City-Prompt); ein
  *   Wechsel blendet sanft ueber TransitionSeconds (Intensitaeten mischen sich
  *   zwischen alt und neu).
- * - Die Tageszeit schreitet mit HoursPerRealSecond fort; Sonnenstand und
- *   Umgebungslicht werden daraus abgeleitet.
+ * - Die Uhr kommt von aussen (UpdateClock mit UTC + Ortszeit): Systemuhr oder
+ *   feste Stunde; Sonnenstand (WiesbadenSolar) und Umgebungslicht folgen daraus.
  * - Ausgabe ist ein FWiesbadenWeatherState (Wetterlage, Blend, Zeit, Sonne,
  *   Intensitaeten, Licht) fuer Rendering/HUD.
  *
@@ -149,24 +144,21 @@ struct WIESBADENREAL_API FWiesbadenWeatherSystem
 	/** Aktuelle Ziel-Wetterlage. */
 	ECityWeatherPreset GetTargetWeather() const { return TargetWeather; }
 
-	/** Setzt die Tageszeit direkt (Stunden 0..24, Wrap). */
-	void SetTimeOfDay(float Hours);
+	/** Zeitquelle waehlen; feste Stunden werden in [0,24) gefaltet. */
+	void SetTimeSource(EWiesbadenTimeSource Source, float InFixedHours = 12.0f);
 
 	/**
-	 * Uhr-Kopplung: lokale Uhrzeit + echten Sonnenstand von aussen setzen (der
-	 * Aufrufer liest die Systemzeit und rechnet WiesbadenSolar). Tick laesst Zeit
-	 * und Sonne dann unangetastet und mischt nur noch das Wetter.
+	 * Uhr und Sonne aus dem Jetzt (UTC + Ortszeit) ableiten - der EINZIGE Ort, der
+	 * Tageszeit, Sonnenhoehe/-azimut und Nachtflagge schreibt. Bei fester Stunde
+	 * wird die Sonne fuer das heutige Datum zu dieser Ortsstunde gerechnet.
 	 */
-	void SetClockAndSun(float LocalHours, float SunElevationDeg, float SunAzimuthDeg);
+	void UpdateClock(const FDateTime& NowUtc, const FDateTime& NowLocal);
 
-	/** Treibt Wetter-Uebergang und Tageszeit einen Schritt weiter. */
+	/** Treibt den Wetter-Uebergang einen Schritt weiter und mischt Intensitaet/Licht. */
 	void Tick(float DeltaSeconds);
 
 	/** Letzte Tick-Ausgabe (Wetterlage, Sonne, Intensitaeten, Licht). */
 	const FWiesbadenWeatherState& GetState() const { return LastState; }
-
-	/** Sonnenstand-Faktor (-1..+1) zur Tageszeit; 0 = Horizont, +1 = Zenit. */
-	static float ComputeSunElevationFactor(float TimeOfDayHours);
 
 	/** Intensitaeten einer Wetterlage (fuer die Uebergangs-Mischung). */
 	static FWiesbadenWeatherIntensity GetIntensityFor(ECityWeatherPreset Weather);

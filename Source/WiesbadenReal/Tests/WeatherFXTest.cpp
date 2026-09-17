@@ -20,7 +20,8 @@ namespace
 		State.PreviousWeather = Previous;
 		State.Blend01 = Blend01;
 		State.TimeOfDayHours = TimeOfDayHours;
-		State.SunElevationFactor = SunElevationFactor;
+		// Hoehe ist die einzige Darstellung; der Faktor (sin) ist abgeleitet.
+		State.SunElevationDeg = FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(SunElevationFactor, -1.0f, 1.0f)));
 		State.bIsNight = SunElevationFactor < 0.0f;
 
 		const FWiesbadenWeatherIntensity Prev =

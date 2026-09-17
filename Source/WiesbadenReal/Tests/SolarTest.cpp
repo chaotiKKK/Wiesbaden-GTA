@@ -49,26 +49,22 @@ bool FWiesbadenSolarTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("14:30 -> 14,5 h"), FMath::IsNearlyEqual(LocalHours(FDateTime(2026, 1, 1, 14, 30, 0)), 14.5f, 0.001f));
 
-	// Uhr-Kopplung: Tick laesst Zeit + Sonne unangetastet, Faktor = sin(Hoehe);
-	// frei laufend wandert die Uhr und die Sonne steht mittags im Sueden.
+	// Zeitquelle im Wettersystem: Systemuhr folgt der Ortszeit, feste Stunde steht
+	// still und rechnet die Sonne fuer denselben Tag zu dieser Stunde.
 	{
+		const FDateTime Utc(2026, 6, 21, 13, 15, 0), Local(2026, 6, 21, 15, 15, 0);   // MESZ
 		FWiesbadenWeatherSystem Weather;
-		Weather.Settings.bFollowSystemClock = true;
-		Weather.SetClockAndSun(15.25f, 30.0f, 220.0f);
-		Weather.Tick(10.0f);
-		TestTrue(TEXT("gekoppelt: Zeit bleibt"), FMath::IsNearlyEqual(Weather.GetState().TimeOfDayHours, 15.25f, 0.001f));
-		TestTrue(TEXT("gekoppelt: Azimut bleibt"), FMath::IsNearlyEqual(Weather.GetState().SunAzimuthDeg, 220.0f, 0.001f));
-		TestTrue(TEXT("gekoppelt: Faktor sin(30) = 0,5"), FMath::IsNearlyEqual(Weather.GetState().SunElevationFactor, 0.5f, 0.001f));
-		TestFalse(TEXT("gekoppelt: Tag"), Weather.GetState().bIsNight);
-		Weather.SetClockAndSun(23.0f, -20.0f, 350.0f);
-		TestTrue(TEXT("gekoppelt: Nacht"), Weather.GetState().bIsNight);
+		Weather.SetTimeSource(EWiesbadenTimeSource::SystemClock);
+		Weather.UpdateClock(Utc, Local);
+		TestTrue(TEXT("Systemuhr: 15,25 h"), FMath::IsNearlyEqual(Weather.GetState().TimeOfDayHours, 15.25f, 0.001f));
+		TestTrue(TEXT("Systemuhr: Nachmittag, Sonne im Suedwesten"), Weather.GetState().SunAzimuthDeg > 200.0f && Weather.GetState().SunAzimuthDeg < 260.0f);
+		TestFalse(TEXT("Systemuhr: Tag"), Weather.GetState().bIsNight);
 
-		FWiesbadenWeatherSystem Free;
-		Free.Settings.bFollowSystemClock = false;
-		Free.SetTimeOfDay(12.0f);
-		Free.Tick(10.0f);
-		TestTrue(TEXT("frei: Uhr laeuft"), Free.GetState().TimeOfDayHours > 12.0f);
-		TestTrue(TEXT("frei: mittags Azimut Sued"), FMath::Abs(Free.GetState().SunAzimuthDeg - 180.0f) < 2.0f);
+		Weather.SetTimeSource(EWiesbadenTimeSource::FixedHour, 23.0f);
+		Weather.UpdateClock(Utc, Local);
+		Weather.Tick(10.0f);
+		TestTrue(TEXT("feste Stunde: 23 h bleibt"), FMath::IsNearlyEqual(Weather.GetState().TimeOfDayHours, 23.0f, 0.001f));
+		TestTrue(TEXT("feste Stunde: Nacht"), Weather.GetState().bIsNight);
 	}
 	return true;
 }

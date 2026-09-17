@@ -242,7 +242,7 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 			if (const UWiesbadenCitySubsystem* City = PawnWorld->GetSubsystem<UWiesbadenCitySubsystem>())
 			{
 				bWantTorch = UWiesbadenCarLightsComponent::ShouldUseHeadlights(
-					City->GetWeatherState().SunElevationFactor);
+					City->GetWeatherState().SunElevationFactor());
 			}
 		}
 

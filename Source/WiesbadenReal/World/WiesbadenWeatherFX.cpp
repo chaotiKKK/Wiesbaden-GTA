@@ -142,7 +142,7 @@ FWiesbadenWeatherFXParams FWiesbadenWeatherFXParams::FromWeatherState(const FWie
 
 	// Lichtfarbe: Tag warm (R > B), Nacht kuehl-blaulich (B >= R). Die Warm-
 	// Skala ist nur bei tief stehender Sonne (Morgen/Abend) aktiv und nachts 0.
-	const float Day = FMath::Clamp(State.SunElevationFactor, 0.0f, 1.0f);
+	const float Day = FMath::Clamp(State.SunElevationFactor(), 0.0f, 1.0f);
 	const float Night = 1.0f - Day;
 	const float Warm = Day * (1.0f - FMath::Abs(State.TimeOfDayHours - 12.0f) / 12.0f);
 	Out.SunLightColor = FLinearColor(
