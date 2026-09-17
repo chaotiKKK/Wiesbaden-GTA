@@ -4,6 +4,7 @@
 
 #include "WiesbadenReal.h"
 
+#include "Audio/WiesbadenAudioSubsystem.h"
 #include "CanvasItem.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -67,6 +68,16 @@ namespace
 	const FLinearColor MapPlayer(0.95f, 0.25f, 0.20f, 1.0f);
 	const FLinearColor MapBorder(0.55f, 0.57f, 0.62f, 0.85f);
 	const FLinearColor MapWaypoint(0.25f, 0.90f, 0.55f, 1.0f);
+}
+
+FString AWiesbadenVehicleHUD::FormatWaterLevel(float Fuellstand, bool bSchieberOffen)
+{
+	const float Prozent = FMath::Clamp(Fuellstand, 0.0f, 1.0f) * 100.0f;
+	// Auf 5 % gerundet: der Fuellstand aendert sich langsam (2 %/s Abfluss),
+	// und eine zappelnde Einerstelle waere im Bild nur unruhig.
+	const float Gerundet = FMath::RoundToFloat(Prozent / 5.0f) * 5.0f;
+	return FString::Printf(TEXT("Wasserballast %.0f %% - Schieber %s"),
+		Gerundet, bSchieberOffen ? TEXT("offen") : TEXT("zu"));
 }
 
 FString AWiesbadenVehicleHUD::FormatMapDistance(double DistanceCm)
@@ -616,7 +627,16 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	UpdatePauseMenu();
 	if (bPaused)
 	{
-		DrawPauseMenu(Width, Height);
+		// Das Ton-Unterfenster liegt IM Pausemenue (eigener Zustand); es wird
+		// statt der Eintragsliste gezeichnet, solange es offen ist.
+		if (bAudioSettingsOpen)
+		{
+			DrawAudioSettings(Width, Height);
+		}
+		else
+		{
+			DrawPauseMenu(Width, Height);
+		}
 		return;
 	}
 
@@ -753,7 +773,9 @@ void AWiesbadenVehicleHUD::DrawHUD()
 
 	if (!Vehicle)
 	{
-		// Zu Fuss: statt Tacho der Hinweis, was hier gerade moeglich ist.
+		// Zu Fuss: statt Tacho der Hinweis, was hier gerade moeglich ist -
+		// und waehrend einer Mitfahrt die Tafel mit Kurbel und Wasserstand.
+		DrawFunicularRidePanel(Width * 0.5f, Height - 190.0f);
 		DrawFootPrompt(Width * 0.5f, Height - 120.0f);
 		return;
 	}
@@ -867,6 +889,9 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 		// Ohne diese Zuweisung blieb CachedFootMerchant dauerhaft leer und
 		// ResolveMerchantCue fiel auf den allgemeinen Hinweis zurueck.
 		CachedFootMerchant = Cast<AWiesbadenStoreMerchant>(NearestOf(Merchants).Actor);
+		// Die Nerobergbahn ebenso: die Mitfahrtafel braucht ihren Wasserstand
+		// (siehe DrawFunicularRidePanel).
+		CachedFunicular = Cast<AWiesbadenNerobergbahn>(NearestOf(Funiculars).Actor);
 
 		FootPromptScanAge = 0.0f;
 	}
@@ -885,6 +910,59 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 	GetTextSize(Prompt, TextWidth, TextHeight, GEngine->GetLargeFont(), 1.0f);
 	DrawText(Prompt, DialText, CenterX - TextWidth * 0.5f, Y,
 		GEngine->GetLargeFont(), 1.0f);
+}
+
+void AWiesbadenVehicleHUD::DrawFunicularRidePanel(float CenterX, float Y)
+{
+	AWiesbadenNerobergbahn* Bahn = CachedFunicular.Get();
+	if (!Bahn || !Bahn->IsPlayerRiding())
+	{
+		return;
+	}
+
+	const int32 Wagen = Bahn->GetRiddenCarIndex();
+	float Fuellstand = 0.0f;
+	bool bSchieberOffen = false;
+	if (!Bahn->GetCarWater(Wagen, Fuellstand, bSchieberOffen))
+	{
+		return;
+	}
+	Fuellstand = FMath::Clamp(Fuellstand, 0.0f, 1.0f);
+
+	const FString Kopf = FString::Printf(TEXT("MITFAHRT NEROBERGBAHN - WAGEN %s"),
+		Wagen == 0 ? TEXT("A") : TEXT("B"));
+
+	constexpr float BoxWidth = 560.0f;
+	constexpr float LineHeight = 20.0f;
+	constexpr float Padding = 12.0f;
+	constexpr float BarHeight = 10.0f;
+	const float BoxHeight = Padding * 2.0f + LineHeight * 3.0f + BarHeight + 16.0f;
+	const float X = CenterX - BoxWidth * 0.5f;
+
+	DrawRect(DialBackground, X, Y, BoxWidth, BoxHeight);
+
+	DrawText(Kopf, DialText, X + Padding, Y + Padding,
+		GEngine->GetMediumFont(), 1.0f);
+	DrawText(TEXT("Kurbel: K drehen (Wasserschieber auf/zu)      Aussteigen: E"),
+		DialScale, X + Padding, Y + Padding + LineHeight,
+		GEngine->GetSmallFont(), 1.0f);
+	DrawText(FormatWaterLevel(Fuellstand, bSchieberOffen),
+		bSchieberOffen ? RpmRed : RpmSafe,
+		X + Padding, Y + Padding + LineHeight * 2.0f,
+		GEngine->GetSmallFont(), 1.0f);
+
+	// Balken mit den Viertelmarken des Schauglases (10/20/30/40).
+	const float BarX = X + Padding;
+	const float BarY = Y + Padding + LineHeight * 3.0f + 6.0f;
+	const float BarWidth = BoxWidth - Padding * 2.0f;
+	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.5f), BarX, BarY, BarWidth, BarHeight);
+	DrawRect(bSchieberOffen ? RpmRed : RpmSafe, BarX, BarY,
+		BarWidth * Fuellstand, BarHeight);
+	for (int32 Mark = 1; Mark < 4; ++Mark)
+	{
+		const float MarkX = BarX + BarWidth * (Mark / 4.0f);
+		DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.6f), MarkX - 0.5f, BarY, 1.0f, BarHeight);
+	}
 }
 
 void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString>& OutLines)
@@ -918,6 +996,8 @@ void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString
 	OutLines.Add(TEXT("Linke Maustaste     Kettensaege schwingen"));
 	OutLines.Add(TEXT("F                   Einsteigen - auch in Verkehrsautos"));
 	OutLines.Add(TEXT("E                   Nerobergbahn - mitfahren"));
+	// Im Wagen bedient die Kurbel den Wasserschieber (AWiesbadenNerobergbahn).
+	OutLines.Add(TEXT("K                   Kurbel drehen - im Nerobergbahn-Wagen"));
 }
 
 void AWiesbadenVehicleHUD::DrawControlLegend(bool bInVehicle, float X, float Y)
@@ -951,6 +1031,7 @@ void AWiesbadenVehicleHUD::GetPauseMenuEntries(TArray<FString>& OutEntries)
 	OutEntries.Reset();
 	OutEntries.Add(TEXT("Weiterspielen"));
 	OutEntries.Add(TEXT("Steuerung einblenden"));
+	OutEntries.Add(TEXT("Ton / Lautstaerke"));
 	OutEntries.Add(TEXT("Karte zeigen / verbergen (M)"));
 	// Entwicklerbefehle. Ohne sie kostet jede Pruefung eine Fahrt quer durch
 	// die Stadt - der Weg zur Platter Strasse dauert im Spiel Minuten.
@@ -983,18 +1064,34 @@ void AWiesbadenVehicleHUD::UpdatePauseMenu()
 	if (Edge(EKeys::Escape, bPauseKeyHeld)
 		|| PC->IsInputKeyDown(EKeys::Gamepad_Special_Right))
 	{
-		bPaused = !bPaused;
-		PauseSelection = 0;
+		if (bAudioSettingsOpen)
+		{
+			// Aus dem Ton-Unterfenster nur eine Ebene zurueck ins Pausemenue,
+			// nicht gleich das Spiel fortsetzen.
+			bAudioSettingsOpen = false;
+		}
+		else
+		{
+			bPaused = !bPaused;
+			PauseSelection = 0;
 
-		// Die Zeit wirklich anhalten. Ein Menue, hinter dem der Verkehr
-		// weiterfaehrt, ist keine Pause - und beim Zuruecksetzen der Position
-		// waere die Stadt sonst schon woanders.
-		PC->SetPause(bPaused);
-		PC->bShowMouseCursor = bPaused;
+			// Die Zeit wirklich anhalten. Ein Menue, hinter dem der Verkehr
+			// weiterfaehrt, ist keine Pause - und beim Zuruecksetzen der Position
+			// waere die Stadt sonst schon woanders.
+			PC->SetPause(bPaused);
+			PC->bShowMouseCursor = bPaused;
+		}
 	}
 
 	if (!bPaused)
 	{
+		return;
+	}
+
+	// Ton-Unterfenster hat Vorrang: eigene Tastenauswertung (Bus + Lautstaerke).
+	if (bAudioSettingsOpen)
+	{
+		UpdateAudioSettings();
 		return;
 	}
 
@@ -1044,13 +1141,30 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 		break;
 
 	case 2:
+		// Ton-Unterfenster oeffnen - NICHT entpausieren: die Lautstaerke wird im
+		// angehaltenen Spiel geregelt, Escape fuehrt zurueck ins Pausemenue.
+		bAudioSettingsOpen = true;
+		AudioSelection = 0;
+		break;
+
 	case 3:
+		// Weltkarte oeffnen (im Spiel sonst per M-Taste); frisch eingepasst wie
+		// dort. Ohne diesen Fall loeste "Karte" durch einen alten Index-Versatz
+		// einen Teleport aus (Menue war um einen Eintrag verrutscht).
+		bWorldMapOpen = true;
+		MapZoom = 1.0f;
+		bMapCentreInit = false;
+		Unpause();
+		break;
+
 	case 4:
+	case 5:
+	case 6:
 	{
 		// Zuruecksetzen an einen festen Ort. Die Zielpunkte und Fallhoehe leben
 		// datenrein in FWiesbadenDevActions - dieselbe Logik nutzt der
 		// Konsolenbefehl WbTeleport (DRY, unter Automation getestet).
-		const EWiesbadenDevTeleport Target = static_cast<EWiesbadenDevTeleport>(Index - 2);
+		const EWiesbadenDevTeleport Target = static_cast<EWiesbadenDevTeleport>(Index - 4);
 		if (APawn* Pawn = PC->GetPawn())
 		{
 			Pawn->SetActorLocation(FWiesbadenDevActions::TeleportSpawnCm(Target),
@@ -1060,7 +1174,7 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 		break;
 	}
 
-	case 5:
+	case 7:
 	{
 		// Fahrzeug aufrichten: Nick/Roll auf 0, leicht anheben und auf die
 		// Raeder fallen lassen. Direkte Nothilfe gegen umgekippte oder an der
@@ -1076,7 +1190,7 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 		break;
 	}
 
-	case 6:
+	case 8:
 		if (UWiesbadenCitySubsystem* City = HudWorld->GetSubsystem<UWiesbadenCitySubsystem>())
 		{
 			// Verkehr aus: die schnellste Art zu pruefen, ob ein Ruckler vom
@@ -1087,7 +1201,7 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 		Unpause();
 		break;
 
-	case 7:
+	case 9:
 		FPlatformMisc::RequestExit(false);
 		break;
 
@@ -1126,12 +1240,170 @@ void AWiesbadenVehicleHUD::DrawPauseMenu(float Width, float Height)
 	DrawText(TEXT("Pfeile waehlen   Eingabe bestaetigen   Esc schliesst"),
 		TellTaleOff, X + 24.0f, Y + BoxHeight - 24.0f, GEngine->GetSmallFont(), 1.0f);
 
-	if (PauseSelection == 2)
+	if (PauseSelection == 3)
 	{
 		DrawText(TEXT("Karte im Spiel: M (Tastatur) / Gamepad-Start"),
 			DialScale, X + 24.0f, Y + 60.0f + (PauseSelection + 1) * LineHeight,
 			GEngine->GetSmallFont(), 1.0f);
 	}
+}
+
+void AWiesbadenVehicleHUD::GetAudioBusLabels(TArray<FString>& OutLabels)
+{
+	// Reihenfolge == EWbAudioBus 0..Vehicle: Zeile i gehoert zu (EWbAudioBus)i.
+	// Der Test Vehicles.HUD.AudioBusLabels haelt fest, dass es genau so viele
+	// Zeilen wie Busse gibt - so wandert die Liste mit dem Enum mit.
+	OutLabels.Reset();
+	OutLabels.Add(TEXT("Gesamt"));     // Master
+	OutLabels.Add(TEXT("Musik"));      // Music
+	OutLabels.Add(TEXT("Effekte"));    // SFX
+	OutLabels.Add(TEXT("Ambiente"));   // Ambience
+	OutLabels.Add(TEXT("Bedienung"));  // UI
+	OutLabels.Add(TEXT("Stimme"));     // Voice
+	OutLabels.Add(TEXT("Fahrzeug"));   // Vehicle
+}
+
+FString AWiesbadenVehicleHUD::FormatVolumePercent(float Slider01)
+{
+	const int32 Pct = FMath::RoundToInt(FMath::Clamp(Slider01, 0.0f, 1.0f) * 100.0f);
+	return FString::Printf(TEXT("%d %%"), Pct);
+}
+
+void AWiesbadenVehicleHUD::UpdateAudioSettings()
+{
+	APlayerController* PC = GetOwningPlayerController();
+	if (!PC)
+	{
+		return;
+	}
+
+	// Ein Schritt je Tastendruck (Flanke ueber ZWEI Tasten): links/rechts sollen
+	// die Lautstaerke nudgen, nicht bei gehaltener Taste in einem Bild von 0 auf
+	// 100 springen.
+	auto Edge = [PC](const FKey& KeyA, const FKey& KeyB, bool& bHeld) -> bool
+	{
+		const bool bDown = PC->IsInputKeyDown(KeyA) || PC->IsInputKeyDown(KeyB);
+		const bool bPressed = bDown && !bHeld;
+		bHeld = bDown;
+		return bPressed;
+	};
+
+	TArray<FString> Labels;
+	GetAudioBusLabels(Labels);
+	const int32 Count = Labels.Num();
+	if (Count <= 0)
+	{
+		return;
+	}
+
+	if (Edge(EKeys::Up, EKeys::W, bMenuUpHeld))
+	{
+		AudioSelection = (AudioSelection + Count - 1) % Count;
+	}
+	if (Edge(EKeys::Down, EKeys::S, bMenuDownHeld))
+	{
+		AudioSelection = (AudioSelection + 1) % Count;
+	}
+
+	// Lautstaerke live und dauerhaft ueber das Mischpult stellen: SetBusVolume
+	// wendet sofort an und speichert in die GameUserSettings. Fehlt das
+	// Subsystem/die Assets, bleibt das Fenster bedienbar, nur ohne Wirkung.
+	UWiesbadenAudioSubsystem* Audio = nullptr;
+	if (UGameInstance* GI = PC->GetGameInstance())
+	{
+		Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>();
+	}
+	if (!Audio)
+	{
+		return;
+	}
+
+	constexpr float VolumeStep = 0.05f;   // 5 % je Druck - fein genug, nicht zaeh
+	float Delta = 0.0f;
+	if (Edge(EKeys::Left, EKeys::A, bMenuLeftHeld))
+	{
+		Delta -= VolumeStep;
+	}
+	if (Edge(EKeys::Right, EKeys::D, bMenuRightHeld))
+	{
+		Delta += VolumeStep;
+	}
+
+	if (!FMath::IsNearlyZero(Delta))
+	{
+		const EWbAudioBus Bus = static_cast<EWbAudioBus>(AudioSelection);
+		const float NewVol = FMath::Clamp(Audio->GetBusVolume(Bus) + Delta, 0.0f, 1.0f);
+		Audio->SetBusVolume(Bus, NewVol);
+	}
+}
+
+void AWiesbadenVehicleHUD::DrawAudioSettings(float Width, float Height)
+{
+	TArray<FString> Labels;
+	GetAudioBusLabels(Labels);
+
+	UWiesbadenAudioSubsystem* Audio = nullptr;
+	if (APlayerController* PC = GetOwningPlayerController())
+	{
+		if (UGameInstance* GI = PC->GetGameInstance())
+		{
+			Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>();
+		}
+	}
+
+	constexpr float LineHeight = 30.0f;
+	constexpr float BoxWidth = 580.0f;
+	const float BoxHeight = Labels.Num() * LineHeight + 132.0f;
+
+	const float X = (Width - BoxWidth) * 0.5f;
+	const float Y = (Height - BoxHeight) * 0.5f;
+
+	// Wie das Pausemenue: ganzen Schirm abdunkeln, dann die Tafel.
+	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f), 0.0f, 0.0f, Width, Height);
+	DrawRect(DialBackground, X, Y, BoxWidth, BoxHeight);
+
+	DrawText(TEXT("TON / LAUTSTAERKE"), DialText, X + 24.0f, Y + 20.0f,
+		GEngine->GetLargeFont(), 1.0f);
+
+	const float LabelX = X + 24.0f;
+	const float BarX = X + 210.0f;
+	const float BarW = 280.0f;
+	const float BarH = 14.0f;
+	const FLinearColor BarBack(0.14f, 0.15f, 0.17f, 0.9f);
+	const FLinearColor BarFill(0.20f, 0.70f, 0.95f, 0.95f);
+
+	for (int32 Index = 0; Index < Labels.Num(); ++Index)
+	{
+		const bool bSelected = (Index == AudioSelection);
+		const float RowY = Y + 62.0f + Index * LineHeight;
+
+		const FString Name = (bSelected ? TEXT("> ") : TEXT("  ")) + Labels[Index];
+		DrawText(Name, bSelected ? IndicatorOn : DialScale, LabelX, RowY,
+			GEngine->GetMediumFont(), 1.0f);
+
+		const float Vol = Audio
+			? FMath::Clamp(Audio->GetBusVolume(static_cast<EWbAudioBus>(Index)), 0.0f, 1.0f)
+			: 1.0f;
+
+		const float BarY = RowY + 4.0f;
+		DrawRect(BarBack, BarX, BarY, BarW, BarH);
+		if (Vol > 0.0f)
+		{
+			DrawRect(BarFill, BarX, BarY, BarW * Vol, BarH);
+		}
+
+		DrawText(FormatVolumePercent(Vol), bSelected ? DialText : DialScale,
+			BarX + BarW + 14.0f, RowY, GEngine->GetSmallFont(), 1.0f);
+	}
+
+	if (!Audio)
+	{
+		DrawText(TEXT("Mischpult inaktiv - Mix-Assets fehlen (Content/Audio/Mix)."),
+			TellTaleOff, LabelX, Y + BoxHeight - 46.0f, GEngine->GetSmallFont(), 1.0f);
+	}
+
+	DrawText(TEXT("Pfeile waehlen   Links/Rechts leiser/lauter   Esc zurueck"),
+		TellTaleOff, LabelX, Y + BoxHeight - 26.0f, GEngine->GetSmallFont(), 1.0f);
 }
 
 const FRoadNetwork* AWiesbadenVehicleHUD::FindRoadNetwork()

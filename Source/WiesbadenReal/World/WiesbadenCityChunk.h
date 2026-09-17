@@ -71,6 +71,20 @@ public:
 	 */
 	void BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoadCollision, bool bBuildingCollision);
 
+	/**
+	 * Wirft die Verweise der Komponenten auf die gerade gebackenen StaticMesh-
+	 * Assets weg und laesst die Pakete purgen.
+	 *
+	 * Nur fuer den Bake-Pfad: BakeToStaticMeshes haelt JEDES frisch gebackene
+	 * Mesh als starken Verweis an der Komponente. Bei ~4600 Chunks x 3 Meshes
+	 * blieben dadurch alle Render-/Kollisionsdaten bis zum Ende von BuildCity im
+	 * Speicher (mehrere GiB Commit), obwohl jedes Asset laengst auf der Platte
+	 * liegt - genau der Commit-OOM des Stadt-Bakes. Nach dem Aufruf sind die
+	 * Komponenten leer; die gebackene Karte liest die Meshes beim Stream-in
+	 * sowieso neu aus den Paketen. Ausserhalb des Editors ein No-op.
+	 */
+	void UnloadBakedChunkMeshes();
+
 	/** Setzt das Material einer Road-Section (Index wie in ApplyChunk). */
 	void SetRoadSectionMaterial(int32 SectionIndex, UMaterialInterface* Material);
 

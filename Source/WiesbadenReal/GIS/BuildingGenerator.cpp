@@ -325,8 +325,17 @@ FString UBuildingGenerator::NormalizeAddressForMatch(const FString& Address)
 	return Normalized.ToLower();
 }
 
-bool UBuildingGenerator::ApplyPlatterAddressOverride(FGeneratedBuilding& OutBuilding, double MetersPerLevel)
+bool UBuildingGenerator::ApplyPlatterAddressOverride(FGeneratedBuilding& OutBuilding, double MetersPerLevel,
+	bool bHasReliableHeight)
 {
+	// Amtliche Hoehe (Hessen-LoD2, als height-Tag injiziert) schlaegt das
+	// hartcodierte Raten: der Override weicht dann komplett zurueck. Er bleibt
+	// nur Fallback fuer Footprints ohne verlaessliche Hoehe.
+	if (bHasReliableHeight)
+	{
+		return false;
+	}
+
 	if (OutBuilding.Address.IsEmpty())
 	{
 		return false;
@@ -882,10 +891,15 @@ bool UBuildingGenerator::BuildSingleBuilding(
 	}
 	OutBuilding.LevelCount = Levels;
 
-	// Adress-Override fuer die realen Gebaeude an der Platter Strasse:
-	// 140 -> 12 Geschosse, 142 -> Garage/Flachdach/1, 144/146 -> 6. Logik in
-	// ApplyPlatterAddressOverride (per Unit-Test abgesichert).
-	ApplyPlatterAddressOverride(OutBuilding, Settings.MetersPerLevel);
+	// Adress-Override fuer die realen Gebaeude an der Platter Strasse (Fallback):
+	// 140 -> 12 Geschosse, 142 -> Garage/Flachdach/1, 144/146 -> 6. Greift NUR,
+	// wenn keine amtliche Hoehe getaggt ist. Liegt eine explizite height/
+	// building:height vor (der LoD2-Injektor setzt sie aus den Hessen-Daten),
+	// gewinnen die echten Gebaeudehoehen und ersetzen das hartcodierte Raten -
+	// das loest zugleich Suffix-/Duplikat-Footprints (140a, 142a/b/c) per alkis:id.
+	const bool bHasReliableHeight =
+		TagCarrier.HasTag(TEXT("height")) || TagCarrier.HasTag(TEXT("building:height"));
+	ApplyPlatterAddressOverride(OutBuilding, Settings.MetersPerLevel, bHasReliableHeight);
 
 	OutBuilding.bIsLandmark = IsLandmark(OutBuilding.BuildingName, OutBuilding.BuildingType, AreaSqm);
 

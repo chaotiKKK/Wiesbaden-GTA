@@ -17,7 +17,9 @@
 #include "Materials/MaterialInterface.h"
 #include "Vehicles/WiesbadenFootPawn.h"
 #include "NPC/WiesbadenStoreMerchant.h"
+#include "Missions/WiesbadenMissionSubsystem.h"
 #include "Vehicles/WiesbadenHelicopter.h"
+#include "Vehicles/WiesbadenLegacyHelicopter.h"
 #include "UI/WiesbadenVehicleHUD.h"
 #include "Core/WiesbadenGameStateSubsystem.h"
 #include "Store/WiesbadenStore.h"
@@ -30,6 +32,11 @@
 #include "World/WiesbadenNerotalbahn.h"
 #include "World/WiesbadenNerotal48.h"
 #include "World/WiesbadenLandmarks.h"
+#include "Audio/WiesbadenAudioSubsystem.h"
+#include "Engine/GameInstance.h"
+#include "World/WiesbadenBusRoute.h"
+#include "World/WiesbadenBusStopMonitor.h"
+#include "World/WiesbadenWeatherFX.h"
 #include "World/WiesbadenParkFeatures.h"
 
 AWiesbadenGameMode::AWiesbadenGameMode()
@@ -57,6 +64,24 @@ AWiesbadenGameMode::AWiesbadenGameMode()
 void AWiesbadenGameMode::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Audio-Mischpult scharfschalten: Basis-SoundMix aktiv + gespeicherte
+	// Bus-Lautstaerken anwenden (no-op, falls die Mix-Assets fehlen).
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		if (UWiesbadenAudioSubsystem* Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>())
+		{
+			Audio->ApplyMix();
+		}
+	}
+
+	// Wetter-/Tageslicht-Renderer: die Komponente setzt Sonne (Drehung, Staerke,
+	// Farbe) und Wetter-FX aus dem Wetterzustand des CitySubsystems. Sie wurde
+	// bisher nirgends angelegt - deshalb stand die Sonne im Spiel immer gleich.
+	if (UWiesbadenWeatherFXComponent* WeatherFX = NewObject<UWiesbadenWeatherFXComponent>(this, TEXT("WeatherFX")))
+	{
+		WeatherFX->RegisterComponent();
+	}
 
 	// Engine-Bildschirmwarnungen (z. B. der rote "RAY TRACING GEOMETRY ... EXCEEDS
 	// BUDGET"-Hinweis) sind Entwickler-Diagnose und wirken auf Spieler wie ein
@@ -138,6 +163,43 @@ void AWiesbadenGameMode::BeginPlay()
 		LandmarkWorld->SpawnActor<AWiesbadenLandmarks>(
 			AWiesbadenLandmarks::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
+
+			// OEPNV: die ESWE-Linien 6 und 3.
+			//
+			// Je Linie ein Bus-Actor und ein Abfahrtsmonitor. Was die Linie ausmacht
+			// (Strecke, Halte, Namen, Takt, Zielschilder, DFI-Halte), steht in
+			// Data/Raw/Bus/line<ref>.json - hier steht nur, WELCHE Linien gefahren
+			// werden. Die Fahrzeuge sind feste Wagen mit Dauerbetrieb (Wendezeit an
+			// beiden Enden), siehe AWiesbadenBusRoute.
+			struct FWbBusLine { const TCHAR* LineFile; const TCHAR* ScheduleFile; };
+			static const FWbBusLine BusLines[] = {
+				{ TEXT("line6.json"), TEXT("line6_schedule.json") },   // Nordfriedhof <-> Mainz-Gonsenheim
+				{ TEXT("line3.json"), TEXT("") },                        // Nordfriedhof <-> Biebrich Rheinufer
+			};
+			for (const FWbBusLine& Line : BusLines)
+			{
+				// Verzoegert spawnen: LineFile/ScheduleFile muessen VOR BeginPlay
+				// stehen, sonst laedt der Actor die Vorgabe (Linie 6).
+				AWiesbadenBusRoute* Bus = LandmarkWorld->SpawnActorDeferred<AWiesbadenBusRoute>(
+					AWiesbadenBusRoute::StaticClass(), FTransform::Identity, nullptr, nullptr,
+					ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+				if (Bus)
+				{
+					Bus->LineFile = Line.LineFile;
+					Bus->ScheduleFile = Line.ScheduleFile;
+					Bus->FinishSpawning(FTransform::Identity);
+				}
+
+				AWiesbadenBusStopMonitor* Monitor = LandmarkWorld->SpawnActorDeferred<AWiesbadenBusStopMonitor>(
+					AWiesbadenBusStopMonitor::StaticClass(), FTransform::Identity, nullptr, nullptr,
+					ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+				if (Monitor)
+				{
+					Monitor->LineFile = Line.LineFile;
+					Monitor->ScheduleFile = Line.ScheduleFile;
+					Monitor->FinishSpawning(FTransform::Identity);
+				}
+			}
 
 		// Formale Parkanlagen (Bowling Green am Kurhaus, Reisinger-Anlagen):
 		// lange Wasserbecken + Fontaenen, ebenfalls selbstsetzend zur Laufzeit.
@@ -393,6 +455,15 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 						Hit, WheelXY + FVector(0, 0, 300.0), WheelXY - FVector(0, 0, 500.0),
 						ECC_Visibility, TraceParams))
 				{
+					// Strassenmoebel verwerfen (Schild-/Laternen-/Poller-Oberkante):
+					// ein "Boden" deutlich UEBER der Fahrspur ist keiner. Sonst nimmt
+					// der Trace die Pfosten-Oberkante als Boden und das Fahrzeug wird
+					// auf Pfostenhoehe + Radradius gesetzt -> es schwebt auf dem Pfosten.
+					if (Hit.Location.Z > Candidate.Z + 90.0)
+					{
+						bAllHit = false;
+						break;
+					}
 					MinGround = FMath::Min(MinGround, Hit.Location.Z);
 					MaxGround = FMath::Max(MaxGround, Hit.Location.Z);
 				}
@@ -628,7 +699,28 @@ bool AWiesbadenGameMode::TryMerchantInteraction(AWiesbadenFootPawn* Foot)
 	}
 
 	AWiesbadenStoreMerchant* Merchant = FindMerchantInReach(*Foot);
-	return Merchant ? Merchant->TryInteract(Foot) : false;
+	if (!Merchant)
+	{
+		return false;
+	}
+
+	// Der NPC am Nordfriedhof macht ZWEIERLEI: Laden (Freischaltungen kaufen)
+	// und Auftragsvergabe. Der automatische Missionsstart wurde entfernt - neue
+	// Auftraege gibt es NUR noch hier im Gespraech. Laeuft schon einer, gibt der
+	// NPC keinen neuen (RequestNextMission liefert dann false).
+	const bool bStore = Merchant->TryInteract(Foot);
+	bool bMission = false;
+	if (const UWorld* World = GetWorld())
+	{
+		if (UWiesbadenMissionSubsystem* Missions =
+			World->GetSubsystem<UWiesbadenMissionSubsystem>())
+		{
+			bMission = Missions->RequestNextMission();
+		}
+	}
+	// true, wenn etwas geschah (Kauf ODER neuer Auftrag) -> kein Fahrzeugwechsel.
+	// Sonst false, damit F am NPC nicht das Einsteigen blockiert.
+	return bStore || bMission;
 }
 
 AWiesbadenStoreMerchant* AWiesbadenGameMode::PickMerchantInReach(
@@ -933,13 +1025,28 @@ bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 		PlayerHelicopter->FinishSpawning(SpawnTransform);
 	}
 
-	// Material setzen: der Helikopter besteht aus Engine-Wuerfeln und trug
-	// ohne Zuweisung das Default-Schachbrett.
+	// Material setzen: der WUERFEL-Rueckfall trug ohne Zuweisung das
+	// Default-Schachbrett.
 	if (PlayerHelicopter)
 	{
-		if (UMaterialInterface* Paint = LoadObject<UMaterialInterface>(
+		// Das importierte Ka-52-Modell bringt seine eigenen PBR-Materialien mit
+		// (M_Ka52PBR je Slot, geprueft von WiesbadenReal.Vehicles.HelicopterModell).
+		// Die alte Zell-Tarnung darueberzulegen wuerde sie ueberschreiben - der
+		// neue Heli saehe dann aus wie der alte, und das Standstueck daneben waere
+		// nicht mehr zu unterscheiden.
+		if (PlayerHelicopter->HasImportedModel())
+		{
+			UE_LOG(LogWbVehicles, Log,
+				TEXT("Helikopter: importiertes Ka-52-Modell - eigene Materialien bleiben stehen."));
+		}
+		else if (UMaterialInterface* Paint = LoadObject<UMaterialInterface>(
 			nullptr, TEXT("/Game/Materials/City/M_WbHelicopter.M_WbHelicopter")))
 		{
+			// Rotorblaetter tragen ein eigenes dunkles Rotor-Material, NICHT die
+			// Zell-Tarnung - ein Tarnmuster auf drehenden Blaettern sieht falsch aus.
+			UMaterialInterface* RotorPaint = LoadObject<UMaterialInterface>(
+				nullptr, TEXT("/Game/Assets/Landmarks/M_HeliRotorBase.M_HeliRotorBase"));
+
 			TArray<UStaticMeshComponent*> Meshes;
 			PlayerHelicopter->GetComponents<UStaticMeshComponent>(Meshes);
 			for (UStaticMeshComponent* Mesh : Meshes)
@@ -956,6 +1063,12 @@ bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 				{
 					continue;
 				}
+				// Solide Rotorblaetter -> Rotor-Material; alles andere -> Zell-Tarnung.
+				if (CompName.Contains(TEXT("Rotor")) && RotorPaint)
+				{
+					Mesh->SetMaterial(0, RotorPaint);
+					continue;
+				}
 				Mesh->SetMaterial(0, Paint);
 			}
 		}
@@ -970,6 +1083,101 @@ bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 	UE_LOG(LogWbVehicles, Log,
 		TEXT("Helikopter abgesetzt: %.0f m neben dem Fahrzeug bei (%.0f, %.0f, %.0f) - mit F einsteigen."),
 		HelicopterDistanceMeters, SpawnLocation.X, SpawnLocation.Y, SpawnLocation.Z);
+
+	// Das alte Modell daneben aufstellen - es ist die Anschauung zum neuen.
+	if (bSpawnLegacyHelicopter)
+	{
+		SpawnLegacyHelicopterNearStart();
+	}
+	return true;
+}
+
+double AWiesbadenGameMode::ComputeHelicopterStandDistanceCm(
+	double OwnDiscCm, double LegacyDiscCm, double OwnLengthCm, double LegacyLengthCm)
+{
+	// Rotorkreise: die Scheiben duerfen sich nicht schneiden, 5 m Luft zwischen
+	// den Blattspitzen. Rumpflaengen: bei gleicher Ausrichtung duerfen sich die
+	// Rumpfspitzen nicht beruehren, 2 m Luft.
+	const double Discs = (FMath::Max(OwnDiscCm, 0.0) + FMath::Max(LegacyDiscCm, 0.0)) * 0.5 + 500.0;
+	const double Hulls = (FMath::Max(OwnLengthCm, 0.0) + FMath::Max(LegacyLengthCm, 0.0)) * 0.5 + 200.0;
+
+	// Ohne Netze (frischer Checkout) bleibt ein Mindestabstand - ein Standstueck
+	// darf nie im Spielerheli stehen.
+	return FMath::Max(800.0, FMath::Max(Discs, Hulls));
+}
+
+bool AWiesbadenGameMode::SpawnLegacyHelicopterNearStart()
+{
+	UWorld* World = GetWorld();
+	if (!World || !PlayerVehicle || !PlayerHelicopter)
+	{
+		return false;
+	}
+	// Nur einmal: SpawnHelicopterNearStart laeuft auch aus HandleCityStatus.
+	if (LegacyHelicopter)
+	{
+		return true;
+	}
+
+	// Standabstand aus den Rotorkreisen und der Rumpflaenge. Am CDO gemessen -
+	// die Netze haengen dort schon im Konstruktor, eine Welt braucht es dafuer
+	// nicht; nur bei fehlenden Assets bleibt der Mindestabstand.
+	const AWiesbadenLegacyHelicopter* LegacyCDO = GetDefault<AWiesbadenLegacyHelicopter>();
+	const double OwnDiscCm = PlayerHelicopter->GetUpperRotorDiameterCm();
+	const double LegacyDiscCm = LegacyCDO ? LegacyCDO->GetUpperRotorDiameterCm() : 0.0;
+	const double OwnLengthCm = PlayerHelicopter->GetNoseToTailCm();
+	const double LegacyLengthCm = LegacyCDO ? LegacyCDO->GetNoseToTailCm() : 0.0;
+	const double StandDistanceCm = ComputeHelicopterStandDistanceCm(
+		OwnDiscCm, LegacyDiscCm, OwnLengthCm, LegacyLengthCm);
+
+	// VOM SPIELERHELI AUS messen, nicht vom Auto.
+	//
+	// Vom Auto aus gerechnet (erster Entwurf) rueckte das Standstueck um den
+	// Seitenversatz des Helis aus der Flucht - die beiden standen dann schraeg
+	// zueinander statt nebeneinander. Und der Abstand war nicht mehr der
+	// gerechnete, sondern die Diagonale darueber.
+	const FVector Base = PlayerHelicopter->GetActorLocation()
+		+ PlayerHelicopter->GetActorForwardVector() * StandDistanceCm;
+
+	// Boden messen. Der Ursprung des ALTEN Rumpfnetzes liegt an der
+	// Rumpfunterseite (gemessene Bounds z 0..17,1 cm, nicht der Mittelpunkt),
+	// der Actor-Ursprung darf also direkt auf die Aufstandsflaeche - die kleine
+	// Zugabe deckt die Unebenheit des Gelaendes ab.
+	constexpr double GroundClearanceCm = 5.0;
+	FVector StandLocation = Base + FVector(0.0, 0.0, 200.0);
+	FHitResult Hit;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbLegacyHeliStand), false);
+	Params.AddIgnoredActor(PlayerVehicle);
+	Params.AddIgnoredActor(PlayerHelicopter);
+	if (World->LineTraceSingleByChannel(Hit,
+		Base + FVector(0.0, 0.0, 20000.0), Base - FVector(0.0, 0.0, 20000.0),
+		ECC_Visibility, Params))
+	{
+		StandLocation = Hit.Location + FVector(0.0, 0.0, GroundClearanceCm);
+	}
+
+	// Nur die Richtung uebernehmen: das Standstueck steht aufrecht, auch wenn
+	// der Spielerheli Laengs- oder Querneigung hat.
+	const FRotator StandRotation(0.0, PlayerHelicopter->GetActorRotation().Yaw, 0.0);
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	SpawnParams.Owner = this;
+
+	LegacyHelicopter = World->SpawnActor<AWiesbadenLegacyHelicopter>(
+		AWiesbadenLegacyHelicopter::StaticClass(), StandLocation, StandRotation, SpawnParams);
+
+	if (!LegacyHelicopter)
+	{
+		UE_LOG(LogWbVehicles, Warning, TEXT("Alter Helikopter konnte nicht aufgestellt werden."));
+		return false;
+	}
+
+	UE_LOG(LogWbVehicles, Log,
+		TEXT("Alter Helikopter steht %.1f m vor dem Spielerheli bei (%.0f, %.0f, %.0f) - ")
+		TEXT("Rotorkreise %.1f / %.1f m, Rumpf %.1f m."),
+		StandDistanceCm * 0.01, StandLocation.X, StandLocation.Y, StandLocation.Z,
+		OwnDiscCm * 0.01, LegacyDiscCm * 0.01, LegacyLengthCm * 0.01);
 	return true;
 }
 

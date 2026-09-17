@@ -315,6 +315,36 @@ void URoadFurnitureGenerator::PlaceSigns(
 	// dort kein abgeleitetes Schild mehr setzen (verhindert Doppel-Schilder).
 	TSet<int64> NodesWithExplicitSigns;
 
+	// Ausrichtung eines Node-Schilds aus der NAECHSTEN Strasse ableiten (wie die
+	// abgeleiteten Schilder). Ohne das bekamen OSM-Node-Schilder ZeroRotator und
+	// standen verdreht, waehrend die Nachbarn korrekt zur Strasse zeigten.
+	auto NearestRoadYaw = [&Network](const FVector& At, bool& bOk) -> double
+	{
+		double BestD = TNumericLimits<double>::Max();
+		FVector BestDir = FVector::ForwardVector;
+		bOk = false;
+		for (const FRoadSegment& Seg : Network.Segments)
+		{
+			for (int32 i = 0; i + 1 < Seg.Centerline.Num(); ++i)
+			{
+				const FVector A = Seg.Centerline[i];
+				const FVector AB = Seg.Centerline[i + 1] - A;
+				const double L2 = AB.SizeSquared2D();
+				const double T = (L2 > 1.0)
+					? FMath::Clamp(FVector::DotProduct(At - A, AB) / L2, 0.0, 1.0) : 0.0;
+				const FVector Proj = A + AB * T;
+				const double D = FVector::DistSquared2D(At, Proj);
+				if (D < BestD)
+				{
+					BestD = D;
+					BestDir = AB.GetSafeNormal();
+					bOk = true;
+				}
+			}
+		}
+		return BestDir.Rotation().Yaw;
+	};
+
 	// 1) Explizite OSM-Node-Schilder (authoritative Quelle).
 	if (DataSet && Converter && Converter->IsInitialized())
 	{
@@ -341,9 +371,11 @@ void URoadFurnitureGenerator::PlaceSigns(
 				Instance.SignId = Sign.Id;
 				Instance.Sign = Sign;
 				Instance.Location = Ground + FVector(0.0, 0.0, Settings.SignHeightAboveGroundCm);
-				// Orientierung von Node-Schildern wird spaeter aus der naechsten
-				// Strasse abgeleitet; hier neutral.
-				Instance.Rotation = FRotator::ZeroRotator;
+				// Orientierung aus der naechsten Strasse (sonst stand das Schild
+				// verdreht, waehrend die Nachbarschilder korrekt zeigten).
+				bool bYawOk = false;
+				const double NodeYaw = NearestRoadYaw(Ground, bYawOk);
+				Instance.Rotation = bYawOk ? FRotator(0.0, NodeYaw, 0.0) : FRotator::ZeroRotator;
 				Instance.SourceNodeId = Node.Id;
 				Layout.Signs.Add(Instance);
 			}

@@ -2,13 +2,7 @@
 
 #include "World/WiesbadenWeatherSystem.h"
 
-float FWiesbadenWeatherSystem::ComputeSunElevationFactor(float TimeOfDayHours)
-{
-	// Sonne geht um 6 Uhr auf (Faktor 0), steht um 12 Uhr im Zenit (+1), geht
-	// um 18 Uhr unter (0) und erreicht um 0 Uhr den tiefsten Stand (-1).
-	const float Hours = FMath::Fmod(TimeOfDayHours, 24.0f);
-	return FMath::Sin((Hours - 6.0f) * (2.0f * PI / 24.0f));
-}
+#include "World/WiesbadenSolar.h"
 
 FWiesbadenWeatherIntensity FWiesbadenWeatherSystem::GetIntensityFor(ECityWeatherPreset Weather)
 {
@@ -64,24 +58,30 @@ void FWiesbadenWeatherSystem::SetTargetWeather(ECityWeatherPreset NewWeather)
 	LastState.Blend01 = 0.0f;
 }
 
-void FWiesbadenWeatherSystem::SetTimeOfDay(float Hours)
+void FWiesbadenWeatherSystem::SetTimeSource(EWiesbadenTimeSource Source, float InFixedHours)
 {
-	LastState.TimeOfDayHours = FMath::Fmod(Hours, 24.0f);
-	if (LastState.TimeOfDayHours < 0.0f)
-	{
-		LastState.TimeOfDayHours += 24.0f;
-	}
+	Settings.TimeSource = Source;
+	float Hours = FMath::Fmod(InFixedHours, 24.0f);
+	if (Hours < 0.0f) { Hours += 24.0f; }
+	Settings.FixedHours = Hours;
+}
 
-	// Abgeleitete Werte SOFORT nachziehen.
-	//
-	// Vorher setzte diese Funktion nur die Stunde; Sonnenstand und Nachtflagge
-	// wurden erst im naechsten Tick nachgerechnet. Bis dahin stand ein
-	// widerspruechlicher Zustand in der Struktur - eine Abfrage direkt nach dem
-	// Setzen meldete "23:00 Uhr, Sonnenstand 0,72, Nacht: nein". Wer daraufhin
-	// eine Entscheidung trifft (etwa die Lichtautomatik), trifft sie auf Basis
-	// der alten Tageszeit.
-	LastState.SunElevationFactor = ComputeSunElevationFactor(LastState.TimeOfDayHours);
-	LastState.bIsNight = LastState.SunElevationFactor < 0.0f;
+void FWiesbadenWeatherSystem::UpdateClock(const FDateTime& NowUtc, const FDateTime& NowLocal)
+{
+	// Stunde der Spieluhr: Systemzeit oder feste Stunde.
+	const float LocalNow = WiesbadenSolar::LocalHours(NowLocal);
+	const float Hours = (Settings.TimeSource == EWiesbadenTimeSource::FixedHour) ? Settings.FixedHours : LocalNow;
+
+	// Sonne fuer das heutige Datum zu dieser Ortsstunde: die UTC-Zeit um die
+	// Differenz zur jetzigen Ortsstunde verschieben (Zeitzone bleibt implizit).
+	const FDateTime SunUtc = NowUtc + FTimespan::FromHours(Hours - LocalNow);
+	const WiesbadenSolar::FSunPosition Sun = WiesbadenSolar::ComputeSunPosition(
+		SunUtc, WiesbadenSolar::WiesbadenLatitudeDeg, WiesbadenSolar::WiesbadenLongitudeDeg);
+
+	LastState.TimeOfDayHours = Hours;
+	LastState.SunElevationDeg = static_cast<float>(Sun.ElevationDeg);
+	LastState.SunAzimuthDeg = static_cast<float>(Sun.AzimuthDeg);
+	LastState.bIsNight = LastState.SunElevationDeg < 0.0f;
 }
 
 void FWiesbadenWeatherSystem::Tick(float DeltaSeconds)
@@ -94,14 +94,6 @@ void FWiesbadenWeatherSystem::Tick(float DeltaSeconds)
 		Blend01 = FMath::Min(1.0f, Blend01 + DeltaSeconds / FMath::Max(Settings.TransitionSeconds, 0.1f));
 	}
 
-	// Tageszeit fortschreiten (0..24, Wrap).
-	LastState.TimeOfDayHours = FMath::Fmod(
-		LastState.TimeOfDayHours + DeltaSeconds * Settings.HoursPerRealSecond, 24.0f);
-
-	// Sonnenstand + Nacht.
-	LastState.SunElevationFactor = ComputeSunElevationFactor(LastState.TimeOfDayHours);
-	LastState.bIsNight = LastState.SunElevationFactor < 0.0f;
-
 	// Intensitaeten zwischen vorheriger und aktueller Lage mischen.
 	const FWiesbadenWeatherIntensity Prev = GetIntensityFor(LastState.PreviousWeather);
 	const FWiesbadenWeatherIntensity Curr = GetIntensityFor(LastState.CurrentWeather);
@@ -110,7 +102,7 @@ void FWiesbadenWeatherSystem::Tick(float DeltaSeconds)
 	LastState.Intensity.CloudCover = FMath::Lerp(Prev.CloudCover, Curr.CloudCover, Blend01);
 
 	// Umgebungslicht: 0.35 in der Nacht, 1.0 am hellen Mittag.
-	const float Daylight = FMath::Clamp(LastState.SunElevationFactor, 0.0f, 1.0f);
+	const float Daylight = FMath::Clamp(LastState.SunElevationFactor(), 0.0f, 1.0f);
 	LastState.AmbientLightMultiplier = 0.35f + 0.65f * Daylight;
 
 	LastState.Blend01 = Blend01;

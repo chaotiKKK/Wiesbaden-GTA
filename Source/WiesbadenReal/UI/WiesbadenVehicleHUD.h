@@ -11,6 +11,7 @@ class AWiesbadenCar;
 class IWiesbadenVehicleControl;
 class AWiesbadenHelicopter;
 class AWiesbadenStoreMerchant;
+class AWiesbadenNerobergbahn;
 class UWiesbadenWorldMapView;
 class UWorld;
 class UWiesbadenCitySubsystem;
@@ -55,6 +56,16 @@ public:
 
 	/** Gangstufe als Text: "R" rueckwaerts, "N" Leerlauf, sonst die Zahl. */
 	static FString FormatGear(int32 Gear);
+
+	/**
+	 * Wasserstand des Nerobergbahn-Wagens als Text, z. B.
+	 * "Wasserballast 62 % - Schieber zu".
+	 *
+	 * Datenrein und statisch wie die uebrigen Rechenteile: der Wasserballast
+	 * ist die EINZIGE Antriebskraft des Wagens, und die Anzeige ist die einzige
+	 * Rueckmeldung auf die Kurbel - ohne sie dreht der Spieler ins Leere.
+	 */
+	static FString FormatWaterLevel(float Fuellstand, bool bSchieberOffen);
 
 	/**
 	 * Steuerkurs als Himmelsrichtung + Grad, z. B. "N 000" oder "SW 225".
@@ -217,6 +228,16 @@ private:
 	/** Zeichnet den Handlungshinweis zu Fuss ("F Einsteigen" und dergleichen). */
 	void DrawFootPrompt(float CenterX, float Y);
 
+	/**
+	 * Waehrend der Mitfahrt: Kurbelhinweis und Wasserstand des Wagens.
+	 *
+	 * Der Wagen hat weder Motor noch Tueren; im Vorbild bedient der Wagenfuehrer
+	 * mit der Handkurbel den Wasserschieber (TON 13:13). Ohne diesen Hinweis ist
+	 * die Kurbel im Spiel nicht auffindbar - und ohne Wasserstandsanzeige sieht
+	 * niemand, was sie bewirkt hat.
+	 */
+	void DrawFunicularRidePanel(float CenterX, float Y);
+
 	/** Zeichnet das Pausemenue mittig. */
 	void DrawPauseMenu(float Width, float Height);
 
@@ -226,6 +247,14 @@ private:
 	/** Fuehrt den gewaehlten Eintrag aus. */
 	void ActivatePauseEntry(int32 Index);
 
+	/** Zeichnet das Ton-Unterfenster (Lautstaerke-Balken je Bus) mittig. */
+	void DrawAudioSettings(float Width, float Height);
+
+	/** Wertet die Tasten des Ton-Unterfensters aus: Pfeile/W/S waehlen den Bus,
+	 *  Links/Rechts bzw. A/D regeln ihn leiser/lauter. Escape (zurueck) laeuft
+	 *  ueber UpdatePauseMenu. */
+	void UpdateAudioSettings();
+
 public:
 	/**
 	 * Eintraege des Pausemenues (datenrein, testbar).
@@ -234,6 +263,16 @@ public:
 	 * Entwicklerbefehle pruefen lassen, ohne einen Bildschirm zu brauchen.
 	 */
 	static void GetPauseMenuEntries(TArray<FString>& OutEntries);
+
+	/**
+	 * Beschriftungen der Ton-Busse in Anzeige-Reihenfolge (datenrein, testbar).
+	 * Die Reihenfolge entspricht EWbAudioBus 0..Vehicle - Zeile i gehoert zu
+	 * (EWbAudioBus)i. Getrennt vom Zeichnen, damit sie ohne Welt pruefbar ist.
+	 */
+	static void GetAudioBusLabels(TArray<FString>& OutLabels);
+
+	/** Lautstaerke (0..1) als Prozenttext, z. B. "75 %". Datenrein/testbar. */
+	static FString FormatVolumePercent(float Slider01);
 
 private:
 	/** True, solange das Spiel pausiert ist. */
@@ -247,6 +286,16 @@ private:
 
 	/** Ausgewaehlter Eintrag. */
 	int32 PauseSelection = 0;
+
+	/** True, solange das Ton-Unterfenster (Lautstaerke) im Pausemenue offen ist. */
+	bool bAudioSettingsOpen = false;
+
+	/** Ausgewaehlte Bus-Zeile im Ton-Unterfenster. */
+	int32 AudioSelection = 0;
+
+	/** Flankenerkennung der Lautstaerke-Tasten (links/rechts bzw. A/D). */
+	bool bMenuLeftHeld = false;
+	bool bMenuRightHeld = false;
 
 	/** Reichweite, ab der zu Fuss "F Einsteigen" erscheint, in cm. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|HUD", meta = (ClampMin = "100.0"))
@@ -298,6 +347,14 @@ private:
 	 * einzelnen Haendler (siehe DescribeNearestMerchantInReach).
 	 */
 	TWeakObjectPtr<AWiesbadenStoreMerchant> CachedFootMerchant;
+
+	/**
+	 * Nerobergbahn aus demselben Suchlauf.
+	 *
+	 * Ein Actor traegt beide Wagen; fuer die Mitfahrtafel werden nur der
+	 * besetzte Wagen und sein Wasserballast gebraucht.
+	 */
+	TWeakObjectPtr<AWiesbadenNerobergbahn> CachedFunicular;
 
 	/**
 	 * Zuletzt bestimmter Strassenname und wann er bestimmt wurde.

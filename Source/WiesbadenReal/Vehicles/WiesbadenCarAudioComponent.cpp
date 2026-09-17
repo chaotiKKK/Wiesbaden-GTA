@@ -4,6 +4,7 @@
 
 #include "WiesbadenReal.h"
 
+#include "Audio/WiesbadenAudioSubsystem.h"
 #include "Components/AudioComponent.h"
 #include "Sound/SoundBase.h"
 #include "Sound/SoundWaveProcedural.h"
@@ -62,6 +63,10 @@ void UWiesbadenCarAudioComponent::CreateAudioSource()
 
 	EngineAudio->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
 	EngineAudio->RegisterComponent();
+
+	// In den Fahrzeug-Bus des Mischpults einordnen (Master-Lautstaerke/Ducking);
+	// nullptr, falls die Mix-Assets fehlen -> dann eben ohne Bus (kein Fehler).
+	EngineAudio->SoundClassOverride = UWiesbadenAudioSubsystem::LoadBusSoundClass(EWbAudioBus::Vehicle);
 
 	// Raeumlich: der Motor sitzt beim Kaefer hinten, und beim Vorbeifahren
 	// soll der Klang von dort kommen.

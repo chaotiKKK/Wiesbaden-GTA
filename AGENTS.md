@@ -5,6 +5,7 @@ Nicht-offensichtliche Fakten, die sich nicht aus Code/Doku rekonstruieren lassen
 ## Umgebung & Build
 
 - **Neuer Rechner (ab 2026-09-01, Benutzer HP):** einzige Arbeitskopie unter `C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal`; verbindliche Engine ist die Launcher-Installation **5.8.2 (CL 56702186)** unter `C:\Program Files\Epic Games\UE_5.8` - alle `.cmd`/`Tools`/Doku zeigen dorthin. Die Plattenkopie `C:\freebuff\WiesbadenReal_Sicherung\UE_5.8` (5.8.1, CL 56057345) bleibt nur als Rueckfall (dann Rebuild noetig, da `Intermediate`/`Binaries` gegen 5.8.2 gebaut sind). Build HIER moeglich (VS 2022 + MSVC 14.44 + Win11-SDK 26100). Die alten `ssonn`/`aivideo`-Pfade und BEIDE Worktrees (`D:\freebuff_city_wi`, `C:\Users\ssonn\aivideo\WiesbadenReal`) existieren hier NICHT; `verify-worktree-sync.mjs` ist damit gegenstandslos.
+- **FALLE: die beiden UE-5.8-Baeme niemals mischen (Symptom 2026-09-17).** Baut man den Editor mit der Plattenkopie (`C:\freebuff\...\UE_5.8`, 5.8.1) statt mit der Launcher-Installation (5.8.2), scheitert JEDE Uebersetzungseinheit mit Typneudefinitionen in Engine-Headern: `GenericPlatform.h error C2953 "SelectIntPointerType" ... bereits definiert`, `error C2011 "FGenericPlatformTypes"`, `fatal error C1189: #error: PLATFORM_32BITS should not be defined`. Die `note: Siehe Deklaration`-Zeilen nennen dann `C:\Program Files\Epic Games\UE_5.8\...` als ERSTE Deklaration - das ist der Fingerzeig. Ursache ist NICHT der Code, nicht UBA und nicht die Toolchain: das **gemeinsame PCH liegt im Projekt-`Intermediate`** und traegt die Headerpfade der Engine, mit der es erzeugt wurde; der andere Baum parst dieselben (bytegleichen) Header ein zweites Mal. Weder `-NoUBA`, noch das Loeschen der Projekt-PCHs hilft dauerhaft - nur derselbe Baum. Praktisch: `Tools/build_gate1.cmd` ruft die installierte Engine; bei einem Baumwechsel vorher `WiesbadenReal\Intermediate\Build\...\*.pch` loeschen. PCH-Wiederverwendung ist danach stabil (inkrementeller Lauf: 0 Aktionen, `Result: Succeeded`).
 - git-Repo vorhanden (Branch `main`); `.gitignore` haelt `Content/__ExternalActors__` (26 GB gebackene Karte), `Data/Raw`, UE-Build-Ausgaben und `*.log` draussen.
 - `WiesbadenReal.Build.cs` setzt **`bUseUnity = false`**: gleichnamige anonyme-Namespace-Helfer in mehreren `.cpp` (`FLatLon`, `MakeLane`, `WriteTempText`, `Dt`, `NextNoise`, `SamplesPerPush`, `BytesPerSample`) kollidieren, sobald der Unity-Build TUs zusammenfasst; neue Quelldateien verschieben die Chunk-Grenzen und decken latente Kollisionen auf. Non-Unity kompiliert sauber (Projekt IWYU-tauglich) - nicht ohne Dedup dieser Helfer wieder einschalten.
 - **Warnungen sind FEHLER** (u. a. C4458 Variablen-Shadowing bricht den Build ab). Falle: `AGameModeBase::GameState` ist ein Member (der AGameStateBase*-Actor) - eine lokale `GameState` in einer GameMode-Methode verdeckt ihn -> Build-Abbruch. Lokale anders benennen (`GS`).
@@ -49,6 +50,7 @@ Nicht-offensichtliche Fakten, die sich nicht aus Code/Doku rekonstruieren lassen
 
 - Heli-Rotor-Physik (`FWiesbadenRotorPhysics`): `bCoaxialRotors` = gegenlaeufiger Doppelrotor (ka-52-Stil, verdoppelter Auftrieb, kein Heckrotor, Pedal = direktes Yaw-Moment); `MaxForwardSpeedMetersPerS` + `RetreatingBladeStallStartFrac` modellieren den Blattspitzenverlust (LiftScale -> 0.45 an vmax) statt hartem Speed-Clamp. `EngineRpm = MainRotorRpm * EngineToMainRotorRatio` (0 bei Triebwerk aus) speist Audio/HUD.
 - Flugsound: `UWiesbadenHelicopterAudioComponent` spielt Assets (RotorSound/EngineSound) mit RPM-/Last-Parametern ODER den prozeduralen Fallback `FWiesbadenHelicopterAudioModel` (deterministischer xorshift-PRNG, Seed-Parameter -> Automation-/node-tests): Rotor = Rauschen durch One-Pole-Tiefpass (Cutoff steigt mit RPM+Collective) + Wop-Wop-AM mit Blattpassfrequenz, Motor = Ton RPM/60*8 Zylinder. Samples als int16-PCM in `USoundWaveProcedural::QueueAudio` (vorher `GetAvailableAudioByteCount()` gegen Pufferdrift pruefen); `USoundWaveProcedural::NumSamplesToGeneratePerCallback` ist protected - nicht setzbar. `BladeSlapDepth` (AM-Tiefe) + `RotorCutoffBaseHz` (Basis-Cutoff) erzeugen den Kampfheli-Charakter; der Heli nutzt Koaxial-Konfiguration (bCoaxialRotors=true, zweiter gegenlaeufiger Rotor, BladeCount=3).
+- **Ka-52-Modell (Neubau 2026-09-17, Import `/Game/Vehicles/Ka52`):** `AWiesbadenHelicopter` bindet die drei Meshes `Fuselage`/`Rotor_Upper`/`Rotor_Lower` ueber `ConstructorHelpers` (Pfade muessen exakt `<Paket>.<Objekt>` sein, sonst faellt der Actor still auf den Wuerfel-Rueckfall zurueck). Das Modell ist FERTIG skaliert und traegt seine Weltlage EINGEBAKEN: Rotor-Achse in Mesh-XY bei (0,0) (gemessen 2 cm), Boden bei z=0, Rumpf 0..295 cm, Naben z 495 / 376,5 cm. Deshalb gibt es keine Median-Offsets mehr: der Hub-`USceneComponent` traegt nur die Nabenhoehe (495 / 376.5), das Blatt-Mesh darunter exakt `-HubHeight` - dann rotiert die Geometrie geometrisch um die Mastachse, ohne dass ein Offset nachgefuehrt werden muss. `TailBoomMesh`/`TailFinMesh`/`TailRotorBlade` sind beim echten Mesh unsichtbar (Heck und Stummelfluegel stecken im Rumpf-Mesh). Import + Materialkette: `Tools/import_ka52.cmd` (FBX, Nanite, keine Import-Bones) und `Tools/fix_ka52_materials.cmd` (4 PBR-Texturen -> `M_Ka52PBR` -> ALLE Material-Slots der drei Meshes; der FBX-Import legt sonst leere Tripo-Restmaterialien an - der Rumpf hat 10 Slots). **FALLE (2026-09-17):** `AssetTools.create_asset` legt ein Material nur IM SPEICHER an - ohne zusaetzliches `EditorAssetLibrary.save_loaded_asset(mat)` wird `M_Ka52PBR.uasset` NIE geschrieben, waehrend die Meshes sehr wohl gespeichert werden und danach auf ein nicht existierendes Asset zeigen (grauer Rumpf, Texturen ungenutzt). Der Commandlet-Log meldete trotzdem "M_Ka52PBR verdrahtet" und Erfolg. Beleg war nur der Plattencheck (`ls Content/Vehicles/Ka52/M_Ka52PBR.uasset`). Verifikation: `Tools/verify_ka52.cmd` (Meshes/Bounds in /Game) und `Tools/verify_ka52_actor.cmd` (CDO des Actors - welche Meshes an welchen Komponenten haengen, Nabenhoehen, XY-Abstand Blatt<->Mastachse = 0; Ergebnis `Saved/Diagnose/ka52_actor.txt`, weil Python-prints im Commandlet-Log verschwinden koennen). Dauerhaft abgesichert im Automation-Test `WiesbadenReal.Vehicles.HelicopterModell` (`Tests/HelicopterModelTest.cpp`, Editor-Kontext): Mesh-Namen an den Komponenten (faengt ConstructorHelpers-Tippfehler, die still auf den Wuerfel-Rueckfall gehen), Materialname je Slot, Rumpfmasse 14,1 x 8,7 x 2,95 m, Sohle auf 0 sowie Blatt-z = -Nabenhoehe und XY-Abstand 0 zur Mastachse.
 
 - **`FMath::FInterpTo(x, 0, dt, Speed)` gibt bei `Speed<=0` SOFORT das Ziel (0) zurueck** (UE-Quelle). Die Heli-Ratendaempfung setzte `Speed = RateAssist*Neutral`, `Neutral=0` bei vollem Ausschlag -> Gier-/Nick-/Rollrate wurde JEDES Bild auf 0 gerissen (Giermoment war korrekt 360k N*m, nur die Rate genullt; Fehlerbild "Heli giert nicht" trotz richtiger Autoritaet). Fix: Daempfung nur bei `Neutral>epsilon`. Danach `CoaxialYawAuthority` 60000->16000 (sonst >400 Grad/s statt ~30-80).
 - Externe Steuerung: `AWiesbadenHelicopter::SetExternalControl(FWiesbadenHeliControl)`/`ClearExternalControl` ist der saubere Eingang (KI/Zwischensequenz/Replay/Test), wirkt ueber die echte Rotorphysik; `ReadInput` wendet ihn nur an, enthaelt sonst NULL Test-Code. Test-Choreografie (Gierprobe/Flugprofil) liegt in `UWiesbadenVehicleTestHarness` (UActorComponent), das die Dev-Befehle zur Laufzeit auf dem Heli anlegen - im normalen Spiel existiert es nicht.
@@ -2092,3 +2094,505 @@ MERKE: der alte Test war gruen, weil er Haendler UND Spieler im Ursprung
 annahm (`NewObject` ohne Wurzel + `PlayerCm = 0.0`) - er spiegelte den Fehler,
 statt ihn zu finden. Eine Regression mit weit entferntem Spielerstandort steht
 jetzt daneben.
+
+## Build/Test-Fallstricke: DLL-Sperre, const-Outer, -ExecCmds-Quoting (17.09.2026)
+
+**"Editor geschlossen" heisst nicht "baubar".** Der Link brach mit
+`LNK1104 ... UnrealEditor-WiesbadenReal.dll kann nicht geoeffnet werden` und
+davor `Link [x64] ... Exited with error code 9001. This action will retry without
+UBA` ab - die UBA-Wendung verleitet zur falschen Faehrte (UBA war unschuldig,
+auch der NoUBA-Lauf scheiterte genauso). Wahre Ursache: eine noch laufende
+SPIELSITZUNG `UnrealEditor.exe <Projekt> -game /Game/Maps/...` (Elternprozess
+explorer.exe), die das Modul-DLL geladen haelt. Die Kompilierung war laengst
+gruen - nur der Link scheitert. Vor jedem Build pruefen:
+`Get-CimInstance Win32_Process | Where-Object {$_.Name -match "Unreal"}`;
+eine -game-Sitzung ist kein Rest des Editors und ueberlebt dessen Schliessen.
+
+**`FindObject<T>()` verlangt in UE 5.8 einen NICHT-const `UObject*` als Outer**
+(`UObjectGlobals.h`: `T* FindObject(UObject* Outer, FStringView Name, ...)`;
+der `const UObject*`-Overload existiert nicht mehr). Ein `GetDefault<T>()`-Zeiger
+ergibt in JEDER Zeile `error C2672: keine uebereinstimmende ueberladene Funktion`.
+In Tests `GetMutableDefault<T>()` nehmen (nur lesen) - im Heli-Modelltest so geloest.
+
+**`-ExecCmds` verliert seine Anfuehrungszeichen ueber `Start-Process -ArgumentList`.**
+Aus `-ExecCmds="Automation RunTests X; Quit"` wird dann
+`-ExecCmds=Automation RunTests WiesbadenReal.Vehicles; Quit -unattended ...`:
+die Engine fuehrt NUR `Automation` aus, `RunTests` laeuft nie, `Quit` kommt nie -
+der Editor idlet endlos und STILL (Log steht nach dem Asset-Registry-Scan still,
+CPU ~40 %, kein `Cmd: Automation RunTests`-Eintrag). Beweis steht im Log unter
+`LogInit: Command Line:` - fehlende Quotes dort. Immer ueber ein .cmd mit
+`%1`-Argumenten starten (Quotes fest im Skript):
+`Tools\run_automation_test.cmd <Filter> <Logname>` - Standard
+`WiesbadenReal.Vehicles.HelicopterModell` -> `Saved\Logs\wb_test_heli.log`.
+Gueltiger Lauf = Zeile `Display: Found N automation tests based on '<Filter>'`
+UND am Ende `**** TEST COMPLETE. EXIT CODE: 0 ****`; fehlt die erste, lief nichts.
+
+Stand 17.09.2026: Gate 1 gruen (`Result: Succeeded`, inkrementell ~3 s),
+`WiesbadenReal.Vehicles.HelicopterModell` gruen und die ganze Fahrzeug-Batterie
+`WiesbadenReal.Vehicles` 40/40 Success, 0 Fail, EXIT CODE 0. Der Modelltest
+haelt die Ka-52-Bindung fest (Mesh-Namen, Material je Slot, Rumpfmasse,
+`Blatt-z = -Nabenhoehe`, XY-Abstand 0 zur Mastachse). Einschraenkung: fehlt das
+Mesh (frischer Checkout ohne `Tools\import_ka52.cmd`), meldet er nur einen
+Hinweis und ist trotzdem gruen - ein gruener Lauf ist erst zusammen mit
+0x "ohne Mesh" im Log aussagekraeftig.
+
+## Bus-Mitfahrt: der Anker trug die MESH-Rotation - die Kamera stand neben dem Bus (17.09.2026)
+
+Gemeldet war: "als Fahrgast im Bus sieht man nichts und es scheint, als wird man mit
+dem Bus in die Luft teleportiert". Zwei Ursachen, beide in `WiesbadenBusRoute`:
+
+1. **Der Mitfahr-Anker bekam die Komponenten-Rotation, nicht die Fahrtrichtung.**
+   `RideAnchor->SetWorldLocationAndRotation(loc, Bus->GetComponentQuat())` uebernimmt
+   `Dir*MeshOrient` - MeshOrient ist die glTF-Korrektur des Imports (Yaw -90). Im
+   Anker zeigte damit +X nach LINKS statt nach vorn (die Wagenlaengsachse liegt auf
+   +Y). Die Fahrgast-Offsets (X = nach vorn) zeigten 90 Grad quer: Die Cockpit-Kamera
+   sass rund 2-3 m NEBEN dem Bus in der Luft und flog mit - genau das gemeldete
+   "in die Luft teleportiert". Fix: `Car->GetComponentQuat() * MeshOrient.Quaternion().Inverse()`
+   an BEIDEN Stellen (Einsteigen + Tick), damit Anker +X = Fahrtrichtung, +Y = rechts,
+   +Z = oben - dasselbe Bezugssystem wie `WiesbadenBusInterior`. Merksatz: bei
+   glTF-Importen NIE die rohe Komponentenrotation als Fahrzeug-Bezugssystem nehmen.
+   **Nachweis im Log** (nicht im Bild): `Bus-Mitfahrt: ... Anker-Yaw 94.4, Blick-Yaw
+   94.4 (Versatz 0.0); Auge im Wagen X=172 (vorn) Y=73 (rechts) Z=130`. Der Versatz
+   muss ~0 sein, und das Auge muss vorne rechts sitzen - vertauschte Achsen zeigen
+   sich als (73, 220).
+
+2. **Der Bus hat keinen Innenraum - und die Kamera sass zusaetzlich in der Spielfigur.**
+   `SM_Bus` ist ein reines AUSSEN-Modell (Tripo/OBJ, `convert_bus.py`); in der
+   geschlossenen Huelle sieht man von innen nichts (Rueckseiten) und von der Stadt nur
+   zufaellig. Die uebrigen Fahrzeuge loesen das mit `AddCockpitHiddenMesh` (eigene Haut
+   fuer den Fahrer aus) + HUD-Instrumente; ein Bus braucht dagegen SICHTBARE Waende.
+   Deshalb: `World/WiesbadenBusInterior` (datenrein, Test `WiesbadenReal.Traffic.BusInterior`)
+   baut den Innenraum als Kaesten in Wagenkoordinaten; `AWiesbadenBusRoute` legt ihn als
+   `UProceduralMeshComponent` an den Anker (folgt dem Bus, nur waehrend der Mitfahrt
+   sichtbar) und blendet Haut + Zielschilder fuer den Fahrgast aus. Fenster bleiben
+   ABSICHTLICH offen (keine Scheiben) - sonst sieht der Fahrgast die Stadt nicht.
+   Die aufrecht stehende Spielfigur fuellt sonst das Bild, weil die Fahrgastkamera auf
+   SITZHOEHE (1,30 m) mitten in ihrem Brustkorb sitzt: beim Einsteigen
+   `Pawn->SetActorHiddenInGame(true)`, beim Aussteigen wieder false, und die
+   ausgeblendeten Meshes mit `RemoveCockpitHiddenMesh` zurueckholen (ohne diesen
+   Gegenpart bliebe der Bus dauerhaft durchsichtig).
+
+- **Beleg statt Vermutung:** `shot_busmitfahrt.cmd <Karte> <ParkStop> <Shot s> <Ride s> <Quit s>`
+  startet `-WbZuFuss=5 -WbBusRide=<s>` (Entwicklungshilfe, vorbildlich `-WbMitfahr`:
+  steigt selbst in einen gerade haltenden Bus ein, weil Tastendruecke in automatischen
+  Laeufen nicht ankommen) und legt `Saved\Diagnose\Messstelle00000.png` ab. Der
+  Fahrgast-Abschnitt der .cmd MUSS ueber die .cmd-Datei laufen (leerer Log sonst, siehe
+  `-WbShot`-Eintrag oben).
+- **Nebenbefund:** `-WbBusParkStop` kehrte frueher SOFORT aus dem Tick zurueck - damit
+  liefen Anker, Mitfahrt und Dev-Einsteigen im Parkbetrieb nicht, an einem geparkten Bus
+  war kein Einstieg moeglich. Jetzt laeuft nur die Fahrplan-/Verteilungsschleife nicht.
+- **Messwerte des Meshes sind wichtiger als der Konverter-Kommentar:** `convert_bus.py`
+  setzt den Ursprung auf die Bounds-MITTE, im Import liegt die Box aber bei Min.Z=0,00 /
+  Max.Z=224,77 - die Unterkante also auf dem Pivot (`MeshBottomCm = 0`). Der Wagen ist
+  nur 2,25 m hoch, deshalb die Sitz-Augenhoehe (1,30 m), nicht die Stehhoehe.
+- **Falle beim Bauen:** ein eigener `struct FBox` kollidiert mit Unreals `FBox`
+  (`TBox<double>`) - hier heisst der Kasten deshalb `FPart`.
+- **Offen:** der Diagnose-Strahl nach unten trifft die Fahrbahn 1,96 m unter dem Auge
+  (also ~0,7 m unter dem Bus-Ursprung). Auf einer Bruecke/unter einer zweiten Strasse
+  ist das richtig; auf gerader Strasse waere der Bus angehoben. Nicht geprueft.
+## Heli-Paar am Start: neuer Ka-52 als Spielerheli, altes Modell als Standstueck (17.09.2026)
+
+Zwei Actors, zwei Modelle - nicht derselbe Actor mit Schalter:
+
+- **`AWiesbadenHelicopter` = das Ka-52-Mesh** (`/Game/Vehicles/Ka52`, eigene PBR-Materialien,
+  `HasImportedModel()`), der einzige bespielbare Heli. Der GameMode lackiert ihn NICHT mit
+  der alten Zell-Tarnung - sonst saehe der Neubau aus wie das Standstueck daneben.
+- **`AWiesbadenLegacyHelicopter` = das frueher benutzte Landmarken-Modell** (SM_HeliBody +
+  zwei Rotoren, `M_WbHelicopter` + `M_HeliRotorBase`), `bCanEverTick=false`, Rumpf auf
+  `BlockAll`: es steht, faellt nicht, wird nicht besessen. Ein eigener Actor statt eines
+  "geparkten" Spielerhelis, weil dieser Schwerkraft, Rotordrehzahl und Eingabe mitbringt.
+
+**Massstab, Mastachse und Nabenhoehen des alten Modells sind MESSUNGEN** (Modell 100,7 cm
+lang -> Faktor 14,5 auf 14,6 m; Mast bei (1|-5) im Rumpf; Rotornabe im Rotormesh bei
+(0|33); Naben 345/300 cm). Ohne die beiden Gedaechtnis-Offsets kreisen die Rotoren neben
+dem Mast. Die Unterkante der Geometrie ist der RUMPFBODEN (Bounds z 0..17,1 cm) - der
+Actor-Ursprung darf also auf die Aufstandsflaeche, der Boden-Trace kommt mit +5 cm aus.
+Nicht "vorsichtshalber" noch tiefer setzen.
+
+**Standabstand kommt aus der Geometrie, nicht aus einer festen Zahl:**
+`ComputeHelicopterStandDistanceCm` = max(halbe Rotordurchmesser + 5 m, halbe Rumpflaengen
++ 2 m, 8 m). Aktuell gemessen: Scheiben 13,7 m (Ka-52) / 12,6 m (alt), Rumpfe 14,06 / 14,6 m
+-> 18,15 m. Die Rotorbedingung ist die scharfe: die Scheiben liegen nur ~30 cm uebereinander
+(Ka-52 unten 3,77 m gegen das alte Modell oben 3,45 m), ein zu kleiner Abstand zeigt
+ineinander stechende Rotoren; die Laengenbedingung greift nur, wenn die Netze fehlen.
+**Gemessen wird vom SPIELERHELI aus**, nicht vom Auto: der erste Entwurf setzte 12 m + Abstand
+vor das Auto und rueckte den Alt-Heli damit um den Seitenversatz des Helis (6 m) aus der
+Flucht - die beiden standen schraeg zueinander, und der Abstand war die Diagonale darueber.
+
+**Beleg:** `shot_heli_paar.cmd [Karte] [Shot s] [Quit s] [Pose-Schalter...]` faehrt die
+neueste Karte mit `-WbZuFuss=4` (Kamera auf Augenhoehe, sonst verdeckt die Fahrzeughoehe die
+Kufen) und legt `Saved/Diagnose/Messstelle00000.png` ab. Im Bild ist die gruen-schwarze
+Maschine mit den ZWEI uebereinanderliegenden Rotoren der Spielerheli (Ka-52-PBR), der
+blaugraue mit Heckrotor das Standstueck - nicht vertauschen. Die Zahlen stehen in
+`Saved/Logs/WiesbadenReal.log`:
+`Helikopter abgesetzt: 12 m neben dem Fahrzeug bei (...)`, danach
+`Alter Helikopter steht 18.2 m vor dem Spielerheli bei (...) - Rotorkreise 13.7 / 12.6 m, Rumpf 14.6 m`
+(Differenz der beiden Punkte nachrechnen: sie MUSS der Standabstand sein).
+Tests: `WiesbadenReal.Vehicles.LegacyHelicopterModell` und `.HeliStandAbstand`
+(`Tools/run_automation_test.cmd WiesbadenReal.Vehicles <Logname>`).
+
+**Achtung Hangar-Tor:** der Ka-52 ist standardmaessig nur mit gekauftem Heli-Hangar
+einsteigbar (`FWiesbadenStore::MayEnterHelicopter`); ein automatischer Lauf, der einsteigen
+will, muss das DEBUG-Makro `WbDev_AllowHelicopterWithoutHangar` definieren.
+
+### Werkzeug-Fallen, die dabei Zeit gekostet haben
+- In einer .cmd ist `%10` NICHT das zehnte Argument, sondern `%1` gefolgt von einer Null:
+  `set REST=%4 %5 ... %10` schob den Kartennamen ein zweites Mal in die Zeile, sichtbar als
+  `WiesbadenCity_Alkis150` in `LogCsvProfiler: Metadata set : commandline=`. Zusatzschalter
+  in einer `shift`-Schleife einsammeln.
+- Aus Bash heraus findet `cmd //c "script.cmd"` eine Datei im AKTUELLEN Verzeichnis nicht
+  ("... ist entweder falsch geschrieben oder konnte nicht gefunden werden"). `.\script.cmd`
+  schreiben oder einen Pfad mit Verzeichnisanteil nehmen (`Tools\x.cmd`).
+- `Tools\run_automation_test.cmd` kann SOFORT abbrechen mit "Der Prozess kann nicht auf die
+  Datei zugreifen, da sie von einem anderen Prozess verwendet wird" - ohne Log, ohne .out,
+  auch mit frischem Lognamen, und obwohl kein Unreal-Prozess mehr laeuft (ein Handle auf die
+  ABSLOG-/Umleitungsdatei ist offenbar noch nicht freigegeben). Es sieht aus, als haette der
+  Test nicht gelaufen: die mtime des Logs gegen die Uhrzeit pruefen, statt dem fehlenden
+  Fehlerbericht zu glauben. Verlaesslicher Ausweg: die Engine DIREKT aus Bash starten -
+  `("/c/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" <uproject>
+  -ExecCmds="Automation RunTests <Filter>; Quit" -unattended -nop4 -nullrhi -NoSound
+  -ABSLOG=<absoluter Logpfad> > <out> 2>&1 &)` - das lief in derselben Lage sofort.
+- `LogWbVehicles`/`LogWbStreaming` gehen NICHT in die `-stdout`-Umleitung der Shot-.cmd,
+  sondern nach `Saved/Logs/WiesbadenReal.log`.
+
+## Zwei Buslinien im Dauerbetrieb: feste Wagen-Nummern, 10 min Wende, Plattformen sind kein Fahrweg (17.09.2026)
+
+Gemeldet war: "busse sollen feste id_s haben und durchgehen ihre strecken fahren,
+mit kurzer pause an den beiden endpunkten von 10min. wenn die strecke nach mainz
+noch teilweise fehlt dann baue sie. ausserdem linie 3 hinzufuegen."
+
+- **Feste Wagen-Nummern sind jetzt ueber beide Linien eindeutig.** `BuildFleet` vergab
+  je Linie 1..N - Linie 6 und Linie 3 hatten damit beide einen "Wagen 2", und beide
+  schreiben in DASSELBE Log. `AWiesbadenBusRoute::FirstVehicleNumber()` setzt das
+  Hundertfache der Liniennummer davor: Linie 6 -> **601..606**, Linie 3 -> **301..303**
+  (`FServiceConfig::FirstVehicleId`). Die Zuordnung Slot k <-> Wagen Fleet[k] bleibt
+  unveraendert: derselbe Bus bleibt derselbe, Wendezeit inklusive.
+- **Wendezeit kommt aus der LINIENDATEI** (`terminus_dwell_seconds`, 600 s): Linie 3
+  braucht dafuer KEINEN Eintrag in `WiesbadenGameMode.cpp` ausser der Datei selbst -
+  Takt (`headway_seconds` aus dem OSM-`interval`), Wendezeit und Zielschilder stehen
+  in `Data/Raw/Bus/line<ref>.json`, der GameMode listet nur, WELCHE Linien fahren.
+  Gemessen im Lauf: Linie 6 Umlauf 104 min / 17 min Abstand -> 6 Wagen, Linie 3
+  Umlauf 61 min / 20 min Abstand -> 3 Wagen, beide "Wendezeit 10 min je Ende".
+- **Der Pool ist im Dauerbetrieb GENAU die Flotte.** Die Eigenschaft `NumBuses=12`
+  liess vorher 12 Bus-Meshes bauen, von denen nur 6 fuhren (der Rest wurde jeden Tick
+  `HideBusSlot`). Jetzt `N = Fleet.Num()`, nur `-WbBusCount=<n>` hebt den Pool bewusst an.
+- **Plattformen sind MITGLIEDER der OSM-Busrelation, aber kein Fahrweg.** `Tools/build_bus_line.py`
+  nahm alle Way-Mitglieder: die geschlossene `highway=platform`-Flaeche "Hauptbahnhof West /
+  Mainzer Taubertsbergbad" wurde damit als Schleife IN die Strecke gespleisst (rund 20 Punkte,
+  Linie 6 fuhr am Mainzer Hauptbahnhof um den Steg) und "Landtag" als 25-m-Querung ueber den
+  Steig; die Strecke war dadurch 290 m zu lang. Jetzt werden Mitglieder mit Rolle `platform`
+  bzw. `highway/public_transport/railway=platform` uebersprungen und im Bericht als
+  "Steig-/Bahnsteigflaechen sind kein Fahrweg" ausgewiesen. Ergebnis: **294/294 Wege der
+  Relation verbaut, 19,58 km, 40 Halte, 0 Luecken** - die Strecke nach Mainz fehlt NICHT,
+  der "nicht angeschlossene Weg" im alten Bericht war genau diese Plattform.
+- **Doppelte Knoten werden entfernt.** Zwei aufeinanderfolgende OSM-Wege enden und beginnen
+  am selben Knoten - das sind 293 Stellen bei Linie 6 und 148 bei Linie 3. Ungefiltert stehen
+  dort Nulllaengen-Segmente in `WorldPath`/`ArcCm` (Richtung unbestimmt, Bogenlaenge steht
+  still). `SamplePolyline` faengt das mit `Max(SegLen, 1.0)` ab, aber die Linie selbst soll
+  keine Nullsegmente fuehren: entdoppelt wird auf der gerundeten Koordinate (7 Stellen).
+- **Beleg, nicht Behauptung:** `-WbBusLog` schreibt alle 2 s je Linie "Linie <ref>: Dienstzeit
+  ..., n Wagen im Umlauf (Umlaufminuten)" und je Wagen "Bus k: X= Y= Z= Bogen <m> VERWEILT|
+  faehrt SICHTBAR" - daran ist das Durchfahren UND die Wendezeit ablesbar (ein Wagen an
+  Bogen 0 m mit Zustand VERWEILT ist die laufende Wendezeit am Startpunkt). `shot_buslinien.cmd`
+  faehrt zusaetzlich eine Posenserie ab (`Saved/Diagnose/poses_buslinien/linien.txt`,
+  Format Hoehe_m, AtX_cm, AtY_cm, Yaw, Pitch) und legt `Saved/Diagnose/WbSeries_000..003.png`
+  ab: Nordfriedhof (Start beider Linien), Welfenstrasse (gemeinsamer Korridor), Kastel/
+  Brueckenkopf, Endstation Wildpark. Die Strassen existieren bis Mainz-Gonsenheim (Bild 4
+  zeigt Fahrbahn, Laternen, Gehwege) - dort ist nur die Bebauung duenn.
+- **Posendatei-Koordinaten kommen aus dem Log**, nicht aus der Bogenlaenge: die Halte-Zeilen
+  "Bus-Halte n: Bogen <m> -> Welt X= <cm> Y= <cm>" stehen mit `-WbBusLog` in
+  `Saved/Logs/WiesbadenReal.log`.
+
+### Bildkontrolle im Preview-Tab: EIN Server, Verzeichnis als Argument
+Es gibt genau einen statischen Server im Umfeld - `Audioaufzeichnungen/_analyse/range_server.py`,
+mit Range-Unterstuetzung (die stdlib `python -m http.server` ignoriert
+Range-Header auf Python 3.14: immer 200 mit ganzer Datei, Chrome springt beim Suchen still
+auf 0 zurueck). Er nimmt jetzt ein Verzeichnis:
+
+    python _analyse/range_server.py [DIR] [PORT]      # DIR default Audioaufzeichnungen
+    python _analyse/range_server.py 8791              # alte Form: nur Port (unveraendert)
+    python _analyse/range_server.py ../WiesbadenReal/Saved/Diagnose 8791
+
+Ein blosses Zahlargument bleibt der Port, und die erste Zeile im Log nennt den absoluten
+Pfad - ein 404 ist damit als "falscher Ordner" erkennbar, nicht als Serverfehler. Die
+frueher hier liegende Kopie `Tools/serve_dir.py` ist GELOESCHT (zwei Server mit derselben
+Range-Logik hiessen zwei Stellen fuer jeden Fix). Ein Vorschau-Register mit `htmlPath`
+rendert ausserdem NUR die HTML-Datei: Nachbar-Bilder im selben Ordner bleiben kaputt (leere
+Bildrahmen) - man braucht den laufenden Server (`url` + `pid`, pid aus `netstat -ano | grep
+:8791`). 15-MB-HighRes-PNGs vorher auf ~1800 px verkleinern, sonst bleibt der Preview-Tab
+schwarz ("produced no frames").
+
+### Bash/cwd-Falle, die diesmal Zeit gekostet hat
+`MSYS2_ARG_CONV_EXCL='*' cmd //c ".\script.cmd"` startet eine INTERAKTIVE cmd (kein Lauf):
+die Variable schaltet genau die Umschreibung ab, die `//c` zu `/c` macht. Richtig ist
+`cmd //c ".\script.cmd"` OHNE die Variable. Und umgekehrt: die Engine-Zeile direkt aus Bash
+BRAUCHT `MSYS2_ARG_CONV_EXCL='*'`, sonst wird `/Game/Maps/<Karte>` zu
+`C:/Program Files/Git/Game/Maps/<Karte>` und der Lauf endet nach 2 s ohne Karte
+(im Log sichtbar als `LogInit: Command Line:` mit dem Git-Pfad).
+
+## Gebackene Karte: KEINE Fahrbahn-Kollision - Boden kommt aus dem Strassennetz
+- Der vertikale Boden-Trace traf in JEDER Probe beider Buslinien (132/132) nur das
+  `Landscape`, nie einen Fahrbahn-Mesh. Die `RoadCollisionStaticMesh`-Komponenten STEHEN
+  aber in den Chunk-Paketen (2010 Pakete von Alkis15) und die Meshes liegen als
+  `Content/Generated/Chunks/SM_RoadCol_*` (1985 Stueck, 17.09. 13:59) auf der Platte -
+  der Treffer fehlt also trotzdem. `LogWbStreaming: Hoehen-Stapel: Gelaende bei Z = ...`
+  (0,5 Hz, Spielerposition) zeigt denselben Befund: auch der SPIELER steht auf dem
+  Gelaende, das laut Baubuch unter dem Belag liegt (Fahrbahnversatz 30 cm, Einebnung
+  nochmals 45 cm; die Gebaeude-Diagnose nennt es "Fahrzeug-Band Boden+35..185 cm").
+- Messung je 25 m Fahrtweg: `-WbBusGroundAudit` schreibt
+  `Saved\Diagnose\bus_ground_audit_line<ref>.txt` (getroffene Flaeche + Name, was darunter
+  liegt, und den Abstand zur naechsten SPUR des Strassennetzes). Ergebnis Linie 6:
+  Unterkante im Mittel 37 cm UNTER der Fahrbahn, an der Rheinbruecke 5,65 m (dort ist der
+  Boden unter der Bruecke das Flussbett). JE LINIE eine eigene Datei - sonst ueberschreibt
+  der zweite Bus-Actor die erste Messung.
+- Fix im Bus-Actor: `BuildLaneIndex()`/`RoadSurfaceZ()` - aus `AWiesbadenWorldBuilder::
+  RoadNetwork.Lanes` (nicht-transiente UPROPERTY der gebackenen Karte, `TActorIterator`;
+  `FindBakedCityBuilder()` ist PRIVATE!) ein 200-m-Zellen-Gitter ueber alle Spur-
+  stuetzpunkte, Spurhoehe entlang des Segments interpoliert, Spur innerhalb 9 m gewinnt
+  gegen den Trace. Dieselbe Sollbahn faehrt die Verkehrs-Simulation - Bus und Auto stehen
+  damit gleich hoch. `RoadSurfaceOffsetCm = 20` im Generator, real war der Abstand groesser
+  (Einebnung) - deshalb NICHT mit einer Konstante rechnen, sondern das Netz fragen.
+- NACHTRAG (Beleglauf ueber die GANZE Linie, 1111 Proben, Bogen 14..19570 m): die
+  Fahrbahn-Kollision IST wirksam - aber nur, solange ihr Chunk gestreamt ist. 99 Proben
+  trafen `RoadCollisionStaticMesh` (Spielernaehe), 1012 Proben nur das `Landscape`. Das
+  Landscape ist EIN Actor und deshalb immer geladen, die Chunk-Pakete der Stadt nicht -
+  entfernte Busse stehen ohne Chunk da. Darum darf man den Trace NIE als Fahrbahn lesen.
+  Wo beides da war, stimmt das Strassennetz mit dem sichtbaren Belag ueberein: Abstand
+  Belag <-> Spur im Mittel 1 cm, max 32 cm (99 Proben) - die Spurhoehe ist also die
+  Fahrbahnoberkante, nicht eine Naeherung.
+- Gemessen ueber die ganze Linie 6: Unterkante vorher im Mittel 52 cm UNTER der Fahrbahn,
+  min 598 cm (Rheinbruecke, dort ist der Boden unter dem Deck das Flussbett), max +58 cm.
+  Nach dem Fix: 1111 von 1111 Proben auf dem Strassennetz aufgesetzt.
+- Dasselbe gilt fuer die Posen-Kamera: sie ankert ihre Hoehe am BODENTRACE, an der
+  Rheinbruecke also 5,65 m unter dem Deck (Posenhoehe entsprechend gross).
+
+## Kompletter Umlauf als Beleg: 2-s-Protokoll eines Wagens, Spielzeit laeuft 1:1
+- `-WbBusLogWagon=<Wagennummer>` (z. B. 601) protokolliert GENAU diesen Wagen alle 2 s:
+  `Umlauf Wagen 601 (6): t=973 s Bogen 8447.7 von 19588.3 m | Unterkante 20.77 m |
+  Grundlage Fahrbahn aus dem Strassennetz (Gelaende-Trace 20.67 m, Abweichung -10 cm) |
+  faehrt | Richtung hin | Mitfahrt nein` - Bogenlaenge, Bodenhoehe (BEIDE Bezuege),
+  Zustand samt Wendezeit (`VERWEILT noch n s von 600 s`, an den Enden zusaetzlich
+  `(Endpunkt fern)`/`(Endpunkt Start)`), Richtung und Mitfahrt in EINER Zeile. Eigener
+  2-s-Takt, damit `-WbBusLogWagon` ohne `-WbBusLog` reicht.
+- Der Umlauf der Linie 6 dauert **6215 s** (beide Richtungen + 2x 600 s Wende) - ein
+  kompletter Umlauf braucht also ~104 min LAUFZEIT. Die Spielzeit laeuft dabei 1:1 zur
+  Wanduhr (gemessen: t=2 s um 17:18:50, t=973 s um 17:35:01) - es gibt keine Beschleunigung,
+  also `-WbQuitAfter` entsprechend gross setzen (6500) und abwarten.
+- Slot 0 startet an der ersten HALTESTELLE (Bogen 2592 m), nicht am Endpunkt: die Flotte
+  ist ueber den Umlauf gestaffelt. Ein Umlauf eines Wagens ist deshalb erst nach der
+  vollen Umlaufzeit wieder an derselben Stelle - und die Wendezeit am Startende (Bogen 0)
+  laeuft MITTEN in diesem Fenster ab, nicht am Anfang.
+- `Tools\run_bus_umlauf.cmd [Karte] [QuitAfter]` ist der Beleglauf dafuer: Protokoll +
+  Kurzzeilen aller Wagen + Boden-Audit + Mitfahrt (`-WbBusRide=900 -WbBusRideExit=1300`)
+  + Bild aus dem fahrenden Bus (`-WbShot=1000`).
+- Mitfahrt belegt das FAHREN nicht ueber den Zustand, sondern ueber die Augenkoordinaten:
+  wechseln sie zwischen zwei `Mitfahrt Linie <ref> Wagen <nr>`-Zeilen, sitzt der Fahrgast
+  in einem fahrenden Bus (an der Wendezeit stehen sie still).
+
+## Ferne Wendezeit belegen: Dienstuhr verschieben statt 100 Minuten warten
+- `-WbBusClock=<Sekunden>` addiert einen Versatz auf `ServiceSeconds`. Mit 2500 steht
+  Wagen 601 die ganze Aufnahme ueber am ZWEITEN Endpunkt (Linie 6: Bogen 19588 m, Halt 39
+  Mainz-Gonsenheim Wildpark) - sonst sieht man nur die Wendezeit am Startende.
+- `FBusState` traegt `DwellRemainingSeconds` UND `DwellTotalSeconds`. Erst damit ist eine
+  Probe MITTEN in der Wendezeit beweisfaehig: `VERWEILT noch 267 s von 600 s (Endpunkt)`.
+  Die Logzeile nennt jetzt `Linie <ref> Wagen <nummer>` statt des Pool-Slots - bei zwei
+  Linien im selben Log war "Bus 2" nicht mehr zuordenbar (Wagen 302 oder 602?).
+- `-WbBusRideExit=<Sekunden>` steigt nach so vielen Sekunden Mitfahrt von selbst wieder
+  aus (ohne das laesst sich der Ausstieg in einem automatischen Lauf nicht belegen) und
+  protokolliert, dass Figur sichtbar und Innenraum ausgeblendet zurueckkommen.
+
+## Liniendaten und Zielfilme muessen GETRACKT werden
+- `.gitignore` schliesst `Data/Raw/` aus; `line6.json` war per `git add -f` ausgenommen,
+  `line3.json`/`announce_line3.json`/`announce_line6.json` und die sechs
+  `Content/Vehicles/Bus/Blind/*L3*`-Assets fehlten komplett - nach einem frischen Checkout
+  gab es Linie 3 also nicht (und die Ansagen von Linie 6 auch nicht).
+- REGEL statt `-f`: ein ausgeschlossenes ELTERNVERZEICHNIS laesst sich nicht wieder
+  einschliessen. Darum in `.gitignore` `Data/Raw/*` (nicht `Data/Raw/`) + `!Data/Raw/Bus/`
+  + `Data/Raw/Bus/*` + `!Data/Raw/Bus/*.json`. Kontrolle: `git check-ignore -v
+  Data/Raw/Bus/line3.json` muss LEER bleiben, `Data/Raw/Bus/bus.glb` muss die Regel nennen.
+- Ohne `line3_schedule.json` ist Linie 3 im Fahrplan-Modus (`-WbBusSchedule`) leer; der
+  GameMode setzt fuer sie bewusst `ScheduleFile = ""`. Fuer einen echten Linie-3-Fahrplan
+  fehlen die Soll-Abfahrtszeiten.
+
+## Welt-Hoehenbezug (gegen den "Mainz ist 60 m zu tief"-Verdacht)
+- UE-Z = DEM - **75 m** (`VerticalReferenceMeters = 75`, `Config/DefaultGame.ini` laedt
+  `Data/Raw/DEM/N50E008.hgt`). Gegen die SRTM-Kachel geprueft: 350 Proben noerdlich 50 N
+  liegen im Median 0,1 m (max 0,5 m) daneben - das Gelaende FOLGT der Kachel exakt.
+  "Mainz hat nur 20-54 m" ist also der Bezug, kein Fehler.
+- ABER: das Gebiet suedlich 50 Grad Nord ist der GEKLEMMTE Suedrand von N50E008
+  (`SampleBilinearGeo` klemmt U/V auf das Raster). 44 Proben dort treffen die geklemmte
+  Kante auf 0,0 m genau, waehrend die echte `N49E008.hgt` 6-20 m hoeher liegt. Wer
+  Mainz-Gonsenheim genau haben will, muss die zweite Kachel anbinden und neu backen -
+  fuer die Busse ist es ohne Belang (Gelaende UND Strassen kommen aus derselben Quelle).
+
+### Fahrbahnhoehe der Busse: Spurwahl im Fehlermass, NICHT im Grundriss
+- `RoadSurfaceZ` nahm die Spur mit dem kleinsten Abstand IM GRUNDRISS. An Knoten liegen
+  Spuren bis 9 m daneben auf ganz anderem Niveau (Rampe, Bruecke, Parallelfahrbahn):
+  das Boden-Audit mass `Abstand Unterkante<->Fahrbahn max 4014 cm` und `Belag<->Spur
+  max 528 cm` - der Bus stand dort bis 40 m neben der Fahrbahn. Sichtbar war das nur
+  im 25-m-Probenraster der Slots, nicht im 2-s-Protokoll des einen beobachteten Wagens
+  (dessen max war 82 cm) - wer eine Abweichung sucht, darf nicht nur EINE Quelle lesen.
+- Jetzt entscheidet der GESAMTABSTAND `D2 + (SpurZ - Boden-Trace)^2`, und eine Spur mit
+  mehr als `MaxLaneDeviationCm = 1000` cm Abweichung wird verworfen (dann steht der Bus
+  auf dem Gelaende-Trace, ~40 cm daneben statt 40 m). Bruecken bleiben richtig: das
+  Rheinbrueckendeck liegt 6,1 m ueber dem Ufer, also unter der Schwelle.
+- Das Audit schreibt die fuenf schlimmsten Stellen mit Bogenlaenge, Weltkoordinaten,
+  Wagennummer sowie Boden- UND Spurhoehe heraus (`NoteDeviation`) - Summenwerte allein
+  nennen keine Stelle, und ohne Stelle ist nicht entscheidbar, ob die Spur oder der
+  Boden falsch war. Nach dem Fix: max 72 cm (Linie 6) / 25 cm (Linie 3) neben der
+  Fahrbahn, 0 Proben ohne brauchbare Spur, schlimmster Wert -612 cm = Rheinbruecke.
+
+### Spiel-Fensterlauf vs. kopfloser Lauf (Messlaeufe)
+- Ein `-game`-Fenster im HINTERGRUND wird gedrosselt: gemessen 56 s Spielzeit in 9 min
+  Wanduhr (10x zu langsam); zwei Fensterlaeufe endeten ausserdem nach ~1 min mit
+  `FPlatformMisc::RequestExit(..., UGameEngine::Tick.ViewportClosed)`. Fuer Messungen
+  daher `Tools\run_bus_audit.cmd [Karte] [Spielsekunden] [Log]` (`-game -nullrhi
+  -NoSound`, kein Fenster): ~87 % Geschwindigkeit, Traces/Streaming unveraendert.
+- Start aus bash: `powershell -NoProfile -Command 'Start-Process -FilePath cmd.exe
+  -ArgumentList "/c <cmd-Datei> <args>" -WindowStyle Hidden'` - ein `(cmd //c ... &)`
+  erzeugte Laeufe, die der Fensterschliesser nach ~1 min beendete.
+
+### Beleglauf-Werkzeuge (Fahrbahn, Wendezeit, Mitfahrt)
+- `Tools\run_bus_ground.cmd [Karte] [QuitAfter]` - Audit ueber die ganze Linie +
+  Dienstuhrversatz (`-WbBusGroundAudit -WbBusLog -WbBusClock=2500`).
+- `Tools\run_bus_fahrbahn.cmd` - dasselbe plus vier Nahaufnahmen am fernen Endpunkt
+  (`Saved\Diagnose\poses_busfahrbahn\fahrbahn.txt`). ACHTUNG: die Posen-Serie beendet den
+  Lauf kurz nach den Bildern - fuer ein Audit mit vielen Proben OHNE Posen fahren.
+- `Tools\run_bus_haltestelle.cmd <Halt>` - parkt je einen Wagen beider Richtungen an
+  Halt N (`-WbBusParkStop=N`, Halt 7 = Stadtstrasse, Halt 20 = Rheinbrueckenkopf) und
+  nimmt Bilder auf: der Beleg "Räder auf dem Belag".
+- `Tools\run_bus_umlauf.cmd [Wagen] [Karte] [Spielsekunden]` - Umlauf-Protokoll
+  EINES Wagens im 2-s-Takt (`-WbBusLogWagon=<Nr>`, z. B. 601). Ein voller Umlauf
+  Linie 6 dauert 104 min; `-WbBusQuitAfter=7000` genuegt fuer Rueckkehr UND
+  Wendezeit am Startende. Der Takt ist Spielzeit = Wanduhr (kopflos ~1:1).
+- `Tools\run_bus_mitfahrt_wagen.cmd [Wagen] ...` - Mitfahrt auf einem BESTIMMTEN
+  Wagen (`-WbBusRideWagon=<Nr>`): ohne diese Nummer nimmt die Dev-Mitfahrt den
+  ersten HALTENDEN Bus, also einen beliebigen Wagen - ein Beleg "auf Wagen 601"
+  war damit Glueckssache.
+- `Tools\umlauf_beleg.py <Wagen> <Log> <Linie>` zieht den Beleg aus dem Log:
+  Probentakt, Wendezeiten mit erster/mittlerer/letzter Zeile, Hoehen je Abschnitt
+  (Grenze Wiesbaden/Mainz aus der Haltestelle 'Landtag' der Liniendatei, NICHT aus
+  einer Skriptzahl - 'Kasteler Strasse' gibt es auch in Wiesbaden), Orte der
+  groessten Abweichungen. Ergebnis `Saved\Diagnose\beleg_umlauf.txt`.
+
+### Liniendatei: genau EIN Leser fuer Bus und Haltestellenmonitor
+- `World/WiesbadenBusLineFile.{h,cpp}` ist der einzige Leser von `Data/Raw/Bus/line<ref>.json`
+  und `line<ref>_schedule.json`. `ReadLine`/`ReadSchedule` liefern Bus-Actor UND
+  Haltestellenmonitor DASSELBE Objekt (gleiche Adresse, nur lesen) statt je einer eigenen Kopie:
+  vorher lagen in beiden Actors je ein LoadLine/LoadSchedule/BuildWorldPath (~320 Zeilen fast
+  gleicher Code) - eine Aenderung musste an zwei Stellen nachgezogen werden, sonst zeigt der
+  Monitor andere Zeiten an, als die Busse fahren.
+- Cache-Schluessel = Dateiname + Aenderungszeit + Origin: im Editor geaenderte Datei wird neu
+  gelesen, unveraenderte nicht. Beleg im Lauf (Log-Kategorie `LogWbBusLineFile`): "Liniendatei
+  line6.json gelesen" steht GENAU EINMAL fuer die ganze Welt, danach "Linie 6: Route 19.59 km, 40
+  Halte auf der Linie (Bogen 0..19588 m)" - dieselben Zahlen, die der Bus-Actor meldet.
+- Rollen bleiben getrennt: `WiesbadenBusLine` rechnet datenrein (Zeit->Bogenlaenge), der Leser macht
+  Datei + Geo->Welt, die Actors setzen nur noch um, was sie brauchen (Bus: Liniennummer, Takt,
+  Wendezeit, Zielschilder; Monitor: Liniennummer, Ziel, Takt, Wendezeit, `monitor_stops`).
+- Test `WiesbadenReal.Traffic.BusLineFile` prueft die ECHTEN Dateien: projizierte Laenge gegen den
+  eigenen Pfad nachgerechnet (<1 %), Halte-Bogenlaengen aufsteigend und auf der Linie, Achslage
+  (Sueden = +Y, Osten = +X), Cache-Identitaet (zweiter Aufruf = dasselbe Objekt) und fehlende
+  Datei ohne Absturz. Bewusst OHNE festgeschriebene Haltezahl - die Linie waechst mit OSM.
+
+### Fahrbahnhöhe: Spur schlaegt Trace, Bruecken sind die grossen Abweichungen
+- Im 2-s-Protokoll steht in JEDER Probe beider Linien "Grundlage Fahrbahn aus dem
+  Strassennetz" - der Gelaende-Trace ist nur noch Rueckfall. Die grossen
+  Abweichungen sind deshalb kein Platzierungsfehler, sondern Bruecken: Linie 6
+  Bogen 12,17-12,73 km = Rheinbruecke (Trace trifft 5,7-6,0 m unter dem Deck das
+  Wasser, +529 cm an der Rampe, deren Deck ueber der Strasse liegt) und
+  Bogen 14,14 km = hoeher liegende Mainzer Strecke. Median der Abweichung -17 cm,
+  nur 39 von 1837 Proben weiter als 2 m - alle in diesem Brueckenband.
+- Die Fahrbahn-Kollision der Stadt ist im kopflosen Lauf nur auf ~8 % (Linie 6)
+  bzw. ~19 % (Linie 3) der Proben ueberhaupt gestreamt: der Rest trifft das
+  Landscape UNTER dem Belag. Wo sie da ist, stimmen Belag und Spur auf 1-23 cm
+  (Mittel 1 cm) - die Zahl der Treffer misst das Streaming, nicht den Einbau.
+
+### Bus-Innenraum: Texturen je Flaechenart, UVs in Kachelweite
+- "Im Bus sind keine Texturen" war KEIN Renderfehler: der Innenraum war nur
+  vertexgefaerbt, die UVs je Flaeche fest (0,0)-(1,1). Jetzt traegt jeder Kasten eine
+  Flaechenart (`WiesbadenBusInterior::ETile`: Boden/Sitz/Wand/Decke/Technik), je Art
+  gibt es eine kachelnde 512er-Textur (`Tools/make_bus_interior_textures.py` ->
+  `Content/Vehicles/Bus/Interior/Source`) und ein Material Textur x Vertexfarbe
+  (`Tools/import_bus_interior.py`, Basiscolor gegen `MaterialExpressionMultiply`
+  gegengeprueft, `ok=5/5`). Die FARBE bleibt die Vertexfarbe, die Textur ist GRAU -
+  sonst braeuchte jede Farbe (ESWE-Gelb der Stangen, blauer Stoff) eine eigene Textur.
+- Ein `FSurface` haelt Farbe UND Flaechenart in einer Zeile; das Mesh wird je Art in
+  einen eigenen Abschnitt gelegt (`BuildSection`), Abschnittsnummer = `(int32)ETile` =
+  Materialindex. `BuildMesh` gibt es nicht mehr.
+- UVs = absolute Wagenkoordinate / `TexCmPerTile()` (200 cm), NICHT kastenrelativ:
+  benachbarte Kaesten derselben Wand liegen damit im selben Raster und stossen nicht
+  versetzt an. Muster, die das kacheln, brauchen Rasterweiten, die 512 ganzzahlig
+  teilen (Fugen 128/256 px, Punkte 16 px, Wellen mit ganzzahliger Frequenz).
+- `UTexture2D::GetSizeX()` liefert 0, solange die Textur nicht aufgebaut ist - im
+  Laufzeit-Log `GetImportedSize()` nehmen. Die Zeile "(0x0)" sah wie ein kaputtes
+  Asset aus, war aber nur zu frueh gemessen. Belegzeile jetzt:
+  `Bus-Innenraum: 51 Kaesten, 1224 Ecken in 5 Abschnitten; ... ok T_WbBusIntBoden(512x512, UV -2.05..2.05/-0.64..0.64) ...`
+  (UV 2,05 = 410 cm von der Wagenmitte = halbe Wagenlaenge, also echte Kacheln).
+### Haltestellen-Saeulen: zwei je Halte, und Richtungen mischen sich
+- "Es fehlen Anzeigetafeln auf der gegenueberliegenden Haltestelle" war kein fehlendes
+  Asset: `monitor_stops` hat fuenf Halte, und je Halte stand EINE Saeule - auf der
+  Bordsteinkante der HINFAHRT. Jetzt baut `BuildMonitorsForSide(bForward,...)` je Halte
+  zwei (Seite = `bForward ? RightDir : -RightDir`, Panel blickt zur Strasse), und jede
+  nennt Zieltext UND Durchfahrtszeit IHRER Richtung: `SecondsToStopOnLeg(...)` =
+  Hinfahrtszeit, bzw. Hinfahrt + Wendezeit + Rueckfahrt (`WiesbadenBusLine.cpp`,
+  dieselbe Phasenfolge wie `BuildPhases`). Die Gegenrichtung braucht den zweiten
+  Endpunkt: das Feld `from` liegt jetzt als `FLineFile.Origin` im Leser.
+- Belegzeile je Saeule (kopfloser Lauf, `Tools/run_bus_interior_proof.cmd`):
+  `Saeule Hinfahrt an Halt 1 'Wolkenbruch' auf (-118138, -123791) - Durchfahrt Ziel
+  Mainz Gonsenheim Wildpark nach 53 s` und `Saeule Gegenrichtung ... auf (-117711,
+  -124651) - Ziel Wiesbaden Nordfriedhof nach 5554 s` (9,6 m Abstand = beide
+  Strassenseiten, verschiedene Zeiten).
+- FALLE beim Pruefen der Fahrtrichtung: die Zeile `Umlauf Wagen <id> (6): ...
+  Richtung hin/zurueck` schreibt NUR der per `-WbBusLogWagon` gewaehlte Wagen - ein
+  Auszaehlen dieser Zeilen je Zeitstempel ergibt deshalb scheinbar "alle fahren
+  gleichzeitig in dieselbe Richtung" (\"0 gemischt\"), obwohl die Flotte
+  (`PhaseSeconds = Cycle/Anzahl`) sauber gemischt faehrt. Richtig ist der Vergleich der
+  `Linie <ref> Wagen <id>: ... Bogen <x> m`-Zeilen ALLER Wagen ueber zwei Zeitpunkte:
+  damit stehen z.B. W601/605/606 auf "hin" und W602/603/604 auf "zurueck".
+- `unreal.log("###MARKER###")` aus einem Import-Skript landet NICHT im per `> log`
+  umgeleiteten cmd-Log, sondern als `LogPython:` in `Saved/Logs/WiesbadenReal.log` -
+  bei der Suche nach Import-Markern dort nachsehen. `LogWbBus`-Zeilen eines
+  `-game -nullrhi`-Laufs ebenso: im stdout-Redirect steht nichts, das Log liegt in
+  `Saved/Logs/WiesbadenReal.log` (Kurzbeleg: `Tools/run_bus_interior_proof.cmd`).
+### Bus-Aussenmaterial: „die Texturen sind weg" hiess: das Elternmaterial war Engines glTF-Default
+- Befund (`Tools/inspect_bus_materials.py`): alle 41 Plaetze von `SM_Bus` sind
+  `MaterialInstanceConstant`s und tragen ihre eigene `BaseColorTexture`, ihr Elternmaterial war
+  aber `/InterchangeAssets/gltf/MaterialInstances/MI_Default_Opaque_DS` aus dem ENGINE-Inhalt -
+  ohne Nanite-Flag. Auf einem Nanite-Mesh ersetzt Unreal so ein Material durch Grau: der Bus
+  rendert texturiert aus der Ferne (Fallback-Mesh) und grau von Nahem, also genau dann, wenn man
+  als Fahrgast an anderen Wagen vorbeischaut. Kein Renderfehler, kein Streaming-Problem.
+- Fix `Tools/fix_bus_materials.cmd` (Skript `fix_bus_materials.py`): Projekt-Master
+  `/Game/Vehicles/Bus/M_WbBusBody` mit `used_with_nanite=True` und den Parameter-Namen, die die
+  Instanzen schon setzen (`BaseColorTexture`/`RoughnessFactor`/`MetallicFactor`), und alle 41
+  Instanzen darauf umhaengen - die Texturen bleiben in den Instanzen.
+- Beleg: `Tools/verify_bus_materials.cmd` -> `Saved/Diagnose/bus_material_check.txt`
+  (41 x `/Game/Vehicles/Bus/M_WbBusBody`, Nanite-Flag True, 41/41 mit BaseColor) und die
+  Laufzeitzeile des Actors `Bus-Aussenmaterial: 41 Plaetze, 41 mit BaseColor-Textur, 0 auf
+  Engine-Inhalt; Basis /Game/Vehicles/Bus/M_WbBusBody`. Beide Zahlen sind die Gegenprobe
+  zueinander: faellt eine Instanz auf Engine-Inhalt zurueck, warnt der Actor im Log.
+- `unreal.log("###...")` aus einem `-run=pythonscript`-Commandlet landet WEDER im per `> log`
+  umgeleiteten cmd-Strom NOCH dauerhaft sonst irgendwo: der Commandlet schreibt nach
+  `Saved/Logs/WiesbadenReal.log`, das der naechste Spiel-Lauf ueberschreibt (`-stdout` hilft
+  nicht). Belege aus Commandlets darum IMMER per `open(...,"w")` in eine eigene Datei unter
+  `Saved/Diagnose/` schreiben - sonst ist der Beleg nach dem naechsten Lauf weg (genau das war
+  bei `wb_fix_bus_materials.log` der Fall: 0 Treffer fuer `###WBBUSFIX###`).
+- `Richtung hin/zurueck` steht jetzt auch in der All-Wagen-Zeile
+  (`Linie <ref> Wagen <id>: ... faehrt | Richtung hin ...`) - ein 2-s-Tick mit `-WbBusLog`
+  belegt damit in EINER Zeile, dass beide Richtungen gleichzeitig befahren werden
+  (W601/605/606 hin, W602/603/604 zurueck), ohne zwei Zeitpunkte vergleichen zu muessen.
+### Material-Usage-Flags: graue Objekte trotz Texturen (Ka52, Nerobergbahn)
+- Dieselbe Ursache wie beim Bus, andere Objekte: `Material /Game/Vehicles/Ka52/M_Ka52PBR missing
+  usage flag Nanite!` (der Hubschrauber rendert grau) und
+  `.../Nerobergbahn/Materials/MI_Nb_NbSchiene missing usage flag InstancedStaticMeshes!`
+  (Schiene/Zahnstange/Seilkanal/Rost/Holz/Schotter stecken in ISM-Komponenten).
+  `Tools/fix_material_flags.cmd` -> `Saved/Diagnose/material_usage_flags.txt` setzt die Flags.
+- Die Warnzeile erscheint NUR im Fenster-Lauf (der kopflose `-nullrhi`-Lauf rendert Ka52 und
+  Nerobergbahn nicht) - die Liste der zu reparierenden Materialien darf also nicht allein aus
+  einem kopflosen Log kommen (`KNOWN`-Liste im Skript).
+- An einer `MaterialInstanceConstant` gibt es das ISM-/Nanite-Feld NICHT
+  (`Failed to find property 'used_with_instanced_static_meshes'`) - das Flag sitzt am
+  BASIsmaterial und wird geerbt; das Skript setzt es darum am `parent`.
+- Ein `-run=pythonscript`-Commandlet ueberschreibt `Saved/Logs/WiesbadenReal.log` schon beim
+  START mit seinem eigenen Log (ein Lauf gegen 00:44 loeschte die Warnzeilen des Spiel-Laufs von
+  00:40, bevor das Skript sie lesen konnte). Gegenmittel: das Spiel-Log vorher wegkopieren
+  (`material_flags_source.log`) UND den Commandlet mit `-ABSLOG=` auf eine eigene Datei legen.

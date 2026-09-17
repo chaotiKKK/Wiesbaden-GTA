@@ -16,7 +16,6 @@ class URegionAssetSpawnerComponent;
 class URoadFurnitureSpawnerComponent;
 class UTrafficVehicleSpawnerComponent;
 class UPedestrianSpawnerComponent;
-class UWiesbadenWeatherFXComponent;
 
 /**
  * Laufzeit-Actor der Stadt: haelt die erzeugte Geometrie als
@@ -263,10 +262,6 @@ private:
 
 	UPROPERTY(Transient)
 	URoadFurnitureSpawnerComponent* FurnitureSpawner = nullptr;
-
-	/** Treibt Niagara-Wetter-Effekte (Regen/Schnee/Nebel/Wolken/Gewitter). */
-	UPROPERTY(Transient)
-	UWiesbadenWeatherFXComponent* WeatherFX = nullptr;
 
 	/** Rendert regionen-abhaengige Assets (Baeume HISM, Ufer/Industrie ISM). */
 	UPROPERTY(Transient)

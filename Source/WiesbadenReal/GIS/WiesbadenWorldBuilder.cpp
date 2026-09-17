@@ -1070,6 +1070,17 @@ void AWiesbadenWorldBuilder::SpawnCityChunks(const FRoadMeshData& RoadMesh, cons
 		ChunkedRegionAssets += ChunkMesh.RegionAssets.Num();
 	}
 
+		// FRUEHERER FEHLER (behoben 2026-09-16): Hier wurden per
+	// UnloadBakedChunkMeshes ALLE Chunk-StaticMesh-Verweise auf nullptr gesetzt,
+	// um Commit-Speicher zu sparen - aber VOR dem Karten-Save. Die Chunk-Actors
+	// wurden damit OHNE Mesh serialisiert; die geladene Karte zeigte 444/444
+	// leere Chunks (keine Strassen/Gebaeude), Chunk am Ursprung mit km-Bounds.
+	// Die Annahme "wird beim Stream-in neu verdrahtet" war falsch - es gibt
+	// keinen solchen Mechanismus. Die Verweise MUESSEN bis zum Save erhalten
+	// bleiben. Der Peak (~85 GiB Commit) passt in das 127-GiB-Limit (vergroesserte
+	// Auslagerungsdatei); das Nullen sparte ohnehin keinen Speicher.
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+
 	UE_LOG(LogWbCore, Log,
 		TEXT("Stadt in %d World-Partition-Zellen aufgeteilt (%.0f m Zellen), ")
 		TEXT("darin %d Regionsobjekte (Baeume/Ufer/Industrie)."),

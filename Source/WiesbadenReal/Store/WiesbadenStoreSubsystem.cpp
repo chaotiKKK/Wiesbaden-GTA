@@ -13,6 +13,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Sound/SoundWaveProcedural.h"
+#include "Audio/WiesbadenAudioSubsystem.h"
 #include "Kismet/GameplayStatics.h"
 
 void UWiesbadenStoreSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -142,6 +143,12 @@ void UWiesbadenStoreSubsystem::PlayUiSound(EWiesbadenUiSound Kind) const
 	Wave->Duration = static_cast<float>(NumSamples) / SampleRate;
 	Wave->bLooping = false;
 	Wave->QueueAudio(reinterpret_cast<const uint8*>(Pcm.GetData()), NumSamples * sizeof(int16));
+
+	// UI-Rueckmeldung in den Bedien-Bus (UI) des Mischpults einordnen, statt
+	// ungeroutet am Mischpult vorbeizuspielen. Am Klang gesetzt (nicht an einer
+	// Komponente), weil PlaySound2D den Einmal-Ton selbst erzeugt und startet.
+	// nullptr, falls die Mix-Assets fehlen -> dann eben ohne Bus (kein Fehler).
+	Wave->SoundClassObject = UWiesbadenAudioSubsystem::LoadBusSoundClass(EWbAudioBus::UI);
 
 	UGameplayStatics::PlaySound2D(World, Wave);
 

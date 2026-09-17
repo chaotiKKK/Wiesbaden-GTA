@@ -72,6 +72,8 @@ void UWiesbadenVehicleCameraComponent::CreateCameraRig()
 	CockpitSocket = NewObject<USceneComponent>(Owner, TEXT("VehicleCockpitSocket"));
 	CockpitSocket->AttachToComponent(CameraAnchor ? CameraAnchor : this, FAttachmentTransformRules::KeepRelativeTransform);
 	CockpitSocket->SetRelativeLocation(CockpitOffset);
+	// Eigene Blickrichtung (z. B. Tiefblick auf die Instrumente im Bahnwagen).
+	CockpitSocket->SetRelativeRotation(FRotator(CockpitPitch, CockpitYaw, 0.0f));
 	CockpitSocket->RegisterComponent();
 
 	CockpitCamera = NewObject<UCameraComponent>(Owner, TEXT("VehicleCockpitCamera"));
@@ -165,6 +167,13 @@ void UWiesbadenVehicleCameraComponent::AddCockpitHiddenMesh(UPrimitiveComponent*
 		// Konstruktor/BeginPlay, ApplyCameraMode kann schon gelaufen sein).
 		Mesh->SetOwnerNoSee(CameraMode == EWiesbadenVehicleCameraMode::Cockpit);
 	}
+}
+
+void UWiesbadenVehicleCameraComponent::RemoveCockpitHiddenMesh(UPrimitiveComponent* Mesh)
+{
+	if (!Mesh) { return; }
+	CockpitHiddenMeshes.Remove(Mesh);
+	Mesh->SetOwnerNoSee(false);
 }
 
 void UWiesbadenVehicleCameraComponent::HandleInput(float DeltaTime)

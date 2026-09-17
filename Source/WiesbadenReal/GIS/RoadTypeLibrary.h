@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GIS/OSMTypes.h"
+#include "GIS/RoadNetworkTypes.h"
 #include "RoadTypeLibrary.generated.h"
 
 /**
@@ -51,6 +52,11 @@ struct WIESBADENREAL_API FRoadTypeDefinition
 	/** True, wenn Mittelstreifen-Markierung gezeichnet wird. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Road")
 	bool bHasCenterLineMarking = true;
+
+	/** True, wenn diese Klasse eine durchgezogene Randlinie (Fahrbahnbegrenzung)
+	 *  erhaelt. Default nur fuer klassifizierte Strassen (Motorway..Tertiary). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Road")
+	bool bHasEdgeLineMarking = false;
 
 	/**
 	 * Vorfahrtsprioritaet. Kleiner = wichtiger. Bei Kreuzungen ohne Ampel
@@ -137,6 +143,21 @@ public:
 	 */
 	void ResolveLaneCounts(const FOSMWay& Way, EOSMHighwayType Type, EOSMOnewayType Oneway,
 		int32& OutForwardLanes, int32& OutBackwardLanes) const;
+
+	/**
+	 * Loest die Pro-Spur-Attribute (Busspur, Radspur, Abbiegepfeile, StVO-
+	 * Grenzstile) aus den Tags eines Ways auf. Ergebnis in LaneIndexFromLeft-
+	 * Reihenfolge (0 = aeusserste Linksspur in Way-Richtung), Groesse =
+	 * ForwardLanes + BackwardLanes.
+	 *
+	 * Fakten (Bus/Rad/Abbiegen) NUR aus OSM - bei fehlenden/unstimmigen Tags
+	 * bleibt es beim Default. Grenzstile als Konvention: Richtungstrennung
+	 * (DirSplit) zwischen Gegen- und Hinrichtung, Sonderspur-Grenze (Solid) an
+	 * Bus-/Radspuren, sonst Leitlinie (Dashed) zwischen Spuren, Randlinie (Edge)
+	 * aussen nur bei Klassen mit bHasEdgeLineMarking. Datenrein, ohne Weltzugriff.
+	 */
+	TArray<FLaneAttributes> ResolveLaneAttributes(const FOSMWay& Way, EOSMHighwayType Type,
+		EOSMOnewayType Oneway, int32 ForwardLanes, int32 BackwardLanes) const;
 
 	/**
 	 * Fahrbahnbreite in Metern.

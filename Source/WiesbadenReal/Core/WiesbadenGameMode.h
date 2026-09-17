@@ -109,6 +109,21 @@ public:
 	static AWiesbadenStoreMerchant* PickMerchantInReach(
 		const TArray<AWiesbadenStoreMerchant*>& Merchants, const FVector& FromLocation);
 
+	/**
+	 * Standabstand zweier gleich ausgerichteter Helikopter in einer Reihe, cm.
+	 * Datenrein und damit ohne Welt pruefbar (WiesbadenReal.Vehicles.HeliStandAbstand):
+	 * die halben Rotordurchmesser plus 5 m Luft, mindestens die halben
+	 * Rumpflaengen plus 2 m Luft.
+	 *
+	 * Beide Bedingungen sind noetig, keine ist Zierde: die Rotorscheiben der
+	 * beiden Maschinen liegen nur rund 30 cm uebereinander (Ka-52 unten 3,77 m
+	 * gegen das alte Modell oben 3,45 m) und wuerden sich bei zu kleinerem
+	 * Abstand durchdringen; stehen die Rumpfspitzen aufeinander zu, entscheidet
+	 * dagegen die Laenge.
+	 */
+	static double ComputeHelicopterStandDistanceCm(
+		double OwnDiscCm, double LegacyDiscCm, double OwnLengthCm, double LegacyLengthCm);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -146,6 +161,21 @@ protected:
 	 * sie im Spiel schlicht nicht vorhanden.
 	 */
 	bool SpawnHelicopterNearStart();
+
+	/**
+	 * Das ALTE Heli-Modell als Standstueck neben den Spielerheli stellen.
+	 *
+	 * Der Spielerheli traegt seit dem Ka-52-Neubau (17.09.2026) das importierte
+	 * Modell; das frueher benutzte Landmarken-Modell steht daneben als Ansicht -
+	 * ohne Fluglogik, damit es nicht faellt und nicht besessen wird.
+	 *
+	 * Aufgestellt wird vom SPIELERHELI aus, nicht vom Auto: nur so stehen beide
+	 * auf derselben Linie in der Strassenflucht, und der Abstand ist genau der
+	 * gerechnete. Der Abstand kommt aus den beiden Rotorkreisen, sie liegen nur
+	 * rund 30 cm uebereinander - ein zu kleiner Abstand zeigte ineinander
+	 * stechende Rotoren.
+	 */
+	bool SpawnLegacyHelicopterNearStart();
 
 	/**
 	 * Wechselt zwischen Fahrzeug und zu Fuss (Taste F).
@@ -206,9 +236,19 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Spieler")
 	bool bSpawnPlayerCar = true;
 
-	/** Helikopter beim Start absetzen. */
+	/**
+	 * Helikopter beim Start absetzen.
+	 *
+	 * Der Spielerheli ist das Ka-52-Modell (AWiesbadenHelicopter, seit dem Neubau
+	 * 17.09.2026); das alte Landmarken-Modell steht daneben als Standstueck
+	 * (AWiesbadenLegacyHelicopter).
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Spieler")
 	bool bSpawnHelicopter = true;
+
+	/** Standstueck (altes Heli-Modell) neben den Spielerheli stellen. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Spieler")
+	bool bSpawnLegacyHelicopter = true;
 
 	/**
 	 * Abstand des Helikopters zum Startpunkt in Metern.
@@ -243,6 +283,10 @@ private:
 	/** Helikopter am Startpunkt. */
 	UPROPERTY(Transient)
 	class AWiesbadenHelicopter* PlayerHelicopter = nullptr;
+
+	/** Standstueck: das alte Heli-Modell neben dem Spielerheli. */
+	UPROPERTY(Transient)
+	class AWiesbadenLegacyHelicopter* LegacyHelicopter = nullptr;
 
 	/** Spielerfigur zu Fuss - entsteht beim ersten Aussteigen. */
 	UPROPERTY(Transient)

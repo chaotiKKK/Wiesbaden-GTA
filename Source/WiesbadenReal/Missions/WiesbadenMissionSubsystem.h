@@ -31,8 +31,15 @@ public:
 	virtual TStatId GetStatId() const override;
 
 	/** Startet die (im Pool vorhandene) Mission mit dieser Id. Fuer skriptbare
-	 *  Ausloeser; die automatische Vergabe laeuft ueber den Dispatcher. */
+	 *  Ausloeser. */
 	bool StartMission(FName MissionId);
+
+	/** Vergibt den naechsten Auftrag aus dem Dispatcher-Pool, WENN gerade keiner
+	 *  aktiv ist. Ausgeloest durch das Gespraech mit dem NPC am Nordfriedhof -
+	 *  ersetzt die frueher automatische Vergabe im Tick. Gibt true zurueck, wenn
+	 *  ein Auftrag begonnen wurde (false, wenn schon einer laeuft oder der Pool
+	 *  leer ist). */
+	bool RequestNextMission();
 
 	/** Aktuelles Ziel oder nullptr (keine aktive Mission). Fuer HUD/Minimap. */
 	const FMissionObjective* GetCurrentObjective() const;

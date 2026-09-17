@@ -8,6 +8,7 @@
 #include "GIS/GeoCoordinateConverter.h"
 #include "GIS/PolygonUtils.h"
 #include "GIS/RoadTypeLibrary.h"
+#include "GIS/WiesbadenRoadMarkings.h"
 
 namespace
 {
@@ -433,6 +434,11 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 		const EOSMSurfaceType Surface = TypeLibrary->ResolveSurface(Way, HighwayType);
 		const FRoadTypeDefinition& TypeDef = TypeLibrary->GetDefinition(HighwayType);
 
+		// Pro-Spur-Attribute (Busspur/Radspur/Abbiegen/Grenzstil) einmal je Way
+		// aufloesen und auf alle Segmente uebertragen (LaneIndexFromLeft-Reihenfolge).
+		const TArray<FLaneAttributes> LaneAttrs =
+			TypeLibrary->ResolveLaneAttributes(Way, HighwayType, Oneway, ForwardLanes, BackwardLanes);
+
 		// Zerlegungspunkte bestimmen: Anfang, Ende und jeder Innenknoten, der
 		// von mindestens zwei Ways benutzt wird.
 		TArray<int32> SplitIndices;
@@ -519,6 +525,7 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 			Segment.SidewalkType = Settings.bGenerateSidewalks ? Sidewalk : EOSMSidewalkType::None;
 			Segment.ForwardLaneCount = ForwardLanes;
 			Segment.BackwardLaneCount = BackwardLanes;
+			Segment.LaneAttributes = LaneAttrs;
 			Segment.CarriagewayWidthCm = CarriagewayWidthM * MetersToCm;
 			Segment.SidewalkWidthCm = TypeDef.SidewalkWidthMeters * MetersToCm;
 			Segment.KerbHeightCm = TypeDef.KerbHeightMeters * MetersToCm;
@@ -1721,12 +1728,11 @@ void URoadNetworkGenerator::BuildLanes(
 		const double LaneWidth = Segment.CarriagewayWidthCm / static_cast<double>(TotalLanes);
 		const double HalfCarriageway = Segment.CarriagewayWidthCm * 0.5;
 
-		// Anmerkung zu turn:lanes: die Abbiegepfeile stehen am Quell-Way und
-		// werden beim Zerlegen nicht auf die Segmente uebertragen. Die
-		// tatsaechlich erlaubten Abbiegebeziehungen ermittelt ConnectLanes
-		// ohnehin aus der Kreuzungsgeometrie; das Tag steuert daher nur die
-		// aufgemalten Pfeile und wird beim Erzeugen der Fahrbahnmarkierungen
-		// ausgewertet, nicht hier.
+		// Pro-Spur-Attribute (turn:lanes, Bus-/Radspur, Grenzstil) sind bereits je
+		// Way aufgeloest und liegen in Segment.LaneAttributes (LaneIndexFromLeft).
+		// Sie steuern die aufgemalten Markierungen; die tatsaechlich erlaubten
+		// Abbiegebeziehungen der KI ermittelt ConnectLanes weiterhin aus der
+		// Kreuzungsgeometrie, unabhaengig von den Pfeilen.
 
 		for (int32 LaneIndexFromLeft = 0; LaneIndexFromLeft < TotalLanes; ++LaneIndexFromLeft)
 		{
@@ -1761,6 +1767,17 @@ void URoadNetworkGenerator::BuildLanes(
 			Lane.WidthCm = LaneWidth;
 			Lane.SpeedLimitKmh = Segment.MaxSpeedKmh;
 			Lane.TurnFlags = static_cast<uint8>(ETurnIndication::Through);
+
+			// Pro-Spur-Attribute aus den OSM-Tags uebernehmen (falls aufgeloest).
+			if (Segment.LaneAttributes.IsValidIndex(LaneIndexFromLeft))
+			{
+				const FLaneAttributes& Attr = Segment.LaneAttributes[LaneIndexFromLeft];
+				Lane.TurnFlags = Attr.TurnFlags;
+				Lane.bIsBusLane = Attr.bIsBusLane;
+				Lane.bIsBikeLane = Attr.bIsBikeLane;
+				Lane.LeftBoundary = Attr.LeftBoundary;
+				Lane.RightBoundary = Attr.RightBoundary;
+			}
 
 			// Hoehe von der Segmentachse uebernehmen: die Spur liegt hoechstens
 			// wenige Meter daneben, dort ist die Terrainhoehe praktisch gleich,
@@ -2381,6 +2398,34 @@ void URoadNetworkGenerator::BuildSegmentMesh(
 		SegmentTypeDef.SidewalkWidthMeters * MetersToCm,
 		100.0);
 
+	// Hoehe an der FAHRBAHN-Mittellinie sampeln, nicht an der (versetzten)
+	// Gehweg-/Bordsteinposition. Sonst tastet der Gehweg das Gelaende mehrere
+	// Meter neben der Strasse ab, weicht dort in der Hoehe ab und "schwebt"
+	// bzw. verspringt gegenueber der Fahrbahn. So bleibt der Gehweg buendig auf
+	// Strassenniveau + Bordstein und folgt der Strasse.
+	auto NearestOnLine = [&](const FVector2D& P) -> FVector2D
+	{
+		FVector2D Best = Line2D.Num() > 0 ? Line2D[0] : P;
+		double BestD = TNumericLimits<double>::Max();
+		for (int32 i = 0; i + 1 < Line2D.Num(); ++i)
+		{
+			const FVector2D A = Line2D[i];
+			const FVector2D AB = Line2D[i + 1] - A;
+			const double L2 = AB.SizeSquared();
+			const double T = (L2 > KINDA_SMALL_NUMBER)
+				? FMath::Clamp(FVector2D::DotProduct(P - A, AB) / L2, 0.0, 1.0) : 0.0;
+			const FVector2D Proj = A + AB * T;
+			const double D = FVector2D::DistSquared(P, Proj);
+			if (D < BestD) { BestD = D; Best = Proj; }
+		}
+		return Best;
+	};
+	auto SampleRoadZ = [&](const FVector2D& P) -> double
+	{
+		return (HeightSampler && HeightSampler->HasValidData())
+			? HeightSampler->SampleHeightCm(NearestOnLine(P)) : 0.0;
+	};
+
 	auto BuildSidewalk = [&](double SideSign)
 	{
 		// Achse des Gehwegs: halbe Fahrbahnbreite plus halbe Gehwegbreite.
@@ -2412,11 +2457,10 @@ void URoadNetworkGenerator::BuildSegmentMesh(
 		{
 			const FVector2D& Point = Vertices2D[Index];
 
-			// Der Gehweg folgt dem Terrain eigenstaendig - er kann mehrere
-			// Meter neben der Fahrbahn liegen, wo die Hoehe abweicht.
-			const double TerrainZ = (HeightSampler && HeightSampler->HasValidData())
-				? HeightSampler->SampleHeightCm(Point)
-				: 0.0;
+			// Hoehe an der Fahrbahn-Mittellinie (nicht an der versetzten Gehweg-
+			// position) -> Gehweg bleibt buendig auf Strassenniveau + Bordstein,
+			// schwebt nicht ueberm Gras und verspringt nicht gegen die Fahrbahn.
+			const double TerrainZ = SampleRoadZ(Point);
 
 			Section.Vertices.Add(FVector(
 				Point.X, Point.Y,
@@ -2495,9 +2539,9 @@ void URoadNetworkGenerator::BuildSegmentMesh(
 				AccumulatedLength += FVector2D::Distance(KerbLine[Index - 1], KerbLine[Index]);
 			}
 
-			const double TerrainZ = (HeightSampler && HeightSampler->HasValidData())
-				? HeightSampler->SampleHeightCm(KerbLine[Index])
-				: 0.0;
+			// Wie der Gehweg: Hoehe an der Fahrbahn-Mittellinie, damit Bordstein-
+			// Oberkante und Gehwegniveau exakt zusammenpassen (keine Stufe).
+			const double TerrainZ = SampleRoadZ(KerbLine[Index]);
 
 			const double BaseZ = TerrainZ + Settings.RoadSurfaceOffsetCm + Segment.Layer * Settings.LayerHeightCm;
 
@@ -2620,14 +2664,21 @@ void URoadNetworkGenerator::BuildLaneMarkings(
 		return;
 	}
 
-	const FRoadTypeDefinition& TypeDef = TypeLibrary.GetDefinition(Segment.HighwayType);
-	if (!TypeDef.bHasCenterLineMarking)
+	const int32 TotalLanes = Segment.GetTotalLaneCount();
+	if (TotalLanes < 1)
 	{
 		return;
 	}
 
-	const int32 TotalLanes = Segment.GetTotalLaneCount();
-	if (TotalLanes < 2)
+	// Grenzstile je Grenze bevorzugt aus den aufgeloesten LaneAttributes (Rand-,
+	// StVO- und Sonderspur-Linien). Fehlen sie ODER ist der attributgetriebene
+	// Pfad abgeschaltet (bGenerateEdgeLines), Rueckfall auf die alte Heuristik
+	// (nur Innengrenzen, Richtungstrennung durchgezogen) - so bleibt das Modul
+	// einzeln bakebar (Spec Abschnitt 9).
+	const bool bHaveAttrs = Settings.bGenerateEdgeLines
+		&& (Segment.LaneAttributes.Num() == TotalLanes);
+	const FRoadTypeDefinition& TypeDef = TypeLibrary.GetDefinition(Segment.HighwayType);
+	if (!bHaveAttrs && !TypeDef.bHasCenterLineMarking)
 	{
 		return;
 	}
@@ -2645,17 +2696,83 @@ void URoadNetworkGenerator::BuildLaneMarkings(
 	FRoadMeshSection& Section = FindOrAddSection(
 		OutMeshData, ERoadMeshChannel::LaneMarking, EOSMSurfaceType::Asphalt);
 
-	// Markierung auf jeder Spurgrenze. Die Trennlinie zwischen den
-	// Fahrtrichtungen wird ueber die Vertexfarbe als durchgezogene Mittellinie
-	// gekennzeichnet, alle uebrigen als unterbrochene Leitlinie - das
-	// unterscheidet der Shader ueber den Rotkanal.
-	for (int32 Boundary = 1; Boundary < TotalLanes; ++Boundary)
+	// Hoehe der Markierung aus der interpolierten Fahrbahn-Mittellinie am
+	// jeweiligen Punkt (nicht ueber Index/2 auf Line gemappt: OffsetPolyline
+	// aendert die Punktzahl, dann sass die Z falsch -> Markierung dippte/schwebte).
+	auto CenterlineZ = [&Line](const FVector2D& P) -> double
 	{
-		const double OffsetFromCenter = HalfCarriageway - Boundary * LaneWidth;
+		double BestD = TNumericLimits<double>::Max();
+		double BestZ = Line[0].Z;
+		for (int32 i = 0; i + 1 < Line.Num(); ++i)
+		{
+			const FVector2D A(Line[i].X, Line[i].Y);
+			const FVector2D AB = FVector2D(Line[i + 1].X, Line[i + 1].Y) - A;
+			const double L2 = AB.SizeSquared();
+			const double T = (L2 > 1.0)
+				? FMath::Clamp(FVector2D::DotProduct(P - A, AB) / L2, 0.0, 1.0) : 0.0;
+			const FVector2D Proj = A + AB * T;
+			const double D = FVector2D::DistSquared(P, Proj);
+			if (D < BestD)
+			{
+				BestD = D;
+				BestZ = FMath::Lerp(Line[i].Z, Line[i + 1].Z, T);
+			}
+		}
+		return BestZ;
+	};
 
-		const bool bIsDirectionSplit = (Boundary == Segment.BackwardLaneCount)
-			&& Segment.BackwardLaneCount > 0
-			&& Segment.ForwardLaneCount > 0;
+	// Grenzstil einer Grenze b: 0 = linker Fahrbahnrand, TotalLanes = rechter
+	// Rand, 1..TotalLanes-1 = Spurgrenzen dazwischen.
+	auto BoundaryStyleAt = [&Segment, bHaveAttrs, TotalLanes](int32 b) -> ELaneBoundaryStyle
+	{
+		if (bHaveAttrs)
+		{
+			if (b <= 0) { return Segment.LaneAttributes[0].LeftBoundary; }
+			if (b >= TotalLanes) { return Segment.LaneAttributes[TotalLanes - 1].RightBoundary; }
+			return Segment.LaneAttributes[b - 1].RightBoundary;
+		}
+		// Rueckfall ohne Attribute: nur Innengrenzen, Richtungstrennung durchgezogen.
+		if (b <= 0 || b >= TotalLanes) { return ELaneBoundaryStyle::None; }
+		const bool bSplit = (b == Segment.BackwardLaneCount)
+			&& Segment.BackwardLaneCount > 0 && Segment.ForwardLaneCount > 0;
+		return bSplit ? ELaneBoundaryStyle::DirSplit : ELaneBoundaryStyle::Dashed;
+	};
+
+	for (int32 b = 0; b <= TotalLanes; ++b)
+	{
+		const ELaneBoundaryStyle Style = BoundaryStyleAt(b);
+		if (Style == ELaneBoundaryStyle::None)
+		{
+			continue;
+		}
+
+		// Strichbreite und durchgezogen/gestrichelt aus dem Stil (StVO/RMS).
+		double WidthCm = Settings.MarkingWidthCm;   // Schmalstrich 12 cm (tunbar)
+		bool bSolid = true;
+		switch (Style)
+		{
+		case ELaneBoundaryStyle::Dashed:
+			bSolid = false;
+			break;
+		case ELaneBoundaryStyle::Solid:   // Bus-/Radspur-Trennung: Breitstrich
+			WidthCm = WiesbadenRoadMarkings::WideLineWidthCm;
+			break;
+		case ELaneBoundaryStyle::Edge:    // Fahrbahnbegrenzung: Schmalstrich, durchgezogen
+			break;
+		case ELaneBoundaryStyle::DirSplit:
+			// Mittellinie: ab 50 km/h durchgezogene Fahrstreifenbegrenzung,
+			// darunter (Tempo-30) unterbrochene Leitlinie.
+			bSolid = (Segment.MaxSpeedKmh >= 50.0);
+			break;
+		default:
+			break;
+		}
+
+		double OffsetFromCenter = HalfCarriageway - b * LaneWidth;
+		// Randlinien liegen ganz auf der Fahrbahn -> um die halbe Strichbreite
+		// nach innen ruecken, sonst haengt der halbe Strich ueber die Kante.
+		if (b == 0) { OffsetFromCenter -= WidthCm * 0.5; }
+		else if (b == TotalLanes) { OffsetFromCenter += WidthCm * 0.5; }
 
 		TArray<FVector2D> MarkingAxis;
 		if (!FPolygonUtils::OffsetPolyline(Line2D, OffsetFromCenter, MarkingAxis))
@@ -2666,29 +2783,22 @@ void URoadNetworkGenerator::BuildLaneMarkings(
 		TArray<FVector2D> Vertices2D;
 		TArray<int32> Indices;
 		TArray<FVector2D> UVs;
-
-		if (!FPolygonUtils::BuildRibbonMesh(
-			MarkingAxis, Settings.MarkingWidthCm, Vertices2D, Indices, UVs))
+		if (!FPolygonUtils::BuildRibbonMesh(MarkingAxis, WidthCm, Vertices2D, Indices, UVs))
 		{
 			continue;
 		}
 
 		const int32 BaseIndex = Section.Vertices.Num();
-
+		const uint8 R = bSolid ? 255 : 0;   // R = 255: durchgezogen, R = 0: unterbrochen
 		for (int32 Index = 0; Index < Vertices2D.Num(); ++Index)
 		{
-			const int32 CenterIndex = FMath::Clamp(Index / 2, 0, Line.Num() - 1);
-
 			Section.Vertices.Add(FVector(
 				Vertices2D[Index].X,
 				Vertices2D[Index].Y,
-				Line[CenterIndex].Z + Settings.MarkingOffsetCm));
-
+				CenterlineZ(Vertices2D[Index]) + Settings.MarkingOffsetCm));
 			Section.Normals.Add(FVector::UpVector);
 			Section.UVs.Add(UVs[Index]);
-
-			// R = 255: durchgezogen, R = 0: unterbrochen.
-			Section.VertexColors.Add(FColor(bIsDirectionSplit ? 255 : 0, 255, 255, 255));
+			Section.VertexColors.Add(FColor(R, 255, 255, 255));
 			Section.Tangents.Add(FProcMeshTangent(1.0f, 0.0f, 0.0f));
 		}
 

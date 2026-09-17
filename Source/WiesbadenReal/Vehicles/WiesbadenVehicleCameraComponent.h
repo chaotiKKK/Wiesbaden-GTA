@@ -122,8 +122,11 @@ public:
 	 * nach Umschalten auf Orbit - so wie es die Steuerungshilfe verspricht
 	 * ("Maus - Umsehen"). Ohne Eingabe kehrt der Blick sanft nach hinten zurueck.
 	 */
+	// Standard 0: freie Sicht - die Kamera bleibt stehen, wo man hinschaut, und
+	// springt NICHT staendig hinter das Fahrzeug zurueck (auf Wunsch). Ein Wert
+	// > 0 aktiviert das sanfte Zuruecklaufen wieder.
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "0.0"))
-	float FollowRecenterSpeed = 3.0f;
+	float FollowRecenterSpeed = 0.0f;
 
 	/** Glattung der Kamera-Bewegung. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera", meta = (ClampMin = "0.01"))
@@ -163,6 +166,21 @@ public:
 	FVector CockpitOffset = FVector(95.0f, 0.0f, 140.0f);
 
 	/**
+	 * Blickrichtung der Cockpit-Kamera in Grad (negativ = nach unten).
+	 *
+	 * Ohne eigenen Winkel schaut sie exakt geradeaus. Im Nerobergbahn-Wagen
+	 * sitzen Tacho, Schauglas und Kurbel TIEFER als die Augen des Fahrgasts
+	 * (2,45 m bzw. 1,6 m ueber dem Wagenursprung) - mit einer waagerechten
+	 * Kamera waeren die Instrumente nicht im Bild.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera")
+	float CockpitPitch = 0.0f;
+
+	/** Gierwinkel der Cockpit-Kamera in Grad (positiv = nach rechts). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera")
+	float CockpitYaw = 0.0f;
+
+	/**
 	 * Meshes, die in der Cockpit-Ansicht fuer den Fahrer unsichtbar werden.
 	 *
 	 * Die Fahrzeuge haben keinen modellierten Innenraum - saesse die Kamera in
@@ -178,6 +196,16 @@ public:
 	/** Ein Mesh registrieren, das in der Cockpit-Ansicht verborgen wird. */
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Kamera")
 	void AddCockpitHiddenMesh(UPrimitiveComponent* Mesh);
+
+	/**
+	 * Verborgenes Mesh wieder sichtbar machen.
+	 *
+	 * Beim Aussteigen muss die eigene Aussenhaut zurueckkommen - sonst bliebe der
+	 * Bus fuer den Spieler dauerhaft durchsichtig. Ohne diesen Gegenpart gab es
+	 * nur AddCockpitHiddenMesh, und die Liste lebte bis zur Zerstoerung der Kamera.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Kamera")
+	void RemoveCockpitHiddenMesh(UPrimitiveComponent* Mesh);
 
 	/** Kamera-Rig an einen bewegten Unterpunkt, z. B. einen Bahnwagen, haengen. */
 	void SetCameraAnchor(USceneComponent* Anchor);

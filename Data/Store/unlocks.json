@@ -11,12 +11,6 @@
       "title": "Premium-Stadtplan",
       "beschreibung": "Schaltet die Detailkarte von Wiesbaden frei.",
       "kosten": 150
-    },
-    {
-      "id": "helikopter_hangar",
-      "title": "Helikopter-Hangar",
-      "beschreibung": "Dauerhafter Zugang zum Ka-52 an der Platter Strasse.",
-      "kosten": 750
     }
   ]
 }

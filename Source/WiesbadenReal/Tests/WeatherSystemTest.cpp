@@ -52,50 +52,37 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWeatherTimeOfDayTest,
 
 bool FWeatherTimeOfDayTest::RunTest(const FString& Parameters)
 {
+	// Sommertag in Wiesbaden (MESZ = UTC+2): 12:00 Ortszeit = 10:00 UTC.
+	const FDateTime Utc(2026, 6, 21, 10, 0, 0);
+	const FDateTime Local(2026, 6, 21, 12, 0, 0);
+
+	// Systemuhr: die Spieluhr zeigt die Ortszeit, die Sonne steht hoch.
 	FWiesbadenWeatherSystem Weather;
-
-	// Ein voller Ingame-Tag dauert 3 Realstunden: 9 Uhr + 24h = wieder 9 Uhr.
-	// In <=10s-Schritten fahren, weil Tick grosse Deltas auf 10s clamp't
-	// (Schutz vor Zeitspruengen).
-	//
-	// Hier standen 60 Minuten je Tag. Nach einer halben Stunde Spielen war
-	// Nacht - und weil die Stadt nachts keine eigene Lichtquelle hatte, ab da
-	// unbenutzbar. Der Wert wird aus den Einstellungen abgeleitet und nicht
-	// erneut als Zahl hingeschrieben, damit Test und Verhalten nicht
-	// auseinanderlaufen koennen.
-	const float SecondsPerFullDay = 24.0f / FWiesbadenWeatherSettings().HoursPerRealSecond;
-	const int32 Steps = FMath::RoundToInt(SecondsPerFullDay / 10.0f);
-
-	for (int32 i = 0; i < Steps; ++i)
-	{
-		Weather.Tick(10.0f);
-	}
-	TestTrue(
-		FString::Printf(TEXT("Ein voller Tag dauert %.0f Minuten"), SecondsPerFullDay / 60.0f),
-		FMath::IsNearlyEqual(Weather.GetState().TimeOfDayHours, 9.0f, 0.05f));
-
-	// +12h -> 21 Uhr. Schrittzahl ebenfalls aus den Einstellungen ableiten.
-	for (int32 i = 0; i < Steps / 2; ++i)
-	{
-		Weather.Tick(10.0f);
-	}
-	TestTrue(TEXT("+12 Ingame-Stunden -> 21 Uhr"),
-		FMath::IsNearlyEqual(Weather.GetState().TimeOfDayHours, 21.0f, 0.05f));
-
-	// Sonnenstand: Mittag Zenit, Mitternacht tiefste Nacht.
-	Weather.SetTimeOfDay(12.0f);
+	Weather.SetTimeSource(EWiesbadenTimeSource::SystemClock);
+	Weather.UpdateClock(Utc, Local);
 	Weather.Tick(0.0f);
-	TestTrue(TEXT("Mittag: Sonne im Zenit"), Weather.GetState().SunElevationFactor > 0.99f);
+	TestTrue(TEXT("Systemuhr: 12 Uhr"), FMath::IsNearlyEqual(Weather.GetState().TimeOfDayHours, 12.0f, 0.01f));
+	TestTrue(TEXT("Sommer-Mittag: Sonne ueber 55 Grad"), Weather.GetState().SunElevationDeg > 55.0f);
 	TestTrue(TEXT("Mittag: kein Nacht-Flag"), !Weather.GetState().bIsNight);
-	TestTrue(TEXT("Mittag: helles Umgebungslicht"),
-		Weather.GetState().AmbientLightMultiplier > 0.99f);
+	TestTrue(TEXT("Mittag: helles Umgebungslicht"), Weather.GetState().AmbientLightMultiplier > 0.9f);
 
-	Weather.SetTimeOfDay(0.0f);
+	// Zwoelf Stunden spaeter: Mitternacht, Sonne unter dem Horizont, Licht gedimmt.
+	Weather.UpdateClock(Utc + FTimespan::FromHours(12.0), Local + FTimespan::FromHours(12.0));
 	Weather.Tick(0.0f);
-	TestTrue(TEXT("Mitternacht: Sonne tief"), Weather.GetState().SunElevationFactor < -0.99f);
+	TestTrue(TEXT("Systemuhr: 0 Uhr"), FMath::IsNearlyEqual(Weather.GetState().TimeOfDayHours, 0.0f, 0.01f));
+	TestTrue(TEXT("Mitternacht: Sonne unter dem Horizont"), Weather.GetState().SunElevationDeg < -10.0f);
 	TestTrue(TEXT("Mitternacht: Nacht-Flag"), Weather.GetState().bIsNight);
 	TestTrue(TEXT("Mitternacht: gedimmtes Licht"),
 		FMath::IsNearlyEqual(Weather.GetState().AmbientLightMultiplier, 0.35f, 0.01f));
+
+	// Feste Stunde (-WbTime=13): Uhr steht, Sonne wird fuer HEUTE um 13 Uhr gerechnet -
+	// auch wenn es real Mitternacht ist. Ein spaeterer Tick aendert daran nichts.
+	Weather.SetTimeSource(EWiesbadenTimeSource::FixedHour, 13.0f);
+	Weather.UpdateClock(Utc + FTimespan::FromHours(12.0), Local + FTimespan::FromHours(12.0));
+	Weather.Tick(10.0f);
+	TestTrue(TEXT("feste Stunde: 13 Uhr"), FMath::IsNearlyEqual(Weather.GetState().TimeOfDayHours, 13.0f, 0.01f));
+	TestTrue(TEXT("feste Stunde: Tag trotz realer Nacht"), !Weather.GetState().bIsNight && Weather.GetState().SunElevationDeg > 50.0f);
+	TestTrue(TEXT("feste Stunde: Sonne im Sueden"), FMath::Abs(Weather.GetState().SunAzimuthDeg - 180.0f) < 25.0f);
 
 	return true;
 }
@@ -131,48 +118,39 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWeatherSetTimeConsistencyTest,
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
 /**
- * Nach SetTimeOfDay muss der Zustand in sich stimmen.
- *
- * Die Funktion setzte frueher nur die Stunde; Sonnenstand und Nachtflagge
- * wurden erst im naechsten Tick nachgezogen. Eine Abfrage direkt danach
- * lieferte damit einen widerspruechlichen Zustand - gemessen "23:00 Uhr,
- * Sonnenstand 0,72, Nacht: nein". Wer darauf eine Entscheidung stuetzt, etwa
- * die Lichtautomatik des Fahrzeugs, entscheidet nach der ALTEN Tageszeit.
+ * Nach dem Setzen einer festen Stunde muss der Zustand nach UpdateClock in sich
+ * stimmen: Stunde, Sonnenhoehe und Nachtflagge gehoeren zusammen - wer direkt
+ * danach entscheidet (etwa die Lichtautomatik), darf keinen alten Stand sehen.
  */
 bool FWeatherSetTimeConsistencyTest::RunTest(const FString& Parameters)
 {
+	const FDateTime Utc(2026, 3, 20, 12, 0, 0);
+	const FDateTime Local(2026, 3, 20, 13, 0, 0);
 	FWiesbadenWeatherSystem Weather;
 
-	// Mitternacht: Sonne unter dem Horizont, ohne dass ein Tick noetig waere.
-	Weather.SetTimeOfDay(0.0f);
+	// Mitternacht: Sonne unter dem Horizont, Flagge passt - ohne dass ein Tick noetig waere.
+	Weather.SetTimeSource(EWiesbadenTimeSource::FixedHour, 0.0f);
+	Weather.UpdateClock(Utc, Local);
 	const FWiesbadenWeatherState Midnight = Weather.GetState();
-
 	TestEqual(TEXT("Stunde uebernommen"), Midnight.TimeOfDayHours, 0.0f);
-	TestEqual(
-		TEXT("Sonnenstand passt ohne Tick zur Stunde"),
-		Midnight.SunElevationFactor,
-		FWiesbadenWeatherSystem::ComputeSunElevationFactor(0.0f));
+	TestTrue(TEXT("Mitternacht: Sonne unter dem Horizont"), Midnight.SunElevationDeg < 0.0f);
+	TestEqual(TEXT("Nachtflagge folgt dem Sonnenstand"), Midnight.bIsNight, Midnight.SunElevationDeg < 0.0f);
 
-	// Mittag: deutlich hoeher als um Mitternacht.
-	Weather.SetTimeOfDay(12.0f);
+	// Mittag: deutlich hoeher als um Mitternacht; Faktor = Sinus der Hoehe.
+	Weather.SetTimeSource(EWiesbadenTimeSource::FixedHour, 12.0f);
+	Weather.UpdateClock(Utc, Local);
 	const FWiesbadenWeatherState Noon = Weather.GetState();
-
 	TestEqual(TEXT("Mittagsstunde uebernommen"), Noon.TimeOfDayHours, 12.0f);
-	TestTrue(TEXT("Mittag steht hoeher als Mitternacht"),
-		Noon.SunElevationFactor > Midnight.SunElevationFactor);
-
-	// Nachtflagge muss zur Sonnenhoehe passen, nicht zur vorherigen Stunde.
-	TestEqual(TEXT("Nachtflagge folgt dem Sonnenstand"),
-		Noon.bIsNight, Noon.SunElevationFactor < 0.0f);
+	TestTrue(TEXT("Mittag steht hoeher als Mitternacht"), Noon.SunElevationDeg > Midnight.SunElevationDeg);
+	TestTrue(TEXT("Faktor = sin(Hoehe)"),
+		FMath::IsNearlyEqual(Noon.SunElevationFactor(), FMath::Sin(FMath::DegreesToRadians(Noon.SunElevationDeg)), 1e-5f));
+	TestFalse(TEXT("Mittag: Tag"), Noon.bIsNight);
 
 	// Negative und ueberlaufende Stunden werden in [0,24) gefaltet.
-	Weather.SetTimeOfDay(-1.0f);
-	TestTrue(TEXT("Negative Stunde wird gefaltet"),
-		Weather.GetState().TimeOfDayHours >= 0.0f && Weather.GetState().TimeOfDayHours < 24.0f);
-
-	Weather.SetTimeOfDay(30.0f);
-	TestTrue(TEXT("Ueberlaufende Stunde wird gefaltet"),
-		Weather.GetState().TimeOfDayHours >= 0.0f && Weather.GetState().TimeOfDayHours < 24.0f);
+	Weather.SetTimeSource(EWiesbadenTimeSource::FixedHour, -1.0f);
+	TestTrue(TEXT("Negative Stunde wird gefaltet"), FMath::IsNearlyEqual(Weather.Settings.FixedHours, 23.0f, 0.001f));
+	Weather.SetTimeSource(EWiesbadenTimeSource::FixedHour, 30.0f);
+	TestTrue(TEXT("Ueberlaufende Stunde wird gefaltet"), FMath::IsNearlyEqual(Weather.Settings.FixedHours, 6.0f, 0.001f));
 
 	return true;
 }

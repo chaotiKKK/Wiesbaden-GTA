@@ -12,7 +12,6 @@
 #include "World/RoadFurnitureSpawnerComponent.h"
 #include "World/PedestrianSpawnerComponent.h"
 #include "World/TrafficVehicleSpawnerComponent.h"
-#include "World/WiesbadenWeatherFX.h"
 
 AWiesbadenCityActor::AWiesbadenCityActor()
 {
@@ -34,9 +33,6 @@ AWiesbadenCityActor::AWiesbadenCityActor()
 
 	FurnitureSpawner = CreateDefaultSubobject<URoadFurnitureSpawnerComponent>(TEXT("FurnitureSpawner"));
 	FurnitureSpawner->SetupAttachment(Root);
-
-	WeatherFX = CreateDefaultSubobject<UWiesbadenWeatherFXComponent>(TEXT("WeatherFX"));
-	WeatherFX->SetComponentTickEnabled(true);
 
 	RegionAssetSpawner = CreateDefaultSubobject<URegionAssetSpawnerComponent>(TEXT("RegionAssetSpawner"));
 	RegionAssetSpawner->SetupAttachment(Root);

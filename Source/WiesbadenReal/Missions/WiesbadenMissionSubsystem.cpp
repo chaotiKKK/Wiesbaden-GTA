@@ -88,6 +88,27 @@ bool UWiesbadenMissionSubsystem::StartMission(FName MissionId)
 	return false;
 }
 
+bool UWiesbadenMissionSubsystem::RequestNextMission()
+{
+	// Laeuft schon ein Auftrag, gibt der NPC keinen neuen aus.
+	if (bHasActiveMission)
+	{
+		return false;
+	}
+
+	// Dispatcher: erst die handgeschriebenen Vorlagen, danach endlos prozedurale
+	// Kurierjobs. CompletedCount ist der Cursor - nie derselbe gerade
+	// abgeschlossene Auftrag erneut.
+	const FMissionDispatchResult Next =
+		FWiesbadenMissionDispatcher::NextMission(MissionPool, CompletedCount);
+	if (!Next.bHasMission)
+	{
+		return false;
+	}
+	BeginMission(Next.Mission);
+	return true;
+}
+
 const FMissionObjective* UWiesbadenMissionSubsystem::GetCurrentObjective() const
 {
 	if (!bHasActiveMission || !ActiveMission.Objectives.IsValidIndex(ActiveObjectiveIndex))
@@ -224,18 +245,11 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 		return; // z. B. waehrend Streaming/Fahrzeugwechsel
 	}
 
-	// Kein aktiver Auftrag -> naechsten vergeben (nachladend). Der Dispatcher
-	// liefert erst die handgeschriebenen Vorlagen, danach endlos prozedurale
-	// Kurierjobs. CompletedCount ist der Cursor: dadurch wird nie derselbe
-	// gerade abgeschlossene Auftrag erneut angeboten.
+	// KEINE automatische Vergabe mehr: ohne aktiven Auftrag passiert im Tick
+	// nichts. Neue Auftraege gibt es nur noch im Gespraech mit dem NPC am
+	// Nordfriedhof (RequestNextMission), ausgeloest ueber die F-Interaktion.
 	if (!bHasActiveMission)
 	{
-		const FMissionDispatchResult Next =
-			FWiesbadenMissionDispatcher::NextMission(MissionPool, CompletedCount);
-		if (Next.bHasMission)
-		{
-			BeginMission(Next.Mission);
-		}
 		return;
 	}
 

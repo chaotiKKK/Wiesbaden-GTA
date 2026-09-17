@@ -63,6 +63,28 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli")
 	float GetMainRotorRpm() const;
 
+	/**
+	 * Traegt der Heli das importierte Ka-52-Modell (statt der Wuerfel-Notloesung)?
+	 *
+	 * Das importierte Modell bringt seine eigenen PBR-Materialien mit. Die alte
+	 * Zell-Tarnung (M_WbHelicopter) darf dann NICHT daruebergelegt werden, sonst
+	 * sieht der neue Heli aus wie der alte - der GameMode fragt das vor dem
+	 * Lackieren ab.
+	 */
+	bool HasImportedModel() const { return bImportedModel; }
+
+	/** Durchmesser des oberen Rotorkreises in cm (aus der Geometrie gemessen). */
+	double GetUpperRotorDiameterCm() const;
+
+	/**
+	 * Laenge des Rumpfes in cm (aus der Geometrie gemessen).
+	 *
+	 * Fuer den Standabstand zweier geparkter Maschinen: nebeneinander aufgestellt
+	 * begrenzen entweder die Rotorkreise oder die Rumpflaengen den Abstand -
+	 * beides kommt aus dem Mesh, nicht aus zweiten Zahlen.
+	 */
+	double GetNoseToTailCm() const;
+
 	// -- Cockpit-Instrumente ----------------------------------------------
 	// Telemetrie fuer die Cockpit-Anzeige (WiesbadenVehicleHUD). Bewusst als
 	// einfache Abfragen aus dem bereits gefuehrten Flugzustand.
@@ -132,6 +154,9 @@ public:
 
 	/** Triebwerk laeuft; sonst arbeitet der Rotor nur ueber Autorotation. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Heli|Physik")
+	/** Im Konstruktor gesetzt: importiertes Ka-52-Netz gebunden (eigene Materialien). */
+	bool bImportedModel = false;
+
 	bool bEngineRunning = false;
 
 	// -- Fahrzeug-Integration (Kraft/Drehmoment -> Bewegung) --------------
@@ -210,11 +235,11 @@ public:
 	 * schraeg fliegt, wird nicht gegen sich selbst arbeiten muessen.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Helikopter|Steuerung", meta = (ClampMin = "0.0"))
-	float AutoLevelStrength = 0.065f;   // staerkere Selbstnivellierung
+	float AutoLevelStrength = 0.12f;   // deutlich staerkere Selbstnivellierung: kippt nicht mehr so leicht um
 
 	/** Groesster Ausschlag, den die Selbststabilisierung allein erzeugt. */
 	UPROPERTY(EditAnywhere, Category = "Helikopter|Steuerung", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float AutoLevelMaxAuthority = 0.55f;
+	float AutoLevelMaxAuthority = 0.72f;
 
 	/**
 	 * Schwebehilfe: Daempfung der Vertikalgeschwindigkeit bei neutralem
@@ -406,6 +431,16 @@ private:
 
 	bool bEngineToggleHeld = false;
 	bool bGrounded = false;
+
+	// Boden-Cache: ApplyGroundConstraint fuellt ihn einmal pro Frame; der
+	// visuelle Pfad (GetAltitudeMeters, Downwash-Staub) liest ihn, statt eigene
+	// Down-Traces zu schiessen -> ein Boden-Raycast pro Frame statt drei bis vier.
+	bool bGroundCacheValid = false;
+	float CachedGroundZ = 0.0f;
+
+	/** Gecachter Pilot-Controller (in PossessedBy gesetzt) - spart ~17 Casts/Frame. */
+	UPROPERTY(Transient)
+	APlayerController* CachedPlayerController = nullptr;
 
 	/** Externe Steuerung (KI/Zwischensequenz/Test), siehe SetExternalControl. */
 	FWiesbadenHeliControl ExternalControl;

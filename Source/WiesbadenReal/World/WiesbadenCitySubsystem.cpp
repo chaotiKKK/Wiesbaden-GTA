@@ -384,17 +384,7 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 	if (!bTimeOverrideApplied)
 	{
 		bTimeOverrideApplied = true;
-
-		float ForcedHours = -1.0f;
-		if (FParse::Value(FCommandLine::Get(), TEXT("WbTime="), ForcedHours) && ForcedHours >= 0.0f)
-		{
-			Weather.SetTimeOfDay(ForcedHours);
-			UE_LOG(LogWbCore, Log,
-				TEXT("Tageszeit auf %.1f Uhr gesetzt (-WbTime). Sonnenstand %.2f, Nacht: %s."),
-				Weather.GetState().TimeOfDayHours,
-				Weather.GetState().SunElevationFactor,
-				Weather.GetState().bIsNight ? TEXT("ja") : TEXT("nein"));
-		}
+		ResolveTimeSource();
 	}
 
 	// Ladereichweite der World Partition setzen - einmalig.
@@ -1129,7 +1119,9 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 	// Kreuzungs-Rundgang treiben (nur mit -WbTour aktiv).
 	TickJunctionTour(DeltaTime);
 
-	// Wetter-Zustandsmaschine (Tageszeit + Wetter-Uebergang) treiben.
+	// 24-h-Beleuchtung: Uhr + Sonne aus dem Jetzt (Zeitquelle siehe ResolveTimeSource),
+	// dann Wetter-Uebergang mischen.
+	Weather.UpdateClock(FDateTime::UtcNow(), FDateTime::Now());
 	Weather.Tick(DeltaTime);
 
 	// Bezugspunkt des Verkehrs auf den Spieler setzen: Fahrzeuge entstehen in
@@ -1663,6 +1655,29 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 	}
 
 	UpdateStreamingState();
+}
+
+void UWiesbadenCitySubsystem::ResolveTimeSource()
+{
+	// Rangfolge: erzwungene Stunde (-WbTime) vor Prompt-Stunde vor lokaler
+	// Systemzeit. Eine feste Stunde treibt dieselbe astronomische Sonne fuer das
+	// heutige Datum - nur die Uhr steht still.
+	float ForcedHours = -1.0f;
+	FParse::Value(FCommandLine::Get(), TEXT("WbTime="), ForcedHours);
+	const float FixedHours = (ForcedHours >= 0.0f) ? ForcedHours : PromptTimeOfDayHours;
+	if (FixedHours < 0.0f)
+	{
+		Weather.SetTimeSource(EWiesbadenTimeSource::SystemClock);
+		return;
+	}
+	Weather.SetTimeSource(EWiesbadenTimeSource::FixedHour, FixedHours);
+	Weather.UpdateClock(FDateTime::UtcNow(), FDateTime::Now());
+	UE_LOG(LogWbCore, Log,
+		TEXT("Tageszeit auf %.1f Uhr gesetzt (%s). Sonnenhoehe %.1f Grad, Nacht: %s."),
+		Weather.GetState().TimeOfDayHours,
+		ForcedHours >= 0.0f ? TEXT("-WbTime") : TEXT("Prompt"),
+		Weather.GetState().SunElevationDeg,
+		Weather.GetState().bIsNight ? TEXT("ja") : TEXT("nein"));
 }
 
 void UWiesbadenCitySubsystem::LogGeometryBalance(const FWiesbadenHealthReport& Report) const
@@ -3913,12 +3928,10 @@ void UWiesbadenCitySubsystem::SpawnCityActor(const FWiesbadenCityData& Data)
 	// Gleiche Lage ist ein No-Op; ein Wechsel blendet sanft ueber das Wetter-System.
 	Weather.SetTargetWeather(Data.CityPromptSpec.Weather);
 
-	// Start-Tageszeit aus dem Prompt (z. B. "abends" -> 19 Uhr), wenn gesetzt.
-	// Ohne Angabe bleibt der Default (Settings.StartTimeOfDayHours = 9 Uhr).
-	if (Data.CityPromptSpec.TimeOfDayHours >= 0.0f)
-	{
-		Weather.SetTimeOfDay(Data.CityPromptSpec.TimeOfDayHours);
-	}
+	// Stunde aus dem Prompt (z. B. "abends" -> 19 Uhr; -1 = keine) merken und die
+	// Zeitquelle an EINER Stelle neu aufloesen.
+	PromptTimeOfDayHours = Data.CityPromptSpec.TimeOfDayHours;
+	ResolveTimeSource();
 
 	CityStatus = FString::Printf(TEXT("Stadt gespawnt: %d Gebaeude, %d Segmente, %d Spuren."),
 		Data.Buildings.Num(), Data.RoadNetwork.Segments.Num(), Data.RoadNetwork.Lanes.Num());

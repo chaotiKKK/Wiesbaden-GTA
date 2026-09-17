@@ -1,0 +1,65 @@
+{
+ "line": "3",
+ "stops": [
+  {
+   "index": 0,
+   "name": "Nordfriedhof",
+   "asset": "/Game/Audio/Bus/Announce/A_00"
+  },
+  {
+   "index": 6,
+   "name": "Michelsberg",
+   "asset": "/Game/Audio/Bus/Announce/A_05"
+  },
+  {
+   "index": 7,
+   "name": "Platz der Deutschen Einheit",
+   "asset": "/Game/Audio/Bus/Announce/A_06"
+  },
+  {
+   "index": 8,
+   "name": "Schwalbacher Straße/LuisenForum",
+   "asset": "/Game/Audio/Bus/Announce/A_07"
+  },
+  {
+   "index": 9,
+   "name": "Adelheidstraße",
+   "asset": "/Game/Audio/Bus/Announce/A_08"
+  },
+  {
+   "index": 10,
+   "name": "Landeshaus",
+   "asset": "/Game/Audio/Bus/Announce/A_09"
+  },
+  {
+   "index": 11,
+   "name": "Hauptbahnhof",
+   "asset": "/Game/Audio/Bus/Announce/A_10"
+  },
+  {
+   "index": 12,
+   "name": "Mainzer Straße/1. Ring",
+   "asset": "/Game/Audio/Bus/Announce/A_11"
+  },
+  {
+   "index": 13,
+   "name": "Welfenstraße",
+   "asset": "/Game/Audio/Bus/Announce/A_12"
+  },
+  {
+   "index": 14,
+   "name": "Weidenbornstraße/JUVZ",
+   "asset": "/Game/Audio/Bus/Announce/A_13"
+  },
+  {
+   "index": 15,
+   "name": "Freizeitbad/Velvets-Theater",
+   "asset": "/Game/Audio/Bus/Announce/A_14"
+  },
+  {
+   "index": 16,
+   "name": "Kasteler Straße",
+   "asset": "/Game/Audio/Bus/Announce/A_15"
+  }
+ ]
+}

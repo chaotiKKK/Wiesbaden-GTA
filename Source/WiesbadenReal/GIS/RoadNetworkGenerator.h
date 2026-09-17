@@ -163,6 +163,18 @@ struct WIESBADENREAL_API FRoadGenerationSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
 	bool bGenerateLaneMarkings = true;
 
+	/**
+	 * Rand- und StVO-Grenzlinien aus den aufgeloesten Spur-Attributen
+	 * (FRoadSegment::LaneAttributes) erzeugen: Fahrbahnbegrenzung am Aussenrand
+	 * klassifizierter Strassen plus je Grenze der korrekte Stil (durchgezogen/
+	 * gestrichelt, Breit-/Schmalstrich). Ist dies aus, faellt BuildLaneMarkings
+	 * auf die alte Heuristik zurueck (nur Innengrenzen, Richtungstrennung
+	 * durchgezogen) - so laesst sich das Modul einzeln backen (Spec Abschnitt 9).
+	 * Greift nur zusammen mit bGenerateLaneMarkings.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
+	bool bGenerateEdgeLines = true;
+
 	/** Wenn true, werden Gehwege mit Bordstein erzeugt. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
 	bool bGenerateSidewalks = true;

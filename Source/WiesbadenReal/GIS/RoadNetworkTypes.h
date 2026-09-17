@@ -66,6 +66,51 @@ enum class ETurnType : uint8
 };
 
 /**
+ * Markierungsstil einer Spurgrenze (StVO). Treibt die Laengsmarkierung.
+ * Der konkrete Strich (durchgezogen/gestrichelt, Breite) wird beim Bau der
+ * Markierungen aus diesem Semantik-Wert abgeleitet - z. B. wird DirSplit auf
+ * klassifizierten Strassen/>=50 durchgezogen, auf Tempo-30 gestrichelt gezeichnet.
+ */
+UENUM(BlueprintType)
+enum class ELaneBoundaryStyle : uint8
+{
+	None		UMETA(DisplayName = "keine"),
+	Dashed		UMETA(DisplayName = "Leitlinie (gestrichelt)"),
+	Solid		UMETA(DisplayName = "Fahrstreifenbegrenzung (Sonderspur)"),
+	Edge		UMETA(DisplayName = "Fahrbahnbegrenzung (Rand)"),
+	DirSplit	UMETA(DisplayName = "Richtungstrennung"),
+	MAX			UMETA(Hidden)
+};
+
+/**
+ * Pro-Spur-Attribute aus den OSM-Tags eines Ways, in der Reihenfolge
+ * LaneIndexFromLeft (0 = aeusserste Linksspur in Way-Richtung). Wird einmal je
+ * Way aufgeloest (URoadTypeLibrary::ResolveLaneAttributes) und beim Spurbau auf
+ * die FRoadLane uebertragen. Datenrein - Fakten (Bus/Rad/Abbiegen) nur aus OSM,
+ * Grenzstile als Konvention aus Klasse/Anordnung.
+ */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FLaneAttributes
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Road", meta = (Bitmask, BitmaskEnum = "/Script/WiesbadenReal.ETurnIndication"))
+	uint8 TurnFlags = static_cast<uint8>(ETurnIndication::Through);
+
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	bool bIsBusLane = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	bool bIsBikeLane = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	ELaneBoundaryStyle LeftBoundary = ELaneBoundaryStyle::None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	ELaneBoundaryStyle RightBoundary = ELaneBoundaryStyle::None;
+};
+
+/**
  * Eine einzelne Fahrspur.
  *
  * Die Mittellinie ist die Sollbahn der Verkehrs-KI. Sie liegt bereits auf
@@ -113,6 +158,18 @@ struct WIESBADENREAL_API FRoadLane
 	/** True fuer Busspuren (lanes:psv, bus=designated). */
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	bool bIsBusLane = false;
+
+	/** True fuer On-Street-Radfahrstreifen (cycleway=lane/track). */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	bool bIsBikeLane = false;
+
+	/** Markierungsstil der linken bzw. rechten Spurgrenze (StVO), aus den
+	 *  Way-Tags/der Spuranordnung. Treibt die Laengsmarkierung. */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	ELaneBoundaryStyle LeftBoundary = ELaneBoundaryStyle::None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	ELaneBoundaryStyle RightBoundary = ELaneBoundaryStyle::None;
 
 	/** Laenge der Sollbahn in cm. */
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
@@ -225,6 +282,14 @@ struct WIESBADENREAL_API FRoadSegment
 
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	int32 BackwardLaneCount = 1;
+
+	/**
+	 * Pro-Spur-Attribute (Bus/Rad/Abbiegen/Grenzstil) in LaneIndexFromLeft-
+	 * Reihenfolge, Groesse = ForwardLaneCount + BackwardLaneCount. Einmal je Way
+	 * aufgeloest; leer = Defaults (Through, keine Sonderspur, keine Grenze).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	TArray<FLaneAttributes> LaneAttributes;
 
 	/** Gesamtbreite der Fahrbahn in cm (ohne Gehwege). */
 	UPROPERTY(BlueprintReadOnly, Category = "Road")

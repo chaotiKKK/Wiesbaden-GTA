@@ -376,6 +376,20 @@ void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoa
 			UE_LOG(LogWbCore, Warning, TEXT("BakeToStaticMeshes %s (%d,%d): %s"), Kind, CellX, CellY, *Err);
 			return false;
 		}
+		// WICHTIG (Commit-OOM beim Stadt-Bake): das Mesh wieder FREIGEBEN, sobald
+		// es gesichert ist. Dst->SetStaticMesh(Baked) haelt hier nur einen starken
+		// Verweis - bei ~4600 Chunks x 3 Meshes blieben sonst ALLE gebackenen
+		// Render-/Kollisionsdaten (mehrere 100 MB Raw-Daten je bake, zusammen
+		// viele GiB) bis zum ENDE des BuildCity im Speicher, obwohl das Asset
+		// laengst auf der Platte liegt. Nachfolgend setzen wir den Verweis
+		// wegweisend NICHT auf das frische Objekt, sondern laden das Mesh beim
+		// SPATEREN Gebrauch lazy - dazu gehoert der Komponenten-Verweis nach dem
+		// Bake nur noch als Pfad, nicht als Objekt.
+		//
+		// Kurzfristig muss der Slot jedoch etwas anzeigen: Wir geben das Mesh
+		// frei, indem die Komponente den Verweis verwirft, sobald die Welt
+		// gespeichert wurde. Das loest der WorldBuilder nach SpawnCityChunks mit
+		// UnloadBakedChunkMeshes (Purge + GC), nicht hier.
 		Dst->SetStaticMesh(Baked);
 		Dst->SetWorldLocation(GetActorLocation());   // Geometrie steckt in Weltkoordinaten
 		Dst->SetCollisionEnabled(bCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
@@ -461,6 +475,23 @@ void AWiesbadenCityChunk::BakeToStaticMeshes(int32 CellX, int32 CellY, bool bRoa
 	// Bounds neu auf den Zell-Inhalt ankern - jetzt tragen die StaticMesh-
 	// Komponenten die Geometrie, die (geleerten) ProcMeshes nur Punkt-Bounds.
 	AnchorStreamingBounds();
+#endif
+}
+
+void AWiesbadenCityChunk::UnloadBakedChunkMeshes()
+{
+#if WITH_EDITOR
+	// Verweise auf die frisch gebackenen Meshes verwerfen, damit die Pakete
+	// (und mit ihnen RenderData + gekochte Kollision) beim naechsten Purge/GC
+	// freigegeben werden koennen. Die Komponenten bleiben bestehen (sie werden
+	// von der gebackenen Karte beim Stream-in neu verdrahtet).
+	for (UStaticMeshComponent* SM : { RoadStaticMesh, BuildingStaticMesh, RoadCollisionStaticMesh })
+	{
+		if (SM)
+		{
+			SM->SetStaticMesh(nullptr);
+		}
+	}
 #endif
 }
 

@@ -104,21 +104,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoreUnlockEffectsTest,
 
 bool FStoreUnlockEffectsTest::RunTest(const FString& Parameters)
 {
-	// Standard-Verhalten: Heli-Tor nur mit gekauftem Hangar.
-	TestFalse(TEXT("ohne Hangar gesperrt"), FWiesbadenStore::MayEnterHelicopter(false));
-	TestTrue(TEXT("mit Hangar erlaubt"), FWiesbadenStore::MayEnterHelicopter(true));
+	// Hangar-Kauf entfernt: der Heli ist IMMER einsteigbar, unabhaengig von einem
+	// Hangar-Unlock - und es wird nie ein Kauf-Hinweis gezeigt.
+	TestTrue(TEXT("Heli ohne Hangar erlaubt"), FWiesbadenStore::MayEnterHelicopter(false));
+	TestTrue(TEXT("Heli mit Hangar erlaubt"), FWiesbadenStore::MayEnterHelicopter(true));
+	TestFalse(TEXT("kein Hangar-Kauf-Hinweis"), FWiesbadenStore::ShouldShowHangarPurchaseHint());
 
-	// DEBUG-Modus: wenn WbDev_AllowHelicopterWithoutHangar definiert ist,
-	// ist das Tor immer offen — das ist die Entwicklerwahl, kein Spielerweg.
-	#if defined(WbDev_AllowHelicopterWithoutHangar)
-	TestTrue(TEXT("DEBUG: Heli ohne Hangar erlaubt"), FWiesbadenStore::MayEnterHelicopter(false));
-	#else
-	TestFalse(TEXT("nicht-DEBUG: Heli ohne Hangar gesperrt"), FWiesbadenStore::MayEnterHelicopter(false));
-	#endif
-
-	// Effekt-Ids passend zum Katalog (Data/Store/unlocks.json), gesetzt und verschieden.
-	TestEqual(TEXT("Hangar-Id"), FWiesbadenStore::HelikopterHangarId().ToString(),
-		FString(TEXT("helikopter_hangar")));
+	// Katalog-Id fuer den Premium-Stadtplan (Hangar wurde aus dem Angebot entfernt).
 	TestEqual(TEXT("Stadtplan-Id"), FWiesbadenStore::PremiumStadtplanId().ToString(),
 		FString(TEXT("premium_stadtplan")));
 	TestTrue(TEXT("Hangar-Id != None"), FWiesbadenStore::HelikopterHangarId() != NAME_None);

@@ -17,7 +17,21 @@ Build/
 
 # === Rohdaten (offline beschafft, sehr gross, nicht regenerierbar aus Code) ===
 # OSM/DEM/ALKIS liegen in Data/Raw und sind zu gross fuer Git.
-Data/Raw/
+#
+# AUSNAHME: die Liniendateien, die der Bus-Actor zur LAUFZEIT liest
+#   Data/Raw/Bus/line<ref>.json, line<ref>_schedule.json, announce_line<ref>.json
+# Sie sind klein (zusammen ~75 kB) und nicht aus dem Code ableitbar, ohne OSM
+# erneut zu befragen - ohne sie faehrt nach einem frischen Checkout keine Linie
+# (der Actor liest sie ueber FPaths::ProjectDir()/Data/Raw/Bus).
+#
+# Merke: "Es ist nicht moeglich, eine Datei wieder einzuschliessen, wenn ein
+# ELTERNVERZEICHNIS ausgeschlossen ist" -> darum Data/Raw/* statt Data/Raw/,
+# sonst greift "!Data/Raw/Bus/..." ueberhaupt nicht (genau dieser Fehler hatte
+# line3.json unbemerkt aus dem Baum gehalten).
+Data/Raw/*
+!Data/Raw/Bus/
+Data/Raw/Bus/*
+!Data/Raw/Bus/*.json
 
 # === Gebackene World-Partition-Karte (26 GB, regenerierbar via rebuild_stadt.cmd) ===
 Content/__ExternalActors__/
