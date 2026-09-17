@@ -63,6 +63,28 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli")
 	float GetMainRotorRpm() const;
 
+	/**
+	 * Traegt der Heli das importierte Ka-52-Modell (statt der Wuerfel-Notloesung)?
+	 *
+	 * Das importierte Modell bringt seine eigenen PBR-Materialien mit. Die alte
+	 * Zell-Tarnung (M_WbHelicopter) darf dann NICHT daruebergelegt werden, sonst
+	 * sieht der neue Heli aus wie der alte - der GameMode fragt das vor dem
+	 * Lackieren ab.
+	 */
+	bool HasImportedModel() const { return bImportedModel; }
+
+	/** Durchmesser des oberen Rotorkreises in cm (aus der Geometrie gemessen). */
+	double GetUpperRotorDiameterCm() const;
+
+	/**
+	 * Laenge des Rumpfes in cm (aus der Geometrie gemessen).
+	 *
+	 * Fuer den Standabstand zweier geparkter Maschinen: nebeneinander aufgestellt
+	 * begrenzen entweder die Rotorkreise oder die Rumpflaengen den Abstand -
+	 * beides kommt aus dem Mesh, nicht aus zweiten Zahlen.
+	 */
+	double GetNoseToTailCm() const;
+
 	// -- Cockpit-Instrumente ----------------------------------------------
 	// Telemetrie fuer die Cockpit-Anzeige (WiesbadenVehicleHUD). Bewusst als
 	// einfache Abfragen aus dem bereits gefuehrten Flugzustand.
@@ -132,6 +154,9 @@ public:
 
 	/** Triebwerk laeuft; sonst arbeitet der Rotor nur ueber Autorotation. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Heli|Physik")
+	/** Im Konstruktor gesetzt: importiertes Ka-52-Netz gebunden (eigene Materialien). */
+	bool bImportedModel = false;
+
 	bool bEngineRunning = false;
 
 	// -- Fahrzeug-Integration (Kraft/Drehmoment -> Bewegung) --------------

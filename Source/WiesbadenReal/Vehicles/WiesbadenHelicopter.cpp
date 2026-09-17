@@ -67,36 +67,27 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	//  - Die Bounding Box ist bei einem GEPARKTEN Rotor irrefuehrend, weil die
 	//    Blaetter ungleich stehen; ihr Mittelpunkt liegt irgendwo dazwischen.
 	//
-	// Der MEDIAN der Vertex-Koordinaten trifft dagegen die Nabe, weil dort die
-	// dichteste Geometrie sitzt. Gemessen ergibt er fuer beide Rotoren
-	// unabhaengig voneinander praktisch denselben Punkt - oberer Rotor
-	// (-0,4 | 34,0), unterer (-0,1 | 32,6) - was fuer ein Koaxialpaar auch so
-	// sein MUSS und die Messung gegenseitig bestaetigt.
-	const FVector2D RotorHubInModelCm(0.0f, 33.0f);
-
-	// Wo sitzt der Mast AM RUMPF?
-	//
-	// Das ist eine andere Frage als die vorige, und ich habe sie zunaechst
-	// verwechselt: Die Rotoren tragen ihren eigenen lokalen Ursprung, sie sind
-	// NICHT gemeinsam mit dem Rumpf in einer Szene platziert worden. Setzt man
-	// die Naben auf den Rotor-Median, landen sie nach der Gierdrehung dicht an
-	// der Rumpfspitze statt in der Mitte.
-	//
-	// Am Rumpfmodell gemessen: Die oberste Geometrie ueber 94 Prozent der
-	// Bauhoehe reicht von y = -60 (Leitwerk, die hoechste Struktur ueberhaupt)
-	// bis y = +8. Klammert man das Leitwerk aus, liegt der Schwerpunkt der
-	// hohen Aufbauten bei etwa (1 | -5) - dort sitzt der Mast.
-	const FVector2D MastInBodyModelCm(1.0f, -5.0f);
+	// Neubau 2026-09-17 (Import /Game/Vehicles/Ka52, Blender-Pipeline 23-25):
+	// Das Modell liegt bereits im WISSENDEN Massstab (x15) und mit EINGEBAKENER
+	// Weltlage: Die Rotor-Achse liegt in Mesh-XY exakt bei (0, 0), die Geometrie
+	// in Gebaeude-z (Boden 0, oberer Hub 330..501, unterer 222..376, Rumpf
+	// 0..295). Pivots und Median-Offsets des alten Assets entfallen - die Nabe
+	// sitzt per Definition auf der Achse (gemessen: Bohrung 2 cm off-axis,
+	// Blatt-Gaps exakt 120 Grad, Round-Trip ueber GLB UND FBX verifiziert).
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> HeliBodyMesh(
-		TEXT("/Game/Assets/Landmarks/HeliBody/StaticMeshes/SM_HeliBody.SM_HeliBody"));
+		TEXT("/Game/Vehicles/Ka52/Fuselage.Fuselage"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> HeliRotorUpperMesh(
-		TEXT("/Game/Assets/Landmarks/HeliRotorUpper/StaticMeshes/SM_HeliRotorUpper.SM_HeliRotorUpper"));
+		TEXT("/Game/Vehicles/Ka52/Rotor_Upper.Rotor_Upper"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> HeliRotorLowerMesh(
-		TEXT("/Game/Assets/Landmarks/HeliRotorLower/StaticMeshes/SM_HeliRotorLower.SM_HeliRotorLower"));
+		TEXT("/Game/Vehicles/Ka52/Rotor_Lower.Rotor_Lower"));
 
 	UStaticMesh* HeliBody = HeliBodyMesh.Succeeded() ? HeliBodyMesh.Object : nullptr;
 	UStaticMesh* HeliRotorUpper = HeliRotorUpperMesh.Succeeded() ? HeliRotorUpperMesh.Object : nullptr;
 	UStaticMesh* HeliRotorLower = HeliRotorLowerMesh.Succeeded() ? HeliRotorLowerMesh.Object : nullptr;
+
+	// Importiertes Modell gebunden? Dann bleiben seine eigenen PBR-Materialien
+	// stehen (siehe HasImportedModel) - nur der Wuerfel-Rueckfall wird lackiert.
+	bImportedModel = (HeliBody != nullptr);
 
 	// Massstab: Das Modell ist ein Kamov Ka-52 - Koaxialrotor, keine
 	// Heckrotor. Genau die Bauart, die RotorPhysics bereits abbildet
@@ -109,25 +100,16 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	//   Rotordurchmesser 14,5 m / 0,88 m = 16,5
 	// Die ersten beiden stuetzen sich gegenseitig; der dritte faellt hoeher
 	// aus, weil die Blaetter im Modell etwas kuerzer geraten sind. Gewaehlt
-	// wird 14,5 - damit stimmen Rumpf und Spannweite, und die Rotorscheibe
-	// misst 12,8 m statt 14,5 m.
-	constexpr float ModelBodyLengthCm = 100.7f;
-	constexpr float TargetBodyLengthCm = 1460.0f;
-	const float ModelScale = TargetBodyLengthCm / ModelBodyLengthCm;
+	// Der Neubau ist already-scaled: Rumpflaenge 14,06 m, Rotorscheiben
+	// 15,6 m (oben) / 16,0 m (unten) - direkt die echten Ka-52-Masse.
+	constexpr float ModelScale = 1.0f;
 
-	// Hoehenlage: Der Rumpf sitzt auf Kufenhoehe, die Rotoren auf dem Mast
-	// darueber. Die Werte richten sich nach der Bauhoehe des Ka-52 von 4,9 m.
-	constexpr float FuselageHeightCm = 0.0f;   // Modell-Ursprung liegt an der Rumpfunterseite (Bounds z 0..17,1)
-
-	// Rotorhoehen ueber der Kufenebene.
-	//
-	// Der Rumpf ist im Modell 16,45 cm hoch, skaliert also rund 238 cm. Mit den
-	// vorherigen 430 und 380 cm schwebte das Rotorpaar anderthalb Meter ueber
-	// dem Dach. Der Rotorkopf eines Ka-52 sitzt auf einem kurzen Mast dicht
-	// darueber; die Bauhoehe von 4,9 m wird von den Blattspitzen erreicht,
-	// nicht vom Mastfuss.
-	constexpr float UpperRotorHeightCm = 345.0f;
-	constexpr float LowerRotorHeightCm = 300.0f;
+	// Hoehenlage: Der Modell-Ursprung liegt an der Kufenebene (Bounds z 0..295).
+	// Rotor-Naben auf den gemessenen Hub-Positionen des Exports (Pivot z 495 /
+	// 376,5 cm) - die Blattspitzen erreichen damit die Bauhoehe von 5,0 m.
+	constexpr float FuselageHeightCm = 0.0f;
+	constexpr float UpperRotorHeightCm = 495.0f;
+	constexpr float LowerRotorHeightCm = 376.5f;
 
 	// Gierdrehung, die Modell-+Y auf Welt-+X legt.
 	const FRotator ModelYaw(0.0f, -90.0f, 0.0f);
@@ -178,15 +160,10 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	// Hauptrotor: Nabe auf dem Mast (leicht vor dem Schwerpunkt, ueber dem Rumpf).
 	MainRotorHub = CreateDefaultSubobject<USceneComponent>(TEXT("MainRotorHub"));
 	MainRotorHub->SetupAttachment(SceneRoot);
-	// Zwei verschiedene Groessen, sauber getrennt:
-	//  MastOffset   - wo die Nabe AM RUMPF sitzt (Position der Nabenkomponente)
-	//  RotorSelfHub - wo im ROTORMESH dessen eigene Drehachse liegt
-	// Die Nabe kommt an den Mast; das Mesh wird um seinen Eigenversatz
-	// zurueckgeschoben, damit die Scheibe genau dort kreist.
-	const FVector MastOffset =
-		ModelYaw.RotateVector(FVector(MastInBodyModelCm.X, MastInBodyModelCm.Y, 0.0f)) * ModelScale;
-	const FVector RotorSelfHub =
-		ModelYaw.RotateVector(FVector(RotorHubInModelCm.X, RotorHubInModelCm.Y, 0.0f)) * ModelScale;
+	// Die Nabe sitzt beim Neubau in Mesh-XY auf (0, 0); der Hub-Node traegt nur
+	// noch die Hub-Hoehe, das Mesh wird um sie nach unten versetzt, damit die
+	// Geometrie an ihrem gebakten Platz bleibt und trotzdem um den Hub kreist.
+	const FVector MastOffset = FVector::ZeroVector;
 
 	MainRotorHub->SetRelativeLocation(
 		FVector(MastOffset.X, MastOffset.Y, UpperRotorHeightCm));
@@ -198,14 +175,10 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 		MainRotorBlade->SetStaticMesh(HeliRotorUpper);
 		MainRotorBlade->SetRelativeScale3D(FVector(ModelScale));
 		MainRotorBlade->SetRelativeRotation(ModelYaw);
-		// Um den Nabenversatz zurueckschieben: die Scheibe bleibt dort, wo sie
-		// hingehoert, dreht sich aber jetzt um ihre eigene Nabe.
-		//
-		// Der Versatz muss GEDREHT abgezogen werden, in denselben Achsen wie
-		// die Geometrie. Zog man den ungedrehten Modellvektor ab, verschob sich
-		// die Scheibe um die Differenz beider Richtungen - im Bild sass sie
-		// dann weit neben dem Rumpf.
-		MainRotorBlade->SetRelativeLocation(-RotorSelfHub);
+		// Hub-Hoehe aus der Geometrie heraus: der Mesh-Ursprung liegt am Boden
+		// auf der Achse, also hebt der reine z-Versatz die Geometrie nicht -
+		// sie bleibt am gebakten Ort und dreht sich um die Hub-Achse.
+		MainRotorBlade->SetRelativeLocation(FVector(0.0f, 0.0f, -UpperRotorHeightCm));
 	}
 	else if (Cube)
 	{
@@ -219,6 +192,7 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	LowerRotorHub->SetupAttachment(SceneRoot);
 	LowerRotorHub->SetRelativeLocation(
 		FVector(MastOffset.X, MastOffset.Y, LowerRotorHeightCm));
+	// (siehe oben: MastOffset ist beim Neubau (0,0,0) - die Achse sitzt zentriert)
 
 	LowerRotorBlade = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LowerRotorBlade"));
 	LowerRotorBlade->SetupAttachment(LowerRotorHub);
@@ -227,7 +201,7 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 		LowerRotorBlade->SetStaticMesh(HeliRotorLower);
 		LowerRotorBlade->SetRelativeScale3D(FVector(ModelScale));
 		LowerRotorBlade->SetRelativeRotation(ModelYaw);
-		LowerRotorBlade->SetRelativeLocation(-RotorSelfHub);
+		LowerRotorBlade->SetRelativeLocation(FVector(0.0f, 0.0f, -LowerRotorHeightCm));
 	}
 	else if (Cube)
 	{
@@ -267,13 +241,15 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 		TEXT("/Game/Materials/City/M_WbDownwash.M_WbDownwash"));
 	UStaticMesh* Disc = CylMesh.Succeeded() ? CylMesh.Object : nullptr;
 
-	// Rotorscheibe misst ~12,8 m -> Zylinder (Durchmesser 100 cm) auf 12,8
-	// skalieren, flach (2 cm). Sitzt an der jeweiligen Nabe und blendet mit der
-	// Drehzahl ein (Opacity per MID), waehrend die soliden Blaetter ausblenden.
-	const FVector BlurScale(12.8f, 12.8f, 0.02f);
+	// Rotorscheiben des Neubaus: 15,6 m (oben) / 16,0 m (unten) Blattkreis ->
+	// Zylinder (Durchmesser 100 cm) entsprechend skalieren, flach (2 cm). Sitzt
+	// an der jeweiligen Nabe und blendet mit der Drehzahl ein (Opacity per MID),
+	// waehrend die soliden Blaetter ausblenden.
+	const FVector BlurScaleUpper(15.6f, 15.6f, 0.02f);
+	const FVector BlurScaleLower(16.0f, 16.0f, 0.02f);
 	UpperRotorBlur = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("UpperRotorBlur"));
 	UpperRotorBlur->SetupAttachment(MainRotorHub);
-	UpperRotorBlur->SetRelativeScale3D(BlurScale);
+	UpperRotorBlur->SetRelativeScale3D(BlurScaleUpper);
 	UpperRotorBlur->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	UpperRotorBlur->SetCastShadow(false);
 	if (Disc) { UpperRotorBlur->SetStaticMesh(Disc); }
@@ -281,7 +257,7 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 
 	LowerRotorBlur = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LowerRotorBlur"));
 	LowerRotorBlur->SetupAttachment(LowerRotorHub);
-	LowerRotorBlur->SetRelativeScale3D(BlurScale);
+	LowerRotorBlur->SetRelativeScale3D(BlurScaleLower);
 	LowerRotorBlur->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	LowerRotorBlur->SetCastShadow(false);
 	if (Disc) { LowerRotorBlur->SetStaticMesh(Disc); }
@@ -490,6 +466,29 @@ void AWiesbadenHelicopter::CycleCameraMode()
 EWiesbadenVehicleCameraMode AWiesbadenHelicopter::GetCameraMode() const
 {
 	return VehicleCamera ? VehicleCamera->GetCameraMode() : EWiesbadenVehicleCameraMode::Follow;
+}
+
+double AWiesbadenHelicopter::GetUpperRotorDiameterCm() const
+{
+	if (!MainRotorBlade || !MainRotorBlade->GetStaticMesh())
+	{
+		return 0.0;
+	}
+	const FVector Size = MainRotorBlade->GetStaticMesh()->GetBoundingBox().GetSize();
+	return FMath::Max(Size.X, Size.Y) * MainRotorBlade->GetRelativeScale3D().X;
+}
+
+double AWiesbadenHelicopter::GetNoseToTailCm() const
+{
+	if (!FuselageMesh || !FuselageMesh->GetStaticMesh())
+	{
+		return 0.0;
+	}
+	// Im Mesh liegt die Laengsachse auf Y (14,06 m), quer dazu die 8,7 m
+	// Stummelfluegel - max(X, Y) trifft die Laengsachse und bleibt auch fuer
+	// den Wuerfel-Rueckfall richtig.
+	const FVector Size = FuselageMesh->GetStaticMesh()->GetBoundingBox().GetSize();
+	return FMath::Max(Size.X, Size.Y) * FuselageMesh->GetRelativeScale3D().X;
 }
 
 float AWiesbadenHelicopter::GetMainRotorRpm() const

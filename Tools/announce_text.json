@@ -1,0 +1,135 @@
+[
+ {
+  "idx": 0,
+  "file": "A_00.wav",
+  "asset": "A_00",
+  "name": "Nordfriedhof",
+  "text": "Nächster Halt: Nordfriedhof."
+ },
+ {
+  "idx": 1,
+  "file": "A_01.wav",
+  "asset": "A_01",
+  "name": "Wolkenbruch",
+  "text": "Nächster Halt: Wolkenbruch."
+ },
+ {
+  "idx": 2,
+  "file": "A_02.wav",
+  "asset": "A_02",
+  "name": "Ruhbergstraße",
+  "text": "Nächster Halt: Ruhbergstraße."
+ },
+ {
+  "idx": 3,
+  "file": "A_03.wav",
+  "asset": "A_03",
+  "name": "Rothstraße",
+  "text": "Nächster Halt: Rothstraße."
+ },
+ {
+  "idx": 4,
+  "file": "A_04.wav",
+  "asset": "A_04",
+  "name": "Adlerstraße",
+  "text": "Nächster Halt: Adlerstraße."
+ },
+ {
+  "idx": 5,
+  "file": "A_05.wav",
+  "asset": "A_05",
+  "name": "Michelsberg",
+  "text": "Nächster Halt: Michelsberg."
+ },
+ {
+  "idx": 6,
+  "file": "A_06.wav",
+  "asset": "A_06",
+  "name": "Platz der Deutschen Einheit",
+  "text": "Nächster Halt: Platz der Deutschen Einheit."
+ },
+ {
+  "idx": 7,
+  "file": "A_07.wav",
+  "asset": "A_07",
+  "name": "Schwalbacher Straße/LuisenForum",
+  "text": "Nächster Halt: Schwalbacher Straße, LuisenForum."
+ },
+ {
+  "idx": 8,
+  "file": "A_08.wav",
+  "asset": "A_08",
+  "name": "Adelheidstraße",
+  "text": "Nächster Halt: Adelheidstraße."
+ },
+ {
+  "idx": 9,
+  "file": "A_09.wav",
+  "asset": "A_09",
+  "name": "Landeshaus",
+  "text": "Nächster Halt: Landeshaus."
+ },
+ {
+  "idx": 10,
+  "file": "A_10.wav",
+  "asset": "A_10",
+  "name": "Hauptbahnhof",
+  "text": "Nächster Halt: Hauptbahnhof."
+ },
+ {
+  "idx": 11,
+  "file": "A_11.wav",
+  "asset": "A_11",
+  "name": "Mainzer Straße/1. Ring",
+  "text": "Nächster Halt: Mainzer Straße, 1. Ring."
+ },
+ {
+  "idx": 12,
+  "file": "A_12.wav",
+  "asset": "A_12",
+  "name": "Welfenstraße",
+  "text": "Nächster Halt: Welfenstraße."
+ },
+ {
+  "idx": 13,
+  "file": "A_13.wav",
+  "asset": "A_13",
+  "name": "Weidenbornstraße/JUVZ",
+  "text": "Nächster Halt: Weidenbornstraße, JUVZ."
+ },
+ {
+  "idx": 14,
+  "file": "A_14.wav",
+  "asset": "A_14",
+  "name": "Freizeitbad/Velvets-Theater",
+  "text": "Nächster Halt: Freizeitbad, Velvets-Theater."
+ },
+ {
+  "idx": 15,
+  "file": "A_15.wav",
+  "asset": "A_15",
+  "name": "Kasteler Straße",
+  "text": "Nächster Halt: Kasteler Straße."
+ },
+ {
+  "idx": 16,
+  "file": "A_16.wav",
+  "asset": "A_16",
+  "name": "Bahnhof Wiesbaden Ost",
+  "text": "Nächster Halt: Bahnhof Wiesbaden Ost."
+ },
+ {
+  "idx": 17,
+  "file": "A_17.wav",
+  "asset": "A_17",
+  "name": "Dyckerhoffstraße",
+  "text": "Nächster Halt: Dyckerhoffstraße."
+ },
+ {
+  "idx": 18,
+  "file": "A_18.wav",
+  "asset": "A_18",
+  "name": "Mudra-Kaserne",
+  "text": "Nächster Halt: Mudra-Kaserne."
+ }
+]

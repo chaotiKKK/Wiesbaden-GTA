@@ -47,6 +47,12 @@ public:
 	 */
 	void SetRiding(bool bInRiding) { bRiding = bInRiding; }
 
+	/** Faehrt der Spieler gerade mit? Seit es ZWEI Bus-Actoren gibt (Linie 6 und
+	 *  Linie 3), muss der Einstieg fragen, ob schon jemand den Fahrgast hat:
+	 *  beide Actors sehen denselben Tastendruck und haetten sich sonst beide
+	 *  denselben Pawn angehaengt (jeder mit eigenem Anker). */
+	bool IsRiding() const { return bRiding; }
+
 	// -- Gesundheit ---------------------------------------------------------
 	/**
 	 * Gesundheit der Figur in Punkten.

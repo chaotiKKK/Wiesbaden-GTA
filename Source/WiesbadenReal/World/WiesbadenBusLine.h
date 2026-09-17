@@ -28,6 +28,14 @@ namespace WiesbadenBusLine
 		double ArcLengthCm = 0.0;   // Position entlang der Polylinie
 		bool bForward = true;       // Hinrichtung true, Rueckrichtung false
 		bool bDwelling = false;     // haelt gerade an einer Halte
+		/** Restsekunden der laufenden Verweilphase (0, wenn keine laeuft). An
+		 *  der Endhalte ist das die Wendezeit - nur so ist im Log nachweisbar,
+		 *  dass dort wirklich 600 s ablaufen und nicht nur ein paar Sekunden. */
+		double DwellRemainingSeconds = 0.0;
+		/** Gesamtdauer der laufenden Verweilphase (0, wenn keine laeuft).
+		 *  Zusammen mit der Restzeit belegt sie die VOLLE Wendezeit auch dann,
+		 *  wenn die Probe mitten in der Wendezeit liegt: "noch 480 s von 600 s". */
+		double DwellTotalSeconds = 0.0;
 	};
 
 	/** Dauer einer vollstaendigen Rundfahrt (Hin + Rueck inkl. aller Verweilzeiten). */
@@ -57,12 +65,89 @@ namespace WiesbadenBusLine
 	 * Echter Fahrplan: Abfahrtszeiten am Terminus (Sekunden seit 00:00 Uhr,
 	 * aufsteigend) und Tageslaenge zum Umlaufen. Statt gleichverteilter Offsets
 	 * faehrt jeder Bus einen konkreten Kurs, der zur Fahrplanminute abfaehrt.
+	 *
+	 * ACHTUNG: seit dem Dauerbetrieb (17.09.2026) ist das nur noch der zweite
+	 * Modus. Standard ist die Flotte (FBusVehicle) - feste Wagen, die ihren Umlauf
+	 * ununterbrochen fahren und an BEIDEN Endpunkten ihre Wendezeit abwarten.
 	 */
 	struct FBusSchedule
 	{
 		TArray<double> DepartureSeconds;   // Abfahrten ab Terminus, Sek. seit 00:00
 		double DaySeconds = 86400.0;       // Tageslaenge (Fahrplan wiederholt sich taeglich)
 	};
+
+	/**
+	 * Ein festes Fahrzeug im Dauerbetrieb.
+	 *
+	 * `Id` ist die Wagen-Nummer: sie bleibt dem Fahrzeug fuer die ganze Dienstzeit
+	 * - der Bus, den man an der Halte stehen sieht, ist spaeter an der anderen
+	 * Halte derselbe (und im Mitfahrbetrieb heisst er genauso). Die frueher
+	 * verwendete Zuordnung "Kurs-Index modulo Poolgroesse" tauschte Wagen
+	 * gegeneinander aus, sobald ein Kurs endete.
+	 */
+	struct FBusVehicle
+	{
+		int32 Id = 0;               // feste Wagen-Nummer (siehe FServiceConfig::FirstVehicleId)
+		double PhaseSeconds = 0.0;  // Abfahrt dieses Wagens am Anfangspunkt (Sek.)
+	};
+
+	/**
+	 * Dienstparameter eines Umlaufs. Aus ihnen folgen Umlaufdauer und Flotte -
+	 * Bus und Haltestellenmonitor rechnen damit dieselben Zeiten.
+	 */
+	struct FServiceConfig
+	{
+		double CruiseSpeedCmS = 0.0;
+		double StopDwellSeconds = 8.0;
+		double TerminusDwellSeconds = 600.0;   // 10 min Wendezeit an BEIDEN Enden
+		double HeadwaySeconds = 1200.0;        // angestrebter Takt
+		int32 MaxBuses = 12;                   // Obergrenze des Pools
+
+		/**
+		 * Nummer des ersten Wagens; die weiteren zaehlen fortlaufend weiter.
+		 *
+		 * Beide Linien fahren in DERSELBEN Welt und schreiben in dasselbe Log: mit
+		 * "1..N" je Linie hiessen zwei fahrende Busse gleich "Wagen 2". Der Actor
+		 * setzt deshalb das Hundertfache der Liniennummer davor (Linie 6 -> 601,
+		 * Linie 3 -> 301), sodass eine Wagen-Nummer im Log, am Steg und in der
+		 * Mitfahrt genau ein Fahrzeug bezeichnet.
+		 */
+		int32 FirstVehicleId = 1;
+	};
+
+	/**
+	 * Flotte und Umlaufdauer aus einem Dienstauftrag bauen.
+	 *
+	 * Anzahl = ceil(Umlauf/Takt), mindestens 2, hoechstens MaxBuses; die Wagen
+	 * starten GLEICHMAESSIG ueber den Umlauf verteilt. Damit ist der Abstand
+	 * zwischen zwei Abfahrten nie groesser als der gewuenschte Takt (bei einem
+	 * Umlauf, der kein Vielfaches des Takts ist, sogar kleiner - ein Rest-Takt von
+	 * 2 Minuten waere schlechter als gleichmaessige 17,5).
+	 */
+	WIESBADENREAL_API void BuildFleet(const FBusRoute& Route, const FServiceConfig& Config,
+		double& OutCycleSeconds, TArray<FBusVehicle>& OutFleet);
+
+	/**
+	 * Wo ist Wagen V zur Dienstzeit ServiceSeconds?
+	 *
+	 * Rein periodisch: der Umlauf wiederholt sich unendlich (durchgehender
+	 * Betrieb) - ein Wagen kurz VOR seiner Abfahrt ist also noch im Ruecklauf des
+	 * vorigen Umlaufs und nicht etwa geparkt. Negative Zeiten werden entsprechend
+	 * umlaufen (kein Clamp auf 0).
+	 */
+	WIESBADENREAL_API FBusState FleetStateAt(double ServiceSeconds, const FBusVehicle& Vehicle,
+		const FBusRoute& Route, double CruiseSpeedCmS,
+		double StopDwellSeconds, double TerminusDwellSeconds);
+
+	/**
+	 * Die naechsten MaxCount Durchfahrten an einer Halte (Hinfahrt) aus der Flotte:
+	 * je Wagen ist die naechste Durchfahrt Phase + OffsetToStopSeconds + k*Umlauf.
+	 * Reihenfolge nach Restzeit, aufsteigend - die Anzeigetafel bekommt damit
+	 * dieselben Zeiten, die die Busse tatsaechlich fahren.
+	 */
+	WIESBADENREAL_API void FleetDepartures(double ServiceSeconds, const TArray<FBusVehicle>& Fleet,
+		double CycleSeconds, double OffsetToStopSeconds, int32 MaxCount,
+		TArray<double>& OutSecondsUntil);
 
 	/** Ein gerade fahrender Kurs: seit Abfahrt verstrichene Zeit + stabiler Index. */
 	struct FBusRun
@@ -88,6 +173,14 @@ namespace WiesbadenBusLine
 	 */
 	WIESBADENREAL_API double SecondsToStop(const FBusRoute& Route, double CruiseSpeedCmS,
 		double StopDwellSeconds, int32 StopIndex);
+
+	/**
+	 * Dasselbe fuer BEIDE Richtungen: `bForward` = Hinfahrt, sonst Gegenrichtung
+	 * (deren Wagen erreichen die Halte erst nach Hinfahrt + Wendezeit + Rueckfahrt).
+	 * Fuer die zwei Saeulen an einer Halte - je Strassenseite eine Richtung.
+	 */
+	WIESBADENREAL_API double SecondsToStopOnLeg(const FBusRoute& Route, double CruiseSpeedCmS,
+		double StopDwellSeconds, double TerminusDwellSeconds, int32 StopIndex, bool bForward);
 
 	/**
 	 * Die naechsten MaxCount Durchfahrten an einer Halte ab ServiceSeconds:

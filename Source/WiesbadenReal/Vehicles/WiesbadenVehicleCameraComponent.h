@@ -197,6 +197,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Kamera")
 	void AddCockpitHiddenMesh(UPrimitiveComponent* Mesh);
 
+	/**
+	 * Verborgenes Mesh wieder sichtbar machen.
+	 *
+	 * Beim Aussteigen muss die eigene Aussenhaut zurueckkommen - sonst bliebe der
+	 * Bus fuer den Spieler dauerhaft durchsichtig. Ohne diesen Gegenpart gab es
+	 * nur AddCockpitHiddenMesh, und die Liste lebte bis zur Zerstoerung der Kamera.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Kamera")
+	void RemoveCockpitHiddenMesh(UPrimitiveComponent* Mesh);
+
 	/** Kamera-Rig an einen bewegten Unterpunkt, z. B. einen Bahnwagen, haengen. */
 	void SetCameraAnchor(USceneComponent* Anchor);
 

@@ -20,11 +20,20 @@ RAW = os.path.join(unreal.Paths.project_dir(), "Data", "Raw", "Bus", "blind")
 if not EAL.does_directory_exist(DEST):
     EAL.make_directory(DEST)
 
+# Eine Zeile je Schild - dieselbe Liste steht in make_bus_blind_textures.py, das die
+# PNGs erzeugt. Slots, die es schon gibt, werden ersetzt (replace_existing), die
+# Assetnamen bleiben gleich; neue Linien kommen hier dazu.
 FILES = [("blind_mainz.png", "T_WbBlindMainz", "M_WbBlindMainz"),
          ("blind_nord.png", "T_WbBlindNord", "M_WbBlindNord"),
-         ("blind_route6.png", "T_WbBlindRoute6", "M_WbBlindRoute6")]
+         ("blind_route6.png", "T_WbBlindRoute6", "M_WbBlindRoute6"),
+         ("blind_l3_rheinufer.png", "T_WbBlindL3Rheinufer", "M_WbBlindL3Rheinufer"),
+         ("blind_l3_nordfriedhof.png", "T_WbBlindL3Nordfriedhof", "M_WbBlindL3Nordfriedhof"),
+         ("blind_l3_route3.png", "T_WbBlindL3Route3", "M_WbBlindL3")]
 
 def import_texture(png, tex_name):
+    if not os.path.exists(os.path.join(RAW, png)):
+        log("uebersprungen (PNG fehlt): %s" % png)
+        return None
     path = DEST + "/" + tex_name
     t = unreal.AssetImportTask()
     t.set_editor_property("filename", os.path.join(RAW, png))
@@ -65,3 +74,9 @@ for png, tex_name, mat_name in FILES:
     log("%s + %s" % (tex_name, mat_name))
 
 log("ENDE ok=%d/%d" % (ok, len(FILES)))
+
+# Editor beenden: ohne das laeuft der -run=pythonscript-Aufruf nach dem Skript
+# weiter und haelt seine Logdatei offen - der naechste Lauf bricht dann mit
+# "Datei wird von einem anderen Prozess verwendet" ab (siehe AGENTS.md).
+if unreal.SystemLibrary.get_command_line().find("-unattended") >= 0:
+    unreal.SystemLibrary.quit_editor()

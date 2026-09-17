@@ -169,6 +169,13 @@ void UWiesbadenVehicleCameraComponent::AddCockpitHiddenMesh(UPrimitiveComponent*
 	}
 }
 
+void UWiesbadenVehicleCameraComponent::RemoveCockpitHiddenMesh(UPrimitiveComponent* Mesh)
+{
+	if (!Mesh) { return; }
+	CockpitHiddenMeshes.Remove(Mesh);
+	Mesh->SetOwnerNoSee(false);
+}
+
 void UWiesbadenVehicleCameraComponent::HandleInput(float DeltaTime)
 {
 #if !UE_BUILD_SHIPPING

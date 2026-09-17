@@ -1,9 +1,15 @@
 """Erzeugt authentische ESWE-Punktmatrix-Blinds als PNG (Bernstein-LEDs auf Dunkel).
 
-Ausgabe nach Data/Raw/Bus/blind/:
-  blind_mainz.png   (breit)  "[6]  Mainz-Gonsenheim"   - Front/Seite Hinrichtung
-  blind_nord.png    (breit)  "[6]  Nordfriedhof"        - Front/Seite Rueckrichtung
-  blind_route6.png  (quadr.) "6"                        - Heck (nur Liniennummer)
+Ausgabe nach Data/Raw/Bus/blind/ - je Linie zwei breite Schilder (Front/Seite, eine
+je Fahrtrichtung) und das quadratische Heck-Schild (nur Liniennummer):
+  blind_mainz.png          (breit)  "[6]  Mainz-Gonsenheim"   - Linie 6 hin
+  blind_nord.png           (breit)  "[6]  Nordfriedhof"
+  blind_route6.png         (quadr.) "6"                       - Heck
+  blind_l3_rheinufer.png   (breit)  "[3]  Biebrich Rheinufer"
+  blind_l3_nordfriedhof.png(breit)  "[3]  Nordfriedhof"
+  blind_l3_route3.png      (quadr.) "3"                       - Heck
+Die Tabelle BLINDS/REAR unten ist die einzige Stelle, die fuer eine neue Linie
+ergaenzt werden muss (Materialien: Tools/import_bus_blinds.py).
 
 Look: regelmaessiges LED-Punktraster, gezuendete Punkte bernstein, ungezuendete
 sehr dunkel - wie ein echtes Rollband. Die Liniennummer steht in einem eigenen,
@@ -73,7 +79,7 @@ def dotify(mask, pitch, radius):
         y += pitch
     return img
 
-def make_wide(dest, path):
+def make_wide(line, dest, path):
     W, H = 1040, 208
     pitch, radius = 8, 3
     pad = 14
@@ -81,8 +87,8 @@ def make_wide(dest, path):
     mask = Image.new("L", (W, H), 0)
     md = ImageDraw.Draw(mask)
     # Liniennummer gross links
-    rf = fit_font("6", route_w - 2 * pad, H - 2 * pad)
-    draw_centered(md, (pad, pad, route_w - pad, H - pad), "6", rf)
+    rf = fit_font(line, route_w - 2 * pad, H - 2 * pad)
+    draw_centered(md, (pad, pad, route_w - pad, H - pad), line, rf)
     # Ziel rechts
     df = fit_font(dest, (W - route_w) - 2 * pad, H - 3 * pad)
     draw_centered(md, (route_w + pad, pad, W - pad, H - pad), dest, df)
@@ -96,18 +102,33 @@ def make_wide(dest, path):
     hflip_save(img, path)
     print("geschrieben:", path, img.size)
 
-def make_route(path):
+def make_route(line, path):
     W = H = 256
     pitch, radius = 9, 4
     pad = 22
     mask = Image.new("L", (W, H), 0)
     md = ImageDraw.Draw(mask)
-    rf = fit_font("6", W - 2 * pad, H - 2 * pad)
-    draw_centered(md, (pad, pad, W - pad, H - pad), "6", rf)
+    rf = fit_font(line, W - 2 * pad, H - 2 * pad)
+    draw_centered(md, (pad, pad, W - pad, H - pad), line, rf)
     hflip_save(dotify(mask, pitch, radius), path)
     print("geschrieben:", path, (W, H))
 
-make_wide("Mainz-Gonsenheim", os.path.join(OUT, "blind_mainz.png"))
-make_wide("Nordfriedhof", os.path.join(OUT, "blind_nord.png"))
-make_route(os.path.join(OUT, "blind_route6.png"))
+# Eine Zeile je Schild: Linie, Ziel/Richtung, Dateiname und - in import_bus_blinds.py -
+# der Assetname. Linie 6 behaelt ihre bestehenden Dateinamen, damit die schon
+# importierten Assets unveraendert bleiben; jede weitere Linie bekommt eigene.
+BLINDS = [
+    ("6", "Mainz-Gonsenheim", "blind_mainz.png", "M_WbBlindMainz"),
+    ("6", "Nordfriedhof",     "blind_nord.png", "M_WbBlindNord"),
+    ("3", "Biebrich Rheinufer", "blind_l3_rheinufer.png", "M_WbBlindL3Rheinufer"),
+    ("3", "Nordfriedhof",      "blind_l3_nordfriedhof.png", "M_WbBlindL3Nordfriedhof"),
+]
+REAR = [
+    ("6", "blind_route6.png", "M_WbBlindRoute6"),
+    ("3", "blind_l3_route3.png", "M_WbBlindL3"),
+]
+
+for line, dest, fname, _asset in BLINDS:
+    make_wide(line, dest, os.path.join(OUT, fname))
+for line, fname, _asset in REAR:
+    make_route(line, os.path.join(OUT, fname))
 print("ENDE")

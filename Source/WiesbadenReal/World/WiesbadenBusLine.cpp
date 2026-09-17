@@ -66,6 +66,8 @@ WiesbadenBusLine::FBusState WiesbadenBusLine::EvaluateRoundTrip(double Elapsed,
 			S.ArcLengthCm = P.bDwell ? P.A : FMath::Lerp(P.A, P.B, f);
 			S.bForward = P.bForward;
 			S.bDwelling = P.bDwell;
+			S.DwellRemainingSeconds = P.bDwell ? FMath::Max(P.Dur - t, 0.0) : 0.0;
+			S.DwellTotalSeconds = P.bDwell ? P.Dur : 0.0;
 			return S;
 		}
 		t -= P.Dur;
@@ -87,6 +89,75 @@ double WiesbadenBusLine::BayFactor(double ArcLengthCm, bool bDwelling,
 	const double t = FMath::Clamp(Nearest / BayZoneCm, 0.0, 1.0);
 	// smoothstep, aber invertiert: 1 an der Halte (t=0), 0 ab BayZoneCm (t>=1).
 	return 1.0 - t * t * (3.0 - 2.0 * t);
+}
+
+void WiesbadenBusLine::BuildFleet(const FBusRoute& Route, const FServiceConfig& Config,
+	double& OutCycleSeconds, TArray<FBusVehicle>& OutFleet)
+{
+	OutFleet.Reset();
+	OutCycleSeconds = RoundTripSeconds(Route, Config.CruiseSpeedCmS,
+		Config.StopDwellSeconds, Config.TerminusDwellSeconds);
+	if (OutCycleSeconds <= 0.0)
+	{
+		return;
+	}
+
+	const double Headway = FMath::Max(Config.HeadwaySeconds, 1.0);
+	const int32 MaxBuses = FMath::Max(Config.MaxBuses, 2);
+	const int32 Count = FMath::Clamp((int32)FMath::CeilToDouble(OutCycleSeconds / Headway), 2, MaxBuses);
+	const double Spacing = OutCycleSeconds / (double)Count;
+	for (int32 k = 0; k < Count; ++k)
+	{
+		FBusVehicle V;
+		V.Id = Config.FirstVehicleId + k;   // feste Nummer, ueber beide Linien eindeutig
+		V.PhaseSeconds = Spacing * (double)k;
+		OutFleet.Add(V);
+	}
+}
+
+WiesbadenBusLine::FBusState WiesbadenBusLine::FleetStateAt(double ServiceSeconds,
+	const FBusVehicle& Vehicle, const FBusRoute& Route, double v, double Dwell, double Term)
+{
+	const double Cycle = RoundTripSeconds(Route, v, Dwell, Term);
+	if (Cycle <= 0.0)
+	{
+		FBusState S;
+		S.ArcLengthCm = Route.StopArcCm.Num() > 0 ? Route.StopArcCm[0] : 0.0;
+		return S;
+	}
+	// Positiver Modulo: ein Wagen, dessen Abfahrt noch aussteht, ist im RUECKLAUF
+	// des vorigen Umlaufs unterwegs - nicht geparkt. Ohne das stuenden zu
+	// Dienstbeginn alle spaeteren Wagen am Anfangspunkt uebereinander.
+	double Local = FMath::Fmod(ServiceSeconds - Vehicle.PhaseSeconds, Cycle);
+	if (Local < 0.0) { Local += Cycle; }
+	return EvaluateRoundTrip(Local, Route, v, Dwell, Term);
+}
+
+void WiesbadenBusLine::FleetDepartures(double ServiceSeconds, const TArray<FBusVehicle>& Fleet,
+	double CycleSeconds, double OffsetToStopSeconds, int32 MaxCount, TArray<double>& OutSecondsUntil)
+{
+	OutSecondsUntil.Reset();
+	if (Fleet.Num() == 0 || CycleSeconds <= 0.0 || MaxCount <= 0)
+	{
+		return;
+	}
+	TArray<double> Cand;
+	Cand.Reserve(Fleet.Num());
+	for (const FBusVehicle& V : Fleet)
+	{
+		// Durchfahrt = Abfahrt dieses Wagens + Fahrzeit bis zur Halte, plus ganze
+		// Umlaeufe, bis sie NACH der Dienstzeit liegt.
+		const double First = V.PhaseSeconds + OffsetToStopSeconds;
+		double Until = First - ServiceSeconds;
+		if (Until < 0.0)
+		{
+			Until += CycleSeconds * FMath::CeilToDouble(-Until / CycleSeconds);
+		}
+		Cand.Add(Until);
+	}
+	Cand.Sort();
+	const int32 K = FMath::Min(MaxCount, Cand.Num());
+	for (int32 i = 0; i < K; ++i) { OutSecondsUntil.Add(Cand[i]); }
 }
 
 void WiesbadenBusLine::ActiveRuns(double ServiceSeconds, const FBusSchedule& Schedule,
@@ -131,6 +202,37 @@ double WiesbadenBusLine::SecondsToStop(const FBusRoute& Route, double v,
 	{
 		t += (Route.StopArcCm[i + 1] - Route.StopArcCm[i]) / Vv;   // Fahrsegment i->i+1
 		if (i + 1 < Target) { t += Dwell; }                        // Verweilen an Zwischenhalte
+	}
+	return t;
+}
+
+double WiesbadenBusLine::SecondsToStopOnLeg(const FBusRoute& Route, double v,
+	double Dwell, double Term, int32 StopIndex, bool bForward)
+{
+	// Die Saeule auf der Gegenseite zeigt die Gegenrichtung. Deren Wagen sind
+	// erst nach der Hinfahrt UND der Wendezeit dort - mit der Hinfahrtszeit
+	// stuenden auf der Tafel der Gegenseite die Zeiten der falschen Richtung.
+	//
+	// Dieselbe Phasenfolge wie BuildPhases: Hinfahrt 0->N-1 (Verweilen an jeder
+	// Zwischenhalte, am Ende die Wendezeit), dann Rueckfahrt N-1->0.
+	const int32 N = Route.StopArcCm.Num();
+	const double Vv = FMath::Max(v, 1.0);
+	if (N < 2) { return 0.0; }
+	const int32 Target = FMath::Clamp(StopIndex, 0, N - 1);
+	if (bForward) { return SecondsToStop(Route, v, Dwell, Target); }
+
+	double t = 0.0;
+	for (int32 i = 0; i < N - 1; ++i)
+	{
+		t += (Route.StopArcCm[i + 1] - Route.StopArcCm[i]) / Vv;
+		t += (i + 1 == N - 1) ? Term : Dwell;   // Wendezeit am fernen Ende
+	}
+	// Rueckfahrt bis zur Zielhalte: die Ankunft liegt am ENDE des Fahrsegments,
+	// die Verweilzeiten davor gehoeren zu den weiter entfernten Halten.
+	for (int32 i = N - 1; i > Target; --i)
+	{
+		t += (Route.StopArcCm[i] - Route.StopArcCm[i - 1]) / Vv;
+		if (i - 1 > Target) { t += Dwell; }
 	}
 	return t;
 }
