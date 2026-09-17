@@ -31,6 +31,7 @@
 #include "World/WiesbadenNerotalbahn.h"
 #include "World/WiesbadenNerotal48.h"
 #include "World/WiesbadenLandmarks.h"
+#include "World/WiesbadenBusRoute.h"
 #include "World/WiesbadenParkFeatures.h"
 
 AWiesbadenGameMode::AWiesbadenGameMode()
@@ -139,6 +140,12 @@ void AWiesbadenGameMode::BeginPlay()
 		LandmarkWorld->SpawnActor<AWiesbadenLandmarks>(
 			AWiesbadenLandmarks::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
+
+			// OEPNV-Pilot: ESWE-Linie 6 - Busse fahren sichtbar die OSM-Trasse ab
+			// (Data/Raw/Bus/line6.json); setzt sich selbst zur Laufzeit.
+			LandmarkWorld->SpawnActor<AWiesbadenBusRoute>(
+				AWiesbadenBusRoute::StaticClass(),
+				FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
 
 		// Formale Parkanlagen (Bowling Green am Kurhaus, Reisinger-Anlagen):
 		// lange Wasserbecken + Fontaenen, ebenfalls selbstsetzend zur Laufzeit.
