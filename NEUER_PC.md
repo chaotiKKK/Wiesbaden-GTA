@@ -112,8 +112,8 @@ Die gebackene Karte liegt bereit:
 
 | Karte | Stand |
 |---|---|
-| `WiesbadenCity_Alkis4` | aktuell, mit der Gelaendereparatur |
-| `WiesbadenCity_Alkis3` | der vorherige Stand, als Rueckfall |
+| `WiesbadenCity_Alkis10` | aktuell (auch GameDefaultMap) |
+| `WiesbadenCity_Alkis4` | der vorherige Stand, als Rueckfall |
 
 ## Die Stadt neu bauen
 

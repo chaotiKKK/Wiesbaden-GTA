@@ -1070,20 +1070,15 @@ void AWiesbadenWorldBuilder::SpawnCityChunks(const FRoadMeshData& RoadMesh, cons
 		ChunkedRegionAssets += ChunkMesh.RegionAssets.Num();
 	}
 
-	// Commit-OOM-Behebung (2026-09-16): ALLE frisch gebackenen Chunk-Meshes
-	// freigeben, sobald ihre Pakete gesichert sind. Ohne diesen Schritt blieben
-	// ~4600 Chunks x 3 StaticMesh-Assets (RenderData + gekochte Kollision,
-	// zusammen mehrere GiB Commit) bis zum Ende von BuildCity geladen, obwohl
-	// sie nur fuer das Speichern der Karte gebraucht werden - der Bake starb
-	// reproduzierbar bei ~78 GiB Commit. Die Material-Setter oben mussten VOR
-	// diesem Schritt laufen (sie brauchen die Slots der Meshes noch).
-	for (AWiesbadenCityChunk* Chunk : CityChunks)
-	{
-		if (Chunk)
-		{
-			Chunk->UnloadBakedChunkMeshes();
-		}
-	}
+		// FRUEHERER FEHLER (behoben 2026-09-16): Hier wurden per
+	// UnloadBakedChunkMeshes ALLE Chunk-StaticMesh-Verweise auf nullptr gesetzt,
+	// um Commit-Speicher zu sparen - aber VOR dem Karten-Save. Die Chunk-Actors
+	// wurden damit OHNE Mesh serialisiert; die geladene Karte zeigte 444/444
+	// leere Chunks (keine Strassen/Gebaeude), Chunk am Ursprung mit km-Bounds.
+	// Die Annahme "wird beim Stream-in neu verdrahtet" war falsch - es gibt
+	// keinen solchen Mechanismus. Die Verweise MUESSEN bis zum Save erhalten
+	// bleiben. Der Peak (~85 GiB Commit) passt in das 127-GiB-Limit (vergroesserte
+	// Auslagerungsdatei); das Nullen sparte ohnehin keinen Speicher.
 	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 
 	UE_LOG(LogWbCore, Log,
