@@ -15,6 +15,8 @@ class UGeoCoordinateConverter;
 class UWiesbadenCitySubsystem;
 class UWiesbadenVehicleCameraComponent;
 class UMaterialInterface;
+class UAudioComponent;
+class USoundBase;
 
 /**
  * Ein sichtbarer Linienbus, der eine OSM-Buslinie abfaehrt (Pilot: ESWE-Linie 6).
@@ -173,6 +175,18 @@ private:
 	void CreatePassengerCamera();
 	void DestroyPassengerCamera();
 
+	// Gesprochene Halteansagen (nur fuer den mitfahrenden Fahrgast): beim Verlassen
+	// einer Halte kuendigt eine deutsche TTS-Stimme ueber den Voice-Bus die naechste
+	// an und senkt dabei Musik + Ambiente ueber das Mischpult ab (Ducking).
+	void SetupAnnouncements();
+	// Naechste anzusagende Halte aus dem Fahrzustand (Fahrtrichtung + Bogenlaenge).
+	int32 NextStopIndex(const WiesbadenBusLine::FBusState& St) const;
+	// Wechselt die naechste Halte -> Ansage spielen (einmal je Halte-Uebergang).
+	void UpdateStopAnnouncement(const WiesbadenBusLine::FBusState& St);
+	void PlayStopAnnouncement(int32 StopIndex);
+	void StopAnnouncement();          // Ansage abbrechen + Ducking beenden (Aussteigen)
+	void EndDucking();                // Timer-Rueckruf: Ducking nach Ansagedauer aus
+	void SetAudioDucking(bool bActive);
 
 	UPROPERTY(Transient) USceneComponent* Root = nullptr;
 	UPROPERTY(Transient) UGeoCoordinateConverter* Converter = nullptr;
@@ -221,6 +235,15 @@ private:
 	int64 RiddenRunKey = -1;        // dessen Kurs-Index
 	bool bBoardKeyHeld = false;
 
+	// Halteansagen: echte Namen (aus line6.json "stop_names"), eine vorgerenderte
+	// TTS-Welle je Halte (/Game/Audio/Bus/Announce/A_00..), ein Cabin-PA-
+	// AudioComponent (2D, ueber den Voice-Bus geroutet), zuletzt angesagte Halte
+	// und ein Timer, der das Ducking nach der Ansagedauer wieder aufhebt.
+	TArray<FString> StopNames;
+	UPROPERTY(Transient) UAudioComponent* AnnounceAudio = nullptr;
+	UPROPERTY(Transient) TArray<TObjectPtr<USoundBase>> AnnounceWaves;
+	int32 LastAnnouncedStop = INDEX_NONE;
+	FTimerHandle DuckTimer;
 
 	double MeshScale = 1.0;
 	double MeshBottomCm = 0.0;   // Pivot -> Unterkante (Anhebung, damit die Raeder aufsitzen)

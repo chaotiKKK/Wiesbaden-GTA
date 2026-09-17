@@ -97,4 +97,14 @@ namespace WiesbadenBusLine
 	 */
 	WIESBADENREAL_API void NextDepartures(double ServiceSeconds, const FBusSchedule& Schedule,
 		double OffsetToStopSeconds, int32 MaxCount, TArray<double>& OutSecondsUntil);
+
+	/**
+	 * Index der naechsten anzusagenden Halte aus Position + Fahrtrichtung: die
+	 * erste Halte VOR dem Bus (Hinfahrt: kleinster Bogen > Position; Rueckfahrt:
+	 * groesster Bogen < Position). An bzw. kurz nach einer Halte gilt die FOLGENDE
+	 * als naechste (Eps). Am/hinter dem Terminus die Endhalte (Hinfahrt) bzw.
+	 * Halt 0 (Rueckfahrt). -1 bei < 2 Halten. Datenrein fuer die Halteansagen.
+	 */
+	WIESBADENREAL_API int32 NextStopIndex(double ArcLengthCm, bool bForward,
+		const TArray<double>& StopArcCm);
 }

@@ -4,6 +4,7 @@
 
 #include "WiesbadenReal.h"
 
+#include "Audio/WiesbadenAudioSubsystem.h"
 #include "Components/AudioComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -159,6 +160,11 @@ void UWiesbadenWeaponComponent::SetupAudio()
 	ShotAudio->bAllowSpatialization = true;
 	ShotAudio->bAutoActivate = false;
 	ShotAudio->RegisterComponent();
+
+	// In den Effekt-Bus (SFX) des Mischpults einordnen - so laeuft der Schuss
+	// ueber Master-Lautstaerke und Ducking wie die Fahrzeugklaenge, nicht am
+	// Mischpult vorbei. nullptr, falls die Mix-Assets fehlen -> dann ohne Bus.
+	ShotAudio->SoundClassOverride = UWiesbadenAudioSubsystem::LoadBusSoundClass(EWbAudioBus::SFX);
 
 	// Dasselbe Verfahren wie beim Motor: eine laufende prozedurale Welle, in
 	// die Abtastwerte geschoben werden. Sie spielt dauerhaft und ist still,

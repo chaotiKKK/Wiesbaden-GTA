@@ -4,6 +4,7 @@
 
 #include "WiesbadenReal.h"
 
+#include "Audio/WiesbadenAudioSubsystem.h"
 #include "Components/AudioComponent.h"
 #include "Engine/World.h"
 #include "Sound/SoundWave.h"
@@ -46,6 +47,14 @@ void UWiesbadenHelicopterAudioComponent::CreateAudioSources()
 	EngineAudio = NewObject<UAudioComponent>(Owner, TEXT("EngineAudio"));
 	EngineAudio->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
 	EngineAudio->RegisterComponent();
+
+	// Rotor + Turbine in den Fahrzeug-Bus des Mischpults einordnen (nullptr, falls
+	// die Mix-Assets fehlen -> dann ohne Bus, kein Fehler).
+	if (USoundClass* VehicleBus = UWiesbadenAudioSubsystem::LoadBusSoundClass(EWbAudioBus::Vehicle))
+	{
+		RotorAudio->SoundClassOverride = VehicleBus;
+		EngineAudio->SoundClassOverride = VehicleBus;
+	}
 
 	ApplyMasterVolume();
 

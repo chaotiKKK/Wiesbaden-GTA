@@ -31,6 +31,8 @@
 #include "World/WiesbadenNerotalbahn.h"
 #include "World/WiesbadenNerotal48.h"
 #include "World/WiesbadenLandmarks.h"
+#include "Audio/WiesbadenAudioSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "World/WiesbadenBusRoute.h"
 #include "World/WiesbadenBusStopMonitor.h"
 #include "World/WiesbadenParkFeatures.h"
@@ -60,6 +62,16 @@ AWiesbadenGameMode::AWiesbadenGameMode()
 void AWiesbadenGameMode::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Audio-Mischpult scharfschalten: Basis-SoundMix aktiv + gespeicherte
+	// Bus-Lautstaerken anwenden (no-op, falls die Mix-Assets fehlen).
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		if (UWiesbadenAudioSubsystem* Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>())
+		{
+			Audio->ApplyMix();
+		}
+	}
 
 	// Engine-Bildschirmwarnungen (z. B. der rote "RAY TRACING GEOMETRY ... EXCEEDS
 	// BUDGET"-Hinweis) sind Entwickler-Diagnose und wirken auf Spieler wie ein

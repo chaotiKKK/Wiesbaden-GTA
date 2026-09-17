@@ -149,3 +149,32 @@ bool FWiesbadenBusLineTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWiesbadenBusNextStopTest,
+	"WiesbadenReal.Traffic.BusNextStop",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+// Naechste anzusagende Halte (Halteansagen). Halte 100 m auseinander, damit der
+// 50-cm-Eps (nur um "an einer Halte -> naechste ansagen" abzudecken) vernachlaessigbar ist.
+bool FWiesbadenBusNextStopTest::RunTest(const FString& Parameters)
+{
+	using WiesbadenBusLine::NextStopIndex;
+	const TArray<double> Stops = { 0.0, 10000.0, 20000.0, 30000.0 };   // 4 Halte, 100 m Abstand
+
+	// Hinfahrt: an/zwischen Halten immer die naechste voraus.
+	TestEqual(TEXT("hin, an Halt 0 -> 1"), NextStopIndex(0.0, true, Stops), 1);
+	TestEqual(TEXT("hin, zwischen 0 und 1 -> 1"), NextStopIndex(5000.0, true, Stops), 1);
+	TestEqual(TEXT("hin, an Halt 1 -> 2"), NextStopIndex(10000.0, true, Stops), 2);
+	TestEqual(TEXT("hin, kurz vor 3 -> 3"), NextStopIndex(29000.0, true, Stops), 3);
+	TestEqual(TEXT("hin, am Terminus -> Endhalte"), NextStopIndex(30000.0, true, Stops), 3);
+
+	// Rueckfahrt: die naechste ist die Halte mit kleinerem Bogen.
+	TestEqual(TEXT("rueck, am Terminus 3 -> 2"), NextStopIndex(30000.0, false, Stops), 2);
+	TestEqual(TEXT("rueck, zwischen 2 und 1 -> 1"), NextStopIndex(15000.0, false, Stops), 1);
+	TestEqual(TEXT("rueck, an Halt 0 -> 0"), NextStopIndex(0.0, false, Stops), 0);
+
+	// Entartet: < 2 Halte -> keine Ansage.
+	const TArray<double> One = { 5000.0 };
+	TestEqual(TEXT("eine Halte -> -1"), NextStopIndex(0.0, true, One), -1);
+
+	return true;
+}

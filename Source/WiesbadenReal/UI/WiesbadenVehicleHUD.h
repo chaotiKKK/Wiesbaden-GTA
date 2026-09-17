@@ -247,6 +247,14 @@ private:
 	/** Fuehrt den gewaehlten Eintrag aus. */
 	void ActivatePauseEntry(int32 Index);
 
+	/** Zeichnet das Ton-Unterfenster (Lautstaerke-Balken je Bus) mittig. */
+	void DrawAudioSettings(float Width, float Height);
+
+	/** Wertet die Tasten des Ton-Unterfensters aus: Pfeile/W/S waehlen den Bus,
+	 *  Links/Rechts bzw. A/D regeln ihn leiser/lauter. Escape (zurueck) laeuft
+	 *  ueber UpdatePauseMenu. */
+	void UpdateAudioSettings();
+
 public:
 	/**
 	 * Eintraege des Pausemenues (datenrein, testbar).
@@ -255,6 +263,16 @@ public:
 	 * Entwicklerbefehle pruefen lassen, ohne einen Bildschirm zu brauchen.
 	 */
 	static void GetPauseMenuEntries(TArray<FString>& OutEntries);
+
+	/**
+	 * Beschriftungen der Ton-Busse in Anzeige-Reihenfolge (datenrein, testbar).
+	 * Die Reihenfolge entspricht EWbAudioBus 0..Vehicle - Zeile i gehoert zu
+	 * (EWbAudioBus)i. Getrennt vom Zeichnen, damit sie ohne Welt pruefbar ist.
+	 */
+	static void GetAudioBusLabels(TArray<FString>& OutLabels);
+
+	/** Lautstaerke (0..1) als Prozenttext, z. B. "75 %". Datenrein/testbar. */
+	static FString FormatVolumePercent(float Slider01);
 
 private:
 	/** True, solange das Spiel pausiert ist. */
@@ -268,6 +286,16 @@ private:
 
 	/** Ausgewaehlter Eintrag. */
 	int32 PauseSelection = 0;
+
+	/** True, solange das Ton-Unterfenster (Lautstaerke) im Pausemenue offen ist. */
+	bool bAudioSettingsOpen = false;
+
+	/** Ausgewaehlte Bus-Zeile im Ton-Unterfenster. */
+	int32 AudioSelection = 0;
+
+	/** Flankenerkennung der Lautstaerke-Tasten (links/rechts bzw. A/D). */
+	bool bMenuLeftHeld = false;
+	bool bMenuRightHeld = false;
 
 	/** Reichweite, ab der zu Fuss "F Einsteigen" erscheint, in cm. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|HUD", meta = (ClampMin = "100.0"))

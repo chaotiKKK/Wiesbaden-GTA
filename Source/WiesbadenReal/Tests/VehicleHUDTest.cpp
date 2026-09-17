@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "UI/WiesbadenVehicleHUD.h"
+#include "Audio/WiesbadenAudioSubsystem.h"
 #include "GIS/BuildingGenerator.h"
 #include "UI/WiesbadenWorldMapView.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
@@ -818,6 +819,64 @@ bool FBeetleAssemblyTest::RunTest(const FString& Parameters)
 		const FBeetleAssembly A = AWiesbadenCar::ChooseBeetleAssembly(false, false, false);
 		TestTrue(TEXT("nichts: Cube"), A.Body == EBeetleBodyMesh::Cube);
 		TestFalse(TEXT("nichts: keine Einzelraeder"), A.bSeparateWheels);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleHUDAudioSettingsTest,
+	"WiesbadenReal.Vehicles.HUD.AudioSettings",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Die datenreinen Teile des Ton-Unterfensters: Bus-Beschriftungen,
+ * Prozent-Formatierung und der Sitz des Eintrags im Pausemenue. Kein Canvas,
+ * keine Welt - das Regeln selbst (SetBusVolume) braucht Audiogeraet + Assets und
+ * wird per Ohr belegt.
+ */
+bool FVehicleHUDAudioSettingsTest::RunTest(const FString& Parameters)
+{
+	// -- Bus-Beschriftungen decken das Enum ab (Zeile i == (EWbAudioBus)i) ----
+	{
+		TArray<FString> Labels;
+		AWiesbadenVehicleHUD::GetAudioBusLabels(Labels);
+
+		// Genau ein Regler je Bus - so wandert die Liste mit EWbAudioBus mit.
+		TestEqual(TEXT("eine Zeile je Bus"),
+			Labels.Num(), static_cast<int32>(EWbAudioBus::MAX));
+
+		// Erste Zeile ist der Master (Index 0), keine Beschriftung ist leer.
+		TestEqual(TEXT("Zeile 0 = Gesamt (Master)"), Labels[0], FString(TEXT("Gesamt")));
+		for (const FString& L : Labels)
+		{
+			TestFalse(TEXT("keine leere Beschriftung"), L.IsEmpty());
+		}
+	}
+
+	// -- Prozent-Formatierung, inkl. Klemmen ---------------------------------
+	{
+		TestEqual(TEXT("0.0 -> 0 %"), AWiesbadenVehicleHUD::FormatVolumePercent(0.0f), FString(TEXT("0 %")));
+		TestEqual(TEXT("0.5 -> 50 %"), AWiesbadenVehicleHUD::FormatVolumePercent(0.5f), FString(TEXT("50 %")));
+		TestEqual(TEXT("1.0 -> 100 %"), AWiesbadenVehicleHUD::FormatVolumePercent(1.0f), FString(TEXT("100 %")));
+		// Ausserhalb 0..1 wird geklemmt, nie negativ oder ueber 100.
+		TestEqual(TEXT("ueber 1 geklemmt"), AWiesbadenVehicleHUD::FormatVolumePercent(9.0f), FString(TEXT("100 %")));
+		TestEqual(TEXT("unter 0 geklemmt"), AWiesbadenVehicleHUD::FormatVolumePercent(-3.0f), FString(TEXT("0 %")));
+	}
+
+	// -- Pausemenue-Vertrag: "Ton / Lautstaerke" an Index 2 ------------------
+	// Bindet die Eintragsliste an ActivatePauseEntry (dort oeffnet case 2 das
+	// Ton-Fenster). Faengt genau den Index-Versatz ab, an dem "Karte" frueher
+	// einen Teleport ausloeste.
+	{
+		TArray<FString> Entries;
+		AWiesbadenVehicleHUD::GetPauseMenuEntries(Entries);
+
+		TestTrue(TEXT("mind. 10 Eintraege"), Entries.Num() >= 10);
+		TestEqual(TEXT("Index 0 = Weiterspielen"), Entries[0], FString(TEXT("Weiterspielen")));
+		TestEqual(TEXT("Index 2 = Ton / Lautstaerke"), Entries[2], FString(TEXT("Ton / Lautstaerke")));
+		TestEqual(TEXT("Index 3 = Karte"), Entries[3], FString(TEXT("Karte zeigen / verbergen (M)")));
+		TestEqual(TEXT("letzter Eintrag = Spiel beenden"),
+			Entries.Last(), FString(TEXT("Spiel beenden")));
 	}
 
 	return true;

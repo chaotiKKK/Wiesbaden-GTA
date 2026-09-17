@@ -158,3 +158,24 @@ void WiesbadenBusLine::NextDepartures(double ServiceSeconds, const FBusSchedule&
 	const int32 K = FMath::Min(MaxCount, Cand.Num());
 	for (int32 i = 0; i < K; ++i) { OutSecondsUntil.Add(Cand[i]); }
 }
+int32 WiesbadenBusLine::NextStopIndex(double ArcLengthCm, bool bForward,
+	const TArray<double>& StopArcCm)
+{
+	const int32 Num = StopArcCm.Num();
+	if (Num < 2) { return -1; }
+	// An/kurz nach einer Halte gilt die FOLGENDE Halte in Fahrtrichtung als naechste.
+	constexpr double Eps = 50.0;   // cm
+	if (bForward)
+	{
+		for (int32 i = 0; i < Num; ++i)
+		{
+			if (StopArcCm[i] > ArcLengthCm + Eps) { return i; }
+		}
+		return Num - 1;   // am/hinter dem Terminus: Endhalte
+	}
+	for (int32 i = Num - 1; i >= 0; --i)
+	{
+		if (StopArcCm[i] < ArcLengthCm - Eps) { return i; }
+	}
+	return 0;
+}

@@ -9,8 +9,13 @@
 #include "Vehicles/WiesbadenFootPawn.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "Audio/WiesbadenAudioSubsystem.h"
+#include "Components/AudioComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/GameInstance.h"
+#include "Sound/SoundBase.h"
+#include "TimerManager.h"
 #include "Materials/MaterialInterface.h"
 #include "Engine/World.h"
 #include "CollisionQueryParams.h"
@@ -67,7 +72,20 @@ void AWiesbadenBusRoute::LoadLine()
 	Obj->TryGetArrayField(TEXT("stops"), StopArr);
 	ReadPairs(PathArr, GeoPath);
 	ReadPairs(StopArr, GeoStops);
-	UE_LOG(LogWbBus, Log, TEXT("Bus %s: %d Wegpunkte, %d Halte."), *LineFile, GeoPath.Num(), GeoStops.Num());
+
+	// Echte Haltenamen (aus OSM abgeglichen) fuer die gesprochenen Ansagen.
+	StopNames.Reset();
+	const TArray<TSharedPtr<FJsonValue>>* NameArr = nullptr;
+	if (Obj->TryGetArrayField(TEXT("stop_names"), NameArr) && NameArr)
+	{
+		for (const TSharedPtr<FJsonValue>& V : *NameArr)
+		{
+			FString S;
+			if (V.IsValid() && V->TryGetString(S)) { StopNames.Add(S); }
+		}
+	}
+	UE_LOG(LogWbBus, Log, TEXT("Bus %s: %d Wegpunkte, %d Halte, %d Namen."),
+		*LineFile, GeoPath.Num(), GeoStops.Num(), StopNames.Num());
 }
 
 void AWiesbadenBusRoute::LoadSchedule()
@@ -263,6 +281,8 @@ void AWiesbadenBusRoute::BeginPlay()
 	SlotWorldPos.Init(FVector::ZeroVector, Buses.Num());
 	SlotState.Init(0, Buses.Num());
 	SlotRunKey.Init(-1, Buses.Num());
+
+	SetupAnnouncements();
 
 	bReady = (WorldPath.Num() >= 2 && Route.StopArcCm.Num() >= 2 && BusMesh != nullptr && CycleSeconds > 0.0);
 	UE_LOG(LogWbBus, Log, TEXT("Bus-Linie bereit=%d: %d Busse, Route %.0f m, Zyklus %.0f s, MeshScale %.3f, Unterkante %.0f cm."),
@@ -527,6 +547,7 @@ void AWiesbadenBusRoute::Tick(float DeltaSeconds)
 			{
 				Slot = RiddenSlot;      // gepinnt: der Fahrgast bleibt an diesem Bus
 				bRiddenSeen = true;
+				UpdateStopAnnouncement(St);   // naechste Halte ansagen (nur fuer den Fahrgast)
 			}
 			else
 			{
@@ -651,6 +672,7 @@ void AWiesbadenBusRoute::ToggleBoarding()
 		RideSession.CompleteExit();
 		RiddenSlot = INDEX_NONE;
 		RiddenRunKey = -1;
+		StopAnnouncement();   // laufende Ansage stoppen + Ducking beenden
 		UE_LOG(LogWbBus, Log, TEXT("Bus: Fahrgast ausgestiegen."));
 		return;
 	}
@@ -682,7 +704,108 @@ void AWiesbadenBusRoute::ToggleBoarding()
 	}
 	RiddenSlot = Best;
 	RiddenRunKey = SlotRunKey.IsValidIndex(Best) ? SlotRunKey[Best] : -1;
+	LastAnnouncedStop = INDEX_NONE;   // die erste naechste Halte gleich ansagen
 	CreatePassengerCamera();
 	Pawn->SetActorLocation(Car->GetComponentLocation() + FVector(0, 0, 160.0f));
 	UE_LOG(LogWbBus, Log, TEXT("Bus: Fahrgast eingestiegen (Slot %d, Kurs %lld)."), Best, (long long)RiddenRunKey);
+}
+
+void AWiesbadenBusRoute::SetupAnnouncements()
+{
+	// Ein 2D-"Cabin-PA"-AudioComponent (nicht raeumlich - der Fahrgast sitzt drin)
+	// ueber den Voice-Bus des Mischpults. Fehlt das Mix-Asset, bleibt der Klang
+	// ungeroutet (kein Fehler); die Ansagen spielen trotzdem.
+	AnnounceAudio = NewObject<UAudioComponent>(this, TEXT("BusAnnounceAudio"));
+	if (AnnounceAudio)
+	{
+		AnnounceAudio->SetupAttachment(Root);
+		AnnounceAudio->bAutoActivate = false;
+		AnnounceAudio->bAllowSpatialization = false;
+		AnnounceAudio->SoundClassOverride = UWiesbadenAudioSubsystem::LoadBusSoundClass(EWbAudioBus::Voice);
+		AnnounceAudio->RegisterComponent();
+	}
+
+	// Vorgerenderte TTS-Wellen je Halte: /Game/Audio/Bus/Announce/A_00 .. A_<n-1>
+	// (Tools/make_bus_announcements.py + import_bus_announcements.py). Fehlt eine,
+	// bleibt der Eintrag null -> diese Halte wird still uebersprungen.
+	const int32 NumStops = Route.StopArcCm.Num();
+	AnnounceWaves.Reset();
+	AnnounceWaves.SetNum(NumStops);
+	int32 Loaded = 0;
+	for (int32 i = 0; i < NumStops; ++i)
+	{
+		const FString ObjPath = FString::Printf(TEXT("/Game/Audio/Bus/Announce/A_%02d.A_%02d"), i, i);
+		USoundBase* Wave = LoadObject<USoundBase>(nullptr, *ObjPath);
+		AnnounceWaves[i] = Wave;
+		if (Wave) { ++Loaded; }
+	}
+	UE_LOG(LogWbBus, Log, TEXT("Bus-Ansagen: %d/%d Halte-Wellen geladen, Voice-Bus=%d."),
+		Loaded, NumStops, (AnnounceAudio && AnnounceAudio->SoundClassOverride) ? 1 : 0);
+}
+
+int32 AWiesbadenBusRoute::NextStopIndex(const WiesbadenBusLine::FBusState& St) const
+{
+	// Datenreine Kernlogik in WiesbadenBusLine (unit-getestet BusLine.NextStop).
+	return WiesbadenBusLine::NextStopIndex(St.ArcLengthCm, St.bForward, Route.StopArcCm);
+}
+
+void AWiesbadenBusRoute::UpdateStopAnnouncement(const WiesbadenBusLine::FBusState& St)
+{
+	const int32 Next = NextStopIndex(St);
+	// Nur beim WECHSEL der naechsten Halte ansagen (einmal je Uebergang), nicht je Tick.
+	if (Next == INDEX_NONE || Next == LastAnnouncedStop) { return; }
+	LastAnnouncedStop = Next;
+	PlayStopAnnouncement(Next);
+}
+
+void AWiesbadenBusRoute::PlayStopAnnouncement(int32 StopIndex)
+{
+	if (!AnnounceAudio || !AnnounceWaves.IsValidIndex(StopIndex)) { return; }
+	USoundBase* Wave = AnnounceWaves[StopIndex].Get();
+	if (!Wave) { return; }   // fehlende Welle -> stille Halte, kein Ducking
+
+	AnnounceAudio->SetSound(Wave);
+	AnnounceAudio->Play();
+	SetAudioDucking(true);   // Musik + Ambiente ueber das Mischpult absenken
+
+	// Ducking nach der Ansagedauer sicher wieder aufheben - per Timer, unabhaengig
+	// vom OnAudioFinished-Delegat (das bei unterbrochenen Ansagen ausbleiben kann).
+	if (UWorld* W = GetWorld())
+	{
+		const float Dur = FMath::Max(Wave->GetDuration(), 0.5f) + 0.35f;
+		W->GetTimerManager().ClearTimer(DuckTimer);
+		W->GetTimerManager().SetTimer(DuckTimer, this, &AWiesbadenBusRoute::EndDucking, Dur, false);
+	}
+
+	if (StopNames.IsValidIndex(StopIndex))
+	{
+		UE_LOG(LogWbBus, Log, TEXT("Bus-Ansage: Naechster Halt %s."), *StopNames[StopIndex]);
+	}
+}
+
+void AWiesbadenBusRoute::EndDucking()
+{
+	SetAudioDucking(false);
+}
+
+void AWiesbadenBusRoute::StopAnnouncement()
+{
+	if (AnnounceAudio) { AnnounceAudio->Stop(); }
+	if (UWorld* W = GetWorld()) { W->GetTimerManager().ClearTimer(DuckTimer); }
+	SetAudioDucking(false);
+	LastAnnouncedStop = INDEX_NONE;
+}
+
+void AWiesbadenBusRoute::SetAudioDucking(bool bActive)
+{
+	if (UWorld* W = GetWorld())
+	{
+		if (UGameInstance* GI = W->GetGameInstance())
+		{
+			if (UWiesbadenAudioSubsystem* Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>())
+			{
+				Audio->SetDuckingActive(bActive);
+			}
+		}
+	}
 }
