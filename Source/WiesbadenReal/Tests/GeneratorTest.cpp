@@ -782,6 +782,89 @@ bool FRoadLaneAttributesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoadEdgeLineMarkingTest,
+	"WiesbadenReal.GIS.RoadNetworkGenerator.EdgeLines",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRoadEdgeLineMarkingTest::RunTest(const FString& Parameters)
+{
+	UGeoCoordinateConverter* Converter = NewWiesbadenConverter();
+	if (!TestTrue(TEXT("Konverter initialisiert"), Converter != nullptr && Converter->IsInitialized()))
+	{
+		return false;
+	}
+
+	URoadTypeLibrary* TypeLibrary = NewObject<URoadTypeLibrary>();
+	TypeLibrary->ApplyBuiltInDefaults();
+	URoadNetworkGenerator* Generator = NewObject<URoadNetworkGenerator>();
+	FRoadGenerationSettings Settings;
+
+	auto LaneMarkingVerts = [](const FRoadMeshData& M)
+	{
+		int32 N = 0;
+		for (const FRoadMeshSection& S : M.Sections)
+		{
+			if (S.Channel == ERoadMeshChannel::LaneMarking) { N += S.Vertices.Num(); }
+		}
+		return N;
+	};
+
+	// Primary (klassifiziert): Randlinien + Mittellinie -> Markierungsgeometrie.
+	int32 PrimaryWithEdge = 0;
+	{
+		FOSMDataSet DS;
+		DS.Nodes.Add(1, FOSMNode(1, 8.2400, 50.0824));
+		DS.Nodes.Add(2, FOSMNode(2, 8.2460, 50.0824));
+		FOSMWay Way = MakeRoad(200, { 1, 2 }, TEXT("Rheinstrasse"));
+		Way.Tags.Add(TEXT("highway"), TEXT("primary"));   // ersetzt residential
+		DS.Ways.Add(200, Way);
+
+		FRoadNetwork Net;
+		FRoadMeshData MD;
+		const FRoadGenerationReport R = Generator->Generate(DS, Converter, TypeLibrary, nullptr, Settings, Net, &MD);
+		TestTrue(TEXT("Primary: Generate erfolgreich"), R.bSuccess);
+		PrimaryWithEdge = LaneMarkingVerts(MD);
+		TestTrue(TEXT("Primary: Fahrbahnmarkierung vorhanden"), PrimaryWithEdge > 0);
+	}
+
+	// Residential (Tempo-30-Wohnstrasse): keine Fahrbahnmarkierung.
+	{
+		FOSMDataSet DS;
+		DS.Nodes.Add(1, FOSMNode(1, 8.2400, 50.0824));
+		DS.Nodes.Add(2, FOSMNode(2, 8.2460, 50.0824));
+		DS.Ways.Add(300, MakeRoad(300, { 1, 2 }, TEXT("Wohnweg")));
+
+		FRoadNetwork Net;
+		FRoadMeshData MD;
+		Generator->Generate(DS, Converter, TypeLibrary, nullptr, Settings, Net, &MD);
+		TestEqual(TEXT("Residential: keine Fahrbahnmarkierung"), LaneMarkingVerts(MD), 0);
+	}
+
+	// Gate bGenerateEdgeLines=false: Primary faellt auf die alte Heuristik zurueck
+	// (nur Innengrenzen, KEINE Randlinien) -> weniger Markierungsgeometrie, aber
+	// die Mittellinie bleibt. Beweist, dass das Modul einzeln abschaltbar ist.
+	{
+		FOSMDataSet DS;
+		DS.Nodes.Add(1, FOSMNode(1, 8.2400, 50.0824));
+		DS.Nodes.Add(2, FOSMNode(2, 8.2460, 50.0824));
+		FOSMWay Way = MakeRoad(200, { 1, 2 }, TEXT("Rheinstrasse"));
+		Way.Tags.Add(TEXT("highway"), TEXT("primary"));
+		DS.Ways.Add(200, Way);
+
+		FRoadGenerationSettings NoEdge;
+		NoEdge.bGenerateEdgeLines = false;
+
+		FRoadNetwork Net;
+		FRoadMeshData MD;
+		Generator->Generate(DS, Converter, TypeLibrary, nullptr, NoEdge, Net, &MD);
+		const int32 WithoutEdge = LaneMarkingVerts(MD);
+		TestTrue(TEXT("ohne Randlinien: Mittellinie bleibt"), WithoutEdge > 0);
+		TestTrue(TEXT("ohne Randlinien: weniger Geometrie als mit"), WithoutEdge < PrimaryWithEdge);
+	}
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildingGeneratorTest,
 	"WiesbadenReal.GIS.BuildingGenerator.Generate",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

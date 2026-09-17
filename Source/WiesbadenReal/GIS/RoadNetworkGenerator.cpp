@@ -8,6 +8,7 @@
 #include "GIS/GeoCoordinateConverter.h"
 #include "GIS/PolygonUtils.h"
 #include "GIS/RoadTypeLibrary.h"
+#include "GIS/WiesbadenRoadMarkings.h"
 
 namespace
 {
@@ -2663,14 +2664,21 @@ void URoadNetworkGenerator::BuildLaneMarkings(
 		return;
 	}
 
-	const FRoadTypeDefinition& TypeDef = TypeLibrary.GetDefinition(Segment.HighwayType);
-	if (!TypeDef.bHasCenterLineMarking)
+	const int32 TotalLanes = Segment.GetTotalLaneCount();
+	if (TotalLanes < 1)
 	{
 		return;
 	}
 
-	const int32 TotalLanes = Segment.GetTotalLaneCount();
-	if (TotalLanes < 2)
+	// Grenzstile je Grenze bevorzugt aus den aufgeloesten LaneAttributes (Rand-,
+	// StVO- und Sonderspur-Linien). Fehlen sie ODER ist der attributgetriebene
+	// Pfad abgeschaltet (bGenerateEdgeLines), Rueckfall auf die alte Heuristik
+	// (nur Innengrenzen, Richtungstrennung durchgezogen) - so bleibt das Modul
+	// einzeln bakebar (Spec Abschnitt 9).
+	const bool bHaveAttrs = Settings.bGenerateEdgeLines
+		&& (Segment.LaneAttributes.Num() == TotalLanes);
+	const FRoadTypeDefinition& TypeDef = TypeLibrary.GetDefinition(Segment.HighwayType);
+	if (!bHaveAttrs && !TypeDef.bHasCenterLineMarking)
 	{
 		return;
 	}
@@ -2713,17 +2721,58 @@ void URoadNetworkGenerator::BuildLaneMarkings(
 		return BestZ;
 	};
 
-	// Markierung auf jeder Spurgrenze. Die Trennlinie zwischen den
-	// Fahrtrichtungen wird ueber die Vertexfarbe als durchgezogene Mittellinie
-	// gekennzeichnet, alle uebrigen als unterbrochene Leitlinie - das
-	// unterscheidet der Shader ueber den Rotkanal.
-	for (int32 Boundary = 1; Boundary < TotalLanes; ++Boundary)
+	// Grenzstil einer Grenze b: 0 = linker Fahrbahnrand, TotalLanes = rechter
+	// Rand, 1..TotalLanes-1 = Spurgrenzen dazwischen.
+	auto BoundaryStyleAt = [&Segment, bHaveAttrs, TotalLanes](int32 b) -> ELaneBoundaryStyle
 	{
-		const double OffsetFromCenter = HalfCarriageway - Boundary * LaneWidth;
+		if (bHaveAttrs)
+		{
+			if (b <= 0) { return Segment.LaneAttributes[0].LeftBoundary; }
+			if (b >= TotalLanes) { return Segment.LaneAttributes[TotalLanes - 1].RightBoundary; }
+			return Segment.LaneAttributes[b - 1].RightBoundary;
+		}
+		// Rueckfall ohne Attribute: nur Innengrenzen, Richtungstrennung durchgezogen.
+		if (b <= 0 || b >= TotalLanes) { return ELaneBoundaryStyle::None; }
+		const bool bSplit = (b == Segment.BackwardLaneCount)
+			&& Segment.BackwardLaneCount > 0 && Segment.ForwardLaneCount > 0;
+		return bSplit ? ELaneBoundaryStyle::DirSplit : ELaneBoundaryStyle::Dashed;
+	};
 
-		const bool bIsDirectionSplit = (Boundary == Segment.BackwardLaneCount)
-			&& Segment.BackwardLaneCount > 0
-			&& Segment.ForwardLaneCount > 0;
+	for (int32 b = 0; b <= TotalLanes; ++b)
+	{
+		const ELaneBoundaryStyle Style = BoundaryStyleAt(b);
+		if (Style == ELaneBoundaryStyle::None)
+		{
+			continue;
+		}
+
+		// Strichbreite und durchgezogen/gestrichelt aus dem Stil (StVO/RMS).
+		double WidthCm = Settings.MarkingWidthCm;   // Schmalstrich 12 cm (tunbar)
+		bool bSolid = true;
+		switch (Style)
+		{
+		case ELaneBoundaryStyle::Dashed:
+			bSolid = false;
+			break;
+		case ELaneBoundaryStyle::Solid:   // Bus-/Radspur-Trennung: Breitstrich
+			WidthCm = WiesbadenRoadMarkings::WideLineWidthCm;
+			break;
+		case ELaneBoundaryStyle::Edge:    // Fahrbahnbegrenzung: Schmalstrich, durchgezogen
+			break;
+		case ELaneBoundaryStyle::DirSplit:
+			// Mittellinie: ab 50 km/h durchgezogene Fahrstreifenbegrenzung,
+			// darunter (Tempo-30) unterbrochene Leitlinie.
+			bSolid = (Segment.MaxSpeedKmh >= 50.0);
+			break;
+		default:
+			break;
+		}
+
+		double OffsetFromCenter = HalfCarriageway - b * LaneWidth;
+		// Randlinien liegen ganz auf der Fahrbahn -> um die halbe Strichbreite
+		// nach innen ruecken, sonst haengt der halbe Strich ueber die Kante.
+		if (b == 0) { OffsetFromCenter -= WidthCm * 0.5; }
+		else if (b == TotalLanes) { OffsetFromCenter += WidthCm * 0.5; }
 
 		TArray<FVector2D> MarkingAxis;
 		if (!FPolygonUtils::OffsetPolyline(Line2D, OffsetFromCenter, MarkingAxis))
@@ -2734,27 +2783,22 @@ void URoadNetworkGenerator::BuildLaneMarkings(
 		TArray<FVector2D> Vertices2D;
 		TArray<int32> Indices;
 		TArray<FVector2D> UVs;
-
-		if (!FPolygonUtils::BuildRibbonMesh(
-			MarkingAxis, Settings.MarkingWidthCm, Vertices2D, Indices, UVs))
+		if (!FPolygonUtils::BuildRibbonMesh(MarkingAxis, WidthCm, Vertices2D, Indices, UVs))
 		{
 			continue;
 		}
 
 		const int32 BaseIndex = Section.Vertices.Num();
-
+		const uint8 R = bSolid ? 255 : 0;   // R = 255: durchgezogen, R = 0: unterbrochen
 		for (int32 Index = 0; Index < Vertices2D.Num(); ++Index)
 		{
 			Section.Vertices.Add(FVector(
 				Vertices2D[Index].X,
 				Vertices2D[Index].Y,
 				CenterlineZ(Vertices2D[Index]) + Settings.MarkingOffsetCm));
-
 			Section.Normals.Add(FVector::UpVector);
 			Section.UVs.Add(UVs[Index]);
-
-			// R = 255: durchgezogen, R = 0: unterbrochen.
-			Section.VertexColors.Add(FColor(bIsDirectionSplit ? 255 : 0, 255, 255, 255));
+			Section.VertexColors.Add(FColor(R, 255, 255, 255));
 			Section.Tangents.Add(FProcMeshTangent(1.0f, 0.0f, 0.0f));
 		}
 
