@@ -6,6 +6,7 @@
 
 #include "Components/DirectionalLightComponent.h"
 #include "Engine/DirectionalLight.h"
+#include "World/WiesbadenSolar.h"
 #include "EngineUtils.h"
 #include "NiagaraFunctionLibrary.h"
 #include "World/WiesbadenCitySubsystem.h"
@@ -447,6 +448,9 @@ void UWiesbadenWeatherFXComponent::TickComponent(float DeltaTime, ELevelTick Tic
 	// der Szene anwenden. Nachts ist die Intensitaet 0 -> Sonne aus.
 	if (UDirectionalLightComponent* Sun = SunLight)
 	{
+		// Drehung aus dem Sonnenstand: die Schatten wandern ueber den Tag, die
+		// Atmosphaere faerbt sich am Horizont von selbst mit (AtmosphereSunLight).
+		Sun->SetWorldRotation(WiesbadenSolar::SunLightRotation(State->SunElevationDeg, State->SunAzimuthDeg));
 		Sun->SetLightColor(Params.SunLightColor);
 		Sun->SetIntensity(Params.SunIntensity);
 	}

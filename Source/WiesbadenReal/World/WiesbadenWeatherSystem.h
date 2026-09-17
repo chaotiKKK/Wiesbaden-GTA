@@ -57,6 +57,15 @@ struct WIESBADENREAL_API FWiesbadenWeatherState
 	UPROPERTY(BlueprintReadOnly, Category = "Weather")
 	bool bIsNight = false;
 
+	/** Echter Sonnenstand in Grad: Hoehe ueber dem Horizont und Azimut ab Nord
+	 *  ueber Ost. Bei Uhr-Kopplung astronomisch (WiesbadenSolar), sonst aus der
+	 *  Spieluhr abgeleitet. Treibt die Drehung der Sonne (WeatherFX). */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather")
+	float SunElevationDeg = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Weather")
+	float SunAzimuthDeg = 180.0f;
+
 	/** Gemischte Intensitaeten (alt und neu ueber Blend01). */
 	UPROPERTY(BlueprintReadOnly, Category = "Weather")
 	FWiesbadenWeatherIntensity Intensity;
@@ -84,6 +93,16 @@ struct WIESBADENREAL_API FWiesbadenWeatherSettings
 	// sie ab da unbenutzbar. Drei Stunden je Tag lassen rund anderthalb Stunden
 	// Tageslicht am Stueck und machen den Wechsel trotzdem erlebbar.
 	float HoursPerRealSecond = 24.0f / 10800.0f;
+
+	/**
+	 * Uhr an die lokale Systemzeit koppeln: die Spieluhr zeigt die echte Uhrzeit,
+	 * der Sonnenstand folgt astronomisch dem Datum (WiesbadenSolar). Aus = die
+	 * Spieluhr laeuft frei mit HoursPerRealSecond (fuer -WbTime, Prompts, Tests).
+	 * Default AUS, damit die datenreine Maschine deterministisch bleibt; das
+	 * CitySubsystem schaltet die Kopplung im Spiel ein.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather")
+	bool bFollowSystemClock = false;
 
 	/** Start-Tageszeit (Stunden 0..24). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather", meta = (ClampMin = "0.0", ClampMax = "24.0"))
@@ -132,6 +151,13 @@ struct WIESBADENREAL_API FWiesbadenWeatherSystem
 
 	/** Setzt die Tageszeit direkt (Stunden 0..24, Wrap). */
 	void SetTimeOfDay(float Hours);
+
+	/**
+	 * Uhr-Kopplung: lokale Uhrzeit + echten Sonnenstand von aussen setzen (der
+	 * Aufrufer liest die Systemzeit und rechnet WiesbadenSolar). Tick laesst Zeit
+	 * und Sonne dann unangetastet und mischt nur noch das Wetter.
+	 */
+	void SetClockAndSun(float LocalHours, float SunElevationDeg, float SunAzimuthDeg);
 
 	/** Treibt Wetter-Uebergang und Tageszeit einen Schritt weiter. */
 	void Tick(float DeltaSeconds);

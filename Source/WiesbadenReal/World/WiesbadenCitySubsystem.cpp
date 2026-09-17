@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "World/WiesbadenCitySubsystem.h"
+#include "World/WiesbadenSolar.h"
 
 #include "WiesbadenReal.h"
 
@@ -384,10 +385,14 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 	if (!bTimeOverrideApplied)
 	{
 		bTimeOverrideApplied = true;
+		// Im Spiel folgt die Uhr der lokalen Systemzeit (24-h-Beleuchtung) - ausser
+		// eine Stunde wird erzwungen (-WbTime) oder vom Prompt gesetzt.
+		Weather.Settings.bFollowSystemClock = true;
 
 		float ForcedHours = -1.0f;
 		if (FParse::Value(FCommandLine::Get(), TEXT("WbTime="), ForcedHours) && ForcedHours >= 0.0f)
 		{
+			Weather.Settings.bFollowSystemClock = false;   // erzwungene Stunde statt Systemuhr
 			Weather.SetTimeOfDay(ForcedHours);
 			UE_LOG(LogWbCore, Log,
 				TEXT("Tageszeit auf %.1f Uhr gesetzt (-WbTime). Sonnenstand %.2f, Nacht: %s."),
@@ -1128,6 +1133,16 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 	FrameProfiler.SampleFrame(DeltaTime * 1000.0);
 	// Kreuzungs-Rundgang treiben (nur mit -WbTour aktiv).
 	TickJunctionTour(DeltaTime);
+
+	// 24-h-Beleuchtung: Uhr = lokale Systemzeit, Sonne = echter Stand ueber
+	// Wiesbaden zur UTC-Zeit (WiesbadenSolar). Einmal je Bild ist billig.
+	if (Weather.Settings.bFollowSystemClock)
+	{
+		const WiesbadenSolar::FSunPosition Sun = WiesbadenSolar::ComputeSunPosition(
+			FDateTime::UtcNow(), WiesbadenSolar::WiesbadenLatitudeDeg, WiesbadenSolar::WiesbadenLongitudeDeg);
+		Weather.SetClockAndSun(WiesbadenSolar::LocalHours(FDateTime::Now()),
+			static_cast<float>(Sun.ElevationDeg), static_cast<float>(Sun.AzimuthDeg));
+	}
 
 	// Wetter-Zustandsmaschine (Tageszeit + Wetter-Uebergang) treiben.
 	Weather.Tick(DeltaTime);
@@ -3917,6 +3932,7 @@ void UWiesbadenCitySubsystem::SpawnCityActor(const FWiesbadenCityData& Data)
 	// Ohne Angabe bleibt der Default (Settings.StartTimeOfDayHours = 9 Uhr).
 	if (Data.CityPromptSpec.TimeOfDayHours >= 0.0f)
 	{
+		Weather.Settings.bFollowSystemClock = false;   // der Prompt bestimmt die Stunde
 		Weather.SetTimeOfDay(Data.CityPromptSpec.TimeOfDayHours);
 	}
 

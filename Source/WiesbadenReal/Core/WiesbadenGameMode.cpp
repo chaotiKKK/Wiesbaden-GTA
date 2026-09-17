@@ -35,6 +35,7 @@
 #include "Engine/GameInstance.h"
 #include "World/WiesbadenBusRoute.h"
 #include "World/WiesbadenBusStopMonitor.h"
+#include "World/WiesbadenWeatherFX.h"
 #include "World/WiesbadenParkFeatures.h"
 
 AWiesbadenGameMode::AWiesbadenGameMode()
@@ -71,6 +72,14 @@ void AWiesbadenGameMode::BeginPlay()
 		{
 			Audio->ApplyMix();
 		}
+	}
+
+	// Wetter-/Tageslicht-Renderer: die Komponente setzt Sonne (Drehung, Staerke,
+	// Farbe) und Wetter-FX aus dem Wetterzustand des CitySubsystems. Sie wurde
+	// bisher nirgends angelegt - deshalb stand die Sonne im Spiel immer gleich.
+	if (UWiesbadenWeatherFXComponent* WeatherFX = NewObject<UWiesbadenWeatherFXComponent>(this, TEXT("WeatherFX")))
+	{
+		WeatherFX->RegisterComponent();
 	}
 
 	// Engine-Bildschirmwarnungen (z. B. der rote "RAY TRACING GEOMETRY ... EXCEEDS

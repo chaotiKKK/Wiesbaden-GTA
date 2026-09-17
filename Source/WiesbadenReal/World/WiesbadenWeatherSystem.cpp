@@ -84,6 +84,16 @@ void FWiesbadenWeatherSystem::SetTimeOfDay(float Hours)
 	LastState.bIsNight = LastState.SunElevationFactor < 0.0f;
 }
 
+void FWiesbadenWeatherSystem::SetClockAndSun(float LocalHours, float SunElevationDeg, float SunAzimuthDeg)
+{
+	LastState.TimeOfDayHours = FMath::Fmod(FMath::Max(LocalHours, 0.0f), 24.0f);
+	LastState.SunElevationDeg = SunElevationDeg;
+	LastState.SunAzimuthDeg = SunAzimuthDeg;
+	// Faktor -1..+1 wie bisher (0 = Horizont, +1 = Zenit): der Sinus der Hoehe.
+	LastState.SunElevationFactor = FMath::Sin(FMath::DegreesToRadians(SunElevationDeg));
+	LastState.bIsNight = LastState.SunElevationFactor < 0.0f;
+}
+
 void FWiesbadenWeatherSystem::Tick(float DeltaSeconds)
 {
 	DeltaSeconds = FMath::Clamp(DeltaSeconds, 0.0f, 10.0f);
@@ -94,12 +104,20 @@ void FWiesbadenWeatherSystem::Tick(float DeltaSeconds)
 		Blend01 = FMath::Min(1.0f, Blend01 + DeltaSeconds / FMath::Max(Settings.TransitionSeconds, 0.1f));
 	}
 
-	// Tageszeit fortschreiten (0..24, Wrap).
-	LastState.TimeOfDayHours = FMath::Fmod(
-		LastState.TimeOfDayHours + DeltaSeconds * Settings.HoursPerRealSecond, 24.0f);
+	// Bei Uhr-Kopplung kommen Zeit und Sonne von aussen (SetClockAndSun); sonst
+	// laeuft die Spieluhr frei und die Sonne folgt der einfachen Tageskurve.
+	if (!Settings.bFollowSystemClock)
+	{
+		// Tageszeit fortschreiten (0..24, Wrap).
+		LastState.TimeOfDayHours = FMath::Fmod(
+			LastState.TimeOfDayHours + DeltaSeconds * Settings.HoursPerRealSecond, 24.0f);
 
-	// Sonnenstand + Nacht.
-	LastState.SunElevationFactor = ComputeSunElevationFactor(LastState.TimeOfDayHours);
+		// Sonnenstand; Drehung aus der Uhr: 0 h Nord, 6 h Ost, 12 h Sued, Hoehe bis
+		// 60 Grad (Sommer-Mittag), damit auch die freie Uhr Schatten wandern laesst.
+		LastState.SunElevationFactor = ComputeSunElevationFactor(LastState.TimeOfDayHours);
+		LastState.SunElevationDeg = 60.0f * LastState.SunElevationFactor;
+		LastState.SunAzimuthDeg = FMath::Fmod(LastState.TimeOfDayHours * 15.0f, 360.0f);
+	}
 	LastState.bIsNight = LastState.SunElevationFactor < 0.0f;
 
 	// Intensitaeten zwischen vorheriger und aktueller Lage mischen.
