@@ -658,6 +658,130 @@ bool FRoadTurnClassificationTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoadLaneAttributesTest,
+	"WiesbadenReal.GIS.RoadNetworkGenerator.LaneAttributes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRoadLaneAttributesTest::RunTest(const FString& Parameters)
+{
+	URoadTypeLibrary* Lib = NewObject<URoadTypeLibrary>();
+	Lib->ApplyBuiltInDefaults();
+
+	auto HasFlag = [](uint8 Flags, ETurnIndication Bit) { return (Flags & static_cast<uint8>(Bit)) != 0; };
+
+	// --- A: Zweirichtung, turn:lanes vor UND zurueck (Token->Spur-Mapping) ---
+	// Spuren von links: 0,1 = Gegenrichtung (backward), 2,3 = Hinrichtung (forward).
+	{
+		FOSMWay Way;
+		Way.Id = 1;
+		Way.Tags.Add(TEXT("highway"), TEXT("primary"));
+		Way.Tags.Add(TEXT("turn:lanes:forward"), TEXT("through|through;right"));
+		Way.Tags.Add(TEXT("turn:lanes:backward"), TEXT("left|through"));
+		const TArray<FLaneAttributes> A = Lib->ResolveLaneAttributes(Way, EOSMHighwayType::Primary, EOSMOnewayType::No, 2, 2);
+		TestEqual(TEXT("A: 4 Spuren"), A.Num(), 4);
+		if (A.Num() == 4)
+		{
+			// forward-Tokens -> Spur 2,3 (links->rechts aufsteigend)
+			TestTrue(TEXT("A: Spur3 Through+Right"), HasFlag(A[3].TurnFlags, ETurnIndication::Through) && HasFlag(A[3].TurnFlags, ETurnIndication::Right));
+			TestTrue(TEXT("A: Spur2 Through, nicht Right"), HasFlag(A[2].TurnFlags, ETurnIndication::Through) && !HasFlag(A[2].TurnFlags, ETurnIndication::Right));
+			// backward-Tokens sind in Fahrtrichtung links->rechts -> umgekehrter Way-Index:
+			// Token[0]="left" -> Spur 1, Token[1]="through" -> Spur 0.
+			TestTrue(TEXT("A: Spur1 Left (backward-Mapping)"), HasFlag(A[1].TurnFlags, ETurnIndication::Left));
+			TestTrue(TEXT("A: Spur0 kein Left"), !HasFlag(A[0].TurnFlags, ETurnIndication::Left));
+			// Grenzstile: Mittentrennung zwischen Spur1|2, Leitlinie sonst, Randlinie aussen (primary).
+			TestTrue(TEXT("A: Richtungstrennung 1|2"), A[1].RightBoundary == ELaneBoundaryStyle::DirSplit && A[2].LeftBoundary == ELaneBoundaryStyle::DirSplit);
+			TestTrue(TEXT("A: Leitlinie 0|1"), A[0].RightBoundary == ELaneBoundaryStyle::Dashed);
+			TestTrue(TEXT("A: Randlinie aussen"), A[0].LeftBoundary == ELaneBoundaryStyle::Edge && A[3].RightBoundary == ELaneBoundaryStyle::Edge);
+		}
+	}
+
+	// --- B: Einbahn mit Busspur (lanes:psv) + turn:lanes (unsuffiziert) ---
+	{
+		FOSMWay Way;
+		Way.Id = 2;
+		Way.Tags.Add(TEXT("highway"), TEXT("primary"));
+		Way.Tags.Add(TEXT("oneway"), TEXT("yes"));
+		Way.Tags.Add(TEXT("lanes:psv"), TEXT("1"));
+		Way.Tags.Add(TEXT("turn:lanes"), TEXT("left|through|through"));
+		const TArray<FLaneAttributes> A = Lib->ResolveLaneAttributes(Way, EOSMHighwayType::Primary, EOSMOnewayType::Forward, 3, 0);
+		TestEqual(TEXT("B: 3 Spuren"), A.Num(), 3);
+		if (A.Num() == 3)
+		{
+			TestTrue(TEXT("B: rechte Spur ist Busspur"), A[2].bIsBusLane && !A[0].bIsBusLane && !A[1].bIsBusLane);
+			TestTrue(TEXT("B: Spur0 Left"), HasFlag(A[0].TurnFlags, ETurnIndication::Left));
+			// Busspur wird durch durchgezogene Linie abgetrennt.
+			TestTrue(TEXT("B: Solid vor Busspur"), A[1].RightBoundary == ELaneBoundaryStyle::Solid && A[2].LeftBoundary == ELaneBoundaryStyle::Solid);
+			TestTrue(TEXT("B: Leitlinie 0|1"), A[0].RightBoundary == ELaneBoundaryStyle::Dashed);
+		}
+	}
+
+	// --- C: Einbahn-Radfahrstreifen (cycleway:right) auf tertiary ---
+	{
+		FOSMWay Way;
+		Way.Id = 3;
+		Way.Tags.Add(TEXT("highway"), TEXT("tertiary"));
+		Way.Tags.Add(TEXT("oneway"), TEXT("yes"));
+		Way.Tags.Add(TEXT("cycleway:right"), TEXT("lane"));
+		const TArray<FLaneAttributes> A = Lib->ResolveLaneAttributes(Way, EOSMHighwayType::Tertiary, EOSMOnewayType::Forward, 2, 0);
+		TestEqual(TEXT("C: 2 Spuren"), A.Num(), 2);
+		if (A.Num() == 2)
+		{
+			TestTrue(TEXT("C: rechte Spur ist Radspur"), A[1].bIsBikeLane && !A[0].bIsBikeLane);
+			TestTrue(TEXT("C: Solid vor Radspur"), A[0].RightBoundary == ELaneBoundaryStyle::Solid);
+			TestTrue(TEXT("C: Randlinie aussen (tertiary)"), A[0].LeftBoundary == ELaneBoundaryStyle::Edge && A[1].RightBoundary == ELaneBoundaryStyle::Edge);
+		}
+	}
+
+	// --- D: Tokenzahl passt nicht zur Spurzahl -> KEIN Fakt gesetzt ---
+	{
+		FOSMWay Way;
+		Way.Id = 4;
+		Way.Tags.Add(TEXT("highway"), TEXT("primary"));
+		Way.Tags.Add(TEXT("oneway"), TEXT("yes"));
+		Way.Tags.Add(TEXT("turn:lanes"), TEXT("left|through"));   // 2 Tokens, 3 Spuren
+		const TArray<FLaneAttributes> A = Lib->ResolveLaneAttributes(Way, EOSMHighwayType::Primary, EOSMOnewayType::Forward, 3, 0);
+		TestEqual(TEXT("D: 3 Spuren"), A.Num(), 3);
+		if (A.Num() == 3)
+		{
+			TestTrue(TEXT("D: kein Abbiegen bei Mismatch -> Through-Default"),
+				A[0].TurnFlags == static_cast<uint8>(ETurnIndication::Through) && !HasFlag(A[0].TurnFlags, ETurnIndication::Left));
+		}
+	}
+
+	// --- E: bus:lanes je Spur "designated" (Hinrichtung) ---
+	{
+		FOSMWay Way;
+		Way.Id = 5;
+		Way.Tags.Add(TEXT("highway"), TEXT("secondary"));
+		Way.Tags.Add(TEXT("bus:lanes:forward"), TEXT("yes|designated"));
+		const TArray<FLaneAttributes> A = Lib->ResolveLaneAttributes(Way, EOSMHighwayType::Secondary, EOSMOnewayType::No, 2, 2);
+		TestEqual(TEXT("E: 4 Spuren"), A.Num(), 4);
+		if (A.Num() == 4)
+		{
+			// forward-Token[1]="designated" -> Spur 3.
+			TestTrue(TEXT("E: Spur3 Busspur"), A[3].bIsBusLane && !A[2].bIsBusLane);
+		}
+	}
+
+	// --- F: einspurige Wohnstrasse -> keine Randlinie, kein Absturz ---
+	{
+		FOSMWay Way;
+		Way.Id = 6;
+		Way.Tags.Add(TEXT("highway"), TEXT("residential"));
+		Way.Tags.Add(TEXT("oneway"), TEXT("yes"));
+		const TArray<FLaneAttributes> A = Lib->ResolveLaneAttributes(Way, EOSMHighwayType::Residential, EOSMOnewayType::Forward, 1, 0);
+		TestEqual(TEXT("F: 1 Spur"), A.Num(), 1);
+		if (A.Num() == 1)
+		{
+			TestTrue(TEXT("F: keine Randlinie auf residential"),
+				A[0].LeftBoundary == ELaneBoundaryStyle::None && A[0].RightBoundary == ELaneBoundaryStyle::None);
+			TestTrue(TEXT("F: keine Sonderspur"), !A[0].bIsBusLane && !A[0].bIsBikeLane);
+		}
+	}
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildingGeneratorTest,
 	"WiesbadenReal.GIS.BuildingGenerator.Generate",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

@@ -433,6 +433,11 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 		const EOSMSurfaceType Surface = TypeLibrary->ResolveSurface(Way, HighwayType);
 		const FRoadTypeDefinition& TypeDef = TypeLibrary->GetDefinition(HighwayType);
 
+		// Pro-Spur-Attribute (Busspur/Radspur/Abbiegen/Grenzstil) einmal je Way
+		// aufloesen und auf alle Segmente uebertragen (LaneIndexFromLeft-Reihenfolge).
+		const TArray<FLaneAttributes> LaneAttrs =
+			TypeLibrary->ResolveLaneAttributes(Way, HighwayType, Oneway, ForwardLanes, BackwardLanes);
+
 		// Zerlegungspunkte bestimmen: Anfang, Ende und jeder Innenknoten, der
 		// von mindestens zwei Ways benutzt wird.
 		TArray<int32> SplitIndices;
@@ -519,6 +524,7 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 			Segment.SidewalkType = Settings.bGenerateSidewalks ? Sidewalk : EOSMSidewalkType::None;
 			Segment.ForwardLaneCount = ForwardLanes;
 			Segment.BackwardLaneCount = BackwardLanes;
+			Segment.LaneAttributes = LaneAttrs;
 			Segment.CarriagewayWidthCm = CarriagewayWidthM * MetersToCm;
 			Segment.SidewalkWidthCm = TypeDef.SidewalkWidthMeters * MetersToCm;
 			Segment.KerbHeightCm = TypeDef.KerbHeightMeters * MetersToCm;
@@ -1721,12 +1727,11 @@ void URoadNetworkGenerator::BuildLanes(
 		const double LaneWidth = Segment.CarriagewayWidthCm / static_cast<double>(TotalLanes);
 		const double HalfCarriageway = Segment.CarriagewayWidthCm * 0.5;
 
-		// Anmerkung zu turn:lanes: die Abbiegepfeile stehen am Quell-Way und
-		// werden beim Zerlegen nicht auf die Segmente uebertragen. Die
-		// tatsaechlich erlaubten Abbiegebeziehungen ermittelt ConnectLanes
-		// ohnehin aus der Kreuzungsgeometrie; das Tag steuert daher nur die
-		// aufgemalten Pfeile und wird beim Erzeugen der Fahrbahnmarkierungen
-		// ausgewertet, nicht hier.
+		// Pro-Spur-Attribute (turn:lanes, Bus-/Radspur, Grenzstil) sind bereits je
+		// Way aufgeloest und liegen in Segment.LaneAttributes (LaneIndexFromLeft).
+		// Sie steuern die aufgemalten Markierungen; die tatsaechlich erlaubten
+		// Abbiegebeziehungen der KI ermittelt ConnectLanes weiterhin aus der
+		// Kreuzungsgeometrie, unabhaengig von den Pfeilen.
 
 		for (int32 LaneIndexFromLeft = 0; LaneIndexFromLeft < TotalLanes; ++LaneIndexFromLeft)
 		{
@@ -1761,6 +1766,17 @@ void URoadNetworkGenerator::BuildLanes(
 			Lane.WidthCm = LaneWidth;
 			Lane.SpeedLimitKmh = Segment.MaxSpeedKmh;
 			Lane.TurnFlags = static_cast<uint8>(ETurnIndication::Through);
+
+			// Pro-Spur-Attribute aus den OSM-Tags uebernehmen (falls aufgeloest).
+			if (Segment.LaneAttributes.IsValidIndex(LaneIndexFromLeft))
+			{
+				const FLaneAttributes& Attr = Segment.LaneAttributes[LaneIndexFromLeft];
+				Lane.TurnFlags = Attr.TurnFlags;
+				Lane.bIsBusLane = Attr.bIsBusLane;
+				Lane.bIsBikeLane = Attr.bIsBikeLane;
+				Lane.LeftBoundary = Attr.LeftBoundary;
+				Lane.RightBoundary = Attr.RightBoundary;
+			}
 
 			// Hoehe von der Segmentachse uebernehmen: die Spur liegt hoechstens
 			// wenige Meter daneben, dort ist die Terrainhoehe praktisch gleich,

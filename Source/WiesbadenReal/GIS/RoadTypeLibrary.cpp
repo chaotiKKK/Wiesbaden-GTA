@@ -4,6 +4,7 @@
 
 #include "WiesbadenReal.h"
 
+#include "GIS/RoadNetworkGenerator.h"   // ParseTurnIndication (static, reiner Tag-Parser)
 #include "GIS/WiesbadenConfigPaths.h"
 #include "Dom/JsonObject.h"
 #include "Misc/FileHelper.h"
@@ -80,6 +81,20 @@ void URoadTypeLibrary::ApplyBuiltInDefaults()
 	if (FRoadTypeDefinition* Def = Definitions.Find(EOSMHighwayType::Path))
 	{
 		Def->DefaultSurface = EOSMSurfaceType::Ground;
+	}
+
+	// Randlinie (Fahrbahnbegrenzung) nur auf klassifizierten Durchgangsstrassen -
+	// Wohn-/Erschliessungsstrassen tragen in Deutschland keine durchgezogene
+	// Randmarkierung.
+	for (const EOSMHighwayType EdgeType : {
+		EOSMHighwayType::Motorway, EOSMHighwayType::MotorwayLink,
+		EOSMHighwayType::Trunk, EOSMHighwayType::TrunkLink,
+		EOSMHighwayType::Primary, EOSMHighwayType::Secondary, EOSMHighwayType::Tertiary })
+	{
+		if (FRoadTypeDefinition* Def = Definitions.Find(EdgeType))
+		{
+			Def->bHasEdgeLineMarking = true;
+		}
 	}
 
 	FallbackDefinition = Definitions.FindRef(EOSMHighwayType::Residential);
@@ -194,6 +209,10 @@ bool URoadTypeLibrary::LoadFromJsonFile(const FString& FilePath)
 		if (Entry->TryGetBoolField(TEXT("hasCenterLineMarking"), BoolValue))
 		{
 			Def.bHasCenterLineMarking = BoolValue;
+		}
+		if (Entry->TryGetBoolField(TEXT("hasEdgeLineMarking"), BoolValue))
+		{
+			Def.bHasEdgeLineMarking = BoolValue;
 		}
 		if (Entry->TryGetBoolField(TEXT("trafficEnabled"), BoolValue))
 		{
@@ -350,6 +369,182 @@ void URoadTypeLibrary::ResolveLaneCounts(
 
 	OutForwardLanes = FMath::Clamp(OutForwardLanes, 0, 8);
 	OutBackwardLanes = FMath::Clamp(OutBackwardLanes, 0, 8);
+}
+
+TArray<FLaneAttributes> URoadTypeLibrary::ResolveLaneAttributes(
+	const FOSMWay& Way,
+	EOSMHighwayType Type,
+	EOSMOnewayType Oneway,
+	int32 ForwardLanes,
+	int32 BackwardLanes) const
+{
+	const int32 F = FMath::Max(0, ForwardLanes);
+	const int32 B = FMath::Max(0, BackwardLanes);
+	const int32 Total = F + B;
+
+	TArray<FLaneAttributes> Attrs;
+	if (Total < 1)
+	{
+		return Attrs;
+	}
+	Attrs.SetNum(Total);   // Default: Through, keine Sonderspur, keine Grenze
+	(void)Oneway;          // Frame ist bereits in ForwardLanes/BackwardLanes aufgeloest
+
+	const bool bTwoWay = (F > 0 && B > 0);
+
+	auto GetTag = [&Way](const FString& Key) { return Way.GetTag(FName(*Key)); };
+
+	// Token-Position (links->rechts in Fahrtrichtung) -> Geometrie-Spurindex.
+	// Vorwaertsgruppe liegt rechts (Index B..Total-1), von links aufsteigend.
+	// Rueckwaertsgruppe liegt links (Index 0..B-1); in IHRER Fahrtrichtung ist die
+	// linkeste Spur der Way-rechte Rand, daher umgekehrt.
+	const TFunction<int32(int32)> FwdIndex = [B](int32 i) { return B + i; };
+	const TFunction<int32(int32)> BwdIndex = [B](int32 i) { return (B - 1) - i; };
+
+	// Liest eine Pro-Spur-Tagliste (z. B. turn:lanes:forward) und ruft je Spur
+	// Fn(GeoIndex, Token). false, wenn Tag fehlt oder die Tokenzahl nicht zur
+	// Spurzahl passt (dann bleibt es beim Default - lieber nichts als falsch).
+	auto ForEachLaneToken = [&](const FString& Key, int32 Count,
+		const TFunction<int32(int32)>& Map, const TFunction<void(int32, const FString&)>& Fn) -> bool
+	{
+		const FString Tag = GetTag(Key);
+		if (Tag.IsEmpty()) { return false; }
+		const TArray<FString> Toks = FOSMTagParser::SplitLaneValues(Tag);
+		if (Toks.Num() != Count) { return false; }
+		for (int32 i = 0; i < Count; ++i) { Fn(Map(i), Toks[i]); }
+		return true;
+	};
+
+	// ---- turn:lanes -> TurnFlags ----
+	const TFunction<void(int32, const FString&)> TurnFn = [&Attrs](int32 Idx, const FString& Tok)
+	{
+		const uint8 Flags = URoadNetworkGenerator::ParseTurnIndication(Tok);
+		if (Flags != static_cast<uint8>(ETurnIndication::None)) { Attrs[Idx].TurnFlags = Flags; }
+	};
+	if (bTwoWay)
+	{
+		ForEachLaneToken(TEXT("turn:lanes:forward"), F, FwdIndex, TurnFn);
+		ForEachLaneToken(TEXT("turn:lanes:backward"), B, BwdIndex, TurnFn);
+	}
+	else if (F > 0)
+	{
+		if (!ForEachLaneToken(TEXT("turn:lanes"), F, FwdIndex, TurnFn))
+		{
+			ForEachLaneToken(TEXT("turn:lanes:forward"), F, FwdIndex, TurnFn);
+		}
+	}
+	else // Einbahn gegen die Way-Richtung: alle Spuren in der Rueckwaertsgruppe
+	{
+		if (!ForEachLaneToken(TEXT("turn:lanes"), B, BwdIndex, TurnFn))
+		{
+			ForEachLaneToken(TEXT("turn:lanes:backward"), B, BwdIndex, TurnFn);
+		}
+	}
+
+	// ---- Busspuren (nur echte OSM-Fakten) ----
+	// (a) ganze Strasse dediziert
+	if (GetTag(TEXT("bus")).Equals(TEXT("designated"), ESearchCase::IgnoreCase)
+		|| GetTag(TEXT("psv")).Equals(TEXT("designated"), ESearchCase::IgnoreCase))
+	{
+		for (FLaneAttributes& A : Attrs) { A.bIsBusLane = true; }
+	}
+	// (b) lanes:psv[:richtung] = Anzahl -> die N rechten Spuren der Richtung
+	auto MarkRightmostBus = [&Attrs](int32 GroupStart, int32 GroupCount, bool bForwardGroup, int32 N)
+	{
+		N = FMath::Clamp(N, 0, GroupCount);
+		for (int32 k = 0; k < N; ++k)
+		{
+			const int32 Idx = bForwardGroup ? (GroupStart + GroupCount - 1 - k) : (GroupStart + k);
+			Attrs[Idx].bIsBusLane = true;
+		}
+	};
+	int32 PsvCount = 0;
+	if (bTwoWay)
+	{
+		if (FOSMTagParser::ParseLaneCount(GetTag(TEXT("lanes:psv:forward")), PsvCount)) { MarkRightmostBus(B, F, true, PsvCount); }
+		if (FOSMTagParser::ParseLaneCount(GetTag(TEXT("lanes:psv:backward")), PsvCount)) { MarkRightmostBus(0, B, false, PsvCount); }
+	}
+	else if (FOSMTagParser::ParseLaneCount(GetTag(TEXT("lanes:psv")), PsvCount))
+	{
+		MarkRightmostBus(0, Total, /*bForwardGroup=*/(F > 0), PsvCount);
+	}
+	// (c) busway[:seite] = lane
+	auto IsLaneValue = [](const FString& V)
+	{
+		return V.Equals(TEXT("lane"), ESearchCase::IgnoreCase) || V.Equals(TEXT("opposite_lane"), ESearchCase::IgnoreCase);
+	};
+	if (IsLaneValue(GetTag(TEXT("busway"))) || IsLaneValue(GetTag(TEXT("busway:right")))) { Attrs[Total - 1].bIsBusLane = true; }
+	if (IsLaneValue(GetTag(TEXT("busway:left")))) { Attrs[0].bIsBusLane = true; }
+	// (d) bus:lanes / psv:lanes je Spur "designated"
+	const TFunction<void(int32, const FString&)> BusTokenFn = [&Attrs](int32 Idx, const FString& Tok)
+	{
+		if (Tok.Equals(TEXT("designated"), ESearchCase::IgnoreCase)) { Attrs[Idx].bIsBusLane = true; }
+	};
+	if (bTwoWay)
+	{
+		if (!ForEachLaneToken(TEXT("bus:lanes:forward"), F, FwdIndex, BusTokenFn)) { ForEachLaneToken(TEXT("psv:lanes:forward"), F, FwdIndex, BusTokenFn); }
+		if (!ForEachLaneToken(TEXT("bus:lanes:backward"), B, BwdIndex, BusTokenFn)) { ForEachLaneToken(TEXT("psv:lanes:backward"), B, BwdIndex, BusTokenFn); }
+	}
+	else
+	{
+		const TFunction<int32(int32)> Map = (F > 0) ? FwdIndex : BwdIndex;
+		if (!ForEachLaneToken(TEXT("bus:lanes"), Total, Map, BusTokenFn)) { ForEachLaneToken(TEXT("psv:lanes"), Total, Map, BusTokenFn); }
+	}
+
+	// ---- Radfahrstreifen (cycleway=lane/track am Weg) ----
+	auto IsBikeValue = [](const FString& V)
+	{
+		return V.Equals(TEXT("lane"), ESearchCase::IgnoreCase) || V.Equals(TEXT("track"), ESearchCase::IgnoreCase)
+			|| V.Equals(TEXT("opposite_lane"), ESearchCase::IgnoreCase) || V.Equals(TEXT("opposite_track"), ESearchCase::IgnoreCase);
+	};
+	if (IsBikeValue(GetTag(TEXT("cycleway"))) || IsBikeValue(GetTag(TEXT("cycleway:right"))) || IsBikeValue(GetTag(TEXT("cycleway:both")))) { Attrs[Total - 1].bIsBikeLane = true; }
+	if (IsBikeValue(GetTag(TEXT("cycleway:left"))) || IsBikeValue(GetTag(TEXT("cycleway:both")))) { Attrs[0].bIsBikeLane = true; }
+	const TFunction<void(int32, const FString&)> BikeTokenFn = [&Attrs, &IsBikeValue](int32 Idx, const FString& Tok)
+	{
+		if (IsBikeValue(Tok)) { Attrs[Idx].bIsBikeLane = true; }
+	};
+	if (bTwoWay)
+	{
+		ForEachLaneToken(TEXT("cycleway:lanes:forward"), F, FwdIndex, BikeTokenFn);
+		ForEachLaneToken(TEXT("cycleway:lanes:backward"), B, BwdIndex, BikeTokenFn);
+	}
+	else
+	{
+		const TFunction<int32(int32)> Map = (F > 0) ? FwdIndex : BwdIndex;
+		ForEachLaneToken(TEXT("cycleway:lanes"), Total, Map, BikeTokenFn);
+	}
+
+	// ---- Grenzstile (Konvention aus Klasse/Anordnung) ----
+	const FRoadTypeDefinition& Def = GetDefinition(Type);
+	for (int32 i = 0; i + 1 < Total; ++i)
+	{
+		const bool bSpecialBoundary = (Attrs[i].bIsBusLane != Attrs[i + 1].bIsBusLane)
+			|| (Attrs[i].bIsBikeLane != Attrs[i + 1].bIsBikeLane);
+		ELaneBoundaryStyle Style;
+		if (bSpecialBoundary)
+		{
+			Style = ELaneBoundaryStyle::Solid;       // Sonderspur wird immer abgetrennt (Breitstrich)
+		}
+		else if (!Def.bHasCenterLineMarking)
+		{
+			Style = ELaneBoundaryStyle::None;        // z. B. Tempo-30-Wohnstrasse ohne Fahrbahnmarkierung
+		}
+		else if (bTwoWay && (i + 1 == B))
+		{
+			Style = ELaneBoundaryStyle::DirSplit;    // Richtungstrennung (Mittellinie)
+		}
+		else
+		{
+			Style = ELaneBoundaryStyle::Dashed;      // Leitlinie
+		}
+		Attrs[i].RightBoundary = Style;
+		Attrs[i + 1].LeftBoundary = Style;
+	}
+	const ELaneBoundaryStyle EdgeStyle = Def.bHasEdgeLineMarking ? ELaneBoundaryStyle::Edge : ELaneBoundaryStyle::None;
+	Attrs[0].LeftBoundary = EdgeStyle;
+	Attrs[Total - 1].RightBoundary = EdgeStyle;
+
+	return Attrs;
 }
 
 double URoadTypeLibrary::ResolveCarriagewayWidthMeters(
