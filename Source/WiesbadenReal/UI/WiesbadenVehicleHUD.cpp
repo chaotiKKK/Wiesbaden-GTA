@@ -69,6 +69,16 @@ namespace
 	const FLinearColor MapWaypoint(0.25f, 0.90f, 0.55f, 1.0f);
 }
 
+FString AWiesbadenVehicleHUD::FormatWaterLevel(float Fuellstand, bool bSchieberOffen)
+{
+	const float Prozent = FMath::Clamp(Fuellstand, 0.0f, 1.0f) * 100.0f;
+	// Auf 5 % gerundet: der Fuellstand aendert sich langsam (2 %/s Abfluss),
+	// und eine zappelnde Einerstelle waere im Bild nur unruhig.
+	const float Gerundet = FMath::RoundToFloat(Prozent / 5.0f) * 5.0f;
+	return FString::Printf(TEXT("Wasserballast %.0f %% - Schieber %s"),
+		Gerundet, bSchieberOffen ? TEXT("offen") : TEXT("zu"));
+}
+
 FString AWiesbadenVehicleHUD::FormatMapDistance(double DistanceCm)
 {
 	const double Metres = DistanceCm / 100.0;
@@ -753,7 +763,9 @@ void AWiesbadenVehicleHUD::DrawHUD()
 
 	if (!Vehicle)
 	{
-		// Zu Fuss: statt Tacho der Hinweis, was hier gerade moeglich ist.
+		// Zu Fuss: statt Tacho der Hinweis, was hier gerade moeglich ist -
+		// und waehrend einer Mitfahrt die Tafel mit Kurbel und Wasserstand.
+		DrawFunicularRidePanel(Width * 0.5f, Height - 190.0f);
 		DrawFootPrompt(Width * 0.5f, Height - 120.0f);
 		return;
 	}
@@ -867,6 +879,9 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 		// Ohne diese Zuweisung blieb CachedFootMerchant dauerhaft leer und
 		// ResolveMerchantCue fiel auf den allgemeinen Hinweis zurueck.
 		CachedFootMerchant = Cast<AWiesbadenStoreMerchant>(NearestOf(Merchants).Actor);
+		// Die Nerobergbahn ebenso: die Mitfahrtafel braucht ihren Wasserstand
+		// (siehe DrawFunicularRidePanel).
+		CachedFunicular = Cast<AWiesbadenNerobergbahn>(NearestOf(Funiculars).Actor);
 
 		FootPromptScanAge = 0.0f;
 	}
@@ -885,6 +900,59 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 	GetTextSize(Prompt, TextWidth, TextHeight, GEngine->GetLargeFont(), 1.0f);
 	DrawText(Prompt, DialText, CenterX - TextWidth * 0.5f, Y,
 		GEngine->GetLargeFont(), 1.0f);
+}
+
+void AWiesbadenVehicleHUD::DrawFunicularRidePanel(float CenterX, float Y)
+{
+	AWiesbadenNerobergbahn* Bahn = CachedFunicular.Get();
+	if (!Bahn || !Bahn->IsPlayerRiding())
+	{
+		return;
+	}
+
+	const int32 Wagen = Bahn->GetRiddenCarIndex();
+	float Fuellstand = 0.0f;
+	bool bSchieberOffen = false;
+	if (!Bahn->GetCarWater(Wagen, Fuellstand, bSchieberOffen))
+	{
+		return;
+	}
+	Fuellstand = FMath::Clamp(Fuellstand, 0.0f, 1.0f);
+
+	const FString Kopf = FString::Printf(TEXT("MITFAHRT NEROBERGBAHN - WAGEN %s"),
+		Wagen == 0 ? TEXT("A") : TEXT("B"));
+
+	constexpr float BoxWidth = 560.0f;
+	constexpr float LineHeight = 20.0f;
+	constexpr float Padding = 12.0f;
+	constexpr float BarHeight = 10.0f;
+	const float BoxHeight = Padding * 2.0f + LineHeight * 3.0f + BarHeight + 16.0f;
+	const float X = CenterX - BoxWidth * 0.5f;
+
+	DrawRect(DialBackground, X, Y, BoxWidth, BoxHeight);
+
+	DrawText(Kopf, DialText, X + Padding, Y + Padding,
+		GEngine->GetMediumFont(), 1.0f);
+	DrawText(TEXT("Kurbel: K drehen (Wasserschieber auf/zu)      Aussteigen: E"),
+		DialScale, X + Padding, Y + Padding + LineHeight,
+		GEngine->GetSmallFont(), 1.0f);
+	DrawText(FormatWaterLevel(Fuellstand, bSchieberOffen),
+		bSchieberOffen ? RpmRed : RpmSafe,
+		X + Padding, Y + Padding + LineHeight * 2.0f,
+		GEngine->GetSmallFont(), 1.0f);
+
+	// Balken mit den Viertelmarken des Schauglases (10/20/30/40).
+	const float BarX = X + Padding;
+	const float BarY = Y + Padding + LineHeight * 3.0f + 6.0f;
+	const float BarWidth = BoxWidth - Padding * 2.0f;
+	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.5f), BarX, BarY, BarWidth, BarHeight);
+	DrawRect(bSchieberOffen ? RpmRed : RpmSafe, BarX, BarY,
+		BarWidth * Fuellstand, BarHeight);
+	for (int32 Mark = 1; Mark < 4; ++Mark)
+	{
+		const float MarkX = BarX + BarWidth * (Mark / 4.0f);
+		DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.6f), MarkX - 0.5f, BarY, 1.0f, BarHeight);
+	}
 }
 
 void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString>& OutLines)
@@ -918,6 +986,8 @@ void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString
 	OutLines.Add(TEXT("Linke Maustaste     Kettensaege schwingen"));
 	OutLines.Add(TEXT("F                   Einsteigen - auch in Verkehrsautos"));
 	OutLines.Add(TEXT("E                   Nerobergbahn - mitfahren"));
+	// Im Wagen bedient die Kurbel den Wasserschieber (AWiesbadenNerobergbahn).
+	OutLines.Add(TEXT("K                   Kurbel drehen - im Nerobergbahn-Wagen"));
 }
 
 void AWiesbadenVehicleHUD::DrawControlLegend(bool bInVehicle, float X, float Y)

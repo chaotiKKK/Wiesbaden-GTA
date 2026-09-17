@@ -1,4 +1,6 @@
-"""Importiert das Nerobergbahn-Ensemble (Wagen, Tal-/Bergstation, Viadukt).
+"""Importiert das Nerobergbahn-Ensemble (Wagen, Tal-/Bergstation, Viadukt) und
+die fuenf Gleisbauteile der Trasse (Schiene, Zahnstange, Seilkanal, Schwelle,
+Schotterbett).
 
 Quelle der Meshes: Tools/Blender/make_nerobergbahn.py -> Data/Raw/Nerobergbahn/
 (FBX + nerobergbahn.json). Das Manifest nennt je Materialslot Grundfarbe und
@@ -28,6 +30,12 @@ SRC = os.path.join(unreal.Paths.project_dir(), "Data", "Raw", "Nerobergbahn")
 MESH_DIR = "/Game/Nerobergbahn/Meshes"
 MAT_DIR = "/Game/Nerobergbahn/Materials"
 TEX_DIR = "/Game/Materials/AAA/Textures"
+# Schriftzug und Wasserstandsskala des Wagens: PNG-Quellen im Projekt-Content,
+# erzeugt von Tools/make_nerobergbahn_textures.py, importiert nach
+# /Game/Nerobergbahn/Textures.
+SCHRIFT_SRC = os.path.join(unreal.Paths.project_content_dir(),
+                           "Nerobergbahn", "Textures", "Source")
+SCHRIFT_DIR = "/Game/Nerobergbahn/Textures"
 
 EAL = unreal.EditorAssetLibrary
 MEL = unreal.MaterialEditingLibrary
@@ -49,6 +57,9 @@ PAINT_PBR = {
     "metal": (0.90, 0.28),
     "dark":  (0.20, 0.55),
     "timber": (0.0, 0.80),
+    # Schotter: nichtmetallisch und sehr rau - mit dem Lack-Wert (0,32) haette
+    # das Bett eine Specular-Kante wie eine Karosserie.
+    "gravel": (0.0, 0.90),
 }
 
 
@@ -157,6 +168,114 @@ def make_tiled_instance(master, kind):
     return inst
 
 
+def import_textures(assets):
+    """Importiert die im Manifest genannten Texturen; Name -> Textur-Asset."""
+    namen = []
+    for asset in assets:
+        for m in asset["materials"]:
+            t = m.get("texture")
+            if t and t not in namen:
+                namen.append(t)
+
+    texturen = {}
+    for name in namen:
+        quelle = os.path.join(SCHRIFT_SRC, name)
+        if not os.path.exists(quelle):
+            log("WARNUNG: Textur fehlt: %s - erst Tools/make_nerobergbahn_"
+                "textures.py laufen lassen." % quelle)
+            continue
+        ziel = os.path.splitext(name)[0]
+        task = unreal.AssetImportTask()
+        task.filename = quelle
+        task.destination_path = SCHRIFT_DIR
+        task.destination_name = ziel
+        task.automated = True
+        task.replace_existing = True
+        task.save = True
+        ATH.import_asset_tasks([task])
+        tex = EAL.load_asset("%s/%s" % (SCHRIFT_DIR, ziel))
+        if tex is None:
+            log("WARNUNG: Textur nicht importiert: %s" % name)
+            continue
+        # sRGB: die PNG-Farbe ist bereits der sRGB-Wert der Lackfarbe.
+        tex.set_editor_property("srgb", True)
+        EAL.save_loaded_asset(tex)
+        texturen[name] = tex
+        log("Textur importiert: %s/%s" % (SCHRIFT_DIR, ziel))
+    return texturen
+
+
+def build_decal_master():
+    """Maskiertes, zweiseitiges Master-Material fuer Schriftzug und Skala.
+
+    Beide sind im Vorbild AUF die gelbe Wand gemalt: der Grund der Textur ist
+    vollstaendig transparent, gemalt werden nur die blauen Buchstaben und
+    Striche (OpacityMask aus dem Alpha). Zweiseitig, weil die Flaeche nur 1 cm
+    vor der Wand liegt und aus beiden Blickrichtungen sauber aussehen muss -
+    unabhaengig davon, wie das Wagen-Mesh gewickelt ist.
+    """
+    path = "%s/M_WbNb_Decal" % MAT_DIR
+    if EAL.does_asset_exist(path):
+        EAL.delete_asset(path)
+    mat = ATH.create_asset("M_WbNb_Decal", MAT_DIR, unreal.Material,
+                           unreal.MaterialFactoryNew())
+    mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+    mat.set_editor_property("two_sided", True)
+
+    sample = MEL.create_material_expression(
+        mat, unreal.MaterialExpressionTextureSampleParameter2D, -560, 0)
+    sample.set_editor_property("parameter_name", "BaseColorTex")
+    sample.set_editor_property("sampler_type",
+                               unreal.MaterialSamplerType.SAMPLERTYPE_COLOR)
+    MEL.connect_material_property(sample, "RGB", MP.MP_BASE_COLOR)
+    MEL.connect_material_property(sample, "A", MP.MP_OPACITY_MASK)
+
+    metal = MEL.create_material_expression(
+        mat, unreal.MaterialExpressionScalarParameter, -560, 300)
+    metal.set_editor_property("parameter_name", "Metallic")
+    metal.set_editor_property("default_value", 0.05)
+    MEL.connect_material_property(metal, "", MP.MP_METALLIC)
+
+    rough = MEL.create_material_expression(
+        mat, unreal.MaterialExpressionScalarParameter, -560, 480)
+    rough.set_editor_property("parameter_name", "Roughness")
+    rough.set_editor_property("default_value", 0.45)
+    MEL.connect_material_property(rough, "", MP.MP_ROUGHNESS)
+
+    MEL.recompile_material(mat)
+    EAL.save_loaded_asset(mat)
+    return mat
+
+
+def make_decal_instance(master, spec, texturen):
+    """Aufgemalte Graphik: Textur + eigene Metall-/Rauheitswerte.
+
+    Die Vorgaben (0,05 / 0,45) passen fuer Schriftzug und Skala. Die
+    Tachoscheibe sitzt unter Glas, der Buehnenboden ist gummiert-rau - beides
+    steht als optionales 'metallic'/'roughness' im Manifest und wird hier
+    uebernommen.
+    """
+    slot = spec["name"]
+    name = "MI_Nb_%s" % slot
+    path = "%s/%s" % (MAT_DIR, name)
+    if EAL.does_asset_exist(path):
+        EAL.delete_asset(path)
+    inst = ATH.create_asset(name, MAT_DIR, unreal.MaterialInstanceConstant,
+                            unreal.MaterialInstanceConstantFactoryNew())
+    MEL.set_material_instance_parent(inst, master)
+    tex = texturen.get(spec.get("texture"))
+    if tex is None:
+        log("WARNUNG: %s ohne Textur (Manifest-Eintrag 'texture' fehlt)" % name)
+    else:
+        MEL.set_material_instance_texture_parameter_value(inst, "BaseColorTex", tex)
+    MEL.set_material_instance_scalar_parameter_value(
+        inst, "Metallic", float(spec.get("metallic", 0.05)))
+    MEL.set_material_instance_scalar_parameter_value(
+        inst, "Roughness", float(spec.get("roughness", 0.45)))
+    EAL.save_loaded_asset(inst)
+    return inst
+
+
 def make_paint_instance(master, slot):
     name = "MI_Nb_%s" % slot["name"]
     path = "%s/%s" % (MAT_DIR, name)
@@ -185,6 +304,8 @@ def main():
 
     tiled_master = build_tiled_master()
     paint_master = build_paint_master()
+    decal_master = build_decal_master()
+    texturen = import_textures(assets)
     log("Master-Materialien angelegt.")
 
     tiled_instances = {kind: make_tiled_instance(tiled_master, kind) for kind in TILED}
@@ -218,8 +339,10 @@ def main():
 
     ATH.import_asset_tasks([t for t, _ in tasks])
 
-    # Paint-Instanzen je Slot ueber alle Assets sammeln (Slotname eindeutig).
+    # Paint-/Decal-Instanzen je Slot ueber alle Assets sammeln (Slotname
+    # eindeutig).
     paint_cache = {}
+    decal_cache = {}
 
     for task, asset in tasks:
         mesh_path = "%s/%s" % (MESH_DIR, asset["name"])
@@ -239,6 +362,12 @@ def main():
             kind = spec["kind"]
             if kind in TILED:
                 inst = tiled_instances[kind]
+            elif kind == "decal":
+                # Schriftzug/Skala: maskiertes Material mit eigener Textur.
+                if slot_name not in decal_cache:
+                    decal_cache[slot_name] = make_decal_instance(
+                        decal_master, spec, texturen)
+                inst = decal_cache[slot_name]
             else:
                 if slot_name not in paint_cache:
                     paint_cache[slot_name] = make_paint_instance(paint_master, spec)

@@ -72,6 +72,8 @@ void UWiesbadenVehicleCameraComponent::CreateCameraRig()
 	CockpitSocket = NewObject<USceneComponent>(Owner, TEXT("VehicleCockpitSocket"));
 	CockpitSocket->AttachToComponent(CameraAnchor ? CameraAnchor : this, FAttachmentTransformRules::KeepRelativeTransform);
 	CockpitSocket->SetRelativeLocation(CockpitOffset);
+	// Eigene Blickrichtung (z. B. Tiefblick auf die Instrumente im Bahnwagen).
+	CockpitSocket->SetRelativeRotation(FRotator(CockpitPitch, CockpitYaw, 0.0f));
 	CockpitSocket->RegisterComponent();
 
 	CockpitCamera = NewObject<UCameraComponent>(Owner, TEXT("VehicleCockpitCamera"));

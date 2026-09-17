@@ -7,6 +7,8 @@
 
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "GIS/GeoCoordinateConverter.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -15,9 +17,11 @@
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
 #include "KismetProceduralMeshLibrary.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
+#include "UI/WiesbadenVehicleHUD.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Vehicles/WiesbadenFootPawn.h"
 #include "World/WiesbadenCityChunk.h"
@@ -77,8 +81,11 @@ namespace
 	// Hoehenunterschied des Vorbilds - Rueckfallrampe, bis das Gelaende
 	// gestreamt ist.
 	constexpr double ClimbCm = 8300.0;
-	constexpr double TrackBedStartCm = 850.0;
 	constexpr double RailClearanceCm = 35.0;
+	// Ab hier (Bogenlaenge, cm) liegt die Trasse aufgeschuettet; die Krone der
+	// Damm-/Viaduktmaeuer liegt dort 6 cm hoeher. Betrifft nur noch die
+	// Erdbauwerke - das Gleis selbst folgt dem Trassenpunkt plus RailTopCm.
+	constexpr double TrackBedStartCm = 850.0;
 	constexpr double MaxRailGrade = 0.30;
 
 	// Hebung des Wagen-Ursprungs ueber den Gleispunkt. Der Ursprung von
@@ -86,6 +93,33 @@ namespace
 	// Unterrahmen reicht als Keil nach unten - ein kleiner Wert setzt ihn
 	// buendig auf die Schiene.
 	constexpr float CarFloorCm = 12.0f;
+
+	// Schienen-OBERKANTE ueber dem Trassenpunkt - bewusst derselbe Wert wie
+	// CarFloorCm: die Gleisbauteile sind so modelliert, dass ihre Z=0-Ebene der
+	// Schienenoberkante entspricht (Tools/Blender/make_nerobergbahn.py), also
+	// laufen die Raeder genau auf der Schiene. Der fruehrere Bettlift von 6 cm
+	// ab 8,5 m ist entfallen: breite Farbbaender verzeihen einen Hoehensprung,
+	// ein Schienenstab mit 14 cm Profil nicht.
+	constexpr float RailTopCm = CarFloorCm;
+
+	// Laengen der Gleis-Wiederholteile aus Blender (cm).
+	constexpr double SchienenstabCm = 600.0;   // SM_WbNbSchiene
+	constexpr double TeilStabCm = 200.0;       // Zahnstange, Seilkanal, Bett
+	constexpr double SchwellenAbstandCm = 65.0;
+	constexpr double SchwellenLaengeCm = 24.0; // Stabmass der Schwelle in Fahrt
+
+	// Halbe Spurweite: die Schienen liegen 50 cm neben der jeweiligen Wagenmitte
+	// (1000 mm Spur, wie Wagen und Radsaetze).
+	constexpr double SpurHalfCm = 50.0;
+
+	// Ab welchem Abstand der beiden INNEREN Schienen nicht mehr von einer
+	// gemeinsamen Mittelschiene die Rede sein kann. Darunter wird nur EINE
+	// Schiene bei 0 gelegt (Vorbild: drei Laufschienen).
+	constexpr double MittelschienenToleranzCm = 15.0;
+
+	// Streuung der OSM-Knoten um die echte Spurweite: bis hierher wird der
+	// gemessene Gleisabstand als "eine Spurweite" gelesen und darauf gerundet.
+	constexpr double SpurtoleranzCm = 45.0;
 }
 
 AWiesbadenNerobergbahn::AWiesbadenNerobergbahn()
@@ -102,28 +136,32 @@ AWiesbadenNerobergbahn::AWiesbadenNerobergbahn()
 	// ein reines Schmuckband waere das bezahlte Wartezeit.
 	TrackMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
-	// Material der Trasse.
+	// Material der Erdbauwerke (Damm, Viaduktwaende, Gelaender).
 	//
 	// Die Abschnitte unterscheiden sich NUR ueber Vertexfarben:
-	// Schotterbett dunkel, Schienen hell. Hier stand lange
-	// BasicShapeMaterial - und der Kommentar daneben behauptete, es zeige
+	// Damm-Spandrel hell, Gelaender Metall, Bogenring Klinker. Hier stand
+	// lange BasicShapeMaterial - und der Kommentar daneben behauptete, es zeige
 	// die Vertexfarben. Das tut es nicht. Die Trasse war genau das graue
 	// Band den Berg hinauf, vor dem der Kommentar warnte.
+	//
+	// Das Gleis selbst sind keine Vertexfarben-Baender mehr, sondern die fuenf
+	// Instanzbauteile weiter unten; fuer die setzt BuildTrackMeshes() die
+	// Materialien aus den importierten Meshes.
 	{
 		static ConstructorHelpers::FObjectFinder<UMaterialInterface> TrackMat(
 			TEXT("/Game/Materials/City/M_WbVertexFarbe.M_WbVertexFarbe"));
 		if (TrackMat.Succeeded())
 		{
-			// Sechs Abschnitte: je Gleis Bett, linke und rechte Schiene.
-			for (int32 Section = 0; Section < 6; ++Section)
+			// Vorbelegung; die Sektionen bekommen ihre Materialien nach dem Bau.
+			for (int32 Section = 0; Section < 4; ++Section)
 			{
 				TrackMesh->SetMaterial(Section, TrackMat.Object);
 			}
 		}
 	}
 
-	CarA = BuildCar(TEXT("WagenA"));
-	CarB = BuildCar(TEXT("WagenB"));
+	CarA = BuildCar(TEXT("WagenA"), 0);
+	CarB = BuildCar(TEXT("WagenB"), 1);
 
 	// Bauwerke: modelliert in Blender (Tools/Blender/make_nerobergbahn.py),
 	// importiert von Tools/import_nerobergbahn.py. Anfangs versteckt - erst
@@ -142,15 +180,86 @@ AWiesbadenNerobergbahn::AWiesbadenNerobergbahn()
 		return Comp;
 	};
 
+	// Bahnsteighalle: EIN Mesh fuer beide Stationen - das Vorbild hat denselben
+	// Bautyp an beiden Enden (NACHBAU-REFERENZ §7.1). Der Ursprung des Meshes
+	// liegt auf der Schienenoberkante in Trassenmitte, der Actor setzt ihn
+	// deshalb ohne Hoehenzuschlag (siehe PlaceStructures).
 	Talstation = MakeStructure(TEXT("Talstation"),
-		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbTalstation.SM_WbNbTalstation"));
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbBahnsteighalle.SM_WbNbBahnsteighalle"));
 	Bergstation = MakeStructure(TEXT("Bergstation"),
-		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbBergstation.SM_WbNbBergstation"));
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbBahnsteighalle.SM_WbNbBahnsteighalle"));
 	Viadukt = MakeStructure(TEXT("Viadukt"),
 		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbViadukt.SM_WbNbViadukt"));
+
+	// Gleisbauteile: fuenf Wiederholteile aus demselben Blender-Skript, die
+	// BuildTrackInstances() beim Aufloesen der Hoehen als Instanzen legt.
+	// Der Ursprung jedes Teils liegt auf der Schienenoberkante in
+	// Trassenmitte - der Platzer muss sie also nur heben und quer verschieben.
+	auto MakeTrackPart = [&](const TCHAR* Name, const TCHAR* MeshPath)
+		-> UInstancedStaticMeshComponent*
+	{
+		UInstancedStaticMeshComponent* Comp =
+			CreateDefaultSubobject<UInstancedStaticMeshComponent>(Name);
+		Comp->SetupAttachment(Root);
+		// Keine Kollision: die Trasse folgt dem Gelaende, das bereits Kollision
+		// hat. Ein Instanzkoerper ueber 400 m Strecke waere reine Kochzeit.
+		Comp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		ConstructorHelpers::FObjectFinder<UStaticMesh> Finder(MeshPath);
+		if (Finder.Succeeded())
+		{
+			Comp->SetStaticMesh(Finder.Object);
+		}
+		return Comp;
+	};
+
+	GleisSchienen = MakeTrackPart(TEXT("GleisSchienen"),
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbSchiene.SM_WbNbSchiene"));
+	GleisZahnstangen = MakeTrackPart(TEXT("GleisZahnstangen"),
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbZahnstange.SM_WbNbZahnstange"));
+	GleisSeilkanal = MakeTrackPart(TEXT("GleisSeilkanal"),
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbSeilkanal.SM_WbNbSeilkanal"));
+	GleisSchwellen = MakeTrackPart(TEXT("GleisSchwellen"),
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbSchwelle.SM_WbNbSchwelle"));
+	GleisBett = MakeTrackPart(TEXT("GleisBett"),
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbSchotterbett.SM_WbNbSchotterbett"));
 }
 
-USceneComponent* AWiesbadenNerobergbahn::BuildCar(const TCHAR* Name)
+namespace
+{
+	// -----------------------------------------------------------------------
+	// Einbauwerte der beweglichen Teile. Sie MUESSEN mit den Ankern in
+	// Tools/Blender/make_nerobergbahn.py uebereinstimmen (GRADE, TACHO_MITTE,
+	// SCHWIMMER_UNTEN/OBEN, KURBEL_ACHSE, KURBEL_LAENGE); der Pruefer
+	// check_nerobergbahn_wagen.py prueft die Mesh-Seite, hier stehen dieselben
+	// Zahlen in cm.
+	// -----------------------------------------------------------------------
+	constexpr float CarTiltGrade = 0.195f;            // = GRADE
+	constexpr float CarTachoMaxKmh = 10.0f;           // Skalenende der Scheibe
+	// Bildwinkel = Winkel auf der Scheibe, gemessen von Bildrechts nach
+	// Bildoben. Der gruene Sektor der Textur reicht bis 7,3 km/h, darueber rot.
+	constexpr float CarZeigerWinkelNull = 225.0f;     // Skalenmarke 0
+	constexpr float CarZeigerWinkelVoll = -45.0f;     // Skalenmarke 10
+	const FVector CarTachoAnchor(170.0f, 6.0f, 162.0f);
+	const FVector CarSchwimmerUnten(175.1f, 68.0f, 140.0f);
+	const FVector CarSchwimmerOben(175.1f, 68.0f, 190.0f);
+	const FVector CarKurbelachse(172.0f, -63.0f, 122.0f);
+	constexpr float CarKurbelWinkelOffen = -26.0f;    // zum Bediener gezogen
+	constexpr float CarKurbelWinkelZu = 2.0f;         // senkrecht
+
+	/**
+	 * Neigung des Wagen-Meshes als Quaternion. build_wagen() kippt das Mesh mit
+	 * tilt_grade() um die Y-Achse (x' = x*ca - z*sa, z' = x*sa + z*ca); der
+	 * Actor giert nur. Kinder des Wagen-Meshes leben deshalb im UNGEKIPPTEN
+	 * Bau-System und muessen mit dieser Drehung gesetzt werden.
+	 */
+	FQuat CarTiltQuat()
+	{
+		return FQuat(FVector::YAxisVector, -FMath::Atan(CarTiltGrade));
+	}
+
+}
+
+USceneComponent* AWiesbadenNerobergbahn::BuildCar(const TCHAR* Name, int32 Index)
 {
 	// Ein StaticMesh statt des frueheren Wuerfelstapels: der Wagen ist jetzt
 	// das in Blender modellierte, texturierte AAA-Modell (Stufenwagen, blau/
@@ -168,12 +277,73 @@ USceneComponent* AWiesbadenNerobergbahn::BuildCar(const TCHAR* Name)
 	{
 		Car->SetStaticMesh(WagenMesh.Object);
 	}
+
+	// Die beweglichen Teile des Fuehrerstands haengen IM Wagen. Sie liegen im
+	// Bau-System des Meshes (siehe CarTiltQuat) und werden in Tick gesetzt -
+	// hier nur angebunden und auf ihre Ruhelage gestellt.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> ZeigerMesh(
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbTachoZeiger.SM_WbNbTachoZeiger"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> SchwimmerMesh(
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbSchwimmer.SM_WbNbSchwimmer"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> KurbelMesh(
+		TEXT("/Game/Nerobergbahn/Meshes/SM_WbNbKurbel.SM_WbNbKurbel"));
+
+	auto MakePart = [&](const TCHAR* Suffix, UStaticMesh* Mesh)
+	{
+		UStaticMeshComponent* Part = CreateDefaultSubobject<UStaticMeshComponent>(
+			*(FString(Name) + Suffix));
+		Part->SetupAttachment(Car);
+		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		if (Mesh)
+		{
+			Part->SetStaticMesh(Mesh);
+		}
+		return Part;
+	};
+
+	FWbCarDetail& Detail = CarDetail[Index];
+	Detail.Zeiger = MakePart(TEXT("_Zeiger"),
+		ZeigerMesh.Succeeded() ? ZeigerMesh.Object : nullptr);
+	Detail.Schwimmer = MakePart(TEXT("_Schwimmer"),
+		SchwimmerMesh.Succeeded() ? SchwimmerMesh.Object : nullptr);
+	Detail.Kurbel = MakePart(TEXT("_Kurbel"),
+		KurbelMesh.Succeeded() ? KurbelMesh.Object : nullptr);
 	return Car;
 }
 
 void AWiesbadenNerobergbahn::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Entwicklungshilfe -WbMitfahr=<Sekunden> (siehe Tick).
+	if (!FParse::Value(FCommandLine::Get(), TEXT("WbMitfahr="), DevRideAfterSeconds))
+	{
+		DevRideAfterSeconds = -1.0f;
+	}
+
+	// Entwicklungshilfe -WbKurbel=<Sekunden> (siehe Tick).
+	if (!FParse::Value(FCommandLine::Get(), TEXT("WbKurbel="), DevCrankAfterSeconds))
+	{
+		DevCrankAfterSeconds = -1.0f;
+	}
+
+	// Entwicklungshilfe -WbWagenlog=<Sekunden>: Zustand der beweglichen Teile
+	// im angegebenen Abstand in das Log (Nadel, Schwimmer, Kurbel).
+	if (!FParse::Value(FCommandLine::Get(), TEXT("WbWagenlog="), DevCarLogInterval))
+	{
+		DevCarLogInterval = 0.0f;
+	}
+	NextDevCarLogTime = 0.0f;
+
+	// Entwicklungshilfe -WbBallast=<0..1>: Anfangs-Fuellstand beider Wagen.
+	// Ohne sie startet der Wagen mit 0,75 (dreiviertel voll).
+	float DevBallast = 0.75f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("WbBallast="), DevBallast))
+	{
+		DevBallast = FMath::Clamp(DevBallast, 0.0f, 1.0f);
+		CarDetail[0].Fuellstand = DevBallast;
+		CarDetail[1].Fuellstand = DevBallast;
+	}
 
 	BuildTracks();
 	BuildTrackMeshes();
@@ -433,127 +603,9 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 	TrackMesh->ClearAllMeshSections();
 
 	int32 Section = 0;
-	for (const FTrack* Track : { &TrackA, &TrackB })
-	{
-		// Drei Baender je Gleis: Schotterbett (2,6 m) und zwei Schienen
-		// (Meterspur: Schienenmitten 50 cm neben der Achse).
-		struct FRibbon { float HalfWidth; float Offset; float Lift; FLinearColor Colour; };
-		const FRibbon Ribbons[] = {
-			{ 130.0f, 0.0f, 4.0f,  FLinearColor(0.26f, 0.245f, 0.22f) },  // Schotterbett - realistischer Kies (mittelgrau, leicht warm - Bruchstein statt hellbeige)
-			{ 5.0f, -50.0f, 14.0f, FLinearColor(0.40f, 0.41f, 0.44f) },   // Schiene links - gedaempfter Stahl (heller als Bett/Schwelle, aber nicht grellweiss)
-			{ 5.0f, +50.0f, 14.0f, FLinearColor(0.40f, 0.41f, 0.44f) },   // Schiene rechts
-		};
-
-		for (const FRibbon& Ribbon : Ribbons)
-		{
-			TArray<FVector> Vertices;
-			TArray<int32> Triangles;
-			TArray<FVector> Normals;
-			TArray<FVector2D> UV0;
-			TArray<FLinearColor> Colours;
-
-			for (int32 i = 0; i < Track->Points.Num(); ++i)
-			{
-				const FVector& P = Track->Points[i].Position;
-				const float BedLift = Track->Points[i].ArcLength >= TrackBedStartCm ? 6.0f : 0.0f;
-				FVector Tangent = FVector::ForwardVector;
-				if (i + 1 < Track->Points.Num())
-				{
-					Tangent = (Track->Points[i + 1].Position - P).GetSafeNormal();
-				}
-				else if (i > 0)
-				{
-					Tangent = (P - Track->Points[i - 1].Position).GetSafeNormal();
-				}
-				const FVector Right = FVector::CrossProduct(Tangent, FVector::UpVector).GetSafeNormal();
-				const FVector Centre = P + Right * Ribbon.Offset + FVector(0, 0, Ribbon.Lift + BedLift);
-
-				Vertices.Add(Centre - Right * Ribbon.HalfWidth);
-				Vertices.Add(Centre + Right * Ribbon.HalfWidth);
-				const float V = static_cast<float>(Track->Points[i].ArcLength / 100.0);
-				UV0.Add(FVector2D(0.0f, V));
-				UV0.Add(FVector2D(1.0f, V));
-				Colours.Add(Ribbon.Colour);
-				Colours.Add(Ribbon.Colour);
-
-				if (i > 0)
-				{
-					const int32 Base = (i - 1) * 2;
-					Triangles.Append({ Base, Base + 2, Base + 1,
-									   Base + 1, Base + 2, Base + 3 });
-				}
-			}
-
-			// Normalen aus der Geometrie ableiten (wie bei der Boeschung): fixe
-			// UpVector-Normalen auf dem steilen Gleiskoerper spiegelte der
-			// zweiseitige Shader auf der Sichtseite nach unten -> dunkler Streifen.
-			TArray<FProcMeshTangent> Tang;
-			UKismetProceduralMeshLibrary::CalculateTangentsForMesh(Vertices, Triangles, UV0, Normals, Tang);
-			TrackMesh->CreateMeshSection_LinearColor(
-				Section++, Vertices, Triangles, Normals, UV0, Colours,
-				Tang, /*bCreateCollision=*/false);
-		}
-	}
-
-	// -- Schwellen: dunkle Querbalken auf dem Schotter, ~alle 65 cm -----------
-	// Erst dadurch liest sich das Band als GLEIS statt als schwarze Strasse.
-	{
-		const FLinearColor SleeperColour(0.16f, 0.115f, 0.08f);   // creosot-dunkles Holz
-		constexpr double SleeperSpacingCm = 65.0;
-		constexpr float SleeperHalfLenCm = 13.0f;    // Balken 26 cm laengs
-		constexpr float SleeperHalfWidthCm = 88.0f;  // Schwelle ~1,76 m quer (schmaler als das Bett)
-		constexpr float SleeperLift = 8.0f;
-		for (const FTrack* Track : { &TrackA, &TrackB })
-		{
-			TArray<FVector> V; TArray<int32> Tri; TArray<FVector> N;
-			TArray<FVector2D> UV; TArray<FLinearColor> C;
-			double NextArc = 0.0;
-			for (int32 i = 0; i < Track->Points.Num(); ++i)
-			{
-				if (Track->Points[i].ArcLength < NextArc)
-				{
-					continue;
-				}
-				NextArc = Track->Points[i].ArcLength + SleeperSpacingCm;
-				const FVector& P = Track->Points[i].Position;
-				FVector Tangent = FVector::ForwardVector;
-				if (i + 1 < Track->Points.Num())
-				{
-					Tangent = (Track->Points[i + 1].Position - P).GetSafeNormal();
-				}
-				else if (i > 0)
-				{
-					Tangent = (P - Track->Points[i - 1].Position).GetSafeNormal();
-				}
-				const FVector Right = FVector::CrossProduct(Tangent, FVector::UpVector).GetSafeNormal();
-				const float BedLift = Track->Points[i].ArcLength >= TrackBedStartCm ? 6.0f : 0.0f;
-				const FVector Base = P + FVector(0, 0, SleeperLift + BedLift);
-				const FVector Along = Tangent * SleeperHalfLenCm;
-				const FVector Across = Right * SleeperHalfWidthCm;
-				// Reihenfolge wie beim Bett-Band: [links0, rechts0, links1, rechts1].
-				const int32 B = V.Num();
-				V.Add(Base - Across - Along);
-				V.Add(Base + Across - Along);
-				V.Add(Base - Across + Along);
-				V.Add(Base + Across + Along);
-				// Normalen unten aus der Geometrie (CalculateTangentsForMesh).
-				for (int32 k = 0; k < 4; ++k)
-				{
-					UV.Add(FVector2D(0.0f, 0.0f));
-					C.Add(SleeperColour);
-				}
-				Tri.Append({ B, B + 2, B + 1, B + 1, B + 2, B + 3 });
-			}
-			if (V.Num() > 0)
-			{
-				TArray<FProcMeshTangent> Tang;
-				UKismetProceduralMeshLibrary::CalculateTangentsForMesh(V, Tri, UV, N, Tang);
-				TrackMesh->CreateMeshSection_LinearColor(
-					Section++, V, Tri, N, UV, C, Tang,
-					/*bCreateCollision=*/false);
-			}
-		}
-	}
+	// Das Gleis selbst wird nicht mehr als flaches Farbband gebaut: Bett,
+	// Schienen und Schwellen sind jetzt die fuenf Blender-Bauteile am Ende
+	// dieser Funktion. Was hier bleibt, sind die Erdbauwerke.
 
 	// -- Erd-Boeschung (Damm/Einschnitt) statt Stuetzpfeiler -----------------
 	//
@@ -714,6 +766,14 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 					}
 					const double Height = FMath::Max(0.0, BedTopZ - TerrainZ);
 
+					// IM HALLENBEREICH keine Stuetzmauer und kein Gelaender: die
+					// Bahnsteighalle steht dort selbst (Bahnsteigkoerper, Balustrade),
+					// und Mauer wie Gelaender liefen mitten durch den Bahnsteig
+					// (Bild _station_out/n3.jpg).
+					constexpr double HalleFreiCm = 700.0;   // Halle 600 + Zuschlag
+					const bool bInHalle =
+						(S <= HalleFreiCm) || (S >= Total - HalleFreiCm);
+
 					// Viadukt-Boegen: NUR im 62,5-m-Fenster (5 Boegen) und nur wo
 					// die Mauer hoch genug ist. Dort folgt die Mauer-Unterkante dem
 					// Halbkreis-Intrados (Durchblick), an den Pfeilern zum Boden.
@@ -731,7 +791,8 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 						}
 					}
 
-					const double WallHeight = FMath::Max(0.0, BedTopZ - WallBottomZ);
+					const double WallHeight = bInHalle
+						? 0.0 : FMath::Max(0.0, BedTopZ - WallBottomZ);
 					const double Run = WallHeight * 0.12;   // leichter Anzug der Backsteinmauer
 
 					const FVector EdgeTop(EdgeXY.X, EdgeXY.Y, BedTopZ);
@@ -801,9 +862,17 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 					// die blinde Kasten-Geometrie zuvor riesige Platten erzeugt hatte).
 					constexpr bool bBuildRailing = true;
 					const FVector Up = FVector::UpVector;
-					if (bBuildRailing && Height > RailMinHeight && (Step % RailNodeEvery == 0))
+					if (bBuildRailing && !bInHalle && Height > RailMinHeight
+						&& (Step % RailNodeEvery == 0))
 					{
-						const FVector Crown(EdgeTop.X, EdgeTop.Y, BedTopZ);
+						// Das Gelaender steht auf der AUSSENKANTE der Mauerkrone, nicht
+						// auf der Bettkante: BedHalf (1,30 m) ist genau die halbe
+						// Wagenbreite - dort liefen Handlauf und Wimpel durch die
+						// Fenster des vorbeifahrenden Wagens. Im Vorbild liegt der
+						// Handlauf auf der Krone der Stuetzmauer, also aussen.
+						constexpr double RailOutCm = 45.0;
+						const FVector Crown(EdgeTop.X + Right.X * (SideSign * RailOutCm),
+							EdgeTop.Y + Right.Y * (SideSign * RailOutCm), BedTopZ);
 						if (bHavePrevRailCrown)
 						{
 							// Duenner Handlauf (~6 x 4 cm) zum vorigen Knoten.
@@ -837,7 +906,7 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 						PrevRailCrown = Crown;
 						bHavePrevRailCrown = true;
 					}
-					else if (Height <= RailMinHeight)
+					else if (Height <= RailMinHeight || bInHalle)
 					{
 						bHavePrevRailCrown = false;   // Luecke -> Handlauf nicht ueberbruecken
 					}
@@ -927,6 +996,257 @@ void AWiesbadenNerobergbahn::BuildTrackMeshes()
 			TrackMesh->SetMaterial(S, Mat);
 		}
 	}
+
+	BuildTrackInstances();
+}
+
+void AWiesbadenNerobergbahn::BuildTrackInstances()
+{
+	// Laeuft zweimal (BeginPlay und nach dem Aufloesen der Hoehen) - alte
+	// Instanzen also zuerst wegwerfen.
+	TArray<UInstancedStaticMeshComponent*> Comps = {
+		GleisSchienen, GleisZahnstangen, GleisSeilkanal, GleisSchwellen, GleisBett };
+	for (UInstancedStaticMeshComponent* Comp : Comps)
+	{
+		if (Comp)
+		{
+			Comp->ClearInstances();
+		}
+	}
+
+	const double Total = TrackA.TotalLength;
+	if (TrackA.Points.Num() < 2 || TrackB.Points.Num() < 2 || Total < 50.0)
+	{
+		return;
+	}
+
+	// -- Trassenmitte -------------------------------------------------------
+	//
+	// Die beiden Wagenmitten-Linien sind einander PUNKT FUER PUNKT zugeordnet
+	// (beim Einlesen werden dieselben Indizes ausgeduennt, siehe BuildTracks),
+	// aber NICHT gleich parametrisiert: die erste Linie beginnt rund 3,6 m
+	// weiter talwaerts, so dass ihre Bogenlaengen bis zu 3,7 m auseinander
+	// laufen. Ein Vergleich bei GLEICHER Bogenlaenge vergleicht also Punkte, die
+	// bis 3,8 m auseinander liegen - die Ausweiche erschien damit 100 m zu lang.
+	//
+	// Die Mitte bekommt darum die Bogenlaenge der Linie A: so sitzt der
+	// Querschnitt an derselben Stelle wie die Fahrt, und ein Gleisbauteil liegt
+	// exakt unter dem Rad, das der Wagen an dieser Bogenlaenge hat.
+	FTrack Trasse;
+	TArray<double> TrasseHalf;
+	{
+		const int32 Paare = FMath::Min(TrackA.Points.Num(), TrackB.Points.Num());
+		Trasse.Points.Reserve(Paare);
+		TrasseHalf.Reserve(Paare);
+		double WeitestePaarungCm = 0.0;
+		for (int32 i = 0; i < Paare; ++i)
+		{
+			const FVector& PA = TrackA.Points[i].Position;
+			const FVector& PB = TrackB.Points[i].Position;
+			FVector Dir = FVector::ForwardVector;
+			if (i + 1 < Paare)
+			{
+				Dir = TrackA.Points[i + 1].Position - PA;
+			}
+			else if (i > 0)
+			{
+				Dir = PA - TrackA.Points[i - 1].Position;
+			}
+			const FVector Right = FVector::CrossProduct(
+				FVector(Dir.X, Dir.Y, 0.0).GetSafeNormal(),
+				FVector::UpVector).GetSafeNormal();
+			// Nur der QUERANTEIL zaehlt: in der Ausweiche sind die Knoten der
+			// beiden Wege gegeneinander versetzt, der Abstand der Punkte ist also
+			// groesser als der Gleisabstand.
+			const double RohHalf = FMath::Abs((PB - PA).Dot(Right)) * 0.5;
+			// Die von Hand gezeichneten OSM-Wege treffen die Spurweite im Mittel
+			// auf 2 cm, an einzelnen Knoten aber bis 34 cm daneben. Fuer die
+			// gemeinsame Mittelschiene muss der Abstand genau eine Spurweite sein
+			// - sonst liegen zwei Schienen 30 cm nebeneinander statt einer. Darum
+			// wird auf 50 cm gerundet, solange der Wert in der Naehe liegt; nur
+			// die echte Ausweiche behaelt ihren gemessenen Abstand.
+			const double Half = FMath::Abs(RohHalf - SpurHalfCm) <= SpurtoleranzCm
+				? SpurHalfCm : RohHalf;
+
+			FTrackPoint P;
+			P.Position = (PA + PB) * 0.5;
+			P.ArcLength = TrackA.Points[i].ArcLength;
+			P.bHeightResolved = true;
+			Trasse.Points.Add(P);
+			TrasseHalf.Add(Half);
+			WeitestePaarungCm = FMath::Max(WeitestePaarungCm,
+				FVector::Dist(PA, PB));
+		}
+		Trasse.TotalLength = TrackA.TotalLength;
+		if (Paare > 0 && WeitestePaarungCm > 600.0)
+		{
+			UE_LOG(LogWbStreaming, Warning,
+				TEXT("Nerobergbahn: die beiden Gleislinien sind nicht mehr 1:1 ")
+				TEXT("zugeordnet (weitestes Paar %.0f cm) - Gleisquerlage pruefen."),
+				WeitestePaarungCm);
+		}
+	}
+
+	// Ein Trassenquerschnitt an der Bogenlaenge S der Linie A: Mitte, Richtungen
+	// und der halbe Gleisabstand (50 cm im Normalfall, bis ~2,04 m in der
+	// Ausweiche) - der Abstand wird zwischen den Knoten linear nachgefuehrt.
+	struct FFrame
+	{
+		FVector Mid = FVector::ZeroVector;
+		FVector Forward = FVector::ForwardVector;
+		FVector Right = FVector::RightVector;
+		FVector Up = FVector::UpVector;
+		double Half = SpurHalfCm;
+	};
+
+	auto Sample = [&](double S) -> FFrame
+	{
+		FFrame F;
+		if (Trasse.Points.Num() < 2)
+		{
+			return F;
+		}
+		const double T0 = FMath::Clamp(S, 0.0, Trasse.TotalLength);
+		int32 i = 1;
+		while (i < Trasse.Points.Num() - 1 && Trasse.Points[i].ArcLength < T0)
+		{
+			++i;
+		}
+		const FTrackPoint& A = Trasse.Points[i - 1];
+		const FTrackPoint& B = Trasse.Points[i];
+		const double SegLen = FMath::Max(B.ArcLength - A.ArcLength, 1.0);
+		const double T = FMath::Clamp((T0 - A.ArcLength) / SegLen, 0.0, 1.0);
+		F.Mid = FMath::Lerp(A.Position, B.Position, static_cast<float>(T));
+		F.Forward = (B.Position - A.Position).GetSafeNormal();
+		if (F.Forward.IsNearlyZero())
+		{
+			F.Forward = FVector::ForwardVector;
+		}
+		F.Right = FVector::CrossProduct(
+			FVector(F.Forward.X, F.Forward.Y, 0.0).GetSafeNormal(),
+			FVector::UpVector).GetSafeNormal();
+		F.Up = FVector::CrossProduct(F.Right, F.Forward).GetSafeNormal();
+		F.Half = TrasseHalf[i - 1] + (TrasseHalf[i] - TrasseHalf[i - 1]) * T;
+		return F;
+	};
+
+	// Ein Bauteil: Lage in der Querschnittsmitte des Rahmens F, Querlage als
+	// Verschiebung, Laengsskalierung fuer das letzte Teilstueck, Querskalierung
+	// fuer Schwellen und Bett in der Ausweiche. Die Z-Achse der Instanz ist die
+	// Trassen-Normale - die Instanz kippt also in der Steigung mit, ohne Roll.
+	auto Emit = [&](TArray<FTransform>& Out, const FFrame& F, double Len,
+		double MeshLenCm, double OffsetCm, double ScaleY)
+	{
+		if (MeshLenCm <= 0.0)
+		{
+			return;
+		}
+		const FVector Loc = F.Mid + F.Right * OffsetCm + FVector(0.0, 0.0, RailTopCm);
+		const FQuat Rot = FRotationMatrix::MakeFromXZ(F.Forward, F.Up).ToQuat();
+		Out.Add(FTransform(Rot, Loc, FVector(Len / MeshLenCm, ScaleY, 1.0)));
+	};
+
+	TArray<FTransform> Schienen, Zahnstangen, Seilkanal, Schwellen, Bett;
+	int32 GemeinsameMitte = 0;
+	int32 Ausweichstuecke = 0;
+	double AusweichStartCm = 0.0;
+	double AusweichEndeCm = 0.0;
+	double WeitesterAbstandCm = 0.0;
+
+	// -- Schienen: je Stab bis zu vier Lagen -------------------------------
+	// Aussen liegen sie immer auf +-(Half + 50). Die beiden inneren bei
+	// +-(Half - 50) fallen im Normalfall auf DIESELBE Lage bei 0 - dann wird
+	// daraus eine einzige gemeinsame Mittelschiene (Vorbild: drei
+	// Laufschienen). In der Ausweiche bleiben vier Schienen.
+	for (double S = 0.0; S < Total - 1.0; S += SchienenstabCm)
+	{
+		const double Len = FMath::Min(SchienenstabCm, Total - S);
+		const FFrame F = Sample(S + Len * 0.5);
+		const double InnerGap = 2.0 * F.Half - 2.0 * SpurHalfCm;
+
+		TArray<double, TInlineAllocator<4>> Lagen;
+		if (InnerGap < MittelschienenToleranzCm)
+		{
+			Lagen.Add(0.0);
+			++GemeinsameMitte;
+		}
+		else
+		{
+			Lagen.Add(-(F.Half - SpurHalfCm));
+			Lagen.Add(+(F.Half - SpurHalfCm));
+			if (Ausweichstuecke == 0)
+			{
+				AusweichStartCm = S;
+			}
+			AusweichEndeCm = S + Len;
+			WeitesterAbstandCm = FMath::Max(WeitesterAbstandCm, 2.0 * F.Half);
+			++Ausweichstuecke;
+		}
+		Lagen.Add(-(F.Half + SpurHalfCm));
+		Lagen.Add(+(F.Half + SpurHalfCm));
+
+		for (const double Lage : Lagen)
+		{
+			Emit(Schienen, F, Len, SchienenstabCm, Lage, 1.0);
+		}
+	}
+
+	// -- Zahnstangen, Seilkanal, Schotterbett ---------------------------------
+	// Die Zahnstangen liegen in den Wagenmitten - dort sitzt das Zahnrad des
+	// Wagens und greift zwischen die Seitenbleche. Der Seilkanal liegt in
+	// Trassenmitte unter der Mittelschiene.
+	for (double S = 0.0; S < Total - 1.0; S += TeilStabCm)
+	{
+		const double Len = FMath::Min(TeilStabCm, Total - S);
+		const FFrame F = Sample(S + Len * 0.5);
+
+		Emit(Zahnstangen, F, Len, TeilStabCm, -F.Half, 1.0);
+		Emit(Zahnstangen, F, Len, TeilStabCm, +F.Half, 1.0);
+		Emit(Seilkanal, F, Len, TeilStabCm, 0.0, 1.0);
+
+		// Bettkrone mit 10 cm Ueberstand hinter den Schwellenkoepfen.
+		Emit(Bett, F, Len, TeilStabCm, 0.0, (F.Half + 80.0) / 130.0);
+	}
+
+	// -- Schwellen: eine je 65 cm, quer ueber beide Gleise --------------------
+	// In der Ausweiche wird die Schwelle so lang gestreckt, dass sie die
+	// aeusseren Schienen noch traegt (20 cm Ueberstand).
+	int32 Schwellenzahl = 0;
+	for (double S = 0.0; S < Total - 1.0; S += SchwellenAbstandCm)
+	{
+		const FFrame F = Sample(S);
+		Emit(Schwellen, F, SchwellenLaengeCm, SchwellenLaengeCm, 0.0,
+			(F.Half + 70.0) / 120.0);
+		++Schwellenzahl;
+	}
+
+	// Ein Aufruf je Bauteil statt AddInstance in der Schleife, und ohne
+	// Navigations-Update: die Bauteile haben keine Kollision, koennen das
+	// Navmesh also nicht veraendern - ein Rebuild ueber 434 m waere reine
+	// Wartezeit, und die Funktion laeuft zweimal (Start und nach den Hoehen).
+	auto Bunkern = [](UInstancedStaticMeshComponent* Comp, TArray<FTransform>& Liste)
+	{
+		if (Comp && Liste.Num() > 0)
+		{
+			Comp->AddInstances(Liste, /*bShouldReturnIndices=*/false,
+				/*bWorldSpace=*/true, /*bUpdateNavigation=*/false);
+		}
+	};
+	Bunkern(GleisSchienen, Schienen);
+	Bunkern(GleisZahnstangen, Zahnstangen);
+	Bunkern(GleisSeilkanal, Seilkanal);
+	Bunkern(GleisSchwellen, Schwellen);
+	Bunkern(GleisBett, Bett);
+
+	UE_LOG(LogWbStreaming, Log,
+		TEXT("Nerobergbahn-Gleis: %d Schienenstaebe (%d Stuecke mit gemeinsamer ")
+		TEXT("Mittelschiene, %d in der Ausweiche von %.0f bis %.0f m, ")
+		TEXT("Gleisabstand dort bis %.2f m), %d Zahnstangen, %d Seilkanale, ")
+		TEXT("%d Schwellen, %d Bettstuecke."),
+		Schienen.Num(), GemeinsameMitte, Ausweichstuecke,
+		AusweichStartCm / 100.0, AusweichEndeCm / 100.0,
+		WeitesterAbstandCm / 100.0,
+		Zahnstangen.Num(), Seilkanal.Num(), Schwellenzahl, Bett.Num());
 }
 
 void AWiesbadenNerobergbahn::PlaceStructures()
@@ -963,10 +1283,65 @@ void AWiesbadenNerobergbahn::PlaceStructures()
 		Comp->SetHiddenInGame(false);
 	};
 
-	// Tal- und Bergstation an den Streckenenden, seitlich neben dem Gleis,
-	// damit das Perronvordach ueber die Trasse reicht.
-	Place(Talstation, 0.0, 650.0, -150.0, GroundDrop);
-	Place(Bergstation, TrackA.TotalLength, 700.0, 150.0, GroundDrop);
+	// -- Bahnsteighalle an beiden Streckenenden ----------------------------
+	//
+	// Die Halle ueberspannt das GLEISPAAR: ihre Quermitte ist die Mitte
+	// zwischen den beiden Wagenmitten (TrackA/TrackB), nicht eine der beiden
+	// Linien - sonst stuende sie um eine halbe Spurweite daneben und der Trog
+	// traefe nur ein Gleis. Sie steht auf der Trasse selbst (Zuschlag 0): der
+	// Mesh-Ursprung IST die Schienenoberkante in Trassenmitte.
+	//
+	// Der Wagen steht am TIEFEN Hallenende (Tal bei S=0, Berg bei S=Laenge),
+	// und genau dort ist die Balustrade offen (BALUSTER_FREI im Blender-Bauer).
+	// Damit das an beiden Enden gilt, wird die Berghalle um 180 Grad gedreht -
+	// ihre offene Seite zeigt dann zum Bergende des Gleises.
+	constexpr double HalleHalbCm = 600.0;      // halbe Hallenlaenge (12,0 m)
+	auto PlaceHall = [&](UStaticMeshComponent* Comp, bool bBergseite)
+	{
+		if (!Comp || TrackA.Points.Num() < 2 || TrackB.Points.Num() < 2)
+		{
+			return;
+		}
+		const double SA = bBergseite ? TrackA.TotalLength - HalleHalbCm : HalleHalbCm;
+		const double SB = bBergseite ? TrackB.TotalLength - HalleHalbCm : HalleHalbCm;
+		FVector PosA, TangA, PosB, TangB;
+		SampleTrack(TrackA, SA, PosA, TangA);
+		SampleTrack(TrackB, SB, PosB, TangB);
+		FVector Flat(TangA.X + TangB.X, TangA.Y + TangB.Y, 0.0);
+		if (!Flat.Normalize())
+		{
+			Flat = FVector(1.0, 0.0, 0.0);
+		}
+		FRotator Yaw = Heading(Flat);
+		if (bBergseite)
+		{
+			Yaw.Yaw += 180.0;
+		}
+		Comp->SetWorldLocation((PosA + PosB) * 0.5);
+		Comp->SetWorldRotation(Yaw);
+		Comp->SetHiddenInGame(false);
+	};
+	PlaceHall(Talstation, false);
+	PlaceHall(Bergstation, true);
+
+	// Die Weltkoordinaten der beiden Hallen in das Log: Posen-Dateien fuer
+	// Aufnahmen der Stationen brauchen sie, und aus der Trassenlaenge allein
+	// sind sie nur ueber die Bogenlaenge zu rechnen (Fehlerquelle, wenn die
+	// Ausduennung der Punkte die Laenge verschiebt).
+	for (const TPair<UStaticMeshComponent*, const TCHAR*>& Paar : {
+		TPair<UStaticMeshComponent*, const TCHAR*>(Talstation, TEXT("Tal")),
+		TPair<UStaticMeshComponent*, const TCHAR*>(Bergstation, TEXT("Berg")) })
+	{
+		if (Paar.Key)
+		{
+			const FVector L = Paar.Key->GetComponentLocation();
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("Nerobergbahn: Halle %s auf (%.0f, %.0f, %.0f) cm, Gier %.1f Grad "
+					 "(Trassenlaenge A %.0f cm, B %.0f cm)."),
+				Paar.Value, L.X, L.Y, L.Z, Paar.Key->GetComponentRotation().Yaw,
+				TrackA.TotalLength, TrackB.TotalLength);
+		}
+	}
 
 	// Viadukt: das separate Blender-Mesh SM_WbNbViadukt (5 Boegen a 6 m, nur
 	// 39 m lang) wird NICHT mehr platziert. Die prozeduralen 12,5-m-Boegen in
@@ -1064,9 +1439,12 @@ void AWiesbadenNerobergbahn::Tick(float DeltaSeconds)
 		SampleTrack(Track, S, Pos, Tangent);
 		Car->SetWorldLocation(Pos + FVector(0, 0, CarFloorCm));
 
-		// Nur GIEREN. Die echten Wagen sind Stufenwagen: der Boden bleibt
-		// waagerecht, waehrend die Trasse unter ihnen steigt - ein
-		// mitkippender Kasten saehe nach Achterbahn aus, nicht nach 1888.
+		// Nur GIEREN. Die Neigung der Trasse steckt im Mesh: SM_WbNbWagen ist
+		// um die mittlere Steigung (19,5 %) gekippt, der Kasten liegt damit
+		// parallel zur Strecke - im Vorbild steht der Wagen genau so auf dem
+		// Gleis (Belegframes in Quellen/nerobergbahn-video/NACHBAU-REFERENZ.md,
+		// §3). Wuerde der Actor zusaetzlich nicken, laege der Wagen doppelt
+		// schief.
 		const FRotator Yaw = FRotationMatrix::MakeFromX(
 			FVector(Tangent.X, Tangent.Y, 0.0f).GetSafeNormal()).Rotator();
 		Car->SetWorldRotation(Yaw);
@@ -1074,8 +1452,16 @@ void AWiesbadenNerobergbahn::Tick(float DeltaSeconds)
 
 	// Gegenlauf am Seil: Wagen B steht immer spiegelbildlich zu A.
 	PlaceCar(CarA, TrackA, CablePosition);
-	PlaceCar(CarB, TrackB, WiesbadenRailTransport::OpposingCablePosition(
-		CablePosition, TrackB.TotalLength, true));
+	const double PositionB = WiesbadenRailTransport::OpposingCablePosition(
+		CablePosition, TrackB.TotalLength, true);
+	PlaceCar(CarB, TrackB, PositionB);
+
+	// -- Fuehrerstand: Anzeigen und Wasserballast --------------------------
+	// Die Nadel folgt der FAHRT, nicht der eingestellten Geschwindigkeit: in
+	// der Haltezeit steht der Wagen und der Zeiger faellt auf 0.
+	const float Kmh = (DwellRemaining > 0.0f || Direction == 0) ? 0.0f : SpeedKmh;
+	UpdateCarDetails(0, CablePosition, TrackA.TotalLength, Kmh, DeltaSeconds);
+	UpdateCarDetails(1, PositionB, TrackB.TotalLength, Kmh, DeltaSeconds);
 
 	// -- Mitfahren -----------------------------------------------------------
 	UWorld* World = GetWorld();
@@ -1085,12 +1471,60 @@ void AWiesbadenNerobergbahn::Tick(float DeltaSeconds)
 		return;
 	}
 
+	// Entwicklungshilfe -WbMitfahr=<Sekunden>: stellt den Spieler nach der
+	// angegebenen Zeit an Wagen A und laesst ihn einsteigen. Ohne Tastendruck
+	// laesst sich die Mitfahrt sonst nicht ausloesen - fuer Aufnahmen aus dem
+	// Wagen heraus (zusammen mit -WbZuFuss=<Sekunden> und -WbShotWhenReady).
+	if (!bDevRideDone && DevRideAfterSeconds >= 0.0f
+		&& World->GetTimeSeconds() >= DevRideAfterSeconds)
+	{
+		bDevRideDone = true;
+		APawn* DevPawn = PC->GetPawn();
+		if (Cast<AWiesbadenFootPawn>(DevPawn) && !RideSession.IsRiding() && CarA)
+		{
+			// Erst neben den Wagen setzen: die Einstiegsreichweite wuerde einen
+			// weit entfernt stehenden Spieler abweisen.
+			DevPawn->SetActorLocation(
+				CarA->GetComponentLocation() + FVector(0, 0, 120.0f));
+			ToggleBoarding();
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("Nerobergbahn: -WbMitfahr hat den Spieler in Wagen A gesetzt."));
+		}
+		else if (!Cast<AWiesbadenFootPawn>(DevPawn))
+		{
+			UE_LOG(LogWbStreaming, Warning,
+				TEXT("Nerobergbahn: -WbMitfahr greift nur zu Fuss - vorher mit "
+					 "-WbZuFuss=<Sekunden> aus dem Auto aussteigen."));
+		}
+	}
+
+	// Entwicklungshilfe -WbKurbel=<Sekunden>: dreht die Kurbel des Wagens, in
+	// dem der Fahrgast sitzt, nach so vielen Sekunden von selbst. Ohne sie
+	// laesst sich der Schwimmer im Schauglas nicht ohne Tastendruck aufnehmen
+	// (shot_mitfahrt.cmd kann keine Tasten senden).
+	if (!bDevCrankDone && DevCrankAfterSeconds >= 0.0f
+		&& World->GetTimeSeconds() >= DevCrankAfterSeconds)
+	{
+		bDevCrankDone = true;
+		ToggleWaterValve(RideSession.IsRiding() ? RideSession.CarIndex : 0);
+	}
+
 	const bool bBoardDown = PC->IsInputKeyDown(EKeys::E);
 	if (bBoardDown && !bBoardKeyHeld)
 	{
 		ToggleBoarding();
 	}
 	bBoardKeyHeld = bBoardDown;
+
+	// Kurbel bedienen: im Vorbild ist sie das "Multitool" fuer Wasserschieber
+	// und Bremse (TON 13:13), bedient wird sie von der offenen Buehne aus -
+	// im Modell greift sie, wer mitfaehrt (Taste K).
+	const bool bCrankDown = PC->IsInputKeyDown(EKeys::K);
+	if (bCrankDown && !bCrankKeyHeld && RideSession.IsRiding())
+	{
+		ToggleWaterValve(RideSession.CarIndex);
+	}
+	bCrankKeyHeld = bCrankDown;
 }
 
 #if !UE_BUILD_SHIPPING
@@ -1113,6 +1547,154 @@ void AWiesbadenNerobergbahn::DrawRailwayDebug()
 	}
 }
 #endif
+
+bool AWiesbadenNerobergbahn::GetCarWater(int32 Index, float& OutFuellstand,
+	bool& bOutSchieberOffen) const
+{
+	if (Index < 0 || Index > 1)
+	{
+		return false;
+	}
+	OutFuellstand = CarDetail[Index].Fuellstand;
+	bOutSchieberOffen = CarDetail[Index].bSchieberOffen;
+	return true;
+}
+
+void AWiesbadenNerobergbahn::UpdateCarDetails(int32 Index, double S,
+	double Laenge, float Kmh, float DeltaSeconds)
+{
+	FWbCarDetail& Detail = CarDetail[Index];
+	if (!Detail.Zeiger || !Detail.Schwimmer || !Detail.Kurbel)
+	{
+		return;
+	}
+	Detail.Bahnposition = S;
+	Detail.Bahnlaenge = Laenge;
+
+	// -- Wasserballast -----------------------------------------------------
+	// Das Reservoir der Bergstation liegt nur 2-3 m ueber dem Gleis und fuellt
+	// im natuerlichen Gefaelle (TON 5:46); unten laeuft das Wasser bei
+	// offenem Schieber in das 200-m3-Becken ab (TON 3:18). Die Raten sind
+	// [SCHAETZ]: 7 m3 in rund 50 s Abfluss bzw. 70 s Fuellung.
+	if (Detail.bSchieberOffen)
+	{
+		Detail.Fuellstand = FMath::Max(0.0f, Detail.Fuellstand - 0.020f * DeltaSeconds);
+	}
+	else if (Laenge > 0.0 && S > Laenge - 300.0)
+	{
+		Detail.Fuellstand = FMath::Min(1.0f, Detail.Fuellstand + 0.014f * DeltaSeconds);
+	}
+
+	// -- Schwimmer im Schauglas --------------------------------------------
+	const FQuat Tilt = CarTiltQuat();
+	Detail.Schwimmer->SetRelativeLocation(FMath::Lerp(
+		Tilt.RotateVector(CarSchwimmerUnten),
+		Tilt.RotateVector(CarSchwimmerOben), Detail.Fuellstand));
+	Detail.Schwimmer->SetRelativeRotation(Tilt);
+
+	// -- Geschwindigkeitsanzeige -------------------------------------------
+	// Der Zeiger laeuft auf der im Blender-Bau definierten Scheibe: Bildwinkel
+	// 225 Grad bei 0 km/h bis -45 Grad bei 10 km/h, gemessen von Bildrechts
+	// nach Bildoben. Die Nadel zeigt im Mesh nach "Bildoben", der Bildwinkel
+	// ist deshalb Winkel - 90 Grad. Der Zeiger steht im ungekippten Bau-System:
+	// lokale Z-Achse = Plattennormale (-1,0,1), lokale Y-Achse = Bildoben.
+	const float T = FMath::Clamp(Kmh / CarTachoMaxKmh, 0.0f, 1.0f);
+	const float Bildwinkel = FMath::Lerp(CarZeigerWinkelNull,
+		CarZeigerWinkelVoll, T);
+	const FVector NBuild = FVector(-1.0f, 0.0f, 1.0f).GetSafeNormal();
+	const FVector UBuild = FVector(1.0f, 0.0f, 1.0f).GetSafeNormal();
+	const FVector NActor = Tilt.RotateVector(NBuild);
+	const FVector UActor = Tilt.RotateVector(UBuild);
+	const FQuat Basis = FRotationMatrix::MakeFromZY(NActor, UActor).ToQuat();
+	const FQuat Dreh(NActor, FMath::DegreesToRadians(Bildwinkel - 90.0f));
+	Detail.Zeiger->SetRelativeLocation(Tilt.RotateVector(CarTachoAnchor));
+	Detail.Zeiger->SetRelativeRotation(Dreh * Basis);
+	Detail.Zeigerwinkel = Bildwinkel;
+
+	// -- Kurbelarm ---------------------------------------------------------
+	const float Ziel = Detail.bSchieberOffen ? CarKurbelWinkelOffen : CarKurbelWinkelZu;
+	Detail.Kurbelwinkel = FMath::FInterpTo(Detail.Kurbelwinkel, Ziel,
+		DeltaSeconds, 4.0f);
+	Detail.Kurbel->SetRelativeLocation(Tilt.RotateVector(CarKurbelachse));
+	Detail.Kurbel->SetRelativeRotation(Tilt * FQuat(FVector::YAxisVector,
+		FMath::DegreesToRadians(Detail.Kurbelwinkel)));
+
+	// -- Entwicklungsprotokoll --------------------------------------------
+	// Zahlen statt Augenmass: die Nadelstellung im Bild ist nur dann eine
+	// Pruefung, wenn daneben steht, was der Code gestellt haben wollte. Der
+	// Ist-Winkel wird aus der TATSAECHLICHEN Drehung der Nadel zurueckgerechnet
+	// (Vektor in das ungekippte Bau-System, dann gegen Bildrechts/Bildoben
+	// zerlegt) - eine falsch gesetzte Basis faellt damit als Zahl auf, nicht
+	// erst als schief stehende Nadel.
+	if (DevCarLogInterval > 0.0f)
+	{
+		UWorld* LogWorld = GetWorld();
+		if (LogWorld && LogWorld->GetTimeSeconds() >= NextDevCarLogTime)
+		{
+			NextDevCarLogTime = LogWorld->GetTimeSeconds() + DevCarLogInterval;
+			// Bildrechts im Bau-System ist U x N (die Scheibe wird vom Wagen aus
+			// gelesen). Gemessen wird die RICHTUNG DES BLATTS, und zwar aus der
+			// relativen Drehung - die Weltrichtung enthielte den Gierwinkel des
+			// Wagens und waere als Zeigerstellung unbrauchbar. Das Blatt zeigt im
+			// Mesh nach +Y (make_nerobergbahn.py: "Spitze nach +Y"); welcher der
+			// beiden Achsen das im UE-Mesh entspricht, entscheidet der Vergleich
+			// mit dem Soll - deshalb werden beide gerechnet und der passende
+			// Achsenname mitgeschrieben.
+			const FVector RBuild = FVector::CrossProduct(UBuild, NBuild);
+			const FQuat Rel = Detail.Zeiger->GetRelativeRotation().Quaternion();
+			auto Blattwinkel = [&](const FVector& Achse)
+			{
+				const FVector V = Rel.RotateVector(Achse);
+				return FMath::RadiansToDegrees(FMath::Atan2(V | UBuild, V | RBuild));
+			};
+			const float BildY = Blattwinkel(FVector::YAxisVector);
+			const float BildGegenY = Blattwinkel(-FVector::YAxisVector);
+			const bool bYTrifft = FMath::Abs(BildY - Bildwinkel)
+				<= FMath::Abs(BildGegenY - Bildwinkel);
+			const float Abweichung =
+				(bYTrifft ? BildY : BildGegenY) - Bildwinkel;
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("WbWagenlog: Wagen %s: %.1f km/h, Fuellstand %.0f %%, "
+					 "Schieber %s, Kurbel %.1f Grad, Nadel Soll %.1f Grad, "
+					 "Blatt %s Abweichung %+.1f Grad"),
+				Index == 0 ? TEXT("A") : TEXT("B"), Kmh, 100.0f * Detail.Fuellstand,
+				Detail.bSchieberOffen ? TEXT("offen") : TEXT("zu"),
+				Detail.Kurbelwinkel, Bildwinkel,
+				bYTrifft ? TEXT("+Y") : TEXT("-Y"), Abweichung);
+		}
+	}
+}
+
+void AWiesbadenNerobergbahn::ToggleWaterValve(int32 Index)
+{
+	if (Index < 0 || Index > 1)
+	{
+		return;
+	}
+	FWbCarDetail& Detail = CarDetail[Index];
+	Detail.bSchieberOffen = !Detail.bSchieberOffen;
+
+	UE_LOG(LogWbStreaming, Log,
+		TEXT("Nerobergbahn: Kurbel gedreht (Wagen %s) - Wasserschieber %s, "
+			 "Fuellstand %.0f %%."),
+		Index == 0 ? TEXT("A") : TEXT("B"),
+		Detail.bSchieberOffen ? TEXT("OFFEN") : TEXT("ZU"),
+		100.0f * Detail.Fuellstand);
+
+	// Kurzer Hinweis im HUD: die Bedienung ist ohne Text nicht auffindbar.
+	if (UWorld* World = GetWorld())
+	{
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			if (AWiesbadenVehicleHUD* HUD = Cast<AWiesbadenVehicleHUD>(PC->GetHUD()))
+			{
+				HUD->ShowTransientHint(Detail.bSchieberOffen
+					? TEXT("Kurbel gedreht - Wasserschieber offen, der Wagen laeuft leer")
+					: TEXT("Kurbel gedreht - Wasserschieber zu"));
+			}
+		}
+	}
+}
 
 void AWiesbadenNerobergbahn::ToggleBoarding()
 {
@@ -1184,8 +1766,14 @@ void AWiesbadenNerobergbahn::ToggleBoarding()
 			continue;
 		}
 		CreatePassengerCamera();
-		// In die Wagenmitte, Boden auf Bodenhoehe des Wagens.
-		Pawn->SetActorLocation(Cars[i]->GetComponentLocation() + FVector(0, 0, 150.0f));
+		// In den Mittelgang der Kabine: Wagenboden 0,85 m ueber dem Ursprung
+		// plus halbe Koerperhoehe der Kapsel (90 cm) = 175 cm. Mit den alten
+		// 150 cm stand der Fahrgast 25 cm IM Boden - sichtbar war das erst,
+		// seit der Innenraum eingerichtet ist.
+		// Der Wagen wird nur giert, der Zuschlag wirkt also in Welt-Z; die
+		// Neigung des Kastens steckt im Mesh, und x = 0 ist die Wagenmitte,
+		// wo der Boden exakt auf 0,85 m liegt.
+		Pawn->SetActorLocation(Cars[i]->GetComponentLocation() + FVector(0, 0, 175.0f));
 		UE_LOG(LogWbStreaming, Log, TEXT("Nerobergbahn: Fahrgast eingestiegen (Wagen %s)."),
 			i == 0 ? TEXT("A") : TEXT("B"));
 		return;
@@ -1207,22 +1795,33 @@ void AWiesbadenNerobergbahn::CreatePassengerCamera()
 	}
 	PassengerCamera = NewObject<UWiesbadenVehicleCameraComponent>(this, TEXT("NerobergbahnPassengerCamera"));
 	PassengerCamera->SetupAttachment(Car);
-	PassengerCamera->CameraOffset = FVector(0.0f, 0.0f, 155.0f);
-	PassengerCamera->FollowArmLength = 260.0f;
-	PassengerCamera->ZoomMinArmLength = 80.0f;
-	PassengerCamera->ZoomMaxArmLength = 700.0f;
+	// Verfolgeransicht von AUSSEN: der Arm zeigt von der Wagenmitte nach
+	// hinten. Bei 260 cm lag die Kamera noch IM Wagenkasten (der ist 5,64 m
+	// lang) und blickte auf die Rueckseiten der Inneneinrichtung.
+	PassengerCamera->CameraOffset = FVector(0.0f, 0.0f, 210.0f);
+	PassengerCamera->FollowArmLength = 760.0f;
+	PassengerCamera->ZoomMinArmLength = 120.0f;
+	PassengerCamera->ZoomMaxArmLength = 1400.0f;
 	// Horizont waagerecht halten. Ohne das erbte die Kamera die STEILE Neigung
 	// des Wagens (die Bahn faehrt ~30 % Steigung): der Verfolgerarm zeigte
 	// steil abwaerts in den massiven Trassen-Balken und das Bild wurde SCHWARZ.
 	// Waagerecht steht die Kamera ueber dem Balken und zeigt den Panoramablick
 	// ueber die Stadt statt ins Innere der Trasse.
 	PassengerCamera->bLevelHorizon = true;
-	// Innenansicht (C schaltet Follow -> Orbit -> Cockpit): First-Person im Wagen,
-	// Blick nach vorn die Trasse hinauf. Der Wagen bleibt sichtbar (man sitzt
-	// darin); die Cockpit-Kamera erbt die Wagenneigung, zeigt also den Hang hinauf.
-	PassengerCamera->CockpitOffset = FVector(40.0f, 0.0f, 175.0f);
+	// Innenansicht (C schaltet Follow -> Orbit -> Cockpit): First-Person in der
+	// Kabine. Der Wagen bleibt sichtbar (man sitzt darin); die Cockpit-Kamera
+	// erbt die Wagenneigung, zeigt also den Hang hinauf.
+	//
+	// Hoehen stammen aus dem Mesh: Wagenboden 0,85 m ueber dem Ursprung, ein
+	// stehender Fahrgast hat die Augen bei 0,85 + 1,60 = 2,45 m. Tacho (1,62 m),
+	// Schauglas und Kurbel sitzen tiefer - daher der Tiefblick von 18 Grad.
+	PassengerCamera->CockpitOffset = FVector(0.0f, 0.0f, 245.0f);
+	PassengerCamera->CockpitPitch = -18.0f;
 	PassengerCamera->RegisterComponent();
 	PassengerCamera->ActivateExternalView(PC, Car, RideSession.GetPassenger());
+	// Der Innenraum ist seit dem Umbau eingerichtet - die Fahrt beginnt daher
+	// IM Wagen statt hinter ihm. C schaltet weiter zu Orbit und Follow.
+	PassengerCamera->SetCameraMode(EWiesbadenVehicleCameraMode::Cockpit);
 }
 
 void AWiesbadenNerobergbahn::DestroyPassengerCamera()

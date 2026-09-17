@@ -174,6 +174,10 @@ bool FVehicleHUDControlLegendTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Springen genannt"), FootText.Contains(TEXT("Springen")));
 	TestTrue(TEXT("Einsteigen genannt"), FootText.Contains(TEXT("Einsteigen")));
 	TestTrue(TEXT("Nerobergbahn genannt"), FootText.Contains(TEXT("Nerobergbahn")));
+	// Die Kurbel im Wagen (AWiesbadenNerobergbahn::ToggleWaterValve): im
+	// Wasserballastbetrieb gibt es keine zweite Bedienung - steht sie nicht in
+	// der Legende, findet sie niemand.
+	TestTrue(TEXT("Kurbel genannt"), FootText.Contains(TEXT("Kurbel")));
 
 	// Die beiden Legenden duerfen sich nicht gleichen - sonst zeigt eine von
 	// beiden die falsche Belegung an.
@@ -275,6 +279,44 @@ bool FVehicleHUDControlLegendTest::RunTest(const FString& Parameters)
 					.Contains(TEXT("Händler")));
 		}
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleHUDWaterLevelTest,
+	"WiesbadenReal.Vehicles.HUD.FunicularWaterLevel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Die Wasserstandsanzeige der Mitfahrtafel.
+ *
+ * Der Wasserballast ist die einzige Antriebskraft des Wagens; die Kurbel ist
+ * die einzige Bedienung und diese Anzeige die einzige Rueckmeldung darauf.
+ * Eine Anzeige, die bei 1,4 den Wert "140 %" oder bei offenem Schieber "zu"
+ * schreibt, laesst den Spieler am falschen Hebel drehen.
+ */
+bool FVehicleHUDWaterLevelTest::RunTest(const FString& Parameters)
+{
+	using FHud = AWiesbadenVehicleHUD;
+
+	TestEqual(TEXT("voll und zu"), FHud::FormatWaterLevel(1.0f, false),
+		FString(TEXT("Wasserballast 100 % - Schieber zu")));
+	TestEqual(TEXT("leer und offen"), FHud::FormatWaterLevel(0.0f, true),
+		FString(TEXT("Wasserballast 0 % - Schieber offen")));
+
+	// Der Fuellstand wird auf 5 % gerundet - die Anzeige zappelt sonst mit
+	// jedem Bild (Abfluss 2 %/s).
+	TestTrue(TEXT("62 % wird auf 60 % gerundet"),
+		FHud::FormatWaterLevel(0.62f, false).Contains(TEXT("60 %")));
+	TestTrue(TEXT("68 % wird auf 70 % gerundet"),
+		FHud::FormatWaterLevel(0.68f, false).Contains(TEXT("70 %")));
+
+	// Ausserhalb 0..1 wird geklemmt: ein Rechenfehler im Ballast darf keine
+	// 140-%-Anzeige erzeugen, die wie eine Absicht aussieht.
+	TestTrue(TEXT("uebervoll geklemmt"),
+		FHud::FormatWaterLevel(1.4f, false).Contains(TEXT("100 %")));
+	TestTrue(TEXT("negativ geklemmt"),
+		FHud::FormatWaterLevel(-0.3f, false).Contains(TEXT("0 %")));
 
 	return true;
 }
