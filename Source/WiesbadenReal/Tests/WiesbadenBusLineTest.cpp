@@ -102,5 +102,23 @@ bool FWiesbadenBusLineTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("leerer Fahrplan -> kein Kurs"), Runs.Num(), 0);
 	}
 
+	// --- Haltebucht: BayFactor ---
+	{
+		const TArray<double> Stops = { 0.0, 1000.0, 3000.0 };
+		const double Zone = 500.0;
+		TestTrue(TEXT("Bay: an der Halte -> 1"),
+			FMath::IsNearlyEqual(BayFactor(0.0, false, Stops, Zone), 1.0, 0.001));
+		TestTrue(TEXT("Bay: Verweilen -> 1 (egal wo)"),
+			FMath::IsNearlyEqual(BayFactor(500.0, true, Stops, Zone), 1.0, 0.001));
+		TestTrue(TEXT("Bay: halbe Zone -> 0.5 (smoothstep)"),
+			FMath::IsNearlyEqual(BayFactor(250.0, false, Stops, Zone), 0.5, 0.001));
+		TestTrue(TEXT("Bay: ab Zone -> 0"),
+			FMath::IsNearlyEqual(BayFactor(500.0, false, Stops, Zone), 0.0, 0.001));
+		TestTrue(TEXT("Bay: monoton fallend mit Abstand"),
+			BayFactor(100.0, false, Stops, Zone) > BayFactor(300.0, false, Stops, Zone));
+		TestTrue(TEXT("Bay: kurz vor Halte 1000 wieder hoch"),
+			BayFactor(950.0, false, Stops, Zone) > 0.5);
+	}
+
 	return true;
 }

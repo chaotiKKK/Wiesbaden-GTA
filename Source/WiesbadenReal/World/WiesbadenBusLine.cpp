@@ -74,6 +74,21 @@ WiesbadenBusLine::FBusState WiesbadenBusLine::EvaluateRoundTrip(double Elapsed,
 	return S;
 }
 
+double WiesbadenBusLine::BayFactor(double ArcLengthCm, bool bDwelling,
+	const TArray<double>& StopArcCm, double BayZoneCm)
+{
+	if (bDwelling) { return 1.0; }
+	if (StopArcCm.Num() == 0 || BayZoneCm <= 0.0) { return 0.0; }
+	double Nearest = TNumericLimits<double>::Max();
+	for (const double S : StopArcCm)
+	{
+		Nearest = FMath::Min(Nearest, FMath::Abs(ArcLengthCm - S));
+	}
+	const double t = FMath::Clamp(Nearest / BayZoneCm, 0.0, 1.0);
+	// smoothstep, aber invertiert: 1 an der Halte (t=0), 0 ab BayZoneCm (t>=1).
+	return 1.0 - t * t * (3.0 - 2.0 * t);
+}
+
 void WiesbadenBusLine::ActiveRuns(double ServiceSeconds, const FBusSchedule& Schedule,
 	double RoundTripSeconds, TArray<FBusRun>& OutRuns)
 {

@@ -3,7 +3,12 @@
 #include "World/WiesbadenBusRoute.h"
 
 #include "World/WiesbadenRailTransport.h"
+#include "World/WiesbadenCitySubsystem.h"
+#include "GIS/WiesbadenTrafficLights.h"
 #include "GIS/GeoCoordinateConverter.h"
+#include "Vehicles/WiesbadenFootPawn.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
+#include "GameFramework/PlayerController.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
@@ -24,6 +29,8 @@ AWiesbadenBusRoute::AWiesbadenBusRoute()
 	PrimaryActorTick.bCanEverTick = true;
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	RootComponent = Root;
+	RideAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("RideAnchor"));
+	RideAnchor->SetupAttachment(Root);
 }
 
 void AWiesbadenBusRoute::LoadLine()
@@ -169,6 +176,7 @@ void AWiesbadenBusRoute::BeginPlay()
 	Super::BeginPlay();
 	LoadLine();
 	LoadSchedule();
+	CitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
 	Converter = NewObject<UGeoCoordinateConverter>(this);
 	Converter->InitializeWithWiesbadenOrigin();
 	BuildWorldPath();
@@ -235,6 +243,10 @@ void AWiesbadenBusRoute::BeginPlay()
 		Signs.Add(Sign);
 		SignForward.Add(-1);
 	}
+	SlotWorldPos.Init(FVector::ZeroVector, Buses.Num());
+	SlotState.Init(0, Buses.Num());
+	SlotRunKey.Init(-1, Buses.Num());
+
 	bReady = (WorldPath.Num() >= 2 && Route.StopArcCm.Num() >= 2 && BusMesh != nullptr && CycleSeconds > 0.0);
 	UE_LOG(LogWbBus, Log, TEXT("Bus-Linie bereit=%d: %d Busse, Route %.0f m, Zyklus %.0f s, MeshScale %.3f, Unterkante %.0f cm."),
 		bReady ? 1 : 0, Buses.Num(), Route.TotalLengthCm / 100.0, CycleSeconds, MeshScale, MeshBottomCm);
@@ -258,15 +270,90 @@ void AWiesbadenBusRoute::HideBusSlot(int32 k)
 {
 	if (Buses.IsValidIndex(k) && Buses[k]) { Buses[k]->SetVisibility(false); }
 	if (Signs.IsValidIndex(k) && Signs[k]) { Signs[k]->SetVisibility(false); }
+	if (SlotState.IsValidIndex(k)) { SlotState[k] = 0; }
 }
 
-void AWiesbadenBusRoute::PlaceBusRun(int32 k, double ElapsedSeconds, bool bLogThisTick)
+void AWiesbadenBusRoute::BuildGates()
+{
+	Gates.Reset();
+	if (!CitySubsystem || WorldPath.Num() < 2) { return; }
+	const TArray<FWiesbadenTrafficLight>& Lights = CitySubsystem->TrafficLightSystem.Lights;
+	if (Lights.Num() == 0) { return; }   // Ampelsystem noch nicht initialisiert -> spaeter erneut
+	const double MatchSq = (double)RedGateMatchCm * (double)RedGateMatchCm;
+	for (int32 li = 0; li < Lights.Num(); ++li)
+	{
+		const FVector L = Lights[li].Location;
+		double Best = TNumericLimits<double>::Max();
+		int32 BestIdx = INDEX_NONE;
+		for (int32 i = 0; i < WorldPath.Num(); ++i)
+		{
+			const double D = FVector2D::DistSquared(FVector2D(WorldPath[i].X, WorldPath[i].Y), FVector2D(L.X, L.Y));
+			if (D < Best) { Best = D; BestIdx = i; }
+		}
+		if (BestIdx != INDEX_NONE && Best <= MatchSq)
+		{
+			FBusGate G; G.ArcCm = ArcCm[BestIdx]; G.LightIndex = li;
+			Gates.Add(G);
+		}
+	}
+	Gates.Sort([](const FBusGate& A, const FBusGate& B) { return A.ArcCm < B.ArcCm; });
+	bGatesBuilt = true;
+	UE_LOG(LogWbBus, Log, TEXT("Bus: %d Ampeln auf der Linie 6 als Halte-Gates erkannt (von %d im Netz)."),
+		Gates.Num(), Lights.Num());
+}
+
+bool AWiesbadenBusRoute::RedGateAhead(double InArcCm, const FVector& Dir, bool bForward, double& OutStopArcCm) const
+{
+	if (!CitySubsystem || Gates.Num() == 0) { return false; }
+	// naechstes Gate in Fahrtrichtung innerhalb des Prueffensters.
+	int32 BestGate = INDEX_NONE;
+	double BestDelta = (double)RedApproachCm;
+	for (int32 gi = 0; gi < Gates.Num(); ++gi)
+	{
+		const double Delta = bForward ? (Gates[gi].ArcCm - InArcCm) : (InArcCm - Gates[gi].ArcCm);
+		if (Delta > 0.0 && Delta < BestDelta) { BestDelta = Delta; BestGate = gi; }
+	}
+	if (BestGate == INDEX_NONE) { return false; }
+	// Anfahrts-Achse (0/1) aus der Peilung - dieselbe Regel wie ComputeGroupIndex.
+	const double BearingDeg = FMath::RadiansToDegrees(FMath::Atan2(Dir.Y, Dir.X));
+	const int32 Axis = (BearingDeg >= 0.0 && BearingDeg < 180.0) ? 0 : 1;
+	const ESignalAspect A = CitySubsystem->TrafficLightSystem.GetGroupAspect(Gates[BestGate].LightIndex, Axis);
+	if (A == ESignalAspect::Green) { return false; }
+	OutStopArcCm = bForward ? (Gates[BestGate].ArcCm - RedStopMarginCm)
+	                        : (Gates[BestGate].ArcCm + RedStopMarginCm);
+	return true;
+}
+
+WiesbadenBusLine::FBusState AWiesbadenBusRoute::ComputeHeldState(int64 RunKey, double RawElapsed, float DeltaSeconds, bool& bOutFinished)
+{
+	const double SpeedCmS = FMath::Max(SpeedKmh, 1.0f) * 100000.0 / 3600.0;
+	const double Held = HoldByRun.FindRef(RunKey);
+	const double Eff = RawElapsed - Held;
+	bOutFinished = (Eff >= CycleSeconds);
+	WiesbadenBusLine::FBusState St = WiesbadenBusLine::EvaluateRoundTrip(
+		Eff, Route, SpeedCmS, StopDwellSeconds, TerminusDwellSeconds);
+	if (!bStopAtRed || Gates.Num() == 0 || St.bDwelling || bOutFinished) { return St; }
+	FVector Pos, Tangent;
+	if (!WiesbadenRailTransport::SamplePolyline(WorldPath, ArcCm, St.ArcLengthCm, Pos, Tangent)) { return St; }
+	FVector Dir = Tangent.GetSafeNormal();
+	if (!St.bForward) { Dir = -Dir; }
+	double StopArc = 0.0;
+	if (RedGateAhead(St.ArcLengthCm, Dir, St.bForward, StopArc))
+	{
+		const bool bPast = St.bForward ? (St.ArcLengthCm >= StopArc) : (St.ArcLengthCm <= StopArc);
+		if (bPast)
+		{
+			St.ArcLengthCm = StopArc;                            // an der Haltelinie klemmen
+			HoldByRun.Add(RunKey, Held + (double)DeltaSeconds);  // Zeit verlieren -> bei Gruen fluessig weiter
+		}
+	}
+	return St;
+}
+
+void AWiesbadenBusRoute::PlaceBusAt(int32 k, const WiesbadenBusLine::FBusState& St, bool bLogThisTick)
 {
 	UStaticMeshComponent* Bus = Buses.IsValidIndex(k) ? Buses[k] : nullptr;
 	if (!Bus) { return; }
-	const double SpeedCmS = FMath::Max(SpeedKmh, 1.0f) * 100000.0 / 3600.0;
-	const WiesbadenBusLine::FBusState St = WiesbadenBusLine::EvaluateRoundTrip(
-		ElapsedSeconds, Route, SpeedCmS, StopDwellSeconds, TerminusDwellSeconds);
 	FVector Pos, Tangent;
 	if (!WiesbadenRailTransport::SamplePolyline(WorldPath, ArcCm, St.ArcLengthCm, Pos, Tangent))
 	{
@@ -283,8 +370,11 @@ void AWiesbadenBusRoute::PlaceBusRun(int32 k, double ElapsedSeconds, bool bLogTh
 	// (-Dir.Y, Dir.X) (nicht (Dir.Y,-Dir.X) - das waere Linksverkehr). Boden an der
 	// versetzten Position tasten (Strassenquerneigung/Streaming).
 	const FVector RightDir = FVector(-Dir.Y, Dir.X, 0.0).GetSafeNormal();
-	const double FinalX = Pos.X + RightDir.X * LaneOffsetCm;
-	const double FinalY = Pos.Y + RightDir.Y * LaneOffsetCm;
+	// Haltebucht: an der Halte weiter nach rechts ausscheren (weich ein/aus).
+	const double Bay = WiesbadenBusLine::BayFactor(St.ArcLengthCm, St.bDwelling, Route.StopArcCm, BayZoneCm);
+	const double SideOffsetCm = LaneOffsetCm + Bay * BayDepthCm;
+	const double FinalX = Pos.X + RightDir.X * SideOffsetCm;
+	const double FinalY = Pos.Y + RightDir.Y * SideOffsetCm;
 	double GroundZ = 0.0;
 	if (!ResolveGround(FinalX, FinalY, GroundZ))
 	{
@@ -300,6 +390,8 @@ void AWiesbadenBusRoute::PlaceBusRun(int32 k, double ElapsedSeconds, bool bLogTh
 	const FQuat Q = Dir.Rotation().Quaternion() * MeshOrient.Quaternion();
 	Bus->SetWorldLocationAndRotation(FVector(FinalX, FinalY, BusZ), Q);
 	Bus->SetVisibility(true);
+	if (SlotWorldPos.IsValidIndex(k)) { SlotWorldPos[k] = FVector(FinalX, FinalY, BusZ); }
+	if (SlotState.IsValidIndex(k)) { SlotState[k] = St.bDwelling ? 2 : 1; }
 
 	// Zielanzeige vorn: Quad blickt in Fahrtrichtung, Material je Richtung
 	// (hin -> Mainz-Gonsenheim, zurueck -> Nordfriedhof).
@@ -346,43 +438,195 @@ void AWiesbadenBusRoute::Tick(float DeltaSeconds)
 		if (LogAccum >= 2.0) { LogAccum = 0.0; bLogThisTick = true; }
 	}
 
+	// Ampeln als Halte-Gates sammeln, sobald das (nur auf gebackenen Karten
+	// initialisierte) Ampelsystem bereitsteht; nur in den ersten Sekunden versuchen.
+	if (bStopAtRed && !bGatesBuilt && WorldTime < 20.0) { BuildGates(); }
+
+	const double SpeedCmS = FMath::Max(SpeedKmh, 1.0f) * 100000.0 / 3600.0;
+
 	if (Schedule.DepartureSeconds.Num() >= 2)
 	{
 		// FAHRPLAN-MODUS: jeder Kurs faehrt zur echten ESWE-Abfahrtsminute ab
-		// Nordfriedhof; Dichte schwankt mit dem Takt (HVZ dicht, Rand duenn).
+		// Nordfriedhof; Dichte schwankt mit dem Takt. Rotlicht-Halt je Kurs (Held).
 		const double ServiceSeconds = (double)ServiceStartHour * 3600.0 + WorldTime;
+		const double Window = CycleSeconds + 2400.0;   // Spielraum fuer rotlicht-verspaetete Kurse
 		TArray<WiesbadenBusLine::FBusRun> Runs;
-		WiesbadenBusLine::ActiveRuns(ServiceSeconds, Schedule, CycleSeconds, Runs);
+		WiesbadenBusLine::ActiveRuns(ServiceSeconds, Schedule, Window, Runs);
 		for (int32 k = 0; k < N; ++k) { HideBusSlot(k); }
-		// Stabile Slot-Zuordnung ueber den fortlaufenden Kurs-Index; bei Kollision
-		// (Pool < gleichzeitige Kurse) den naechsten freien Slot.
 		TArray<bool> Used; Used.Init(false, N);
+		TSet<int64> ActiveKeys;
+		int32 Driving = 0;
+		// Mitfahren: den Slot des Fahrgast-Busses reservieren, damit die Slotvergabe
+		// ihn nicht wegtauscht/versteckt.
+		const bool bRiding = RideSession.IsRiding() && Buses.IsValidIndex(RiddenSlot);
+		bool bRiddenSeen = false;
+		if (bRiding) { Used[RiddenSlot] = true; }
 		for (const WiesbadenBusLine::FBusRun& R : Runs)
 		{
-			int32 Slot = (int32)(((R.Index % N) + N) % N);
-			if (Used[Slot])
+			bool bFinished = false;
+			const WiesbadenBusLine::FBusState St = ComputeHeldState(R.Index, R.Elapsed, DeltaSeconds, bFinished);
+			if (bFinished) { continue; }   // Rundfahrt (evtl. verspaetet) beendet
+			ActiveKeys.Add(R.Index);
+			int32 Slot;
+			if (bRiding && R.Index == RiddenRunKey)
 			{
-				Slot = INDEX_NONE;
-				for (int32 j = 0; j < N; ++j) { if (!Used[j]) { Slot = j; break; } }
-				if (Slot == INDEX_NONE) { continue; }
+				Slot = RiddenSlot;      // gepinnt: der Fahrgast bleibt an diesem Bus
+				bRiddenSeen = true;
+			}
+			else
+			{
+				// Stabile Slot-Zuordnung ueber den fortlaufenden Kurs-Index; bei Kollision
+				// (Pool < gleichzeitige Kurse) den naechsten freien Slot.
+				Slot = (int32)(((R.Index % N) + N) % N);
+				if (Used[Slot])
+				{
+					Slot = INDEX_NONE;
+					for (int32 j = 0; j < N; ++j) { if (!Used[j]) { Slot = j; break; } }
+					if (Slot == INDEX_NONE) { continue; }
+				}
 			}
 			Used[Slot] = true;
-			PlaceBusRun(Slot, R.Elapsed, bLogThisTick);
+			if (SlotRunKey.IsValidIndex(Slot)) { SlotRunKey[Slot] = R.Index; }
+			PlaceBusAt(Slot, St, bLogThisTick);
+			++Driving;
+		}
+		// Fahrgast-Kurs nicht mehr aktiv (Rundfahrt beendet) -> automatisch absetzen.
+		if (bRiding && !bRiddenSeen) { ToggleBoarding(); }
+		// Haltezeiten nicht mehr aktiver Kurse aufraeumen (kein Leck).
+		for (auto It = HoldByRun.CreateIterator(); It; ++It)
+		{
+			if (!ActiveKeys.Contains(It.Key())) { It.RemoveCurrent(); }
 		}
 		if (bLogThisTick)
 		{
 			const int32 Hour = ((int32)(ServiceSeconds / 3600.0)) % 24;
 			const int32 Min = ((int32)(ServiceSeconds / 60.0)) % 60;
-			UE_LOG(LogWbBus, Log, TEXT("Fahrplan: Dienstzeit %02d:%02d, %d Busse unterwegs."), Hour, Min, Runs.Num());
+			UE_LOG(LogWbBus, Log, TEXT("Fahrplan: Dienstzeit %02d:%02d, %d Busse unterwegs (%d Ampel-Gates)."),
+				Hour, Min, Driving, Gates.Num());
 		}
 	}
 	else
 	{
-		// Rueckfall ohne Fahrplan: gleichverteilte Busse (wie zuvor).
+		// Rueckfall ohne Fahrplan: gleichverteilte Busse (ohne Rotlicht-Halt).
 		for (int32 k = 0; k < N; ++k)
 		{
 			const double Offset = (CycleSeconds * k) / FMath::Max(N, 1);
-			PlaceBusRun(k, WorldTime + Offset, bLogThisTick);
+			const WiesbadenBusLine::FBusState St = WiesbadenBusLine::EvaluateRoundTrip(
+				WorldTime + Offset, Route, SpeedCmS, StopDwellSeconds, TerminusDwellSeconds);
+			if (SlotRunKey.IsValidIndex(k)) { SlotRunKey[k] = k; }
+			PlaceBusAt(k, St, bLogThisTick);
 		}
 	}
+
+	// Mitfahren: der unskalierte Anker folgt der Pose des Fahrgast-Busses (Fahrgast +
+	// Kamera haengen am Anker); danach die Einstiegstaste abfragen.
+	if (RideSession.IsRiding() && RideAnchor && Buses.IsValidIndex(RiddenSlot) && Buses[RiddenSlot])
+	{
+		RideAnchor->SetWorldLocationAndRotation(
+			Buses[RiddenSlot]->GetComponentLocation(), Buses[RiddenSlot]->GetComponentQuat());
+	}
+	UpdateRiding();
+}
+
+void AWiesbadenBusRoute::UpdateRiding()
+{
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!PC) { return; }
+	const bool bDown = PC->IsInputKeyDown(EKeys::E);
+	if (bDown && !bBoardKeyHeld) { ToggleBoarding(); }
+	bBoardKeyHeld = bDown;
+}
+
+void AWiesbadenBusRoute::CreatePassengerCamera()
+{
+	if (PassengerCamera || !RideSession.GetPassenger() || !RideAnchor) { return; }
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!PC) { return; }
+	PassengerCamera = NewObject<UWiesbadenVehicleCameraComponent>(this, TEXT("BusPassengerCamera"));
+	PassengerCamera->SetupAttachment(RideAnchor);   // unskalierter Anker -> Offsets stimmen
+	PassengerCamera->CameraOffset = FVector(0.0f, 0.0f, 220.0f);
+	PassengerCamera->FollowArmLength = 750.0f;
+	PassengerCamera->ZoomMinArmLength = 120.0f;
+	PassengerCamera->ZoomMaxArmLength = 1600.0f;
+	PassengerCamera->bLevelHorizon = true;
+	// Innenraum vorn: Blick des Fahrgasts nach vorne durch den ~18 m langen Bus.
+	PassengerCamera->CockpitOffset = FVector(620.0f, -55.0f, 210.0f);
+	PassengerCamera->RegisterComponent();
+	PassengerCamera->ActivateExternalView(PC, RideAnchor, RideSession.GetPassenger());
+	PassengerCamera->SetCameraMode(EWiesbadenVehicleCameraMode::Cockpit);
+}
+
+void AWiesbadenBusRoute::DestroyPassengerCamera()
+{
+	if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+	{
+		if (APawn* PassengerPawn = RideSession.GetPassenger())
+		{
+			PC->SetViewTarget(PassengerPawn);
+		}
+	}
+	if (PassengerCamera)
+	{
+		PassengerCamera->DeactivateExternalView();
+		PassengerCamera->DestroyComponent();
+		PassengerCamera = nullptr;
+	}
+}
+
+void AWiesbadenBusRoute::ToggleBoarding()
+{
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+	if (!Pawn || !RideAnchor) { return; }
+
+	// Aussteigen: neben dem Bus absetzen und die Fusssteuerung freigeben.
+	if (RideSession.IsRiding())
+	{
+		APawn* Passenger = RideSession.GetPassenger();
+		if (!RideSession.BeginExiting() || !Passenger) { return; }
+		Passenger->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		const FVector Side = RideAnchor->GetRightVector() * 320.0f + FVector(0, 0, 60.0f);
+		Passenger->SetActorLocation(RideAnchor->GetComponentLocation() + Side);
+		if (AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(Passenger)) { Foot->SetRiding(false); }
+		DestroyPassengerCamera();
+		RideSession.CompleteExit();
+		RiddenSlot = INDEX_NONE;
+		RiddenRunKey = -1;
+		UE_LOG(LogWbBus, Log, TEXT("Bus: Fahrgast ausgestiegen."));
+		return;
+	}
+
+	// Einsteigen: nur der Spieler ZU FUSS, nur nahe an einem an der Halte STEHENDEN Bus.
+	AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(Pawn);
+	if (!Foot) { return; }
+	const FVector P = Pawn->GetActorLocation();
+	int32 Best = INDEX_NONE;
+	double BestD = (double)BoardRangeCm;
+	for (int32 k = 0; k < SlotState.Num(); ++k)
+	{
+		if (SlotState[k] != 2 || !SlotWorldPos.IsValidIndex(k)) { continue; }   // nur haltende Busse
+		const double D = FVector::Dist(P, SlotWorldPos[k]);
+		if (D < BestD) { BestD = D; Best = k; }
+	}
+	UStaticMeshComponent* Car = (Best != INDEX_NONE && Buses.IsValidIndex(Best)) ? Buses[Best] : nullptr;
+	if (!Car) { return; }
+	if (!RideSession.BeginBoarding(Pawn, Best)) { return; }
+	RideAnchor->SetWorldLocationAndRotation(Car->GetComponentLocation(), Car->GetComponentQuat());
+	Foot->SetRiding(true);
+	Pawn->AttachToComponent(RideAnchor, FAttachmentTransformRules::KeepWorldTransform);
+	if (!RideSession.ConfirmRiding())
+	{
+		Pawn->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		Foot->SetRiding(false);
+		RideSession.Reset();
+		return;
+	}
+	RiddenSlot = Best;
+	RiddenRunKey = SlotRunKey.IsValidIndex(Best) ? SlotRunKey[Best] : -1;
+	CreatePassengerCamera();
+	Pawn->SetActorLocation(Car->GetComponentLocation() + FVector(0, 0, 160.0f));
+	UE_LOG(LogWbBus, Log, TEXT("Bus: Fahrgast eingestiegen (Slot %d, Kurs %lld)."), Best, (long long)RiddenRunKey);
 }

@@ -45,6 +45,15 @@ namespace WiesbadenBusLine
 		double StopDwellSeconds, double TerminusDwellSeconds);
 
 	/**
+	 * Haltebucht-Faktor 0..1: wie weit der Bus an der Halte nach rechts ausschert.
+	 * 1 beim Verweilen bzw. direkt an einer Halte, 0 in der Segmentmitte, smoothstep
+	 * ueber BayZoneCm dazwischen (weiches Ein-/Ausscheren). Datenrein aus Bogenlaenge
+	 * + Haltenliste; keine Wende-/Terminuslogik noetig, die Halten stehen ja fest.
+	 */
+	WIESBADENREAL_API double BayFactor(double ArcLengthCm, bool bDwelling,
+		const TArray<double>& StopArcCm, double BayZoneCm);
+
+	/**
 	 * Echter Fahrplan: Abfahrtszeiten am Terminus (Sekunden seit 00:00 Uhr,
 	 * aufsteigend) und Tageslaenge zum Umlaufen. Statt gleichverteilter Offsets
 	 * faehrt jeder Bus einen konkreten Kurs, der zur Fahrplanminute abfaehrt.
