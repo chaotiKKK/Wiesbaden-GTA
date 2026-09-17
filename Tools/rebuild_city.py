@@ -190,6 +190,11 @@ def set_and_verify(prop, value, is_path=False):
 
 # ALKIS wird allein durch nicht-leeren Pfad importiert (kein Flag; Pipeline
 # prueft !AlkisFilePath.IsEmpty()).
+# OSM-Datei (z. B. mit nachgeholten Wald-Relationen als Ways, Tools/fetch_osm_forest_relations.py).
+osm_override = os.environ.get("WB_OSM_FILE")
+if osm_override:
+    set_and_verify("osm_file_path", osm_override, is_path=True)
+
 alkis_override = os.environ.get("WB_ALKIS_FILE")
 if alkis_override:
     set_and_verify("alkis_file_path", alkis_override, is_path=True)
