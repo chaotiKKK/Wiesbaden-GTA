@@ -80,4 +80,21 @@ namespace WiesbadenBusLine
 	 */
 	WIESBADENREAL_API void ActiveRuns(double ServiceSeconds, const FBusSchedule& Schedule,
 		double RoundTripSeconds, TArray<FBusRun>& OutRuns);
+
+	/**
+	 * Fahrzeit ab Terminus (Halt 0) bis zur Ankunft an StopIndex auf der Hinfahrt:
+	 * Summe der Fahrsegmente + Verweilzeiten an den ZWISCHENhalten. StopIndex 0 -> 0.
+	 * Fuer den Abfahrtsmonitor: Durchfahrtszeit einer Abfahrt an einer Zwischenhalte.
+	 */
+	WIESBADENREAL_API double SecondsToStop(const FBusRoute& Route, double CruiseSpeedCmS,
+		double StopDwellSeconds, int32 StopIndex);
+
+	/**
+	 * Die naechsten MaxCount Durchfahrten an einer Halte ab ServiceSeconds:
+	 * je Fahrplan-Abfahrt D ist die Durchfahrt D + OffsetToStopSeconds. OutSecondsUntil
+	 * enthaelt aufsteigend die Restzeiten (Sekunden bis zur Durchfahrt), ueber
+	 * Mitternacht hinweg. Datenrein. OffsetToStopSeconds = SecondsToStop der Halte.
+	 */
+	WIESBADENREAL_API void NextDepartures(double ServiceSeconds, const FBusSchedule& Schedule,
+		double OffsetToStopSeconds, int32 MaxCount, TArray<double>& OutSecondsUntil);
 }

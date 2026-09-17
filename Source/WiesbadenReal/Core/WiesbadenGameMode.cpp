@@ -32,6 +32,7 @@
 #include "World/WiesbadenNerotal48.h"
 #include "World/WiesbadenLandmarks.h"
 #include "World/WiesbadenBusRoute.h"
+#include "World/WiesbadenBusStopMonitor.h"
 #include "World/WiesbadenParkFeatures.h"
 
 AWiesbadenGameMode::AWiesbadenGameMode()
@@ -145,6 +146,11 @@ void AWiesbadenGameMode::BeginPlay()
 			// (Data/Raw/Bus/line6.json); setzt sich selbst zur Laufzeit.
 			LandmarkWorld->SpawnActor<AWiesbadenBusRoute>(
 				AWiesbadenBusRoute::StaticClass(),
+				FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
+
+			// Dynamische Abfahrtsmonitore an ausgewaehlten Linie-6-Halten.
+			LandmarkWorld->SpawnActor<AWiesbadenBusStopMonitor>(
+				AWiesbadenBusStopMonitor::StaticClass(),
 				FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
 
 		// Formale Parkanlagen (Bowling Green am Kurhaus, Reisinger-Anlagen):

@@ -14,6 +14,7 @@ class UStaticMesh;
 class UGeoCoordinateConverter;
 class UWiesbadenCitySubsystem;
 class UWiesbadenVehicleCameraComponent;
+class UMaterialInterface;
 
 /**
  * Ein sichtbarer Linienbus, der eine OSM-Buslinie abfaehrt (Pilot: ESWE-Linie 6).
@@ -65,9 +66,12 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bus", meta = (ClampMin = "0.0", ClampMax = "24.0"))
 	float ServiceStartHour = 7.0f;
 
-	/** Ziellaenge des Bus-Meshes (Gelenkbus ~18 m). */
+	/** Ziellaenge des Bus-Meshes in cm. Das SM_Bus-Mesh ist bereits in realer Groesse
+	 *  gebacken (Blender: Breite 2,55 m -> Laenge 8,27 m, Bus/bake_eswebus.py), also
+	 *  ergibt 827 eine Skalierung ~1,0. Andert sich die Breite des Meshes, hier die
+	 *  daraus folgende Laenge eintragen. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bus", meta = (ClampMin = "100.0"))
-	float BusLengthCm = 1800.0f;
+	float BusLengthCm = 827.0f;
 
 	/** Zusaetzliche Anhebung ueber den Boden, cm (0 = Raeder sitzen auf; der Pivot-
 	 *  Ausgleich passiert automatisch ueber die Mesh-Unterkante). */
@@ -96,21 +100,32 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bus")
 	FRotator MeshOrient = FRotator(0.0f, -90.0f, 0.0f);
 
-	/** Groesse des Zielanzeige-Schilds an der Front (Breite/Hoehe, cm). */
+	/** Groesse der Front-/Seitenanzeige (Punktmatrix-Blind), cm. Aspekt ~5:1 wie die Textur. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bus")
-	float SignWidthCm = 210.0f;
+	float BlindWidthCm = 200.0f;
 
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bus")
-	float SignHeightCm = 52.0f;
+	float BlindHeightCm = 40.0f;
 
-	/** Hoehe der Zielanzeige ueber dem Boden, cm (deckt die Original-Anzeige oben). */
+	/** Kantenlaenge der quadratischen Heck-Anzeige (nur Liniennummer), cm. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bus")
-	float SignZAboveGroundCm = 280.0f;
+	float RearBlindSizeCm = 44.0f;
 
-	/** Laengsversatz der Anzeige vom Bus-Mittelpunkt nach vorn (Anteil BusLength;
-	 *  knapp vor der Frontflaeche, damit sie nicht im gewoelbten Bug steckt). */
+	/** Hoehe der Anzeigen ueber dem Boden, cm (Oberkante der Front des 2,25-m-Busses). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bus")
-	float SignFrontFrac = 0.505f;
+	float BlindZAboveGroundCm = 195.0f;
+
+	/** Laengsversatz Front-/Heckanzeige vom Bus-Mittelpunkt (Anteil BusLength). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bus")
+	float BlindEndFrac = 0.5f;
+
+	/** Laengsversatz der Seitenanzeige nach vorn (Anteil BusLength; nahe der vorderen Tuer). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bus")
+	float BlindSideForwardFrac = 0.28f;
+
+	/** Halbe Fahrzeugbreite fuer die Seitenanzeige, cm (Modell ~2,55 m breit). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Bus")
+	float BusHalfWidthCm = 128.0f;
 
 	/** Bus haelt an roten Ampeln vor der Haltelinie (Kopplung ans Ampel-Aspektmodell;
 	 *  Autos halten bereits ueber die Verkehrs-Sim). Nur auf gebackenen Karten aktiv. */
@@ -158,18 +173,24 @@ private:
 	void CreatePassengerCamera();
 	void DestroyPassengerCamera();
 
+
 	UPROPERTY(Transient) USceneComponent* Root = nullptr;
 	UPROPERTY(Transient) UGeoCoordinateConverter* Converter = nullptr;
 	UPROPERTY(Transient) UStaticMesh* BusMesh = nullptr;
 	UPROPERTY(Transient) TArray<UStaticMeshComponent*> Buses;
 
-	// Zielanzeige (Blind) vor der Front: pro Bus ein Quad, dessen Material je
-	// Fahrtrichtung wechselt (Mainz-Gonsenheim hin, Nordfriedhof zurueck).
-	UPROPERTY(Transient) UStaticMesh* SignMesh = nullptr;
-	UPROPERTY(Transient) UMaterialInterface* SignMatMainz = nullptr;
-	UPROPERTY(Transient) UMaterialInterface* SignMatNord = nullptr;
-	UPROPERTY(Transient) TArray<UStaticMeshComponent*> Signs;
-	TArray<int8> SignForward;   // pro Bus zuletzt gesetzte Richtung (-1 = noch keine)
+	// Zielanzeige (Blind): authentische Punktmatrix-Texturen (Bernstein-LEDs) auf
+	// unlit Quads. Front + rechte (Tuer-)Seite zeigen Liniennummer + Ziel (Material
+	// je Fahrtrichtung), das Heck nur die Liniennummer. Statische Texturen -> keine
+	// Spiegel-/Achsen-Ueberraschungen wie beim frueheren aufgemalten Blind.
+	UPROPERTY(Transient) UStaticMesh* BlindMesh = nullptr;              // Engine-Plane als Quad
+	UPROPERTY(Transient) UMaterialInterface* BlindMatMainz = nullptr;   // "[6] Mainz-Gonsenheim"
+	UPROPERTY(Transient) UMaterialInterface* BlindMatNord = nullptr;    // "[6] Nordfriedhof"
+	UPROPERTY(Transient) UMaterialInterface* BlindMatRoute = nullptr;   // "6" (Heck)
+	UPROPERTY(Transient) TArray<UStaticMeshComponent*> BlindFront;      // Front-Quad je Bus
+	UPROPERTY(Transient) TArray<UStaticMeshComponent*> BlindSide;       // rechte Seite je Bus
+	UPROPERTY(Transient) TArray<UStaticMeshComponent*> BlindRear;       // Heck je Bus
+	TArray<int8> BlindForward;   // zuletzt gesetzte Richtung Front/Seite (-1 = noch keine)
 
 	TArray<FVector2D> GeoPath;    // lat,lon
 	TArray<FVector2D> GeoStops;   // lat,lon
@@ -191,13 +212,15 @@ private:
 	TArray<int64> SlotRunKey;       // welcher Kurs gerade in dem Slot faehrt
 	WiesbadenRailTransport::FWiesbadenRideSession RideSession;
 	UPROPERTY(Transient) UWiesbadenVehicleCameraComponent* PassengerCamera = nullptr;
-	// Unskalierter Anker (das Bus-Mesh ist ~18x skaliert; daran hingen die Kamera-
-	// Offsets das 18-fache). Der Anker folgt je Tick der Pose des mitgefahrenen Busses;
-	// Fahrgast + Kamera haengen am Anker.
+	// Unskalierter Anker (Scale 1). Das Bus-Mesh ist inzwischen real gebacken
+	// (MeshScale ~1,0), aber der Anker bleibt bewusst skalierungsunabhaengig, damit
+	// die Kamera-Offsets echte cm sind. Der Anker folgt je Tick der Pose des
+	// mitgefahrenen Busses; Fahrgast + Kamera haengen am Anker.
 	UPROPERTY(Transient) USceneComponent* RideAnchor = nullptr;
 	int32 RiddenSlot = INDEX_NONE;  // gepinnter Slot des mitgefahrenen Busses
 	int64 RiddenRunKey = -1;        // dessen Kurs-Index
 	bool bBoardKeyHeld = false;
+
 
 	double MeshScale = 1.0;
 	double MeshBottomCm = 0.0;   // Pivot -> Unterkante (Anhebung, damit die Raeder aufsitzen)
@@ -209,4 +232,9 @@ private:
 	// Position/Verweilen jedes sichtbaren Busses. Nur zum Verifizieren; standard aus.
 	bool bLogDiag = false;
 	double LogAccum = 0.0;
+
+	// Diagnose (-WbBusParkStop=N): parkt Slot 0 (Hinrichtung) + Slot 1 (Gegenrichtung)
+	// haltend an Halt N und schaltet den Fahrbetrieb ab. So steht garantiert je ein Bus
+	// beider Richtungen an einer bekannten Stelle - fuer Modell-/Zielanzeige-Aufnahmen.
+	int32 ParkStop = -1;
 };

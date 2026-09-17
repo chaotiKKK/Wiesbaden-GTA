@@ -207,17 +207,40 @@ void AWiesbadenBusRoute::BeginPlay()
 		UE_LOG(LogWbBus, Log, TEXT("Bus-Box lokal Min.Z=%.2f Max.Z=%.2f, Scale %.3f -> Unterkante %.0f cm, Oberkante %.0f cm ueber Pivot, Hoehe %.0f cm."),
 			LocalBox.Min.Z, LocalBox.Max.Z, MeshScale, MeshBottomCm, MeshTopCm, MeshBottomCm + MeshTopCm);
 	}
-	// Zielanzeige-Schild: einfaches Engine-Quad + die beiden Unlit-Materialien.
-	SignMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
-	SignMatMainz = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Vehicles/Bus/Ziel/M_WbBusZiel_Mainz.M_WbBusZiel_Mainz"));
-	SignMatNord = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Vehicles/Bus/Ziel/M_WbBusZiel_Nordfriedhof.M_WbBusZiel_Nordfriedhof"));
-	UE_LOG(LogWbBus, Log, TEXT("Bus-Zielschild-Assets: PlaneMesh=%d MatMainz=%d MatNord=%d."),
-		SignMesh ? 1 : 0, SignMatMainz ? 1 : 0, SignMatNord ? 1 : 0);
+	// Zielanzeige (Blind): authentische Punktmatrix-Texturen (Bernstein-LEDs) auf
+	// unlit Quads (Engine-Plane). Front/Seite je Fahrtrichtung, Heck = Liniennummer.
+	BlindMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Plane.Plane"));
+	BlindMatMainz = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Vehicles/Bus/Blind/M_WbBlindMainz.M_WbBlindMainz"));
+	BlindMatNord = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Vehicles/Bus/Blind/M_WbBlindNord.M_WbBlindNord"));
+	BlindMatRoute = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Vehicles/Bus/Blind/M_WbBlindRoute6.M_WbBlindRoute6"));
+	UE_LOG(LogWbBus, Log, TEXT("Bus-Blind-Assets: Plane=%d Mainz=%d Nord=%d Route=%d."),
+		BlindMesh ? 1 : 0, BlindMatMainz ? 1 : 0, BlindMatNord ? 1 : 0, BlindMatRoute ? 1 : 0);
 
 	const double SpeedCmS = FMath::Max(SpeedKmh, 1.0f) * 100000.0 / 3600.0;
 	CycleSeconds = WiesbadenBusLine::RoundTripSeconds(Route, SpeedCmS, StopDwellSeconds, TerminusDwellSeconds);
 	int32 N = FMath::Max(NumBuses, 1);
 	{ int32 BusOv = 0; if (FParse::Value(FCommandLine::Get(), TEXT("WbBusCount="), BusOv) && BusOv > 0) { N = BusOv; } }
+
+	// Ein Blind-Quad (Engine-Plane 100x100) mit Material + Groesse. Ausrichtung
+	// setzt PlaceBusAt je Flaeche via MakeFromZY(Normal, Up). Die Engine-Plane
+	// rendert die Textur von aussen um 180 Grad gedreht (per Ecken-Marker-Foto
+	// verifiziert: Quell-Oben-Links landet unten-rechts) -> negative X- UND Y-Skala
+	// dreht das Quad um 180 Grad zurueck, damit die Blind-Textur korrekt steht.
+	auto MakeBlindQuad = [this](UMaterialInterface* Mat, float WidthCm, float HeightCm) -> UStaticMeshComponent*
+	{
+		if (!BlindMesh) { return nullptr; }
+		UStaticMeshComponent* Q = NewObject<UStaticMeshComponent>(this);
+		Q->SetStaticMesh(BlindMesh);
+		Q->SetupAttachment(Root);
+		Q->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Q->SetCastShadow(false);
+		if (Mat) { Q->SetMaterial(0, Mat); }
+		Q->RegisterComponent();
+		Q->SetWorldScale3D(FVector(-WidthCm / 100.0, -HeightCm / 100.0, 1.0));
+		Q->SetVisibility(false);
+		return Q;
+	};
+
 	for (int32 k = 0; k < N; ++k)
 	{
 		UStaticMeshComponent* Bus = NewObject<UStaticMeshComponent>(this);
@@ -229,19 +252,13 @@ void AWiesbadenBusRoute::BeginPlay()
 		Bus->SetVisibility(false);
 		Buses.Add(Bus);
 
-		UStaticMeshComponent* Sign = nullptr;
-		if (SignMesh)
-		{
-			Sign = NewObject<UStaticMeshComponent>(this);
-			Sign->SetStaticMesh(SignMesh);
-			Sign->SetupAttachment(Root);
-			Sign->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			Sign->SetCastShadow(false);
-			Sign->RegisterComponent();
-			Sign->SetVisibility(false);
-		}
-		Signs.Add(Sign);
-		SignForward.Add(-1);
+		// Punktmatrix-Blinds: Front + rechte Seite (Liniennummer + Ziel, Material je
+		// Fahrtrichtung), Heck nur die Liniennummer. Front/Seite starten mit dem
+		// Mainz-Material; PlaceBusAt setzt es je Richtung um.
+		BlindFront.Add(MakeBlindQuad(BlindMatMainz, BlindWidthCm, BlindHeightCm));
+		BlindSide.Add(MakeBlindQuad(BlindMatMainz, BlindWidthCm, BlindHeightCm));
+		BlindRear.Add(MakeBlindQuad(BlindMatRoute, RearBlindSizeCm, RearBlindSizeCm));
+		BlindForward.Add(-1);
 	}
 	SlotWorldPos.Init(FVector::ZeroVector, Buses.Num());
 	SlotState.Init(0, Buses.Num());
@@ -252,6 +269,11 @@ void AWiesbadenBusRoute::BeginPlay()
 		bReady ? 1 : 0, Buses.Num(), Route.TotalLengthCm / 100.0, CycleSeconds, MeshScale, MeshBottomCm);
 
 	bLogDiag = FParse::Param(FCommandLine::Get(), TEXT("WbBusLog"));
+	FParse::Value(FCommandLine::Get(), TEXT("WbBusParkStop="), ParkStop);
+	if (ParkStop >= 0)
+	{
+		UE_LOG(LogWbBus, Log, TEXT("Bus-PARK-Diagnose: Halt %d - je ein Bus beider Richtungen steht dort (kein Fahrbetrieb)."), ParkStop);
+	}
 	if (bLogDiag)
 	{
 		for (int32 i = 0; i < Route.StopArcCm.Num(); ++i)
@@ -269,7 +291,9 @@ void AWiesbadenBusRoute::BeginPlay()
 void AWiesbadenBusRoute::HideBusSlot(int32 k)
 {
 	if (Buses.IsValidIndex(k) && Buses[k]) { Buses[k]->SetVisibility(false); }
-	if (Signs.IsValidIndex(k) && Signs[k]) { Signs[k]->SetVisibility(false); }
+	if (BlindFront.IsValidIndex(k) && BlindFront[k]) { BlindFront[k]->SetVisibility(false); }
+	if (BlindSide.IsValidIndex(k) && BlindSide[k]) { BlindSide[k]->SetVisibility(false); }
+	if (BlindRear.IsValidIndex(k) && BlindRear[k]) { BlindRear[k]->SetVisibility(false); }
 	if (SlotState.IsValidIndex(k)) { SlotState[k] = 0; }
 }
 
@@ -393,27 +417,46 @@ void AWiesbadenBusRoute::PlaceBusAt(int32 k, const WiesbadenBusLine::FBusState& 
 	if (SlotWorldPos.IsValidIndex(k)) { SlotWorldPos[k] = FVector(FinalX, FinalY, BusZ); }
 	if (SlotState.IsValidIndex(k)) { SlotState[k] = St.bDwelling ? 2 : 1; }
 
-	// Zielanzeige vorn: Quad blickt in Fahrtrichtung, Material je Richtung
-	// (hin -> Mainz-Gonsenheim, zurueck -> Nordfriedhof).
-	if (Signs.IsValidIndex(k) && Signs[k])
+	// Punktmatrix-Blinds: Front (Fahrtrichtung), rechte Seite (nahe vorderer Tuer),
+	// Heck (entgegen der Fahrtrichtung). Jeder Quad blickt mit seiner +Z-Flaeche
+	// nach aussen und wird 3 cm proud gesetzt, damit er nicht im Blech steckt.
+	const FVector Up = FVector::UpVector;
+	const double BlindZ = GroundZ + BlindZAboveGroundCm;
+	auto PlaceQuad = [&Up](UStaticMeshComponent* Q, const FVector& Pos, const FVector& Normal)
 	{
-		UStaticMeshComponent* Sign = Signs[k];
-		const double SignZ = GroundZ + SignZAboveGroundCm;
-		const FVector SignPos(
-			FinalX + Dir.X * (BusLengthCm * SignFrontFrac),
-			FinalY + Dir.Y * (BusLengthCm * SignFrontFrac),
-			SignZ);
-		const FRotator SignRot = FRotationMatrix::MakeFromZY(-Dir, FVector::UpVector).Rotator();
-		Sign->SetWorldLocationAndRotation(SignPos, SignRot);
-		Sign->SetWorldScale3D(FVector(SignWidthCm / 100.0, SignHeightCm / 100.0, 1.0));
-		const int8 WantFwd = St.bForward ? 1 : 0;
-		if (SignForward.IsValidIndex(k) && SignForward[k] != WantFwd)
-		{
-			UMaterialInterface* M = St.bForward ? SignMatMainz : SignMatNord;
-			if (M) { Sign->SetMaterial(0, M); }
-			SignForward[k] = WantFwd;
-		}
-		Sign->SetVisibility(true);
+		if (!Q) { return; }
+		Q->SetWorldLocationAndRotation(Pos + Normal * 3.0,
+			FRotationMatrix::MakeFromZY(Normal, Up).Rotator());
+		Q->SetVisibility(true);
+	};
+
+	// Material von Front + Seite je Fahrtrichtung (nur bei Wechsel umsetzen).
+	const int8 WantFwd = St.bForward ? 1 : 0;
+	if (BlindForward.IsValidIndex(k) && BlindForward[k] != WantFwd)
+	{
+		UMaterialInterface* M = St.bForward ? BlindMatMainz : BlindMatNord;
+		if (M && BlindFront.IsValidIndex(k) && BlindFront[k]) { BlindFront[k]->SetMaterial(0, M); }
+		if (M && BlindSide.IsValidIndex(k) && BlindSide[k]) { BlindSide[k]->SetMaterial(0, M); }
+		BlindForward[k] = WantFwd;
+	}
+
+	const double EndCm = BusLengthCm * BlindEndFrac;
+	if (BlindFront.IsValidIndex(k))
+	{
+		PlaceQuad(BlindFront[k], FVector(FinalX + Dir.X * EndCm, FinalY + Dir.Y * EndCm, BlindZ), Dir);
+	}
+	if (BlindSide.IsValidIndex(k))
+	{
+		const double SideCm = BusLengthCm * BlindSideForwardFrac;
+		const FVector SidePos(
+			FinalX + Dir.X * SideCm + RightDir.X * BusHalfWidthCm,
+			FinalY + Dir.Y * SideCm + RightDir.Y * BusHalfWidthCm,
+			BlindZ);
+		PlaceQuad(BlindSide[k], SidePos, RightDir);
+	}
+	if (BlindRear.IsValidIndex(k))
+	{
+		PlaceQuad(BlindRear[k], FVector(FinalX - Dir.X * EndCm, FinalY - Dir.Y * EndCm, BlindZ), -Dir);
 	}
 
 	if (bLogThisTick)
@@ -441,6 +484,18 @@ void AWiesbadenBusRoute::Tick(float DeltaSeconds)
 	// Ampeln als Halte-Gates sammeln, sobald das (nur auf gebackenen Karten
 	// initialisierte) Ampelsystem bereitsteht; nur in den ersten Sekunden versuchen.
 	if (bStopAtRed && !bGatesBuilt && WorldTime < 20.0) { BuildGates(); }
+
+	// PARK-Diagnose: je ein haltender Bus beider Richtungen an Halt N, sonst nichts.
+	if (ParkStop >= 0 && Route.StopArcCm.IsValidIndex(ParkStop))
+	{
+		for (int32 k = 0; k < N; ++k) { HideBusSlot(k); }
+		WiesbadenBusLine::FBusState St;
+		St.ArcLengthCm = Route.StopArcCm[ParkStop];
+		St.bDwelling = true;
+		St.bForward = true;  PlaceBusAt(0, St, false);
+		if (N > 1) { St.bForward = false; PlaceBusAt(1, St, false); }
+		return;
+	}
 
 	const double SpeedCmS = FMath::Max(SpeedKmh, 1.0f) * 100000.0 / 3600.0;
 
@@ -551,8 +606,9 @@ void AWiesbadenBusRoute::CreatePassengerCamera()
 	PassengerCamera->ZoomMinArmLength = 120.0f;
 	PassengerCamera->ZoomMaxArmLength = 1600.0f;
 	PassengerCamera->bLevelHorizon = true;
-	// Innenraum vorn: Blick des Fahrgasts nach vorne durch den ~18 m langen Bus.
-	PassengerCamera->CockpitOffset = FVector(620.0f, -55.0f, 210.0f);
+	// Innenraum vorn: Blick des Fahrgasts nach vorne durch den ~8,3 m langen Bus
+	// (Front bei ~4,1 m; Augenhoehe knapp unter dem 2,25-m-Dach).
+	PassengerCamera->CockpitOffset = FVector(300.0f, -55.0f, 185.0f);
 	PassengerCamera->RegisterComponent();
 	PassengerCamera->ActivateExternalView(PC, RideAnchor, RideSession.GetPassenger());
 	PassengerCamera->SetCameraMode(EWiesbadenVehicleCameraMode::Cockpit);

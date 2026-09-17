@@ -120,5 +120,32 @@ bool FWiesbadenBusLineTest::RunTest(const FString& Parameters)
 			BayFactor(950.0, false, Stops, Zone) > 0.5);
 	}
 
+	// --- Abfahrtsmonitor: SecondsToStop + NextDepartures ---
+	{
+		// Route {0,1000,3000}, v=500, dwell=2.
+		TestTrue(TEXT("SecondsToStop(0) = 0"),
+			FMath::IsNearlyEqual(SecondsToStop(R, v, dwell, 0), 0.0, 0.01));
+		TestTrue(TEXT("SecondsToStop(1) = 2 (Fahrt 0->1)"),
+			FMath::IsNearlyEqual(SecondsToStop(R, v, dwell, 1), 2.0, 0.01));
+		TestTrue(TEXT("SecondsToStop(2) = 8 (2 + Halt + 4)"),
+			FMath::IsNearlyEqual(SecondsToStop(R, v, dwell, 2), 8.0, 0.01));
+
+		FBusSchedule Sched; Sched.DepartureSeconds = { 0.0, 600.0, 1200.0 }; Sched.DaySeconds = 86400.0;
+		TArray<double> Until;
+		NextDepartures(100.0, Sched, 0.0, 2, Until);
+		TestEqual(TEXT("2 naechste Abfahrten am Terminus"), Until.Num(), 2);
+		if (Until.Num() == 2)
+		{
+			TestTrue(TEXT("naechste in 500 s"), FMath::IsNearlyEqual(Until[0], 500.0, 0.01));
+			TestTrue(TEXT("uebernaechste in 1100 s"), FMath::IsNearlyEqual(Until[1], 1100.0, 0.01));
+		}
+		NextDepartures(20.0, Sched, 50.0, 1, Until);
+		TestTrue(TEXT("Zwischenhalte (Offset 50): Durchfahrt in 30 s"),
+			Until.Num() == 1 && FMath::IsNearlyEqual(Until[0], 30.0, 0.01));
+		NextDepartures(0.0, Sched, 0.0, 3, Until);
+		TestTrue(TEXT("Restzeiten aufsteigend sortiert"),
+			Until.Num() == 3 && Until[0] <= Until[1] && Until[1] <= Until[2]);
+	}
+
 	return true;
 }

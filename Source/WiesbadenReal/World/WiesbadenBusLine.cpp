@@ -118,3 +118,43 @@ void WiesbadenBusLine::ActiveRuns(double ServiceSeconds, const FBusSchedule& Sch
 		}
 	}
 }
+
+double WiesbadenBusLine::SecondsToStop(const FBusRoute& Route, double v,
+	double Dwell, int32 StopIndex)
+{
+	const int32 N = Route.StopArcCm.Num();
+	const double Vv = FMath::Max(v, 1.0);
+	if (StopIndex <= 0 || N < 2) { return 0.0; }
+	const int32 Target = FMath::Min(StopIndex, N - 1);
+	double t = 0.0;
+	for (int32 i = 0; i < Target; ++i)
+	{
+		t += (Route.StopArcCm[i + 1] - Route.StopArcCm[i]) / Vv;   // Fahrsegment i->i+1
+		if (i + 1 < Target) { t += Dwell; }                        // Verweilen an Zwischenhalte
+	}
+	return t;
+}
+
+void WiesbadenBusLine::NextDepartures(double ServiceSeconds, const FBusSchedule& Schedule,
+	double OffsetToStopSeconds, int32 MaxCount, TArray<double>& OutSecondsUntil)
+{
+	OutSecondsUntil.Reset();
+	const int32 M = Schedule.DepartureSeconds.Num();
+	if (M == 0 || MaxCount <= 0 || Schedule.DaySeconds <= 0.0) { return; }
+	const int64 DayIndex = (int64)FMath::FloorToDouble(ServiceSeconds / Schedule.DaySeconds);
+	TArray<double> Cand;
+	// Heute und morgen pruefen -> auch Durchfahrten kurz nach Mitternacht / erste
+	// Frueh-Abfahrten des Folgetags erscheinen korrekt.
+	for (int64 d = DayIndex; d <= DayIndex + 1; ++d)
+	{
+		for (int32 i = 0; i < M; ++i)
+		{
+			const double PassTime = (double)d * Schedule.DaySeconds + Schedule.DepartureSeconds[i] + OffsetToStopSeconds;
+			const double Until = PassTime - ServiceSeconds;
+			if (Until >= 0.0) { Cand.Add(Until); }
+		}
+	}
+	Cand.Sort();
+	const int32 K = FMath::Min(MaxCount, Cand.Num());
+	for (int32 i = 0; i < K; ++i) { OutSecondsUntil.Add(Cand[i]); }
+}
