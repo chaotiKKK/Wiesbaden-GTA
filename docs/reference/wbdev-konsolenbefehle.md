@@ -170,6 +170,10 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 - **Log-Nachweis:**
   - Erfolg: `WbDev: WbHeliFly - Flugprofil fuer <s> s gestartet.`
   - Kein Heli (Warning): `WbDev: WbHeliFly erkannt, aber kein Helikopter besessen (erst WbHeli).`
+  - In-Flight-Telemetrie des Test-Harness (Kategorie `LogWbVehicles`, je Sekunde): `WbDev Mast t=...`
+    (Rotor-RPM gegen die tatsaechlich gemessene Nabendrehung, Naben- und Blatt-Drehpunkte zur
+    Mastachse, Blattachsen, Blattstern-Mitte) und `WbDev Kamera t=...` (Modus, Abstand, Blicklage
+    gegen die Rumpflage). Eine echte Spielsitzung mit Auswertung faehrt `Tools/flight_check.cmd`.
 
 ## WbDrive
 

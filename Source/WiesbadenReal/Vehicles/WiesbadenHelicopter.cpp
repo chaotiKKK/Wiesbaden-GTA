@@ -496,6 +496,87 @@ float AWiesbadenHelicopter::GetMainRotorRpm() const
 	return RotorPhysics.MainRotorRpm;
 }
 
+FWiesbadenHeliMastSample AWiesbadenHelicopter::SampleRotorMast() const
+{
+	FWiesbadenHeliMastSample Sample;
+	Sample.MainRotorRpm = RotorPhysics.MainRotorRpm;
+
+	if (!MainRotorHub || !LowerRotorHub)
+	{
+		// Wuerfel-Rueckfall ohne Rotor-Naben: nichts zu messen.
+		return Sample;
+	}
+
+	const FVector ActorUp = GetActorUpVector();
+	const FVector ActorLoc = GetActorLocation();
+	const FVector MainHub = MainRotorHub->GetComponentLocation();
+	const FVector LowerHub = LowerRotorHub->GetComponentLocation();
+
+	// Seitenabstand eines Punktes zu einer Achse (Aufpunkt + Richtung).
+	auto LateralCm = [](const FVector& Point, const FVector& AxisPoint, const FVector& AxisDir) -> float
+	{
+		const FVector Delta = Point - AxisPoint;
+		return static_cast<float>((Delta - FVector::DotProduct(Delta, AxisDir) * AxisDir).Size());
+	};
+
+	// Winkel zweier Richtungen in Grad (0 = gleichgerichtet, 90 = abgeknickt).
+	auto AngleDeg = [](const FVector& A, const FVector& B) -> float
+	{
+		const double Cos = FVector::DotProduct(A.GetSafeNormal(), B.GetSafeNormal());
+		return static_cast<float>(FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Cos, -1.0, 1.0))));
+	};
+
+	Sample.MainHubOffsetCm = LateralCm(MainHub, ActorLoc, ActorUp);
+	Sample.LowerHubOffsetCm = LateralCm(LowerHub, ActorLoc, ActorUp);
+	Sample.MastTiltDeg = AngleDeg(MainHub - LowerHub, ActorUp);
+
+	Sample.MainAzimuthDeg = FRotator::ClampAxis(MainRotorHub->GetRelativeRotation().Yaw);
+	Sample.LowerAzimuthDeg = FRotator::ClampAxis(LowerRotorHub->GetRelativeRotation().Yaw);
+
+	// Die Blaetter haengen in der Nabe; ihr Drehpunkt (Komponenten-Ursprung) muss
+	// auf der Nabenachse liegen. Gemessen wird der DREHPUNKT, nicht der
+	// Bounding-Box-Mittelpunkt - der wandert bei einem drehenden Blattstern mit
+	// der Drehlage um bis zu 0,25 * Radius und wuerde eine Kreisbahn vortaeuschen.
+	// Geometrie-Mitte des Blattsterns, im RUMPF-Frame und als MOMENTAUFNAHME.
+	//
+	// Gemessen wird der WELT-Mittelpunkt der Komponenten-Bounds (die Engine zieht
+	// das AABB jeden Bild neu auf): er wandert bei einem drehenden Stern mit der
+	// Drehlage um die echte Sternmitte. Der MITTELWERT ueber eine volle Drehung ist
+	// darum die Sternmitte - und weil hier der RUMPF-Frame steht (der nicht mit dem
+	// Rotor dreht), mittelt der Aufrufer die Momentaufnahmen einfach. Die Aufloesung
+	// liegt bei etwa (0,25 * Rotorradius) / Anzahl Bilder, also bei ~5 cm.
+	//
+	// FALLE: der Anker der MESH-Bounding-Box (Mesh->GetBoundingBox().GetCenter())
+	// taugt NICHT. Er ist ein starrer Punkt der Nabe und misst nur die Asymmetrie
+	// des Sterns im eigenen AABB - beim Ka-52-Rotor 1,8 m, ohne dass irgendetwas
+	// schief sitzt.
+	auto BladeCentreInBodyCm = [this](const UStaticMeshComponent* Comp) -> FVector
+	{
+		if (!Comp)
+		{
+			return FVector::ZeroVector;
+		}
+		return GetActorTransform().InverseTransformPosition(Comp->Bounds.Origin);
+	};
+
+	if (MainRotorBlade)
+	{
+		const FVector HubUp = MainRotorHub->GetUpVector();
+		Sample.MainBladeOffsetCm = LateralCm(MainRotorBlade->GetComponentLocation(), MainHub, HubUp);
+		Sample.MainSpinTiltDeg = AngleDeg(MainRotorBlade->GetUpVector(), HubUp);
+		Sample.MainBladeCentreInBodyCm = BladeCentreInBodyCm(MainRotorBlade);
+	}
+	if (LowerRotorBlade)
+	{
+		const FVector HubUp = LowerRotorHub->GetUpVector();
+		Sample.LowerBladeOffsetCm = LateralCm(LowerRotorBlade->GetComponentLocation(), LowerHub, HubUp);
+		Sample.LowerSpinTiltDeg = AngleDeg(LowerRotorBlade->GetUpVector(), HubUp);
+		Sample.LowerBladeCentreInBodyCm = BladeCentreInBodyCm(LowerRotorBlade);
+	}
+
+	return Sample;
+}
+
 float AWiesbadenHelicopter::GetAirspeedKmh() const
 {
 	// Nur die waagerechte Komponente: das Steigen zaehlt der Variometer, nicht

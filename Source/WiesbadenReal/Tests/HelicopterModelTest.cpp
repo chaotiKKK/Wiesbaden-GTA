@@ -61,6 +61,11 @@ bool FHelicopterModelTest::RunTest(const FString& Parameters)
 		{ TEXT("LowerRotorBlade"), TEXT("Rotor_Lower") },
 	};
 
+	// Sammelt die GEMESSENEN Ist-Werte (nicht die erwarteten) fuer die
+	// Zusammenfassungszeile am Ende: ein gruener Lauf soll ohne Log-
+	// Quervergleich belegen, WAS tatsaechlich an den Komponenten haengt.
+	TArray<FString> Ist;
+
 	bool bAnyMesh = false;
 	for (const FExpect& E : Expected)
 	{
@@ -78,30 +83,55 @@ bool FHelicopterModelTest::RunTest(const FString& Parameters)
 			// (das Mesh entsteht erst durch Tools/import_ka52.cmd).
 			AddInfo(FString::Printf(TEXT("%s ohne Mesh - Tools/import_ka52.cmd laufen lassen"),
 				E.Component));
+			Ist.Add(FString::Printf(TEXT("%s=OHNE_MESH"), E.Component));
 			continue;
 		}
 		bAnyMesh = true;
+		Ist.Add(FString::Printf(TEXT("%s=%s"), E.Component, *Mesh->GetName()));
 
 		TestEqual(FString::Printf(TEXT("%s traegt %s"), E.Component, E.Mesh),
 			Mesh->GetName(), FString(E.Mesh));
 
 		// Material: jeder Slot muss das PBR tragen (leere Slots bleiben grau).
+		// Die Ist-Zeile zaehlt die Namen aus, damit ein leerer Slot auch bei
+		// gruenem Lauf sichtbar bleibt (z.B. "Slots=10 [M_Ka52PBR x9]").
+		TMap<FString, int32> MatCounts;
 		for (int32 Slot = 0; Slot < Mesh->GetStaticMaterials().Num(); ++Slot)
 		{
 			UMaterialInterface* Mat = Mesh->GetStaticMaterials()[Slot].MaterialInterface;
 			TestNotNull(FString::Printf(TEXT("%s Slot %d hat ein Material"), E.Mesh, Slot), Mat);
 			if (Mat)
 			{
+				MatCounts.FindOrAdd(Mat->GetName())++;
 				TestEqual(FString::Printf(TEXT("%s Slot %d = M_Ka52PBR"), E.Mesh, Slot),
 					Mat->GetName(), FString(TEXT("M_Ka52PBR")));
 			}
 		}
+
+		TArray<FString> MatTexte;
+		for (const TPair<FString, int32>& P : MatCounts)
+		{
+			MatTexte.Add(FString::Printf(TEXT("%s x%d"), *P.Key, P.Value));
+		}
+		Ist.Add(FString::Printf(TEXT("%s Slots=%d [%s]"), E.Mesh,
+			Mesh->GetStaticMaterials().Num(), *FString::Join(MatTexte, TEXT(", "))));
 	}
+
+	// Die Ist-Zeile geht per UE_LOG statt AddInfo ins Log: AddInfo-Events
+	// erscheinen im headless-Lauf nur als leere BeginEvents/EndEvents-Zeile
+	// ("Automation RunTests"), die Zeile hier steht in JEDEM Lauf im Log.
+	const auto LogIst = [&Ist](const TCHAR* Suffix)
+	{
+		UE_LOG(LogTemp, Display, TEXT("HelicopterModell-Ist: %s%s"),
+			*FString::Join(Ist, TEXT(" | ")), Suffix);
+	};
 
 	if (!bAnyMesh)
 	{
 		// Ohne Modell sind die Geometrie-Pruefungen sinnlos - der Hinweis oben
-		// sagt, wie das Mesh entsteht.
+		// sagt, wie das Mesh entsteht. Die Ist-Zeile steht trotzdem im Log,
+		// damit ein gruener Lauf hier nicht als "geprueft" missverstanden wird.
+		LogIst(TEXT(" (ohne importiertes Mesh - nur Hinweise)"));
 		return true;
 	}
 
@@ -123,6 +153,9 @@ bool FHelicopterModelTest::RunTest(const FString& Parameters)
 			TestTrue(FString::Printf(TEXT("Rumpf-Unterkante z=%.1f cm (erwartet ~0)"),
 				Mesh->GetBoundingBox().Min.Z),
 				FMath::Abs(Mesh->GetBoundingBox().Min.Z) < 10.0);
+
+			Ist.Add(FString::Printf(TEXT("Rumpf %.0fx%.0fx%.0f cm (X/Y/Z), Sohle z=%.1f"),
+				Size.X, Size.Y, Size.Z, Mesh->GetBoundingBox().Min.Z));
 		}
 	}
 
@@ -162,8 +195,14 @@ bool FHelicopterModelTest::RunTest(const FString& Parameters)
 		// Nabenhoehen des Neubaus (z 495 / 376,5 cm), Abstand ~118 cm.
 		TestTrue(FString::Printf(TEXT("%s: Nabenhoehe %.1f cm (erwartet 370..500)"),
 			R.Key, HubLoc.Z), HubLoc.Z > 370.0 && HubLoc.Z < 500.0);
+
+		Ist.Add(FString::Printf(TEXT("%s Nabe z=%.1f, Blatt-z=%.1f, XY-Offset=%.2f cm"),
+			R.Key, HubLoc.Z, BladeLoc.Z, OffsetXY));
 	}
 
+	// Eine Zeile, alles drin: Mesh-Namen, Material je Slot, Rumpfmasse,
+	// Nabenhoehen und Achsabstand - der Beleg fuer den gruenen Lauf.
+	LogIst(TEXT(""));
 	return true;
 }
 

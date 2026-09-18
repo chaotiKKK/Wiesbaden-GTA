@@ -2133,8 +2133,16 @@ Stand 17.09.2026: Gate 1 gruen (`Result: Succeeded`, inkrementell ~3 s),
 haelt die Ka-52-Bindung fest (Mesh-Namen, Material je Slot, Rumpfmasse,
 `Blatt-z = -Nabenhoehe`, XY-Abstand 0 zur Mastachse). Einschraenkung: fehlt das
 Mesh (frischer Checkout ohne `Tools\import_ka52.cmd`), meldet er nur einen
-Hinweis und ist trotzdem gruen - ein gruener Lauf ist erst zusammen mit
-0x "ohne Mesh" im Log aussagekraeftig.
+Hinweis statt Fehler. Seit 18.09.2026 schreibt er seine GEMESSENEN Ist-Werte als
+EINE Zeile ins Log (`grep HelicopterModell-Ist`, Praefix `LogTemp: Display:`):
+Mesh-Name je Komponente, Material je Slot als `Slots=10 [M_Ka52PBR x10]` (ein
+leerer Slot faellt so auch bei gruenem Lauf auf), Rumpfmasse + Sohle,
+Nabenhoehe/Blatt-z/XY-Offset je Rotor - ein gruener Lauf ist damit ohne
+Quervergleich lesbar. Der Mesh-fehlt-Fall steht als
+`=OHNE_MESH ... (ohne importiertes Mesh - nur Hinweise)` da.
+**FALLE:** `AddInfo` erreicht den kopflosen `Automation RunTests`-Lauf NICHT
+(`BeginEvents:`/`EndEvents:` bleiben leer; in einem alten Mehrfach-Lauf tauchten
+AddInfo-Zeilen noch auf) - Zusammenfassungen per `UE_LOG` schreiben.
 
 ## Bus-Mitfahrt: der Anker trug die MESH-Rotation - die Kamera stand neben dem Bus (17.09.2026)
 
@@ -2329,6 +2337,14 @@ die Variable schaltet genau die Umschreibung ab, die `//c` zu `/c` macht. Richti
 BRAUCHT `MSYS2_ARG_CONV_EXCL='*'`, sonst wird `/Game/Maps/<Karte>` zu
 `C:/Program Files/Git/Game/Maps/<Karte>` und der Lauf endet nach 2 s ohne Karte
 (im Log sichtbar als `LogInit: Command Line:` mit dem Git-Pfad).
+**Symptom, das in die Irre fuehrt (18.09.2026):** der Prozess endet dabei NICHT, sondern
+stellt ein MODALES Fenster `Message` - "The map specified on the commandline ... could not be
+found. Would you like to load the default map instead?" - und wartet auf einen Klick. Von aussen
+sieht das wie ein haengender Editor aus: ~5 GB RAM, Fenster `Message`, und die mit `>` umgeleitete
+Logdatei bleibt 0 Byte, weil der Lauf den Weltstart nie erreicht. Also: haengender UnrealEditor
+mit leerem Log = erst die Kommandozeile im Projektlog (`LogInit: Command Line:`) ansehen, ob ein
+Git-Pfad darin steht - und die Leiche mit `Stop-Process` wegraeumen, sonst blockiert sie den
+naechsten Lauf (auch die Default-Karte wird dann nicht geladen).
 
 ## Gebackene Karte: KEINE Fahrbahn-Kollision - Boden kommt aus dem Strassennetz
 - Der vertikale Boden-Trace traf in JEDER Probe beider Buslinien (132/132) nur das
@@ -2596,3 +2612,80 @@ BRAUCHT `MSYS2_ARG_CONV_EXCL='*'`, sonst wird `/Game/Maps/<Karte>` zu
   START mit seinem eigenen Log (ein Lauf gegen 00:44 loeschte die Warnzeilen des Spiel-Laufs von
   00:40, bevor das Skript sie lesen konnte). Gegenmittel: das Spiel-Log vorher wegkopieren
   (`material_flags_source.log`) UND den Commandlet mit `-ABSLOG=` auf eine eigene Datei legen.
+
+## Flugpruefung in echter Spielsitzung: Rotor-RPM, Mastachse, Kamera (18.09.2026)
+
+- **Werkzeug:** `Tools\flight_check.cmd "<ExecCmds>" <Name> [MinSeconds]` ->
+  `Tools/flight_check.ps1`: startet EINE echte Spielsitzung (`-game -windowed -resx=1280`,
+  Default-Map `WiesbadenCity_Alkis15`), wartet auf genug Messpunkte, beendet sie. Die Quotes um
+  `-ExecCmds` MUSS das Skript setzen (in `Start-Process -ArgumentList` gehen sie sonst verloren,
+  dann laeuft nur das erste Wort und der Editor idlet endlos - genau die Falle aus dem
+  Automation-Test-Runner). Engine/Build-PAARUNG: Gate 1 baut mit der INSTALLIERTEN Engine
+  (`C:\Program Files\Epic Games\UE_5.8`), die Sitzung startet darum DIESELBE `UnrealEditor.exe` -
+  nicht die freebuff-Kopie (shared PCH, siehe `Tools\build_gate1.cmd`).
+- **Messnaht:** `FWiesbadenHeliMastSample` + `IWiesbadenHeliControl::SampleRotorMast()`
+  (`Vehicles/WiesbadenVehicleControl.h`, Implementierung im Heli) liefert die GEOMETRIE-Wahrheit
+  (Naben-/Blatt-Drehpunkte, Drehlagen, Blattachsen), `UWiesbadenVehicleTestHarness` sammelt sie je
+  Bild und loggt je Sekunde `WbDev Mast t=` und `WbDev Kamera t=` (beide `LogWbVehicles`, NICHT in
+  der Doku-Drift-Pruefung - die sieht nur `WbDev:`-Literale des PlayerControllers).
+- **Gemessen 18.09. (Sitzungen a4 / followbank / orbit4, Logs `Saved/Logs/wb_flight_*.log`):**
+  RPM 327-341 -> Naben-Drehung gemessen +1983/-1983 Grad/s gegen Soll +1983 (99,9 %, gegenlaeufig),
+  Naben 0.0/0.0 cm ab Mastachse, Blatt-Drehpunkte 0.0/0.0 cm ab Nabe, Stange 0.00 Grad,
+  Blattachsen 0.00/0.00 Grad - in JEDER Lage (auch 35 Grad Roll). Kamera: Follow ~1500-1550 cm
+  Abstand, Blick Nick konstant -10 Grad bei Rumpf-Nick -8..-36 Grad (Horizont ruhig, Roll des
+  Blicks -0.0 Grad, Gierfehler 0.0 Grad); Cockpit 203 cm und Blick Nick = Rumpf-Nick (starr mit
+  der Zelle); Orbit ~1450-1520 cm, Horizont ebenfalls ruhig.
+- **FALLE Blattstern-Mitte:** der Anker der MESH-Bounding-Box (`Mesh->GetBoundingBox().GetCenter()`,
+  mit der Komponententransformation gedreht) ist ein STARRER Punkt der Nabe und misst nur die
+  AABB-Asymmetrie des Sterns - beim Ka-52-Rotor konstant 179.5/186.1 cm, ohne dass irgendetwas
+  schief sitzt. Richtig ist der WELT-Mittelpunkt der Komponenten-Bounds (`Comp->Bounds.Origin`,
+  die Engine zieht das AABB je Bild neu): der wandert mit der Drehlage, und sein MITTELWERT ueber
+  eine Drehung ist die Sternmitte. Aufloesung ~ (0,25 * Rotorradius)/Bilder, hier 2-15 cm bei
+  ~90 Bildern/s - ein echter Versatz (1,8-m-Klasse) waere unuebersehbar. Im RUMPF-Frame messen,
+  nicht im mitdrehenden Naben-Frame; erst der Aufrufer mittelt (der Heli liefert Momentaufnahmen).
+- **BEFUND Kamera-Ausleger im Steilbank (Wiederholbar 6/6 Sitzungen):** bei Roll ~ -33 Grad
+  (Rollumkehr im nudge-bankierten Profil, immer bei t=7 s) kollabiert der Kamera-Abstand EINEN
+  Messpunkt lang auf 96-99 cm (statt ~1500) - in Follow UND Orbit, nicht im Cockpit. Verdacht:
+  Federarm-Kollisionstest gegen die eigene Zelle/die `CollisionSphere` (Radius 160 bei z=130), die
+  beim Kreuzen der Rollachse in den Strahl kommt. Kein Mast-/Rotorfehler; Fix waere die eigene
+  Zelle aus dem Kamera-Trace zu nehmen (bDoCollisionTest/Owner-Ignore) - NICHT blind die
+  `CollisionSphere` verkleinern (sie traegt die Boden-/Kollisionslogik).
+- **Reihenfolge der Sessions ist egal, aber:** `WbHeli` MUSS vor `WbCam`/`WbHeliFly` stehen (alles
+  laeuft im selben Frame der Deferred-Exec-Kette durch); der Heli ist beim ersten Frame schon
+  abgesetzt (GameMode-BeginPlay), `WbHeli` greift also sofort.
+
+## Kompletter Stadt-Bake: Rezept, Dauer, und was er NICHT braucht (18.09.2026)
+
+- **Rezept in EINER Datei:** `rebake_alkis16.cmd` (Muster fuer jeden Neubau; die alten
+  `rebake_alkis10..13.cmd`/`rebake_lod2.cmd` sind nur noch Beispiele). Quelle ist die zuletzt
+  gebackene Karte, Ziel eine NEUE (`WB_SOURCE_MAP`/`WB_TARGET_MAP`) - ein Bake ueberschreibt nie
+  die gespielte Stadt. Dauer mit dem VOLLEN Editor: 920 s fuer 2010 Kacheln, 1,43 Mio. Region-Assets
+  (Speicherspitze ~19 GB bei 31,7 GB Maschinen-RAM; der Commandlet-Weg starb an 42 GiB virtuell).
+  Alle Datenquellen explizit per Env, weil `rebuild_city.py` sie set-and-verify prueft und bei
+  einem nicht greifenden Override ABBRICHT: `WB_OSM_FILE` (Original + nachgeholte Wald-Relationen),
+  `WB_ALKIS_FILE` (LoD2-Hoehen/Daecher), `WB_DEM_FILE` (DGM1; setzt `import_dem` mit auf True),
+  `WB_USE_OSM_TREES=1`, `WB_MAX_SEGMENT_CM=220`.
+- **Fertig erkennt man den Lauf NICHT am Prozess**, sondern an der neuen Zeile in
+  `Saved/BuildHistory/CityBuilds.csv` (`MapPath`, `Result=ok`) und an
+  `###WBSTADT### FERTIG - Karte ... liegt vor.` im `rebake_alkis16.log`; Ausgabe kommt gepuffert,
+  die Datei kann minutenlang 0 Byte bleiben - am RAM-Wachstum des Editors weiterarbeiten.
+- **Die Pipeline setzt die neue Karte SELBST als Default** (`Config/DefaultEngine.ini`:
+  `GameDefaultMap` + `EditorStartupMap`) - die Aenderung steht danach im `git status` und gehoert
+  mit in den Commit. Getrackt ist nur die `Content/Maps/*.umap` (~13 KB, Huelle + WorldBuilder);
+  die ~2000 externen Actor-Pakete (`Content/__ExternalActors__`, 1,9 GB) und die 3431
+  Chunk-Meshes (`Content/Generated/`) sind per .gitignore draussen - ein frischer Checkout braucht
+  weiterhin einen Bake.
+- **KEIN Anker-Pass nach einem frischen Bake:** `AnchorStreamingBounds()` laeuft im Build-Pfad
+  jeder Kachel (`BakeToStaticMeshes`) und noch einmal in `BeginPlay`. Gegenprobe im Spiel ist die
+  Streaming-Diagnose: `Diagnose: Spieler bei (...); geladene Chunks Distanz 60..1831 m, davon
+  **0 jenseits 2 km**, 0 jenseits 4 km.` (`Tools/anchor_chunk_bounds.py` bleibt nur fuer Karten
+  noetig, die VOR diesem Fix gebacken wurden.)
+- **Zwei Fallen beim Belegbild einer neuen Karte:** `-unattended` startet keinen GameMode -
+  dann fehlen die Laufzeit-Actors (keine `Liniendatei ... gelesen`-Zeile, keine Nerobergbahn) und
+  es sieht aus, als haette die neue Karte keinen Inhalt; und `-WbScreenshot` feuert schon beim
+  Weltstart, also VOR `Bringing World ... up for play` - das Luftbild ist schwarz (350 KB statt
+  ~1,7 MB). Richtig ist `-WbShotWhenReady -WbCamHeight=<m>` (wartet auf `IsCityReady()`,
+  Settle-Countdown, dann EIN HighResShot, danach Selbstende) - so macht es `shot_alkis16.cmd`.
+  Gegenprobe, dass die Karte traegt: `Bringing World ...Alkis16 up for play`,
+  `Liniendatei line3/line6.json gelesen`, `Strang): 9559 Primitive-Komponenten ... 573
+  Instanz-Komponenten mit 716593 Instanzen`, 0 Zeilen `missing usage flag`.

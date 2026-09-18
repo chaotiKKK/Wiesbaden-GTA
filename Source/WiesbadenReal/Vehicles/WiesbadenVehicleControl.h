@@ -44,6 +44,69 @@ struct FWiesbadenHeliControl
 	bool bEngine = true;
 };
 
+/**
+ * Momentaufnahme der Mastachse (Rotor-Montage) eines Hubschraubers.
+ *
+ * Warum es diese Messung gibt: die Rotoren eines Koaxial-Hubschraubers sitzen
+ * auf EINER Stange. Faellt beim Bau ein Versatz an - Blatt-Drehpunkt neben der
+ * Nabe oder Nabe neben dem Rumpfursprung -, laufen die Blaetter nicht um die
+ * Stange, sondern um einen Punkt daneben: im Bild eine Kreisbahn.
+ *
+ * Gemessen werden nur DREHPUNKTE (Komponenten-Ursprünge), nie Bounding-Boxen:
+ * der Mittelpunkt der Bounding-Box eines drehenden Blattsterns wandert mit der
+ * Drehlage um bis zu 0,25 * Radius und wuerde eine Kreisbahn vortaeuschen.
+ *
+ * Alle Abstaende sind SEITLICH gemessen (senkrecht zur jeweiligen Achse) - die
+ * Hoehe AUF der Stange ist gewollt und darf die Pruefung nicht faerben.
+ */
+struct FWiesbadenHeliMastSample
+{
+	/** Hauptrotor-Drehzahl aus der Physik (U/min). */
+	float MainRotorRpm = 0.0f;
+
+	/** Drehlage des oberen/unteren Rotorsterns relativ zum Rumpf, 0..360 Grad. */
+	float MainAzimuthDeg = 0.0f;
+	float LowerAzimuthDeg = 0.0f;
+
+	/** Seitenabstand Naben-Drehpunkt -> Mastachse durch den Rumpfursprung (cm). */
+	float MainHubOffsetCm = 0.0f;
+	float LowerHubOffsetCm = 0.0f;
+
+	/** Seitenabstand Blatt-Drehpunkt -> Naben-Drehpunkt (cm); der Kreisbahn-Detektor. */
+	float MainBladeOffsetCm = 0.0f;
+	float LowerBladeOffsetCm = 0.0f;
+
+	/**
+	 * Blattstern-Mitte im RUMPF-Frame (cm): x/y quer zur Mastachse, z auf der Stange.
+	 *
+	 * Der Drehpunkt kann auf der Stange sitzen, waehrend das Netz daneben
+	 * gezeichnet ist - dann laeuft der Stern trotzdem um einen Punkt neben der
+	 * Stange. Dieser Wert misst die GEOMETRIE und ist darum der Kreisbahn-Detektor.
+	 *
+	 * ACHTUNG, Momentaufnahme: der WELT-Mittelpunkt der Blatt-Bounds wandert bei
+	 * einem drehenden Stern mit der Drehlage um bis zu 0,25 * Rotorradius um die
+	 * echte Mitte (ein Stern ist nicht drehinvariant). Erst der MITTELWERT ueber
+	 * eine volle Drehung ist die Sternmitte - und weil hier der RUMPF-Frame steht
+	 * (nicht der mitdrehende Naben- oder Welt-Frame), mittelt die Messstelle die
+	 * Momentaufnahmen einfach. Darum liefert der Heli nur den Wert, die Statistik
+	 * macht der Aufrufer (Harness/Tests). Aufloesung ~ (0,25 * Radius) / Bilder,
+	 * in der Praxis ~5 cm - ein Versatz ab ~10 cm ist sicher erkennbar.
+	 *
+	 * NICHT verwenden: den Anker der Mesh-Bounding-Box. Der ist ein starrer Punkt
+	 * der Nabe und misst nur die AABB-Asymmetrie des Sterns (hier 1,8 m), ohne
+	 * dass irgendetwas schief sitzt.
+	 */
+	FVector MainBladeCentreInBodyCm = FVector::ZeroVector;
+	FVector LowerBladeCentreInBodyCm = FVector::ZeroVector;
+
+	/** Winkel der Naben-Stange gegen die Rumpf-Hochachse (Grad). */
+	float MastTiltDeg = 0.0f;
+
+	/** Winkel der Blatt-Drehachse gegen die Naben-Hochachse (Grad). */
+	float MainSpinTiltDeg = 0.0f;
+	float LowerSpinTiltDeg = 0.0f;
+};
+
 // ---------------------------------------------------------------------------
 // Interface-FAMILIE der externen Steuernaht.
 //
@@ -154,4 +217,10 @@ public:
 
 	/** Momentane Gierrate in Grad/s. */
 	virtual float GetYawRateDegPerSec() const = 0;
+
+	/** Aktuelle Hauptrotor-Drehzahl (U/min). */
+	virtual float GetMainRotorRpm() const = 0;
+
+	/** Momentaufnahme der Mastachse/Rotormontage (Welt) - fuer Harness, KI und Werkzeuge. */
+	virtual FWiesbadenHeliMastSample SampleRotorMast() const = 0;
 };
