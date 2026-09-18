@@ -269,6 +269,8 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "10.0"))
 	double MaxDecelerationCmS2 = 800.0;
 
+	// (Die Regel dazu steht als RequiredLaneChangeGapCm weiter unten.)
+
 	/** True: Fahrzeuge duerfen zum Ueberholen die Spur wechseln. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
 	bool bAllowLaneChange = true;
@@ -281,14 +283,54 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	double LaneChangeSpeedDeficit = 0.7;
 
 	/**
-	 * Mindestluecke nach vorn UND nach hinten auf der Zielspur in cm.
+	 * UNTERGRENZE der Luecke nach vorn UND nach hinten auf der Zielspur in cm.
 	 *
 	 * Nach hinten ist genauso wichtig wie nach vorn: Wer vor einen schnelleren
 	 * Nachfolger zieht, loest dort dieselbe Bremswelle aus, der er selbst
 	 * entkommen wollte.
+	 *
+	 * DIESER WERT WAR DER GRUND, WARUM NIE UEBERHOLT WURDE. Er stand auf
+	 * 1400 cm - doppelt so viel wie der Folgeabstand MinGapCm (700 cm), den
+	 * die Simulation im fliessenden Verkehr selbst herstellt. Damit verlangte
+	 * die Regel eine Luecke, die doppelt so gross ist wie jede Luecke, die
+	 * ueberhaupt entsteht: in einer Kolonne existierte sie nirgends. Gemessen
+	 * scheiterten 393.957 von 594.580 Anlaeufen (66 %) genau hier, waehrend in
+	 * 95 Sekunden ganze 59 Spurwechsel zustande kamen.
+	 *
+	 * Jetzt ist es die Untergrenze im Stand; darueber zaehlt die Zeitluecke
+	 * (siehe LaneChangeGapSeconds).
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "100.0"))
-	double LaneChangeMinGapCm = 1400.0;
+	double LaneChangeMinGapCm = 700.0;
+
+	/**
+	 * Geforderte Zeitluecke zur Zielspur in Sekunden.
+	 *
+	 * Eine feste Strecke ist an beiden Enden falsch: 14 m sind bei 15 km/h
+	 * dreieinhalb Sekunden (viel zu zaghaft, man kommt nie hinein) und bei
+	 * 80 km/h eine halbe Sekunde (viel zu dreist). Die Zeitluecke stimmt bei
+	 * beiden Tempi - genau so schaetzen Fahrer eine Luecke auch ab.
+	 *
+	 * Nach vorn zaehlt das eigene Tempo, nach hinten das des Nachfolgers: er
+	 * ist derjenige, der bremsen muss.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "0.1"))
+	double LaneChangeGapSeconds = 1.2;
+
+	/**
+	 * Vorausschau in Sekunden: ab wann ein Fahrzeug einen Wechsel ERWAEGT.
+	 *
+	 * Bisher zog ein Fahrzeug erst hinaus, wenn es bereits unter 70 % seines
+	 * Wunschtempos war - also wenn es schon eingeklemmt ist und die Luecken
+	 * ringsum laengst zu sind. Gemessen scheiterten dann 92 % der Anlaeufe
+	 * daran, dass auch die Nebenspur vorn dicht war. Ein Fahrer wechselt
+	 * frueher: sobald er sieht, dass er auf einen Langsameren auflaeuft, und
+	 * solange die Luecke noch da ist.
+	 *
+	 * 0 schaltet die Vorausschau ab (dann gilt nur das Tempodefizit).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "0.0"))
+	double LaneChangeLookAheadSeconds = 4.0;
 
 	/** Sperrzeit zwischen zwei Spurwechseln desselben Fahrzeugs in Sekunden. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "0.0"))
@@ -407,6 +449,41 @@ struct WIESBADENREAL_API FWiesbadenTrafficReport
 	/** Spurwechsel (Ueberholvorgaenge) im letzten Tick. */
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	int32 LaneChangesThisTick = 0;
+
+	// -- Warum NICHT gewechselt wurde (letzter Tick) --------------------------
+	//
+	// Ein einzelner Tick-Zaehler beantwortet die Frage nicht, um die es geht.
+	// Bei 4 s Sperrzeit je Fahrzeug ist "0 Spurwechsel in diesem Tick" auch
+	// dann der Normalfall, wenn das Ueberholen tadellos laeuft - die Zahl kann
+	// "passiert nie" und "passiert selten" gar nicht unterscheiden. Die
+	// folgenden Zaehler zerlegen das Nein in seine Gruende, und erst damit
+	// laesst sich sagen, WO es haengt.
+
+	/** Fahrzeuge, die langsam genug und nicht gesperrt waren. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 LaneChangeCandidates = 0;
+
+	/** Davon: keine Nachbarspur in derselben Richtung vorhanden. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 LaneChangeNoNeighbour = 0;
+
+	/** Davon: Nachbarspur vorhanden, aber Luecke vorn oder hinten zu klein. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 LaneChangeBlockedByGap = 0;
+
+	/** Davon: Luecke gross genug, aber kein spuerbarer Gewinn. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 LaneChangeNoGain = 0;
+
+	/** Von den Luecken-Ablehnungen: nur vorn zu eng / nur hinten / beides. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 LaneChangeTightAheadOnly = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 LaneChangeTightBehindOnly = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 LaneChangeTightBoth = 0;
 };
 
 /**
@@ -486,7 +563,71 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	 *  Verbindung angehalten wurde bzw. eine solche ueberhaupt anfuhr. Erlaubt der
 	 *  Diagnose, "Kopplung defekt" von "keine Ampel auf den befahrenen Spuren" zu
 	 *  unterscheiden (nur ~5% der Kreuzungen sind Ampeln). */
+	// -- Stau-Karte: Fluss je Strasse ueber den ganzen Lauf -------------------
+	//
+	// Eine Momentaufnahme ("diese zehn Fahrzeuge stehen gerade") sagt nicht,
+	// WO die Stadt klemmt - das naechste Bild zeigt zehn andere. Erst die
+	// Summe ueber viele Sekunden trennt den Ort, an dem es immer steht, von
+	// dem, an dem gerade zufaellig jemand bremst.
+
+	/** Fluss-Messung einer Spur ueber den ganzen Lauf. */
+	struct FLaneFlowSample
+	{
+		/** Fahrzeug-Ticks auf dieser Spur (nicht Fahrzeuge - dieselben zaehlen mehrfach). */
+		int32 Samples = 0;
+		/** Davon unter 5 km/h trotz Fahrwunsch. */
+		int32 Stalled = 0;
+		/** Summe der Geschwindigkeiten, fuer den Mittelwert. */
+		double SpeedSumCmS = 0.0;
+		/** Tempolimit dieser Spur (cm/s) - der Massstab fuer "fliesst". */
+		double LimitCmS = 0.0;
+	};
+
+	/**
+	 * Fluss je Spur mitschreiben. Kostet eine Map-Suche je Fahrzeug und Tick,
+	 * deshalb nur auf Anforderung (-WbStauKarte).
+	 */
+	bool bCollectLaneFlow = false;
+
+	/** Die gesammelten Messwerte, LaneId -> Fluss. */
+	const TMap<int32, FLaneFlowSample>& GetLaneFlow() const { return LaneFlow; }
+
+	/**
+	 * Schreibt Netz und Stau-Messwerte als Textdatei fuer die Karte.
+	 *
+	 * Zwei Abschnitte: NETZ (alle Spuren als Linie, der graue Stadtplan) und
+	 * STAU (je gemessener Spur Ort, Mitteltempo, Limit, Steher-Anteil).
+	 * Gibt die Zahl der geschriebenen Stau-Zeilen zurueck, -1 bei Fehler.
+	 */
+	int32 WriteCongestionMap(const FString& Path, int32 MinSamples = 20) const;
+
 	int32 GetLifetimeVehiclesHeldAtRed() const { return LifetimeVehiclesHeldAtRed; }
+
+	/**
+	 * Spurwechsel seit dem Start der Simulation.
+	 *
+	 * Die Lebenszeit-Summe, nicht der Tick: nur sie beantwortet "wechselt der
+	 * Verkehr je die Spur?".
+	 */
+	int32 GetLifetimeLaneChanges() const { return LifetimeLaneChanges; }
+
+	/** Kandidaten und Ablehnungsgruende seit dem Start (fuer die Diagnose). */
+	void GetLifetimeLaneChangeReasons(int32& OutCandidates, int32& OutNoNeighbour,
+		int32& OutBlockedByGap, int32& OutNoGain) const
+	{
+		OutCandidates = LifetimeLaneChangeCandidates;
+		OutNoNeighbour = LifetimeLaneChangeNoNeighbour;
+		OutBlockedByGap = LifetimeLaneChangeBlockedByGap;
+		OutNoGain = LifetimeLaneChangeNoGain;
+	}
+
+	/** Aufschluesselung der zu engen Luecken: nur vorn / nur hinten / beides. */
+	void GetLifetimeTightSides(int32& OutAheadOnly, int32& OutBehindOnly, int32& OutBoth) const
+	{
+		OutAheadOnly = LifetimeTightAheadOnly;
+		OutBehindOnly = LifetimeTightBehindOnly;
+		OutBoth = LifetimeTightBoth;
+	}
 	int32 GetLifetimeVehiclesApproachingSignal() const { return LifetimeVehiclesApproachingSignal; }
 
 	/** Ehrliches, verkehrsUNABHAENGIGES Signal: war seit Initialize je eine von
@@ -548,6 +689,15 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	 *        (400 = 4 m/s^2, ein deutliches, aber nicht ruppiges Bremsen).
 	 * @return Die (ggf. verringerte) Geschwindigkeit in cm/s.
 	 */
+	/**
+	 * Geforderte Luecke zur Zielspur bei diesem Tempo (cm).
+	 *
+	 * Datenrein und statisch, damit die Regel direkt geprueft werden kann -
+	 * die Zahl entscheidet, ob ueberhaupt je ueberholt wird.
+	 */
+	static double RequiredLaneChangeGapCm(const FWiesbadenTrafficSettings& InSettings,
+		double SpeedCmS);
+
 	static double ComputeObstacleAwareSpeed(
 		double CurrentSpeedCmS,
 		const FVector& VehicleLocation,
@@ -811,8 +961,11 @@ private:
 	 */
 	double ComputeGapAheadOnLane(int32 LaneId, double AtDistanceCm, int32 IgnoreVehicleId) const;
 
-	/** Freie Strecke HINTER der Position - fuer den Spurwechsel. */
-	double ComputeGapBehindOnLane(int32 LaneId, double AtDistanceCm, int32 IgnoreVehicleId) const;
+	/** Freie Strecke HINTER der Position - fuer den Spurwechsel. Liefert
+	 *  zusaetzlich das Tempo des Nachfolgers: er muss bremsen, also gibt
+	 *  SEIN Tempo die noetige Zeitluecke vor, nicht das eigene. */
+	double ComputeGapBehindOnLane(int32 LaneId, double AtDistanceCm, int32 IgnoreVehicleId,
+		double* OutFollowerSpeedCmS = nullptr) const;
 
 	/** Ueberholen: behinderte Fahrzeuge auf eine freie Nachbarspur setzen. */
 	void ApplyLaneChanges(float DeltaSeconds);
@@ -832,6 +985,17 @@ private:
 
 	/** Seit Initialize aufsummierte Kennzahlen fuer die ehrliche Ampel-Diagnose. */
 	int32 LifetimeVehiclesHeldAtRed = 0;
+	int32 LifetimeLaneChanges = 0;
+	int32 LifetimeLaneChangeCandidates = 0;
+	int32 LifetimeLaneChangeNoNeighbour = 0;
+	int32 LifetimeLaneChangeBlockedByGap = 0;
+	int32 LifetimeLaneChangeNoGain = 0;
+	int32 LifetimeTightAheadOnly = 0;
+	int32 LifetimeTightBehindOnly = 0;
+	int32 LifetimeTightBoth = 0;
+
+	/** Fluss je Spur - nicht reflektiert, reine Laufzeit-Messung. */
+	TMap<int32, FLaneFlowSample> LaneFlow;
 	int32 LifetimeVehiclesApproachingSignal = 0;
 
 	/** Wurde seit Initialize je eine kontrollierte Verbindung rot beobachtet?
