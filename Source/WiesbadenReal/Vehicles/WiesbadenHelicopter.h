@@ -61,7 +61,16 @@ public:
 
 	/** Aktuelle Hauptrotor-Drehzahl (U/min). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli")
-	float GetMainRotorRpm() const;
+	float GetMainRotorRpm() const override;
+
+	/**
+	 * Mastachse/Rotormontage als Momentaufnahme (siehe FWiesbadenHeliMastSample).
+	 *
+	 * Der Heli kennt als einziger seine Naben- und Blatt-Komponenten; das
+	 * Urteil (Versatz zu gross? Blaetter laufen nicht um die Stange?) faellt
+	 * draussen - hier steht nur die Geometrie-Wahrheit.
+	 */
+	virtual FWiesbadenHeliMastSample SampleRotorMast() const override;
 
 	/**
 	 * Traegt der Heli das importierte Ka-52-Modell (statt der Wuerfel-Notloesung)?

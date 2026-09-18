@@ -9,6 +9,7 @@
 
 class IWiesbadenHeliControl;
 class IWiesbadenVehicleControl;
+struct FWiesbadenHeliMastSample;
 
 /**
  * Dev-Test-Harness: fuehrt ein Fahrzeug ueber seinen NORMALEN Steuereingang
@@ -53,6 +54,15 @@ private:
 	void TickHeliProfiles(float DeltaTime);
 	void TickDriveProfile(float DeltaTime);
 
+	// In-Flight-Telemetrie der Flugprobe, zwei Messgruppen:
+	//  - ROTOR/MASTACHSE: je Bild einsammeln (Maxima der Versaetze, Drehrate aus
+	//    den Drehlagen), je Sekunde EINE Zeile. Nur so faellt auf, ob die Blaetter
+	//    im Flug um die Stange laufen oder um einen Punkt daneben.
+	//  - KAMERA: Modus + die wirklich gerenderte Blicklage (PlayerCameraManager),
+	//    damit "Kamera folgt, Horizont bleibt ruhig" belegbar wird.
+	void AccumulateHeliTelemetry(float DeltaTime, const FWiesbadenHeliMastSample& Sample);
+	void LogHeliTelemetry(const IWiesbadenHeliControl& Heli, float ElapsedSeconds);
+
 	// Gier- und Flugprofil laufen UNABHAENGIG (und ggf. gleichzeitig), wie im
 	// urspruenglichen Entwurf: verschiedene Achsen, ein gemeinsamer Steuerbefehl
 	// je Bild. So kann der Rauchtest beide in einer Sitzung nachweisen.
@@ -70,4 +80,29 @@ private:
 	float DriveDuration = 0.0f;   // 0 = inaktiv
 	int32 DriveLastSecond = -1;
 	float DriveStartYaw = 0.0f;
+
+	// -- Mast-/Kamera-Telemetrie der laufenden Sekunde ---------------------
+	// Summen/Maxima werden je Sekunde geloggt und dann zurueckgesetzt.
+	float TelMainRateSum = 0.0f;   // aufsummierte Drehung oben (Grad)
+	float TelLowerRateSum = 0.0f;  // aufsummierte Drehung unten (Grad)
+	float TelRateDt = 0.0f;        // Framezeit der BRAUCHBAREN Bilder (s)
+	int32 TelRateFrames = 0;
+	int32 TelRateSkipped = 0;      // Bilder mit Riesenschritt (Streaming-Hitch) - verworfen
+	float TelMaxMainHubOffsetCm = 0.0f;
+	float TelMaxLowerHubOffsetCm = 0.0f;
+	float TelMaxMainBladeOffsetCm = 0.0f;
+	float TelMaxLowerBladeOffsetCm = 0.0f;
+	// Blattstern-Mitte (Rumpf-Frame): Summe ueber die Bilder, in denen sich der
+	// Stern WIRKLICH gedreht hat - erst der Mittelwert ist die Sternmitte.
+	FVector TelMainBladeCentreSum = FVector::ZeroVector;
+	FVector TelLowerBladeCentreSum = FVector::ZeroVector;
+	int32 TelBladeCentreSamples = 0;
+	float TelMaxMastTiltDeg = 0.0f;
+	float TelMaxMainSpinTiltDeg = 0.0f;
+	float TelMaxLowerSpinTiltDeg = 0.0f;
+	// Die Drehlage ist ein ZUSTAND: sie wird an der Sekundengrenze NICHT
+	// zurueckgesetzt, sonst entstuende dort ein Schein-Riesenschritt.
+	bool bTelHasPrevAzimuth = false;
+	float TelPrevMainAzimuth = 0.0f;
+	float TelPrevLowerAzimuth = 0.0f;
 };
