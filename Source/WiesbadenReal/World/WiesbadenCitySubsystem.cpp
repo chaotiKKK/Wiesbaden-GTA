@@ -1100,6 +1100,56 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		}
 	}
 
+	// Die ALTEN Zielort-Schalter melden sich, wenn sie wirkungslos sind.
+	//
+	// -WbAtX/-WbAtY, -WbAtStreet, -WbTour und -WbAerial haengen alle hinter
+	// -WbScreenshot. Ohne dieses Flag taten sie stillschweigend nichts, und
+	// ein Messlauf ohne Versetzen sah aus wie einer mit. Genau daran sind hier
+	// zwei Laeufe gescheitert, ohne dass im Protokoll etwas davon stand.
+	if (!bStaleGotoFlagsReported)
+	{
+		bStaleGotoFlagsReported = true;
+
+		const TCHAR* ShotOnlyFlags[] = {
+			TEXT("WbAtStreet="), TEXT("WbAtX="), TEXT("WbTour="), TEXT("WbAerial=") };
+
+		if (!FParse::Param(FCommandLine::Get(), TEXT("WbScreenshot")))
+		{
+			for (const TCHAR* Flag : ShotOnlyFlags)
+			{
+				FString Ignored;
+				if (FParse::Value(FCommandLine::Get(), Flag, Ignored))
+				{
+					UE_LOG(LogWbStreaming, Warning,
+						TEXT("-%s wirkt NUR zusammen mit -WbScreenshot und bleibt hier ohne ")
+						TEXT("Wirkung. Zum Versetzen in jedem Startmodus: -WbGoto=<Strasse|X,Y>."),
+						Flag);
+				}
+			}
+		}
+	}
+
+	// Zielort anfahren (-WbGoto). Laeuft im normalen Tick und damit in JEDEM
+	// Startmodus - die alten Schalter hingen hinter -WbScreenshot und taten
+	// sonst stillschweigend nichts.
+	if (!bGotoApplied)
+	{
+		GotoWaitSeconds += DeltaTime;
+		if (TryApplyGotoTarget())
+		{
+			bGotoApplied = true;
+		}
+		else if (GotoWaitSeconds > 300.0f)
+		{
+			// Aufgeben, aber LAUT. Ein Schalter, der ewig still wartet, ist
+			// genau die Falle, die hier abgestellt wird.
+			bGotoApplied = true;
+			UE_LOG(LogWbStreaming, Warning,
+				TEXT("-WbGoto: nach %.0f s keine Spielfigur oder kein Strassennetz - nicht versetzt."),
+				GotoWaitSeconds);
+		}
+	}
+
 	// Bildzeit mitschreiben.
 	//
 	// Die Zaehler werden nach vier Sekunden EINMAL zurueckgesetzt: Bis dahin
@@ -3311,6 +3361,209 @@ void UWiesbadenCitySubsystem::LogHeightStackNearPlayer() const
 		UE_LOG(LogWbStreaming, Warning, TEXT("Hoehen-Stapel: kein Gelaende unter dem Spieler getroffen."));
 	}
 }
+UWiesbadenCitySubsystem::FWbGotoTarget UWiesbadenCitySubsystem::ParseGotoTarget(
+	const FString& Raw)
+{
+	FWbGotoTarget Target;
+
+	const FString Trimmed = Raw.TrimStartAndEnd();
+	if (Trimmed.IsEmpty())
+	{
+		return Target;
+	}
+
+	// Koordinaten nur, wenn BEIDE Teile Zahlen sind. Sonst waere
+	// "Berliner Strasse, Ost" schon wegen des Kommas keine Strasse mehr.
+	FString Left;
+	FString Right;
+	if (Trimmed.Split(TEXT(","), &Left, &Right))
+	{
+		Left = Left.TrimStartAndEnd();
+		Right = Right.TrimStartAndEnd();
+		if (Left.IsNumeric() && Right.IsNumeric())
+		{
+			Target.bHasCoordinates = true;
+			Target.LocationCm = FVector2D(FCString::Atod(*Left), FCString::Atod(*Right));
+			return Target;
+		}
+	}
+
+	Target.StreetName = Trimmed;
+	return Target;
+}
+
+bool UWiesbadenCitySubsystem::FindStreetLocation(const FRoadNetwork& Network,
+	const FString& Name, FVector2D& OutLocationCm, double& OutLengthCm)
+{
+	OutLengthCm = 0.0;
+	if (Name.IsEmpty())
+	{
+		return false;
+	}
+
+	const FString Needle = Name.ToLower();
+	bool bFound = false;
+
+	for (const FRoadSegment& Segment : Network.Segments)
+	{
+		if (!Segment.StreetName.ToLower().Contains(Needle))
+		{
+			continue;
+		}
+
+		const TArray<FVector>& Line = Segment.Centerline.Num() >= 2
+			? Segment.Centerline : Segment.TrimmedCenterline;
+		if (Line.Num() < 2)
+		{
+			continue;
+		}
+
+		if (Segment.LengthCm > OutLengthCm)
+		{
+			OutLengthCm = Segment.LengthCm;
+			const FVector& Middle = Line[Line.Num() / 2];
+			OutLocationCm = FVector2D(Middle.X, Middle.Y);
+			bFound = true;
+		}
+	}
+
+	return bFound;
+}
+
+bool UWiesbadenCitySubsystem::TryApplyGotoTarget()
+{
+	// bShouldStopOnSeparator=false ist hier KEIN Detail: FParse::Value bricht
+	// sonst am KOMMA ab, und aus "-25585,115670" wird "-25585" - also ein
+	// Strassenname. Der Schalter meldete daraufhin korrekt "keine Strasse
+	// dieses Namens", und die Koordinatenform waere nie gelaufen.
+	FString Raw;
+	if (!FParse::Value(FCommandLine::Get(), TEXT("WbGoto="), Raw,
+			/*bShouldStopOnSeparator=*/false)
+		|| Raw.IsEmpty())
+	{
+		return true;   // nichts zu tun
+	}
+
+	const FWbGotoTarget Target = ParseGotoTarget(Raw);
+	if (!Target.IsValid())
+	{
+		UE_LOG(LogWbStreaming, Warning,
+			TEXT("-WbGoto=\"%s\": unbrauchbare Angabe. Erwartet: \"X,Y\" in cm oder ein Strassenname."),
+			*Raw);
+		return true;   // nicht erneut versuchen
+	}
+
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+	if (!Pawn)
+	{
+		return false;   // Spielfigur steht noch nicht - spaeter erneut
+	}
+
+	FVector2D DestinationCm = Target.LocationCm;
+
+	if (!Target.bHasCoordinates)
+	{
+		// Strassenname: braucht das Netz. Das haengt am WorldBuilder und ist
+		// auf gebackenen Karten sofort da, auf gebauten erst nach dem Aufbau.
+		const FRoadNetwork* Network = nullptr;
+		for (TActorIterator<AWiesbadenWorldBuilder> It(World); It; ++It)
+		{
+			if (It->RoadNetwork.Segments.Num() > 0)
+			{
+				Network = &It->RoadNetwork;
+				break;
+			}
+		}
+
+		if (!Network)
+		{
+			return false;   // noch kein Netz - spaeter erneut
+		}
+
+		double LengthCm = 0.0;
+		if (!FindStreetLocation(*Network, Target.StreetName, DestinationCm, LengthCm))
+		{
+			// LAUT scheitern. Genau das fehlte: die alten Schalter taten
+			// stillschweigend nichts, und der Messlauf sah gueltig aus.
+			UE_LOG(LogWbStreaming, Warning,
+				TEXT("-WbGoto=\"%s\": keine Strasse dieses Namens im Netz (%d Abschnitte). ")
+				TEXT("Nicht versetzt."),
+				*Target.StreetName, Network->Segments.Num());
+			return true;
+		}
+
+		UE_LOG(LogWbStreaming, Log,
+			TEXT("-WbGoto: \"%s\" gefunden bei (%.0f, %.0f), laengster Zug %.0f m."),
+			*Target.StreetName, DestinationCm.X, DestinationCm.Y, LengthCm / 100.0);
+	}
+
+	// Hoehe: den ABSTAND ZUM BODEN mitnehmen, nicht die absolute Hoehe.
+	//
+	// Die Stadt hat ueber 100 Hoehenmeter Unterschied. Mit der alten Hoehe
+	// landet der Wagen am Ziel entweder tief im Hang oder hoch in der Luft.
+	// Das Gelaende ist immer geladen, die Stadtkacheln am Ziel dagegen noch
+	// nicht - deshalb zaehlt hier der Gelaendetreffer.
+	const FVector Current = Pawn->GetActorLocation();
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbGoto), false);
+	Params.AddIgnoredActor(Pawn);
+
+	double HeightAboveGround = 200.0;
+	FHitResult Here;
+	if (World->LineTraceSingleByChannel(Here,
+		Current + FVector(0.0, 0.0, 50000.0), Current - FVector(0.0, 0.0, 50000.0),
+		ECC_Visibility, Params))
+	{
+		HeightAboveGround = FMath::Max(Current.Z - Here.Location.Z, 50.0);
+	}
+
+	const FVector Probe(DestinationCm.X, DestinationCm.Y, Current.Z);
+	FHitResult There;
+	double TargetZ = Current.Z;
+	if (World->LineTraceSingleByChannel(There,
+		Probe + FVector(0.0, 0.0, 100000.0), Probe - FVector(0.0, 0.0, 100000.0),
+		ECC_Visibility, Params))
+	{
+		TargetZ = There.Location.Z + HeightAboveGround;
+	}
+	else
+	{
+		UE_LOG(LogWbStreaming, Warning,
+			TEXT("-WbGoto: am Ziel (%.0f, %.0f) kein Boden getroffen - alte Hoehe behalten."),
+			DestinationCm.X, DestinationCm.Y);
+	}
+
+	const FVector Destination(DestinationCm.X, DestinationCm.Y, TargetZ);
+	Pawn->SetActorLocation(Destination, /*bSweep=*/false, nullptr, ETeleportType::TeleportPhysics);
+
+	// Fahrzeuge tragen Schwung. Ohne Nullsetzen schiesst der Wagen am Ziel mit
+	// der alten Geschwindigkeit los, obwohl er gerade erst dort ankommt.
+	if (UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(Pawn->GetRootComponent()))
+	{
+		if (Body->IsSimulatingPhysics())
+		{
+			Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
+			Body->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+		}
+	}
+
+	// Blickrichtung optional mitgeben. Die Kamera haengt am Pawn und folgt ihm
+	// ohnehin - das hier richtet sie aus, damit das Bild nicht zufaellig steht.
+	float GotoYaw = 0.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("WbGotoYaw="), GotoYaw))
+	{
+		PC->SetControlRotation(FRotator(0.0f, GotoYaw, 0.0f));
+	}
+
+	UE_LOG(LogWbStreaming, Log,
+		TEXT("-WbGoto: Spieler und Kamera versetzt nach (%.0f, %.0f, %.0f), %.1f m ueber Grund ")
+		TEXT("- Streaming folgt dem Pawn."),
+		Destination.X, Destination.Y, Destination.Z, HeightAboveGround / 100.0);
+
+	return true;
+}
+
 void UWiesbadenCitySubsystem::RequestDiagnosticScreenshot()
 {
 	if (!FParse::Param(FCommandLine::Get(), TEXT("WbScreenshot")))
@@ -4196,32 +4449,14 @@ bool UWiesbadenCitySubsystem::SetupJunctionTour(int32 JunctionCount)
 	FString AtStreet;
 	if (FParse::Value(FCommandLine::Get(), TEXT("WbAtStreet="), AtStreet) && !AtStreet.IsEmpty())
 	{
-		bool bFound = false;
+		// Dieselbe Suche wie -WbGoto - eine Fassung, ein Verhalten.
+		FVector2D Found = FVector2D::ZeroVector;
 		double BestLengthCm = 0.0;
-
-		for (const FRoadSegment& Segment : Network->Segments)
+		const bool bFound = FindStreetLocation(*Network, AtStreet, Found, BestLengthCm);
+		if (bFound)
 		{
-			if (!Segment.StreetName.Contains(AtStreet))
-			{
-				continue;
-			}
-
-			const TArray<FVector>& Line = Segment.Centerline.Num() >= 2
-				? Segment.Centerline : Segment.TrimmedCenterline;
-			if (Line.Num() < 2)
-			{
-				continue;
-			}
-
-			// Das LAENGSTE Segment des Namens: Bei Strassen, die es in mehreren
-			// Stadtteilen gibt, ist das der Hauptzug.
-			if (Segment.LengthCm > BestLengthCm)
-			{
-				BestLengthCm = Segment.LengthCm;
-				ViewLocation.X = Line[Line.Num() / 2].X;
-				ViewLocation.Y = Line[Line.Num() / 2].Y;
-				bFound = true;
-			}
+			ViewLocation.X = Found.X;
+			ViewLocation.Y = Found.Y;
 		}
 
 		UE_LOG(LogWbStreaming, Log,

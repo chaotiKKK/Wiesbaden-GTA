@@ -52,6 +52,46 @@ class WIESBADENREAL_API UWiesbadenCitySubsystem : public UTickableWorldSubsystem
 	GENERATED_BODY()
 
 public:
+
+	/**
+	 * Zielort aus `-WbGoto=<Ziel>`: entweder Koordinaten oder ein Strassenname.
+	 *
+	 * Vorher gab es drei Schalter fuer dieselbe Sache (-WbAtX/-WbAtY,
+	 * -WbAtStreet, -WbTour), und ALLE drei hingen hinter -WbScreenshot: ohne
+	 * das Flag taten sie stillschweigend nichts. Zwei Messlaeufe gingen so
+	 * verloren, ohne dass im Protokoll etwas davon stand.
+	 */
+	struct FWbGotoTarget
+	{
+		/** Koordinaten wurden direkt angegeben (cm). */
+		bool bHasCoordinates = false;
+		FVector2D LocationCm = FVector2D::ZeroVector;
+
+		/** Sonst: der gesuchte Strassenname. */
+		FString StreetName;
+
+		bool IsValid() const { return bHasCoordinates || !StreetName.IsEmpty(); }
+	};
+
+	/**
+	 * Zerlegt die Angabe hinter -WbGoto= (datenrein, testbar).
+	 *
+	 * "-121964,-119658" -> Koordinaten in cm; alles andere -> Strassenname.
+	 * Leerzeichen um das Komma sind erlaubt; ein Name darf Kommas enthalten,
+	 * solange nicht BEIDE Teile Zahlen sind.
+	 */
+	static FWbGotoTarget ParseGotoTarget(const FString& Raw);
+
+	/**
+	 * Mittelpunkt des LAENGSTEN Segments mit diesem Namen (datenrein, testbar).
+	 *
+	 * Das laengste ist bei Strassen, die es in mehreren Stadtteilen gibt, der
+	 * Hauptzug. Der Vergleich ist unabhaengig von Gross-/Kleinschreibung -
+	 * "rheinstrasse" soll die "Rheinstraße" finden, ohne dass man die Schreibung
+	 * der OSM-Daten kennt.
+	 */
+	static bool FindStreetLocation(const FRoadNetwork& Network, const FString& Name,
+		FVector2D& OutLocationCm, double& OutLengthCm);
 	// -- Zustand ------------------------------------------------------------
 
 	/** True, wenn die Welt eine partitionierte Welt ist (World Partition). */
@@ -173,6 +213,15 @@ public:
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Traffic")
 	FWiesbadenTrafficLightSystem TrafficLightSystem;
+
+	/** -WbGoto ist erledigt (versetzt oder endgueltig gescheitert). */
+	bool bGotoApplied = false;
+
+	/** Wie lange schon auf Pawn/Strassennetz gewartet wird (s). */
+	float GotoWaitSeconds = 0.0f;
+
+	/** Der Hinweis auf wirkungslose Aufnahme-Schalter ist raus. */
+	bool bStaleGotoFlagsReported = false;
 
 	/** Gemeldete Aussetzer - gedeckelt, damit eine lange Fahrt das Protokoll nicht flutet. */
 	int32 HitchesReported = 0;
@@ -482,6 +531,16 @@ private:
 	 * normaler Spielstart unberuehrt bleibt.
 	 */
 	void RequestDiagnosticScreenshot();
+
+
+	/**
+	 * Versetzt Spieler UND Kamera an den Zielort. Wirkt in JEDEM Startmodus,
+	 * nicht nur bei der Aufnahme.
+	 *
+	 * @return true, wenn versetzt wurde (oder endgueltig aufgegeben wurde).
+	 *         false = noch nicht bereit, im naechsten Tick erneut versuchen.
+	 */
+	bool TryApplyGotoTarget();
 
 	/**
 	 * Setzt die Ansicht auf eine Kamera ueber dem Spieler (-WbAerial=<Meter>).
