@@ -1145,6 +1145,52 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 				Traffic.MeanSpeedKmh, TrafficSimulation.GetVehiclesHeldAtRed(),
 				Traffic.LaneChangesThisTick);
 
+			// Verteilung auf die Strassenklassen. "Hauptstrassen tragen mehr
+			// Verkehr" bleibt eine Behauptung, solange sie niemand nachzaehlt -
+			// und die Einsatzorte werden genau danach gewichtet.
+			{
+				TMap<EOSMHighwayType, int32> ByClass;
+				TrafficSimulation.CollectClassDistribution(ByClass);
+
+				int32 Main = 0;      // Autobahn, Bundes-, Landesstrasse
+				int32 Collector = 0; // Sammelstrassen
+				int32 Local = 0;     // Wohn-, Erschliessungs-, Servicestrassen
+				for (const TPair<EOSMHighwayType, int32>& Pair : ByClass)
+				{
+					switch (Pair.Key)
+					{
+					case EOSMHighwayType::Motorway:
+					case EOSMHighwayType::MotorwayLink:
+					case EOSMHighwayType::Trunk:
+					case EOSMHighwayType::TrunkLink:
+					case EOSMHighwayType::Primary:
+					case EOSMHighwayType::PrimaryLink:
+						Main += Pair.Value;
+						break;
+					case EOSMHighwayType::Secondary:
+					case EOSMHighwayType::SecondaryLink:
+					case EOSMHighwayType::Tertiary:
+					case EOSMHighwayType::TertiaryLink:
+						Collector += Pair.Value;
+						break;
+					default:
+						Local += Pair.Value;
+						break;
+					}
+				}
+
+				const int32 Total = Main + Collector + Local;
+				if (Total > 0)
+				{
+					UE_LOG(LogWbTraffic, Log,
+						TEXT("Verkehr nach Klasse: Hauptstrassen %d (%.0f %%), ")
+						TEXT("Sammelstrassen %d (%.0f %%), Wohn-/Servicestrassen %d (%.0f %%)."),
+						Main, 100.0 * Main / Total,
+						Collector, 100.0 * Collector / Total,
+						Local, 100.0 * Local / Total);
+				}
+			}
+
 			// Stau NACHGEHEN, nicht nur zaehlen: -WbStauLog nennt je Steher den
 			// Grund. Ohne das laesst sich "die Autos stauen sich" nicht von
 			// "ein Fahrzeug haelt an Rot" unterscheiden - und der gemeldete

@@ -46,6 +46,7 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 	ConnectionLengthCm.Reset();
 	LaneSuccessorIndices.Reset();
 	NearbySpawnLaneLengthCm = 0.0;
+	NearbySpawnCumulativeWeights.Reset();
 	LaneNeighbours.Reset();
 	VehiclesByLaneCache.Reset();
 	SpawnAccumulator = 0.0;
@@ -212,6 +213,7 @@ void FWiesbadenTrafficSimulation::Reset()
 	ConnectionLengthCm.Reset();
 	LaneSuccessorIndices.Reset();
 	NearbySpawnLaneLengthCm = 0.0;
+	NearbySpawnCumulativeWeights.Reset();
 	LaneNeighbours.Reset();
 	VehiclesByLaneCache.Reset();
 	SpawnAccumulator = 0.0;
@@ -241,6 +243,68 @@ double FWiesbadenTrafficSimulation::GetEdgeLengthCm(const FTrafficVehicle& Vehic
 		return Network->Lanes.IsValidIndex(Vehicle.LaneId) ? Network->Lanes[Vehicle.LaneId].LengthCm : 0.0;
 	}
 	return ConnectionLengthCm.FindRef(Vehicle.ConnectionIndex);
+}
+
+int32 FWiesbadenTrafficSimulation::PickWeightedIndex(
+	const TArray<double>& Cumulative, uint32 Roll)
+{
+	if (Cumulative.Num() == 0)
+	{
+		return INDEX_NONE;
+	}
+
+	const double Total = Cumulative.Last();
+	if (Total <= KINDA_SMALL_NUMBER)
+	{
+		return INDEX_NONE;
+	}
+
+	// Hash auf [0, Total) abbilden - dieselbe Rechnung wie bei der Wahl der
+	// Folgeverbindung, damit beide Stellen gleich zufaellig und gleich
+	// reproduzierbar sind.
+	const double Target = (static_cast<double>(Roll % 1000000u) / 1000000.0) * Total;
+
+	// Binaere Suche: bei mehreren hundert Spuren im Umkreis ist eine lineare
+	// Suche je Einsatz unnoetig teuer.
+	int32 Low = 0;
+	int32 High = Cumulative.Num() - 1;
+	while (Low < High)
+	{
+		const int32 Mid = (Low + High) / 2;
+		if (Cumulative[Mid] <= Target)
+		{
+			Low = Mid + 1;
+		}
+		else
+		{
+			High = Mid;
+		}
+	}
+	return Low;
+}
+
+void FWiesbadenTrafficSimulation::CollectClassDistribution(
+	TMap<EOSMHighwayType, int32>& Out) const
+{
+	Out.Reset();
+	if (!Network)
+	{
+		return;
+	}
+
+	for (const FTrafficVehicle& Vehicle : Vehicles)
+	{
+		if (!Vehicle.bOnLane || !Network->Lanes.IsValidIndex(Vehicle.LaneId))
+		{
+			continue;   // auf einer Verbindung - die gehoert keiner Klasse
+		}
+		const int32 SegmentId = Network->Lanes[Vehicle.LaneId].SegmentId;
+		if (!Network->Segments.IsValidIndex(SegmentId))
+		{
+			continue;
+		}
+		++Out.FindOrAdd(Network->Segments[SegmentId].HighwayType, 0);
+	}
 }
 
 double FWiesbadenTrafficSimulation::GetRoadClassWeight(EOSMHighwayType Type)
@@ -796,13 +860,30 @@ void FWiesbadenTrafficSimulation::SetObserverLocation(const FVector& InLocation)
 			Network->Lanes, SpawnLaneIds, InLocation,
 			Settings.SpawnRadiusMeters * 100.0, NearbySpawnLaneIds);
 
-		// Bezugsgroesse fuer die erlebte Dichte (Fahrzeuge je Kilometer).
-		// Faellt hier praktisch umsonst ab - die Auswahl laeuft ohnehin nur
-		// alle paar hundert Meter Fahrt.
+		// Bezugsgroesse fuer die erlebte Dichte (Fahrzeuge je Kilometer) UND
+		// die Klassengewichte fuer den Einsatzort. Fallen hier praktisch
+		// umsonst ab - die Auswahl laeuft ohnehin nur alle paar hundert Meter
+		// Fahrt, nicht je Bild.
 		NearbySpawnLaneLengthCm = 0.0;
+		NearbySpawnCumulativeWeights.Reset();
+		NearbySpawnCumulativeWeights.Reserve(NearbySpawnLaneIds.Num());
+
+		double RunningWeight = 0.0;
 		for (const int32 LaneId : NearbySpawnLaneIds)
 		{
-			NearbySpawnLaneLengthCm += Network->Lanes[LaneId].LengthCm;
+			const FRoadLane& Lane = Network->Lanes[LaneId];
+			NearbySpawnLaneLengthCm += Lane.LengthCm;
+
+			// Gewicht der Klasse MAL Laenge: eine 300-m-Hauptstrasse traegt
+			// mehr Verkehr als ein 30-m-Stummel derselben Klasse. Ohne die
+			// Laenge zaehlte jede noch so kurze Spur gleich viel, und in
+			// kleinteiligen Netzen kippt das Bild wieder.
+			const double ClassWeight = Network->Segments.IsValidIndex(Lane.SegmentId)
+				? GetRoadClassWeight(Network->Segments[Lane.SegmentId].HighwayType)
+				: 1.0;
+
+			RunningWeight += ClassWeight * FMath::Max(Lane.LengthCm, 1.0);
+			NearbySpawnCumulativeWeights.Add(RunningWeight);
 		}
 
 		LastSpawnSearchLocation = InLocation;
@@ -1549,7 +1630,31 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 			&& SpawnBudget-- > 0)
 		{
 			SpawnAccumulator -= 1.0;
-			const int32 SpawnLaneId = ActiveSpawnLanes[TotalSpawned % ActiveSpawnLanes.Num()];
+
+			// Einsatzort nach STRASSENKLASSE, nicht reihum.
+			//
+			// Reihum bekam jede Spur im Umkreis gleich viele Fahrzeuge. Weil
+			// Wohn- und Servicestrassen die Hauptstrassen zahlenmaessig weit
+			// uebertreffen, landete der Verkehr ueberwiegend in Seitenstrassen -
+			// also gerade nicht dort, wo der Spieler faehrt. Die Gewichte sind
+			// dieselben wie bei der Wahl an Kreuzungen (GetRoadClassWeight);
+			// zwei Tabellen wuerden auseinanderlaufen.
+			//
+			// Ohne Beobachter bleibt es reihum: dort gibt es keinen Umkreis und
+			// damit keine Gewichte - darauf stuetzen sich die datenreinen Tests.
+			int32 SpawnSlot = INDEX_NONE;
+			if (bHasObserver
+				&& NearbySpawnCumulativeWeights.Num() == ActiveSpawnLanes.Num())
+			{
+				SpawnSlot = PickWeightedIndex(NearbySpawnCumulativeWeights,
+					Hash2(static_cast<uint32>(TotalSpawned),
+						static_cast<uint32>(Settings.RandomSeed)));
+			}
+			if (SpawnSlot == INDEX_NONE)
+			{
+				SpawnSlot = static_cast<int32>(TotalSpawned % ActiveSpawnLanes.Num());
+			}
+			const int32 SpawnLaneId = ActiveSpawnLanes[SpawnSlot];
 
 			// Spur-Anfang blockiert? (Fahrzeug steht noch am Spawnpunkt)
 			bool bBlocked = false;

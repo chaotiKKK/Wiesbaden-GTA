@@ -1230,3 +1230,101 @@ bool FTrafficMergeStackingTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficClassShareTest,
+	"WiesbadenReal.Traffic.Klassenverteilung",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficClassShareTest::RunTest(const FString& Parameters)
+{
+	// -- 1. Rangfolge der Klassen: Hauptstrassen vor Wohnstrassen. ----------
+	const double Primary = FWiesbadenTrafficSimulation::GetRoadClassWeight(
+		EOSMHighwayType::Primary);
+	const double Residential = FWiesbadenTrafficSimulation::GetRoadClassWeight(
+		EOSMHighwayType::Residential);
+	const double Living = FWiesbadenTrafficSimulation::GetRoadClassWeight(
+		EOSMHighwayType::LivingStreet);
+
+	TestTrue(TEXT("Bundesstrasse traegt mehr als Wohnstrasse"), Primary > Residential);
+	TestTrue(TEXT("Wohnstrasse traegt mehr als Erschliessungsweg"), Residential > Living);
+	TestTrue(TEXT("Der Abstand ist deutlich, nicht kosmetisch (mindestens 4-fach)"),
+		Primary >= Residential * 4.0);
+
+	// -- 2. Entartete Eingaben liefern INDEX_NONE statt eines falschen Platzes.
+	{
+		const TArray<double> Empty;
+		TestEqual(TEXT("Leere Gewichte -> kein Platz"),
+			FWiesbadenTrafficSimulation::PickWeightedIndex(Empty, 12345u), INDEX_NONE);
+
+		const TArray<double> Zero = { 0.0, 0.0 };
+		TestEqual(TEXT("Nur Nullgewichte -> kein Platz"),
+			FWiesbadenTrafficSimulation::PickWeightedIndex(Zero, 12345u), INDEX_NONE);
+	}
+
+	// -- 3. Die Grenzen treffen den richtigen Eintrag. ----------------------
+	{
+		// Kumuliert {10, 20, 30}: Ziel = Roll/1e6 * 30.
+		const TArray<double> Cumulative = { 10.0, 20.0, 30.0 };
+
+		TestEqual(TEXT("Rollwert 0 trifft den ersten Eintrag"),
+			FWiesbadenTrafficSimulation::PickWeightedIndex(Cumulative, 0u), 0);
+
+		// Ziel knapp unter 10 -> noch Eintrag 0; knapp darueber -> Eintrag 1.
+		TestEqual(TEXT("Knapp unter der ersten Grenze bleibt Eintrag 0"),
+			FWiesbadenTrafficSimulation::PickWeightedIndex(Cumulative, 333000u), 0);
+		TestEqual(TEXT("Knapp ueber der ersten Grenze folgt Eintrag 1"),
+			FWiesbadenTrafficSimulation::PickWeightedIndex(Cumulative, 334000u), 1);
+		TestEqual(TEXT("Am oberen Ende steht der letzte Eintrag"),
+			FWiesbadenTrafficSimulation::PickWeightedIndex(Cumulative, 999999u), 2);
+	}
+
+	// -- 4. Die eigentliche Zusage: die Anteile folgen den Gewichten. -------
+	//
+	// Zwei Spuren - eine Bundesstrasse, eine Wohnstrasse - gleich lang. Bei
+	// gleichverteilter Wahl bekaeme jede die Haelfte; genau das war der
+	// Zustand, in dem 81 % des Verkehrs in Wohn- und Servicestrassen landete.
+	{
+		TArray<double> Cumulative;
+		Cumulative.Add(Primary);
+		Cumulative.Add(Primary + Residential);
+
+		int32 OnPrimary = 0;
+		constexpr int32 Draws = 20000;
+		for (int32 i = 0; i < Draws; ++i)
+		{
+			// Streuender Hash statt fortlaufender Zahlen: aufeinanderfolgende
+			// Rollwerte lieferten sonst einen Saegezahn und keine Verteilung.
+			const uint32 Roll = static_cast<uint32>(i) * 2654435761u;
+			if (FWiesbadenTrafficSimulation::PickWeightedIndex(Cumulative, Roll) == 0)
+			{
+				++OnPrimary;
+			}
+		}
+
+		const double Share = static_cast<double>(OnPrimary) / Draws;
+		const double Expected = Primary / (Primary + Residential);
+		TestTrue(FString::Printf(
+			TEXT("Anteil Bundesstrasse %.3f entspricht dem Gewicht %.3f"), Share, Expected),
+			FMath::Abs(Share - Expected) < 0.02);
+
+		// Und der Kern der Aufgabe, unabhaengig von der genauen Zahl:
+		TestTrue(FString::Printf(
+			TEXT("Die Bundesstrasse traegt mit %.0f %% klar die Mehrheit"), Share * 100.0),
+			Share > 0.75);
+	}
+
+	// -- 5. Gleiche Eingaben, gleiche Wahl - die Simulation bleibt
+	//       reproduzierbar. ------------------------------------------------
+	{
+		const TArray<double> Cumulative = { 3.0, 7.0, 12.0, 20.0 };
+		bool bStable = true;
+		for (uint32 Roll = 0; Roll < 5000u; Roll += 137u)
+		{
+			bStable = bStable
+				&& FWiesbadenTrafficSimulation::PickWeightedIndex(Cumulative, Roll)
+					== FWiesbadenTrafficSimulation::PickWeightedIndex(Cumulative, Roll);
+		}
+		TestTrue(TEXT("Dieselbe Eingabe liefert dieselbe Wahl"), bStable);
+	}
+
+	return true;
+}

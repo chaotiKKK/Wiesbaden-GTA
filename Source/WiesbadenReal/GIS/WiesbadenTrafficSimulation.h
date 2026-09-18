@@ -677,6 +677,26 @@ public:
 	static double GetRoadClassWeight(EOSMHighwayType Type);
 
 	/**
+	 * Waehlt aus KUMULIERTEN Gewichten deterministisch einen Index
+	 * (datenrein, testbar).
+	 *
+	 * Roll ist ein Hash, kein Zufallszahlengenerator: gleiche Eingaben
+	 * ergeben dieselbe Wahl, damit die Simulation reproduzierbar bleibt.
+	 * Cumulative[i] ist die Summe der Gewichte 0..i; ein leeres oder
+	 * gewichtsloses Feld liefert INDEX_NONE.
+	 */
+	static int32 PickWeightedIndex(const TArray<double>& Cumulative, uint32 Roll);
+
+	/**
+	 * Anteil der Fahrzeuge je Strassenklasse (Diagnose).
+	 *
+	 * "Hauptstrassen tragen mehr Verkehr" ist eine Behauptung, solange sie
+	 * niemand nachzaehlt. Die Karte ordnet jeder Klasse die Zahl der gerade
+	 * darauf fahrenden Fahrzeuge zu.
+	 */
+	void CollectClassDistribution(TMap<EOSMHighwayType, int32>& Out) const;
+
+	/**
 	 * Ein Schritt des Einspurmodells (datenrein, testbar).
 	 *
 	 * Reine Verfolgung: Aus dem Zielpunkt vor dem Fahrzeug folgt der noetige
@@ -806,6 +826,20 @@ private:
 
 	/** Summierte Laenge von NearbySpawnLaneIds in cm - mit der Auswahl gepflegt. */
 	double NearbySpawnLaneLengthCm = 0.0;
+
+	/**
+	 * Kumulierte Strassenklassen-Gewichte zu NearbySpawnLaneIds.
+	 *
+	 * Der Einsatzort wurde frueher REIHUM ueber alle Spuren im Umkreis
+	 * vergeben. Weil Wohn- und Servicestrassen die Hauptstrassen zahlenmaessig
+	 * weit uebertreffen, landete der Verkehr ueberwiegend in Seitenstrassen -
+	 * also gerade nicht dort, wo man faehrt. Mit den Gewichten entscheidet
+	 * die KLASSE, nicht die Anzahl der Spuren.
+	 *
+	 * Faellt bei der ohnehin noetigen Umkreissuche ab (alle paar hundert
+	 * Meter Fahrt), nicht je Bild.
+	 */
+	TArray<double> NearbySpawnCumulativeWeights;
 
 	FVector LastSpawnSearchLocation = FVector::ZeroVector;
 	bool bNearbyLanesValid = false;
