@@ -5,6 +5,7 @@
 #include "WiesbadenReal.h"
 
 #include "GIS/WiesbadenTrafficLights.h"
+#include "Misc/FileHelper.h"
 
 namespace
 {
@@ -53,6 +54,15 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 	TotalSpawned = 0;
 	TotalRemoved = 0;
 	LifetimeVehiclesHeldAtRed = 0;
+	LifetimeLaneChanges = 0;
+	LifetimeLaneChangeCandidates = 0;
+	LifetimeLaneChangeNoNeighbour = 0;
+	LifetimeLaneChangeBlockedByGap = 0;
+	LifetimeLaneChangeNoGain = 0;
+	LifetimeTightAheadOnly = 0;
+	LifetimeTightBehindOnly = 0;
+	LifetimeTightBoth = 0;
+	LaneFlow.Reset();
 	LifetimeVehiclesApproachingSignal = 0;
 	bAnySignalizedConnectionEverRed = false;
 	TotalDistanceCm = 0.0;
@@ -1025,6 +1035,17 @@ double FWiesbadenTrafficSimulation::ComputeObstacleAwareSpeed(
 	return FMath::Min(CurrentSpeedCmS, MaxSpeed);
 }
 
+double FWiesbadenTrafficSimulation::RequiredLaneChangeGapCm(
+	const FWiesbadenTrafficSettings& InSettings, double SpeedCmS)
+{
+	// Zeitluecke statt fester Strecke. Im Stand bleibt die Untergrenze - sonst
+	// koennte ein stehendes Fahrzeug in eine Luecke von null Zentimetern
+	// ziehen.
+	const double ByTime = FMath::Max(InSettings.LaneChangeGapSeconds, 0.0)
+		* FMath::Max(SpeedCmS, 0.0);
+	return FMath::Max(FMath::Max(InSettings.LaneChangeMinGapCm, 0.0), ByTime);
+}
+
 double FWiesbadenTrafficSimulation::ComputeGapAheadOnLane(
 	int32 LaneId, double AtDistanceCm, int32 IgnoreVehicleId) const
 {
@@ -1051,9 +1072,14 @@ double FWiesbadenTrafficSimulation::ComputeGapAheadOnLane(
 }
 
 double FWiesbadenTrafficSimulation::ComputeGapBehindOnLane(
-	int32 LaneId, double AtDistanceCm, int32 IgnoreVehicleId) const
+	int32 LaneId, double AtDistanceCm, int32 IgnoreVehicleId,
+	double* OutFollowerSpeedCmS) const
 {
 	double Best = TNumericLimits<double>::Max();
+	if (OutFollowerSpeedCmS)
+	{
+		*OutFollowerSpeedCmS = 0.0;
+	}
 	const TArray<int32>* Bucket = VehiclesByLaneCache.Find(LaneId);
 	if (!Bucket)
 	{
@@ -1067,9 +1093,15 @@ double FWiesbadenTrafficSimulation::ComputeGapBehindOnLane(
 			continue;
 		}
 		const double Behind = AtDistanceCm - Other.DistanceCm;
-		if (Behind >= 0.0)
+		if (Behind >= 0.0 && Behind < Best)
 		{
-			Best = FMath::Min(Best, Behind);
+			Best = Behind;
+			// Das Tempo des NAECHSTEN Nachfolgers, nicht irgendeines: er ist
+			// der, dem man vor die Nase zieht.
+			if (OutFollowerSpeedCmS)
+			{
+				*OutFollowerSpeedCmS = Other.SpeedCmS;
+			}
 		}
 	}
 	return Best;
@@ -1165,6 +1197,13 @@ void FWiesbadenTrafficSimulation::ApplyCrossEdgeHeadway(double Dt)
 void FWiesbadenTrafficSimulation::ApplyLaneChanges(float DeltaSeconds)
 {
 	Report.LaneChangesThisTick = 0;
+	Report.LaneChangeCandidates = 0;
+	Report.LaneChangeNoNeighbour = 0;
+	Report.LaneChangeBlockedByGap = 0;
+	Report.LaneChangeNoGain = 0;
+	Report.LaneChangeTightAheadOnly = 0;
+	Report.LaneChangeTightBehindOnly = 0;
+	Report.LaneChangeTightBoth = 0;
 
 	if (!Network || !Settings.bAllowLaneChange)
 	{
@@ -1181,21 +1220,23 @@ void FWiesbadenTrafficSimulation::ApplyLaneChanges(float DeltaSeconds)
 			continue;
 		}
 
-		// Nur wer tatsaechlich behindert wird, wechselt. Wer seine
-		// Wunschgeschwindigkeit faehrt, hat keinen Grund dazu - sonst entstuende
-		// ein staendiges Hin und Her ohne Nutzen.
-		if (Vehicle.DesiredSpeedCmS <= 0.0
-			|| Vehicle.SpeedCmS > Vehicle.DesiredSpeedCmS * Settings.LaneChangeSpeedDeficit)
+		// An Rot wird gewartet, nicht ueberholt.
+		//
+		// Ein Fahrzeug vor einer roten Ampel ist langsam - aber nicht
+		// BEHINDERT, und die Nebenspur bringt es keinen Meter weiter. Ohne
+		// diese Ausnahme zaehlte jede wartende Kolonne jeden Tick als
+		// Ueberholwunsch (gemessen ein guter Teil der 594.580 Anlaeufe) und
+		// verwischte, woran es wirklich hakt. Die Ampel-Regel laeuft in
+		// diesem Tick bereits vor dem Spurwechsel, der Wert steht also.
+		if (Vehicle.bWasHeldAtRed)
 		{
 			continue;
 		}
 
-		const TArray<int32>* Neighbours = LaneNeighbours.Find(Vehicle.LaneId);
-		if (!Neighbours || !Network->Lanes.IsValidIndex(Vehicle.LaneId))
+		if (!Network->Lanes.IsValidIndex(Vehicle.LaneId))
 		{
 			continue;
 		}
-
 		const double CurrentLength = Network->Lanes[Vehicle.LaneId].LengthCm;
 		if (CurrentLength <= 0.0)
 		{
@@ -1206,9 +1247,41 @@ void FWiesbadenTrafficSimulation::ApplyLaneChanges(float DeltaSeconds)
 		const double CurrentGap = ComputeGapAheadOnLane(
 			Vehicle.LaneId, Vehicle.DistanceCm, Vehicle.VehicleId);
 
+		// ZWEI Gruende, hinauszuziehen - und der zweite ist der wichtigere.
+		//
+		// (1) Man ist bereits langsamer als gewollt. Das war bisher der
+		//     einzige Grund, und es ist der SPAETE: wer schon steht, steht in
+		//     einer Kolonne, in der ringsum nichts mehr frei ist.
+		// (2) Man laeuft auf: die Luecke nach vorn reicht nur noch fuer
+		//     wenige Sekunden. Genau dann wechselt ein Fahrer - solange es
+		//     neben ihm noch Platz gibt.
+		const bool bSlowedDown = Vehicle.DesiredSpeedCmS > 0.0
+			&& Vehicle.SpeedCmS <= Vehicle.DesiredSpeedCmS * Settings.LaneChangeSpeedDeficit;
+		const bool bClosingIn = Settings.LaneChangeLookAheadSeconds > 0.0
+			&& CurrentGap < Vehicle.SpeedCmS * Settings.LaneChangeLookAheadSeconds;
+		if (!bSlowedDown && !bClosingIn)
+		{
+			continue;
+		}
+
+		// Ab hier ist das Fahrzeug ein Kandidat. Alles Weitere sind Gruende,
+		// es doch nicht zu tun - und die werden gezaehlt.
+		++Report.LaneChangeCandidates;
+
+		const TArray<int32>* Neighbours = LaneNeighbours.Find(Vehicle.LaneId);
+		if (!Neighbours)
+		{
+			++Report.LaneChangeNoNeighbour;
+			continue;
+		}
+
 		int32 BestLane = INDEX_NONE;
 		double BestGap = CurrentGap;
 		double BestDistance = 0.0;
+		bool bAnyNeighbourUsable = false;
+		bool bAnyNeighbourHadRoom = false;
+		bool bTightAhead = false;
+		bool bTightBehind = false;
 
 		for (const int32 NeighbourLaneId : *Neighbours)
 		{
@@ -1221,23 +1294,37 @@ void FWiesbadenTrafficSimulation::ApplyLaneChanges(float DeltaSeconds)
 			{
 				continue;
 			}
+			bAnyNeighbourUsable = true;
 
 			// Parallele Spuren desselben Abschnitts sind etwa gleich lang; der
 			// Laengenanteil ist deshalb die richtige Uebertragung.
 			const double NeighbourDistance = Fraction * Neighbour.LengthCm;
 
+			double FollowerSpeedCmS = 0.0;
 			const double GapAhead = ComputeGapAheadOnLane(
 				NeighbourLaneId, NeighbourDistance, Vehicle.VehicleId);
 			const double GapBehind = ComputeGapBehindOnLane(
-				NeighbourLaneId, NeighbourDistance, Vehicle.VehicleId);
+				NeighbourLaneId, NeighbourDistance, Vehicle.VehicleId, &FollowerSpeedCmS);
 
 			// Nach hinten zaehlt genauso wie nach vorn: Wer vor einen
 			// schnelleren Nachfolger zieht, loest dort dieselbe Bremswelle aus,
 			// der er selbst entkommen wollte.
-			if (GapAhead < Settings.LaneChangeMinGapCm || GapBehind < Settings.LaneChangeMinGapCm)
+			// Vorn das eigene Tempo, hinten das des Nachfolgers - er ist der,
+			// der bremsen muss.
+			const double NeedAhead = RequiredLaneChangeGapCm(Settings, Vehicle.SpeedCmS);
+			const double NeedBehind = RequiredLaneChangeGapCm(Settings,
+				FMath::Max(FollowerSpeedCmS, Vehicle.SpeedCmS));
+			if (GapAhead < NeedAhead || GapBehind < NeedBehind)
 			{
+				// WELCHE Seite klemmt, entscheidet ueber die Abhilfe: vorn zu
+				// eng heisst dichter Verkehr auf der Zielspur, hinten zu eng
+				// heisst, dass die Regel zu streng ist (ein Nachfolger kann
+				// vom Gas gehen, ein Vordermann nicht).
+				bTightAhead = bTightAhead || (GapAhead < NeedAhead);
+				bTightBehind = bTightBehind || (GapBehind < NeedBehind);
 				continue;
 			}
+			bAnyNeighbourHadRoom = true;
 
 			// Nur wechseln, wenn es dort spuerbar freier ist - ohne diesen
 			// Abstand wechselte ein Fahrzeug auch fuer wenige Zentimeter.
@@ -1251,6 +1338,33 @@ void FWiesbadenTrafficSimulation::ApplyLaneChanges(float DeltaSeconds)
 
 		if (BestLane == INDEX_NONE)
 		{
+			// Das Nein einordnen: gar keine brauchbare Nachbarspur, kein Platz
+			// darin, oder Platz ohne Gewinn. Drei verschiedene Befunde, die
+			// drei verschiedene Abhilfen verlangen.
+			if (!bAnyNeighbourUsable)
+			{
+				++Report.LaneChangeNoNeighbour;
+			}
+			else if (!bAnyNeighbourHadRoom)
+			{
+				++Report.LaneChangeBlockedByGap;
+				if (bTightAhead && bTightBehind)
+				{
+					++Report.LaneChangeTightBoth;
+				}
+				else if (bTightAhead)
+				{
+					++Report.LaneChangeTightAheadOnly;
+				}
+				else
+				{
+					++Report.LaneChangeTightBehindOnly;
+				}
+			}
+			else
+			{
+				++Report.LaneChangeNoGain;
+			}
 			continue;
 		}
 
@@ -1272,7 +1386,95 @@ void FWiesbadenTrafficSimulation::ApplyLaneChanges(float DeltaSeconds)
 		Vehicle.DesiredSpeedCmS = ComputeDesiredSpeed(Vehicle);
 		Vehicle.LaneChangeCooldown = Settings.LaneChangeCooldownSeconds;
 		++Report.LaneChangesThisTick;
+		++LifetimeLaneChanges;
 	}
+
+	LifetimeLaneChangeCandidates += Report.LaneChangeCandidates;
+	LifetimeLaneChangeNoNeighbour += Report.LaneChangeNoNeighbour;
+	LifetimeLaneChangeBlockedByGap += Report.LaneChangeBlockedByGap;
+	LifetimeLaneChangeNoGain += Report.LaneChangeNoGain;
+	LifetimeTightAheadOnly += Report.LaneChangeTightAheadOnly;
+	LifetimeTightBehindOnly += Report.LaneChangeTightBehindOnly;
+	LifetimeTightBoth += Report.LaneChangeTightBoth;
+}
+
+int32 FWiesbadenTrafficSimulation::WriteCongestionMap(const FString& Path, int32 MinSamples) const
+{
+	if (!Network)
+	{
+		return -1;
+	}
+
+	FString Out;
+	Out.Reserve(8 * 1024 * 1024);
+	Out += TEXT("# Stau-Karte Wiesbaden. Koordinaten in cm (Weltkoordinaten).\n");
+	Out += TEXT("# NETZ x1 y1 x2 y2            - Stadtplan (nur Vorwaertsspuren)\n");
+	Out += TEXT("# STAU x y MittelKmh LimitKmh StehAnteil Messwerte Strassenname\n");
+
+	// Stadtplan: nur die Vorwaertsspuren, sonst liegt jede Strasse doppelt.
+	for (const FRoadLane& Lane : Network->Lanes)
+	{
+		if (!Lane.IsValid() || Lane.Direction != ELaneDirection::Forward
+			|| Lane.Centerline.Num() < 2)
+		{
+			continue;
+		}
+		const FVector& A = Lane.Centerline[0];
+		const FVector& B = Lane.Centerline.Last();
+		Out += FString::Printf(TEXT("NETZ %.0f %.0f %.0f %.0f\n"), A.X, A.Y, B.X, B.Y);
+	}
+
+	int32 Written = 0;
+	for (const TPair<int32, FLaneFlowSample>& Pair : LaneFlow)
+	{
+		const FLaneFlowSample& Flow = Pair.Value;
+		// Spuren mit wenigen Messwerten fliegen raus: ein einzelnes Fahrzeug,
+		// das zufaellig bremst, ist kein Stauschwerpunkt.
+		if (Flow.Samples < MinSamples || !Network->Lanes.IsValidIndex(Pair.Key))
+		{
+			continue;
+		}
+		const FRoadLane& Lane = Network->Lanes[Pair.Key];
+		if (Lane.Centerline.Num() == 0)
+		{
+			continue;
+		}
+		const FVector Mid = Lane.Centerline[Lane.Centerline.Num() / 2];
+
+		const double MeanKmh = (Flow.SpeedSumCmS / Flow.Samples) / KmhToCmS;
+		const double LimitKmh = Flow.LimitCmS / KmhToCmS;
+		const double StallFraction = static_cast<double>(Flow.Stalled) / Flow.Samples;
+
+		// Der NAME macht aus einem Punkt einen Ort. Ohne ihn liest sich die
+		// Auswertung als Koordinatenliste, mit der niemand etwas anfangen
+		// kann. GetDisplayName faellt auf Referenz bzw. Strassenklasse
+		// zurueck, wenn der Way in OSM keinen Namen traegt - das ist
+		// haeufig und kein Fehler.
+		FString Name = TEXT("(ohne Namen)");
+		if (Network->Segments.IsValidIndex(Lane.SegmentId))
+		{
+			Name = Network->Segments[Lane.SegmentId].GetDisplayName();
+		}
+		// Der Name steht als LETZTES Feld der Zeile, Leerzeichen darin
+		// sind also unschaedlich - Zeilenumbrueche nicht.
+		Name.ReplaceInline(TEXT("\n"), TEXT(" "));
+		Name.ReplaceInline(TEXT("\r"), TEXT(" "));
+
+		Out += FString::Printf(TEXT("STAU %.0f %.0f %.1f %.1f %.3f %d %s\n"),
+			Mid.X, Mid.Y, MeanKmh, LimitKmh, StallFraction, Flow.Samples, *Name);
+		++Written;
+	}
+
+	// FEST UTF-8. Ohne die Vorgabe wechselt FFileHelper auf UTF-16, sobald ein
+	// Zeichen ausserhalb von ASCII vorkommt - und deutsche Strassennamen tun
+	// das. Die Kodierung derselben Datei haenge damit davon ab, WELCHE
+	// Strassen gemessen wurden; jedes Auswertewerkzeug muesste raten.
+	if (!FFileHelper::SaveStringToFile(Out, *Path,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		return -1;
+	}
+	return Written;
 }
 
 void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
@@ -1820,9 +2022,24 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 	int32 Stalled = 0;
 	for (const FTrafficVehicle& Vehicle : Vehicles)
 	{
-		if (Vehicle.SpeedCmS < StallSpeedCmS && Vehicle.DesiredSpeedCmS > StallSpeedCmS)
+		const bool bStalled = Vehicle.SpeedCmS < StallSpeedCmS
+			&& Vehicle.DesiredSpeedCmS > StallSpeedCmS;
+		if (bStalled)
 		{
 			++Stalled;
+		}
+
+		// Fluss je Spur mitschreiben (nur auf Anforderung). Fahrzeuge IN einer
+		// Kreuzung zaehlen nicht mit: sie stehen dort wegen der Ampel, und das
+		// wuerde jede signalisierte Kreuzung als Dauerstau einfaerben.
+		if (bCollectLaneFlow && Vehicle.bOnLane
+			&& Network->Lanes.IsValidIndex(Vehicle.LaneId))
+		{
+			FLaneFlowSample& Flow = LaneFlow.FindOrAdd(Vehicle.LaneId);
+			++Flow.Samples;
+			Flow.Stalled += bStalled ? 1 : 0;
+			Flow.SpeedSumCmS += Vehicle.SpeedCmS;
+			Flow.LimitCmS = Network->Lanes[Vehicle.LaneId].SpeedLimitKmh * KmhToCmS;
 		}
 	}
 	Report.StalledVehicleCount = Stalled;

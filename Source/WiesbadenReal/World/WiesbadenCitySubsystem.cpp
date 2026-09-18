@@ -1233,12 +1233,32 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			const FWiesbadenTrafficReport& Traffic = TrafficSimulation.Report;
 			UE_LOG(LogWbTraffic, Log,
 				TEXT("Verkehrsfluss: %d Fahrzeuge, %d stehen trotz Fahrwunsch (%.0f %%), ")
-				TEXT("mittleres Tempo %.0f km/h, %d an Rot gehalten, %d Spurwechsel."),
+				TEXT("mittleres Tempo %.0f km/h, %d an Rot gehalten, %d Spurwechsel seit Start."),
 				Traffic.ActiveVehicleCount, Traffic.StalledVehicleCount,
 				Traffic.ActiveVehicleCount > 0
 					? 100.0 * Traffic.StalledVehicleCount / Traffic.ActiveVehicleCount : 0.0,
 				Traffic.MeanSpeedKmh, TrafficSimulation.GetVehiclesHeldAtRed(),
-				Traffic.LaneChangesThisTick);
+				TrafficSimulation.GetLifetimeLaneChanges());
+
+			// Warum NICHT gewechselt wird. Die blosse Zahl der Spurwechsel
+			// sagt nichts darueber, woran es haengt - und ohne das aendert man
+			// auf Verdacht.
+			{
+				int32 Candidates = 0, NoNeighbour = 0, BlockedByGap = 0, NoGain = 0;
+				TrafficSimulation.GetLifetimeLaneChangeReasons(
+					Candidates, NoNeighbour, BlockedByGap, NoGain);
+				UE_LOG(LogWbTraffic, Log,
+					TEXT("Spurwechsel: %d seit Start bei %d Anlaeufen - ")
+					TEXT("%d ohne Nachbarspur, %d Luecke zu eng, %d ohne Gewinn."),
+					TrafficSimulation.GetLifetimeLaneChanges(), Candidates,
+					NoNeighbour, BlockedByGap, NoGain);
+
+				int32 AheadOnly = 0, BehindOnly = 0, Both = 0;
+				TrafficSimulation.GetLifetimeTightSides(AheadOnly, BehindOnly, Both);
+				UE_LOG(LogWbTraffic, Log,
+					TEXT("Spurwechsel, zu enge Luecken: %d nur vorn, %d nur hinten, %d beides."),
+					AheadOnly, BehindOnly, Both);
+			}
 
 			// Lampen: ohne Zaehlung ist auf einem Nachtbild nicht zu sagen, ob
 			// eine rote Flaeche vom Bremslicht kommt oder vom Eigenlicht des
@@ -1300,6 +1320,24 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 						Collector, 100.0 * Collector / Total,
 						Local, 100.0 * Local / Total);
 				}
+			}
+
+			// Stau-KARTE: -WbStauKarte schreibt Netz und Fluss je Strasse nach
+			// Saved/Diagnose/staukarte.txt, aus der Tools/render_stau_karte.py
+			// eine Luftkarte macht.
+			//
+			// Geschrieben wird bei JEDER Diagnose-Ausgabe, nicht einmal am
+			// Ende: ein Lauf, der abgebrochen wird oder dessen Editor beim
+			// Sitzungsende abgeraeumt wird, haette sonst gar nichts
+			// hinterlassen - genau das ist beim Bake schon passiert.
+			if (TrafficSimulation.bCollectLaneFlow)
+			{
+				const FString MapPath = FPaths::ProjectSavedDir()
+					/ TEXT("Diagnose") / TEXT("staukarte.txt");
+				const int32 Rows = TrafficSimulation.WriteCongestionMap(MapPath);
+				UE_LOG(LogWbTraffic, Log,
+					TEXT("Stau-Karte: %d Strassen mit genug Messwerten -> %s"),
+					Rows, *MapPath);
 			}
 
 			// Stau NACHGEHEN, nicht nur zaehlen: -WbStauLog nennt je Steher den
@@ -4147,6 +4185,14 @@ void UWiesbadenCitySubsystem::InitializeCity()
 			if (!Builder->RoadNetwork.IsEmpty())
 			{
 				TrafficSimulation.Initialize(Builder->RoadNetwork, Builder->TrafficSettings);
+				// -WbStauKarte: Fluss je Strasse mitschreiben. VOR Initialize
+				// setzen waere zwecklos - Initialize raeumt die Messwerte auf.
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbStauKarte")))
+				{
+					TrafficSimulation.bCollectLaneFlow = true;
+					UE_LOG(LogWbTraffic, Log,
+						TEXT("Stau-Karte: Fluss je Strasse wird mitgeschrieben (-WbStauKarte)."));
+				}
 
 				// Ampeln: Das System war vollstaendig implementiert und getestet,
 				// wurde aber nie mit der Simulation verbunden - der Verkehr fuhr
@@ -4397,6 +4443,14 @@ void UWiesbadenCitySubsystem::SpawnCityActor(const FWiesbadenCityData& Data)
 	if (!Data.RoadNetwork.IsEmpty())
 	{
 		TrafficSimulation.Initialize(Data.RoadNetwork, Data.TrafficSettings);
+		// -WbStauKarte: Fluss je Strasse mitschreiben. VOR Initialize
+		// setzen waere zwecklos - Initialize raeumt die Messwerte auf.
+		if (FParse::Param(FCommandLine::Get(), TEXT("WbStauKarte")))
+		{
+			TrafficSimulation.bCollectLaneFlow = true;
+			UE_LOG(LogWbTraffic, Log,
+				TEXT("Stau-Karte: Fluss je Strasse wird mitgeschrieben (-WbStauKarte)."));
+		}
 		UE_LOG(LogWbCore, Log,
 			TEXT("Verkehrs-Simulation initialisiert: Dichte %.2f, %.1f km Netz, %d Spuren."),
 			Data.TrafficSettings.TrafficDensity,
