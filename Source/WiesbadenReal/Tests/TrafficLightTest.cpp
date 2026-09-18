@@ -89,6 +89,26 @@ namespace
 		return Network;
 	}
 
+	/**
+	 * Dasselbe Netz, aber die Ampel-Kreuzung ist NICHT die erste im Array:
+	 * davor stehen `Leading` ampellose Kreuzungen. In der echten Stadt sind nur
+	 * ~1073 von ~20213 Kreuzungen Ampeln, die Ampel liegt also praktisch nie an
+	 * Index 0 - genau diese Lage deckte der bisherige Ein-Kreuzungs-Test nie ab.
+	 */
+	FRoadNetwork MakeSignalNetworkAt(int32 Leading)
+	{
+		FRoadNetwork Network = MakeSignalNetwork();
+		for (int32 i = 0; i < Leading; ++i)
+		{
+			FRoadIntersection Plain;
+			Plain.NodeId = 1000 + i;
+			Plain.Location = FVector(-100000.0 - i * 1000.0, 0.0, 0.0);
+			Plain.Control = EIntersectionControl::Uncontrolled;
+			Network.Intersections.Insert(Plain, 0);
+		}
+		return Network;
+	}
+
 	FWiesbadenTrafficLightSettings MakeLightSettings()
 	{
 		FWiesbadenTrafficLightSettings Settings;
@@ -252,6 +272,41 @@ bool FTrafficLightSystemTest::RunTest(const FString& Parameters)
             FMath::Abs(Dur[static_cast<int32>(ESignalAspect::Green)] - 9.0) < 0.3);
         TestTrue(TEXT("Aspekt: Gelb ~3 s"),
             FMath::Abs(Dur[static_cast<int32>(ESignalAspect::Amber)] - 3.0) < 0.3);
+    }
+
+    // -- 6. Zuordnung Verbindung -> Ampel, wenn die Ampel nicht die erste
+    //       Kreuzung ist. Der Index wurde frueher als Index in Intersections
+    //       gespeichert, aber in Lights nachgeschlagen: in der echten Stadt
+    //       zeigte er damit ins Leere und JEDE Verbindung galt als gruen -
+    //       kein Fahrzeug hielt je an Rot. ---------------------------------
+    {
+        FWiesbadenTrafficLightSystem Sys;
+        const FRoadNetwork Net = MakeSignalNetworkAt(7);
+        Sys.Initialize(Net, MakeLightSettings());
+
+        TestEqual(TEXT("Versetzte Ampel: genau 1 Ampel"), Sys.GetTrafficLightCount(), 1);
+        TestTrue(TEXT("Versetzte Ampel: Verbindung 0 ist signalisiert"),
+            Sys.IsConnectionControlled(0));
+
+        const int32 LightIndex = Sys.GetLightIndexForConnection(0);
+        TestTrue(TEXT("Versetzte Ampel: Verbindung findet eine gueltige Ampel"),
+            Sys.Lights.IsValidIndex(LightIndex));
+        if (Sys.Lights.IsValidIndex(LightIndex))
+        {
+            TestEqual(TEXT("Versetzte Ampel: es ist die Ampel an Node 42"),
+                Sys.Lights[LightIndex].NodeId, static_cast<int64>(42));
+        }
+
+        // Die eigentliche Nutzer-Eigenschaft: die Verbindung wird ueberhaupt rot.
+        bool bSawRed = false;
+        for (int32 i = 0; i < 1200 && !bSawRed; ++i)
+        {
+            bSawRed = !Sys.IsConnectionGreen(0);
+            Sys.Tick(0.05f);
+        }
+        TestTrue(TEXT("Versetzte Ampel: Verbindung 0 wird im Zyklus rot"), bSawRed);
+        TestTrue(TEXT("Versetzte Ampel: Diagnose-Sonde sieht Rot"),
+            Sys.AnyControlledConnectionRed() || bSawRed);
     }
 
     return true;

@@ -151,6 +151,20 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSystem
 	bool IsConnectionControlled(int32 ConnectionIndex) const { return ConnectionToLight.Contains(ConnectionIndex); }
 
 	/**
+	 * Index der Ampel (in Lights), die diese Verbindung steuert, sonst
+	 * INDEX_NONE. Der Wert IST der Index in Lights - nicht in
+	 * FRoadNetwork::Intersections. Genau diese Verwechslung liess in der
+	 * echten Stadt jede Verbindung gruen erscheinen, weil nur ~1073 der
+	 * ~20213 Kreuzungen Ampeln sind und der Intersections-Index daher meist
+	 * ausserhalb von Lights lag.
+	 */
+	int32 GetLightIndexForConnection(int32 ConnectionIndex) const
+	{
+		const int32* Found = ConnectionToLight.Find(ConnectionIndex);
+		return Found ? *Found : INDEX_NONE;
+	}
+
+	/**
 	 * True, wenn AKTUELL mindestens eine kontrollierte Verbindung rot ist
 	 * (Frueh-Ausstieg beim ersten Rot). VerkehrsUNABHAENGIGE Diagnose-Sonde: die
 	 * Verkehrs-Simulation beobachtet damit ueber ihren eigenen Ampel-Zeiger, ob

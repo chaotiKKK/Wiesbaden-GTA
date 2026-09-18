@@ -58,13 +58,31 @@ void FWiesbadenTrafficLightSystem::Initialize(
 	ConnectionToLight.Reset();
 	ElapsedSeconds = 0.0;
 
-	for (int32 LightIndex = 0; LightIndex < InNetwork.Intersections.Num(); ++LightIndex)
+	// Connections einmal nach Kreuzungsknoten buendeln. Vorher suchte jede
+	// Ampel das GANZE Connections-Array ab (1073 Ampeln x Hunderttausende
+	// Verbindungen); jetzt ein Durchgang plus direkter Zugriff.
+	TMap<int64, TArray<int32>> ConnectionsByNode;
+	ConnectionsByNode.Reserve(InNetwork.Intersections.Num());
+	for (int32 ConnectionIndex = 0; ConnectionIndex < InNetwork.Connections.Num(); ++ConnectionIndex)
 	{
-		const FRoadIntersection& Intersection = InNetwork.Intersections[LightIndex];
+		ConnectionsByNode.FindOrAdd(InNetwork.Connections[ConnectionIndex].IntersectionNodeId)
+			.Add(ConnectionIndex);
+	}
+
+	for (const FRoadIntersection& Intersection : InNetwork.Intersections)
+	{
 		if (Intersection.Control != EIntersectionControl::TrafficSignals)
 		{
 			continue;
 		}
+
+		// Index der Ampel im GEFILTERTEN Lights-Array - nicht der Laufindex
+		// ueber Intersections. Genau diese Verwechslung war der Kopplungs-
+		// Defekt: nur ~1073 von ~20213 Kreuzungen sind Ampeln, der
+		// Intersections-Index lag also fast immer ausserhalb von Lights,
+		// GetConnectionAspect fiel auf "gruen" zurueck und kein Fahrzeug
+		// hielt je an Rot.
+		const int32 LightIndex = Lights.Num();
 
 		FWiesbadenTrafficLight Light;
 		Light.NodeId = Intersection.NodeId;
@@ -78,24 +96,23 @@ void FWiesbadenTrafficLightSystem::Initialize(
 			* Settings.CycleSeconds;
 
 		// Connections dieser Kreuzung einer Richtungsgruppe zuordnen.
-		for (int32 ConnectionIndex = 0; ConnectionIndex < InNetwork.Connections.Num(); ++ConnectionIndex)
+		if (const TArray<int32>* NodeConnections = ConnectionsByNode.Find(Intersection.NodeId))
 		{
-			const FLaneConnection& Connection = InNetwork.Connections[ConnectionIndex];
-			if (Connection.IntersectionNodeId != Intersection.NodeId)
+			for (const int32 ConnectionIndex : *NodeConnections)
 			{
-				continue;
-			}
-			if (!InNetwork.Lanes.IsValidIndex(Connection.FromLaneId))
-			{
-				continue;
-			}
+				const FLaneConnection& Connection = InNetwork.Connections[ConnectionIndex];
+				if (!InNetwork.Lanes.IsValidIndex(Connection.FromLaneId))
+				{
+					continue;
+				}
 
-			const int32 Group = ComputeGroupIndex(InNetwork.Lanes[Connection.FromLaneId], Light.GroupCount);
-			Light.ConnectionGroups.Add(ConnectionIndex, Group);
-			ConnectionToLight.Add(ConnectionIndex, LightIndex);
+				const int32 Group = ComputeGroupIndex(InNetwork.Lanes[Connection.FromLaneId], Light.GroupCount);
+				Light.ConnectionGroups.Add(ConnectionIndex, Group);
+				ConnectionToLight.Add(ConnectionIndex, LightIndex);
+			}
 		}
 
-		Lights.Add(Light);
+		Lights.Add(MoveTemp(Light));
 	}
 }
 
