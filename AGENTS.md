@@ -2337,6 +2337,14 @@ die Variable schaltet genau die Umschreibung ab, die `//c` zu `/c` macht. Richti
 BRAUCHT `MSYS2_ARG_CONV_EXCL='*'`, sonst wird `/Game/Maps/<Karte>` zu
 `C:/Program Files/Git/Game/Maps/<Karte>` und der Lauf endet nach 2 s ohne Karte
 (im Log sichtbar als `LogInit: Command Line:` mit dem Git-Pfad).
+**Symptom, das in die Irre fuehrt (18.09.2026):** der Prozess endet dabei NICHT, sondern
+stellt ein MODALES Fenster `Message` - "The map specified on the commandline ... could not be
+found. Would you like to load the default map instead?" - und wartet auf einen Klick. Von aussen
+sieht das wie ein haengender Editor aus: ~5 GB RAM, Fenster `Message`, und die mit `>` umgeleitete
+Logdatei bleibt 0 Byte, weil der Lauf den Weltstart nie erreicht. Also: haengender UnrealEditor
+mit leerem Log = erst die Kommandozeile im Projektlog (`LogInit: Command Line:`) ansehen, ob ein
+Git-Pfad darin steht - und die Leiche mit `Stop-Process` wegraeumen, sonst blockiert sie den
+naechsten Lauf (auch die Default-Karte wird dann nicht geladen).
 
 ## Gebackene Karte: KEINE Fahrbahn-Kollision - Boden kommt aus dem Strassennetz
 - Der vertikale Boden-Trace traf in JEDER Probe beider Buslinien (132/132) nur das
