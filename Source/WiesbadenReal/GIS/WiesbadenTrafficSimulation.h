@@ -585,6 +585,41 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	 */
 	double GetNearbyLaneKm() const { return NearbySpawnLaneLengthCm / 100000.0; }
 
+	/**
+	 * Ein Steher mit dem GRUND, aus dem er steht (Diagnose).
+	 *
+	 * "Die Autos stauen sich" liess sich bisher nicht nachgehen: die Bilanz
+	 * nennt nur eine Anzahl. Ohne den Grund ist nicht zu unterscheiden, ob der
+	 * Verkehr vor dem geparkten Spielerauto wartet, hinter einem Vordermann
+	 * klemmt, an Rot haelt oder in einer Sackgasse steckt.
+	 */
+	struct FStalledVehicle
+	{
+		int32 VehicleId = INDEX_NONE;
+		int32 LaneId = INDEX_NONE;
+		FVector Location = FVector::ZeroVector;
+		double SpeedCmS = 0.0;
+		double DesiredSpeedCmS = 0.0;
+
+		/** Abstand zum Spielerfahrzeug in cm (-1, wenn keines gemeldet ist). */
+		double PlayerDistanceCm = -1.0;
+
+		/** Steht ein anderes Fahrzeug direkt davor? Abstand in cm, sonst -1. */
+		double AheadDistanceCm = -1.0;
+
+		/** Faehrt es auf eine rote Ampel zu? */
+		bool bHeldAtRed = false;
+
+		/** Hat die Spur ueberhaupt eine Fortsetzung? */
+		bool bHasSuccessor = true;
+	};
+
+	/**
+	 * Die aktuellen Steher mit Grund, hoechstens MaxCount, die naechsten zuerst.
+	 * Fuer die Diagnose gedacht und deshalb nicht je Tick gerufen.
+	 */
+	void CollectStalledVehicles(int32 MaxCount, TArray<FStalledVehicle>& Out) const;
+
 	/** Anzahl der Spuren im Spawn-Umkreis (Bezugsgroesse zu GetNearbyLaneKm). */
 	int32 GetNearbyLaneCount() const { return NearbySpawnLaneIds.Num(); }
 
@@ -600,6 +635,25 @@ private:
 	 * Folgebahn (Sackgasse / kaputtes Netz) - der Aufrufer entfernt.
 	 */
 	bool AdvanceEdge(FTrafficVehicle& Vehicle);
+
+	/**
+	 * Die naechste Bahn, OHNE den Wechsel auszufuehren.
+	 *
+	 * Noetig, um vor dem Wechsel zu fragen, ob dort schon jemand steht. Ohne
+	 * diese Frage setzte AdvanceEdge Fahrzeuge aus verschiedenen Zufluessen im
+	 * selben Tick auf denselben Punkt - gemessen drei Stueck auf 1 cm genau
+	 * uebereinander, und die Abstandsregel bekam sie nicht mehr auseinander:
+	 * sie haelt nur den Abstand, sie kann keinen herstellen.
+	 *
+	 * @return false bei Sackgasse oder kaputter Folgebahn (Aufrufer entfernt).
+	 */
+	bool PeekNextEdge(const FTrafficVehicle& Vehicle, bool& bOutOnLane, int32& OutIndex) const;
+
+	/** Eindeutiger Schluessel einer Bahn (Spur oder Verbindung). */
+	static int64 EdgeKey(bool bOnLane, int32 Index)
+	{
+		return (static_cast<int64>(Index) << 1) | (bOnLane ? 0 : 1);
+	}
 
 	/**
 	 * Deterministisch gewaehlte Folgespur-Verbindung einer Spur (wie

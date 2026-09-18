@@ -1144,6 +1144,28 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					? 100.0 * Traffic.StalledVehicleCount / Traffic.ActiveVehicleCount : 0.0,
 				Traffic.MeanSpeedKmh, TrafficSimulation.GetVehiclesHeldAtRed(),
 				Traffic.LaneChangesThisTick);
+
+			// Stau NACHGEHEN, nicht nur zaehlen: -WbStauLog nennt je Steher den
+			// Grund. Ohne das laesst sich "die Autos stauen sich" nicht von
+			// "ein Fahrzeug haelt an Rot" unterscheiden - und der gemeldete
+			// Stau lag am Startplatz, wo das geparkte Spielerauto die einzige
+			// Fahrspur blockiert.
+			if (FParse::Param(FCommandLine::Get(), TEXT("WbStauLog")))
+			{
+				TArray<FWiesbadenTrafficSimulation::FStalledVehicle> Stalled;
+				TrafficSimulation.CollectStalledVehicles(10, Stalled);
+				for (const FWiesbadenTrafficSimulation::FStalledVehicle& S : Stalled)
+				{
+					UE_LOG(LogWbTraffic, Log,
+						TEXT("  Steher %d auf Spur %d bei (%.0f, %.0f): %.0f von %.0f km/h, ")
+						TEXT("Spieler %.1f m, Vordermann %.1f m, Rot=%d, Fortsetzung=%d."),
+						S.VehicleId, S.LaneId, S.Location.X, S.Location.Y,
+						S.SpeedCmS * 0.036, S.DesiredSpeedCmS * 0.036,
+						S.PlayerDistanceCm >= 0.0 ? S.PlayerDistanceCm * 0.01 : -1.0,
+						S.AheadDistanceCm >= 0.0 ? S.AheadDistanceCm * 0.01 : -1.0,
+						S.bHeldAtRed ? 1 : 0, S.bHasSuccessor ? 1 : 0);
+				}
+			}
 		}
 
 		FrameProfiler.BeginWindow();

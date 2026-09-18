@@ -342,6 +342,36 @@ double FWiesbadenTrafficSimulation::GetSuccessorWeight(int32 ConnectionIndex) co
 	return GetRoadClassWeight(Network->Segments[SegmentId].HighwayType);
 }
 
+bool FWiesbadenTrafficSimulation::PeekNextEdge(
+	const FTrafficVehicle& Vehicle, bool& bOutOnLane, int32& OutIndex) const
+{
+	if (Vehicle.bOnLane)
+	{
+		const int32 Pick = PickSuccessorConnection(Vehicle);
+		if (Pick == INDEX_NONE)
+		{
+			return false;   // Sackgasse
+		}
+		bOutOnLane = false;
+		OutIndex = Pick;
+		return true;
+	}
+
+	if (!Network->Connections.IsValidIndex(Vehicle.ConnectionIndex))
+	{
+		return false;
+	}
+	const FLaneConnection& Connection = Network->Connections[Vehicle.ConnectionIndex];
+	if (!Network->Lanes.IsValidIndex(Connection.ToLaneId)
+		|| !Network->Lanes[Connection.ToLaneId].IsValid())
+	{
+		return false;
+	}
+	bOutOnLane = true;
+	OutIndex = Connection.ToLaneId;
+	return true;
+}
+
 bool FWiesbadenTrafficSimulation::AdvanceEdge(FTrafficVehicle& Vehicle)
 {
 	if (Vehicle.bOnLane)
@@ -592,6 +622,94 @@ void FWiesbadenTrafficSimulation::SamplePolyline(const TArray<FVector>& Polyline
 	}
 	OutLocation = Polyline.Last();
 	OutForward = FVector::ForwardVector;
+}
+
+void FWiesbadenTrafficSimulation::CollectStalledVehicles(
+	int32 MaxCount, TArray<FStalledVehicle>& Out) const
+{
+	Out.Reset();
+	if (!Network || MaxCount <= 0)
+	{
+		return;
+	}
+
+	// Dieselbe Schwelle wie die Bilanz: unter 5 km/h trotz hoeherem Fahrwunsch.
+	constexpr double StalledSpeedCmS = 139.0;
+
+	for (const FTrafficVehicle& Vehicle : Vehicles)
+	{
+		if (Vehicle.SpeedCmS >= StalledSpeedCmS
+			|| Vehicle.DesiredSpeedCmS <= StalledSpeedCmS)
+		{
+			continue;
+		}
+
+		FStalledVehicle Entry;
+		Entry.VehicleId = Vehicle.VehicleId;
+		Entry.LaneId = Vehicle.LaneId;
+		Entry.Location = Vehicle.Location;
+		Entry.SpeedCmS = Vehicle.SpeedCmS;
+		Entry.DesiredSpeedCmS = Vehicle.DesiredSpeedCmS;
+
+		if (bHasPlayerObstacle)
+		{
+			Entry.PlayerDistanceCm = FVector::Dist2D(Vehicle.Location, PlayerObstacleLocation);
+		}
+
+		// Vordermann: das naechste Fahrzeug VOR diesem, in Fahrtrichtung.
+		double BestAhead = TNumericLimits<double>::Max();
+		for (const FTrafficVehicle& Other : Vehicles)
+		{
+			if (Other.VehicleId == Vehicle.VehicleId)
+			{
+				continue;
+			}
+			const FVector Delta = Other.Location - Vehicle.Location;
+			const double Along = FVector::DotProduct(Delta, Vehicle.Forward);
+			if (Along <= 0.0)
+			{
+				continue;   // hinter uns
+			}
+			const double Lateral = FVector::Dist2D(
+				Other.Location, Vehicle.Location + Vehicle.Forward * Along);
+			if (Lateral > 200.0)
+			{
+				continue;   // nicht in derselben Spur
+			}
+			BestAhead = FMath::Min(BestAhead, Along);
+		}
+		if (BestAhead < TNumericLimits<double>::Max())
+		{
+			Entry.AheadDistanceCm = BestAhead;
+		}
+
+		Entry.bHeldAtRed = Vehicle.bWasHeldAtRed;
+
+		if (const TArray<int32>* Successors = LaneSuccessorIndices.Find(Vehicle.LaneId))
+		{
+			Entry.bHasSuccessor = Successors->Num() > 0;
+		}
+		else
+		{
+			Entry.bHasSuccessor = false;
+		}
+
+		Out.Add(Entry);
+	}
+
+	// Die naechsten zuerst - die sieht der Spieler.
+	if (bHasPlayerObstacle)
+	{
+		Out.Sort([](const FStalledVehicle& A, const FStalledVehicle& B)
+		{
+			return A.PlayerDistanceCm < B.PlayerDistanceCm;
+		});
+	}
+
+	if (Out.Num() > MaxCount)
+	{
+		Out.SetNum(MaxCount);
+	}
 }
 
 int32 FWiesbadenTrafficSimulation::GetTargetVehicleCount() const
@@ -1268,30 +1386,91 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 	TotalDistanceCm += DistanceThisTick;
 
 	// -- 3) Bahnwechsel (Spur -> Verbindung -> Folgespur; Sackgasse -> raus) ---
-	for (FTrafficVehicle& Vehicle : Vehicles)
+	//
+	// VORFAHRT AM BAHNANFANG: Wer auf eine Bahn wechselt, deren Anfang schon
+	// besetzt ist, wartet am Ende seiner jetzigen Bahn.
+	//
+	// Ohne diese Regel setzte der Wechsel Fahrzeuge aus verschiedenen
+	// Zufluessen im selben Tick auf denselben Punkt. Gemessen am Startplatz:
+	// drei Fahrzeuge auf Spur 47168 bei (-144427, -158587), auf 1 cm genau
+	// uebereinander, Vordermann-Abstand 0,0 m. Danach kamen sie nie wieder
+	// auseinander - die Abstandsregel HAELT eine Luecke, sie STELLT KEINE HER:
+	// bei Abstand 0 setzt sie beiden Tempo 0, und der Stapel steht fuer immer.
+	// Genau dieses Ineinanderstecken war im Spiel als "die Autos stapeln sich"
+	// zu sehen.
 	{
-		int32 Guard = 0;
-		while (true)
+		// Vorderstes Fahrzeug je Bahn = kleinste Distanz auf ihr. Genau das
+		// trifft ein Neuankoemmling, der am Anfang einsetzt.
+		TMap<int64, double> FrontDistanceOnEdge;
+		FrontDistanceOnEdge.Reserve(Vehicles.Num());
+		for (const FTrafficVehicle& Vehicle : Vehicles)
 		{
-			const double EdgeLength = GetEdgeLengthCm(Vehicle);
-			if (EdgeLength <= 0.0)
+			if (Vehicle.bRemoved)
 			{
-				Vehicle.bRemoved = true;
-				break;
+				continue;
 			}
-			if (Vehicle.DistanceCm < EdgeLength)
+			const int64 Key = EdgeKey(Vehicle.bOnLane,
+				Vehicle.bOnLane ? Vehicle.LaneId : Vehicle.ConnectionIndex);
+			double& Front = FrontDistanceOnEdge.FindOrAdd(Key, TNumericLimits<double>::Max());
+			Front = FMath::Min(Front, Vehicle.DistanceCm);
+		}
+
+		for (FTrafficVehicle& Vehicle : Vehicles)
+		{
+			int32 Guard = 0;
+			while (true)
 			{
-				break;
-			}
-			if (!AdvanceEdge(Vehicle))
-			{
-				Vehicle.bRemoved = true;
-				break;
-			}
-			if (++Guard > MaxEdgeTransitionsPerTick)
-			{
-				Vehicle.bRemoved = true;
-				break;
+				const double EdgeLength = GetEdgeLengthCm(Vehicle);
+				if (EdgeLength <= 0.0)
+				{
+					Vehicle.bRemoved = true;
+					break;
+				}
+				if (Vehicle.DistanceCm < EdgeLength)
+				{
+					break;
+				}
+
+				bool bNextOnLane = false;
+				int32 NextIndex = INDEX_NONE;
+				if (!PeekNextEdge(Vehicle, bNextOnLane, NextIndex))
+				{
+					Vehicle.bRemoved = true;
+					break;
+				}
+
+				// Wo saesse es auf der neuen Bahn? Der Ueberlauf ueber das Ende
+				// der jetzigen ist die neue Distanz - dieselbe Rechnung wie in
+				// AdvanceEdge.
+				const double EntryDistance = Vehicle.DistanceCm - EdgeLength;
+				const int64 NextKey = EdgeKey(bNextOnLane, NextIndex);
+				const double* Front = FrontDistanceOnEdge.Find(NextKey);
+
+				if (Front != nullptr && *Front < EntryDistance + MinGap)
+				{
+					// Besetzt: am Bahnende warten statt hineinzufahren.
+					Vehicle.DistanceCm = FMath::Max(0.0, EdgeLength - 1.0);
+					Vehicle.SpeedCmS = 0.0;
+					break;
+				}
+
+				if (!AdvanceEdge(Vehicle))
+				{
+					Vehicle.bRemoved = true;
+					break;
+				}
+
+				// Die neue Bahn ist jetzt (auch) von diesem Fahrzeug besetzt -
+				// sonst faehrt der Naechste im selben Tick daneben hinein.
+				double& NewFront = FrontDistanceOnEdge.FindOrAdd(
+					NextKey, TNumericLimits<double>::Max());
+				NewFront = FMath::Min(NewFront, Vehicle.DistanceCm);
+
+				if (++Guard > MaxEdgeTransitionsPerTick)
+				{
+					Vehicle.bRemoved = true;
+					break;
+				}
 			}
 		}
 	}

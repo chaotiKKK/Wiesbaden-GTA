@@ -1123,3 +1123,110 @@ bool FTrafficTargetDensityTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficMergeStackingTest,
+	"WiesbadenReal.Traffic.Einmuendung",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficMergeStackingTest::RunTest(const FString& Parameters)
+{
+	// Zwei Zufluesse auf DIESELBE Folgespur - die Lage, in der im Spiel drei
+	// Fahrzeuge auf 1 cm genau uebereinander standen und nie wieder
+	// auseinanderkamen. Die Abstandsregel HAELT eine Luecke, sie STELLT KEINE
+	// HER: bei Abstand 0 bekommen beide Tempo 0 und der Stapel bleibt stehen.
+	FRoadNetwork Network = MakeNetwork();
+
+	// Spur 2 muendet ebenfalls in Spur 1 (Spur 0 tut das schon ueber
+	// Verbindung 0). Die Verbindung ist GENAU SO LANG wie Verbindung 0 -
+	// sonst treffen die beiden nie im selben Tick ein und der Test misst nichts.
+	FLaneConnection Merge;
+	Merge.FromLaneId = 2;
+	Merge.ToLaneId = 1;
+	Merge.IntersectionNodeId = 42;
+	Merge.TurnType = ETurnType::Through;
+	Merge.bRestricted = false;
+	Merge.ConnectionPath = {
+		FVector(10000.0, 5000.0, 0.0), FVector(10250.0, 5000.0, 0.0),
+		FVector(10500.0, 5000.0, 0.0) };
+	Network.Connections.Add(Merge);
+
+	FWiesbadenTrafficSettings Settings = MakeSettings(0.0f);   // kein Spawn
+	Settings.MinGapCm = 700.0;
+
+	FWiesbadenTrafficSimulation Sim;
+	Sim.Initialize(Network, Settings);
+
+	// Beide DIREKT auf ihre Verbindung setzen, dicht vor deren Ende und mit
+	// gleicher Geschwindigkeit: im naechsten Schritt laufen beide auf Spur 1
+	// ueber, mit derselben Rest-Distanz. Genau hier entstand der Stapel.
+	auto PathLength = [](const TArray<FVector>& Path)
+	{
+		double Length = 0.0;
+		for (int32 i = 1; i < Path.Num(); ++i)
+		{
+			Length += FVector::Dist(Path[i], Path[i - 1]);
+		}
+		return Length;
+	};
+
+	const double Conn0Length = PathLength(Network.Connections[0].ConnectionPath);
+	const double Conn1Length = PathLength(Network.Connections[1].ConnectionPath);
+
+	FTrafficVehicle A;
+	A.VehicleId = 1;
+	A.bOnLane = false;
+	A.ConnectionIndex = 0;
+	A.DistanceCm = Conn0Length - 50.0;
+	A.SpeedCmS = 1000.0;
+	A.DesiredSpeedCmS = 1000.0;
+	Sim.Vehicles.Add(A);
+
+	FTrafficVehicle B;
+	B.VehicleId = 2;
+	B.bOnLane = false;
+	B.ConnectionIndex = 1;
+	B.DistanceCm = Conn1Length - 50.0;
+	B.SpeedCmS = 1000.0;
+	B.DesiredSpeedCmS = 1000.0;
+	Sim.Vehicles.Add(B);
+
+	bool bSameSpot = false;
+	double ClosestOnLaneCm = TNumericLimits<double>::Max();
+
+	for (int32 Step = 0; Step < 30; ++Step)
+	{
+		Sim.Tick(0.1f);
+
+		if (Sim.Vehicles.Num() < 2)
+		{
+			break;   // eines ist aus dem Netz gelaufen - dann ist nichts mehr zu messen
+		}
+
+		const FTrafficVehicle& V0 = Sim.Vehicles[0];
+		const FTrafficVehicle& V1 = Sim.Vehicles[1];
+
+		const bool bSameEdge = (V0.bOnLane == V1.bOnLane)
+			&& (V0.bOnLane ? V0.LaneId == V1.LaneId : V0.ConnectionIndex == V1.ConnectionIndex);
+		if (bSameEdge)
+		{
+			const double Gap = FMath::Abs(V0.DistanceCm - V1.DistanceCm);
+			ClosestOnLaneCm = FMath::Min(ClosestOnLaneCm, Gap);
+			if (Gap < 100.0)
+			{
+				bSameSpot = true;
+			}
+		}
+	}
+
+	TestFalse(TEXT("Einmuendung: keine zwei Fahrzeuge auf derselben Bahn am selben Punkt"),
+		bSameSpot);
+
+	if (ClosestOnLaneCm < TNumericLimits<double>::Max())
+	{
+		TestTrue(FString::Printf(
+			TEXT("Einmuendung: geringster Abstand auf der Folgespur %.2f m"),
+			ClosestOnLaneCm / 100.0),
+			ClosestOnLaneCm >= 100.0);
+	}
+
+	return true;
+}
