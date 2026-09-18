@@ -140,6 +140,14 @@ struct WIESBADENREAL_API FWiesbadenWeatherFXParams
 	static float SkyLightFactorFor(float CloudOpacity01);
 
 	/**
+	 * Zusatzhelligkeit eines Blitzes in Lux, die kurz auf das Sonnenlicht
+	 * addiert wird (0 = kein Blitz). Ein Blitz setzt hart ein und klingt schnell
+	 * ab - deshalb quadratisch ueber die Restdauer, nicht linear. Engine-nativ
+	 * statt Niagara: ein Lichtpuls erhellt die ganze Stadt, ein Partikel nicht.
+	 */
+	static float LightningFlashLux(float FlashRemainingSeconds, float FlashDurationSeconds);
+
+	/**
 	 * Gibt die geforderten User-Parameter-Namen fuer einen Effekt-Typ zurueck
 	 * (Vertrag aus WeatherFXCatalog.json, praefixfrei wie ApplyParams sie setzt).
 	 */
@@ -243,6 +251,14 @@ public:
 	/** Letzter Sichtbarkeitszustand der Wolken - nicht je Bild umschalten. */
 	bool bCloudsVisible = true;
 
+	// -- Gewitter (Blitz als Lichtpuls) ----------------------------------------
+	/** Zeit seit dem letzten Blitz. */
+	float LightningTimer = 0.0f;
+	/** Restdauer des laufenden Blitzes. */
+	float LightningFlashRemaining = 0.0f;
+	/** Einmal-Beleg im Log, dass der Blitz-Takt wirklich feuert. */
+	bool bLightningLogged = false;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -279,6 +295,12 @@ private:
 
 	/** Himmelslicht des Levels (fuer die Daempfung unter Wolken). */
 	USkyLightComponent* FindSkyLight() const;
+
+	/**
+	 * Treibt den Blitz-Takt und liefert die Zusatzhelligkeit dieses Bildes in Lux.
+	 * Ausserhalb eines Gewitters (LightningInterval <= 0) immer 0.
+	 */
+	float UpdateLightning(const FWiesbadenWeatherFXParams& Params, float DeltaTime);
 
 	/** Laedt nicht manuell zugewiesene Effekt-Systeme aus den Default-Pfaden. */
 	void LoadDefaultSystems();

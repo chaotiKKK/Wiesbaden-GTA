@@ -141,6 +141,18 @@ float FWiesbadenWeatherFXParams::SkyLightFactorFor(float CloudOpacity01)
 	return FMath::Lerp(1.0f, 0.45f, FMath::Clamp(CloudOpacity01, 0.0f, 1.0f));
 }
 
+float FWiesbadenWeatherFXParams::LightningFlashLux(float FlashRemainingSeconds, float FlashDurationSeconds)
+{
+	if (FlashRemainingSeconds <= 0.0f || FlashDurationSeconds <= 0.0f)
+	{
+		return 0.0f;
+	}
+	// 30 lx liegen deutlich ueber der vollen Mittagssonne (10 lx) - ein Blitz
+	// ueberstrahlt die Szene auch am Tag kurz, nachts umso mehr.
+	const float T = FMath::Clamp(FlashRemainingSeconds / FlashDurationSeconds, 0.0f, 1.0f);
+	return 30.0f * T * T;
+}
+
 float FWiesbadenWeatherFXParams::GetNightSunFloor()
 {
 	return NightSunFloor;
@@ -467,6 +479,34 @@ UVolumetricCloudComponent* UWiesbadenWeatherFXComponent::FindOrSpawnClouds()
 	return Cloud ? Cloud->FindComponentByClass<UVolumetricCloudComponent>() : nullptr;
 }
 
+float UWiesbadenWeatherFXComponent::UpdateLightning(const FWiesbadenWeatherFXParams& Params, float DeltaTime)
+{
+	// Dauer eines Blitzes. Kurz genug, dass er zuckt statt zu blenden.
+	constexpr float FlashSeconds = 0.18f;
+
+	if (Params.LightningInterval <= 0.0f)
+	{
+		LightningTimer = 0.0f;
+		LightningFlashRemaining = 0.0f;
+		return 0.0f;
+	}
+
+	LightningFlashRemaining = FMath::Max(0.0f, LightningFlashRemaining - DeltaTime);
+	LightningTimer += DeltaTime;
+	if (LightningTimer >= Params.LightningInterval)
+	{
+		LightningTimer = 0.0f;
+		LightningFlashRemaining = FlashSeconds;
+		if (!bLightningLogged)
+		{
+			bLightningLogged = true;
+			UE_LOG(LogWbCore, Log, TEXT("WeatherFX: Gewitter - erster Blitz (Takt %.1f s)."),
+				Params.LightningInterval);
+		}
+	}
+	return FWiesbadenWeatherFXParams::LightningFlashLux(LightningFlashRemaining, FlashSeconds);
+}
+
 void UWiesbadenWeatherFXComponent::UpdateSky(const FWiesbadenWeatherFXParams& Params)
 {
 	// Nebel: Dichte aus der Wetterlage, Farbe aus dem Sonnenlicht - so faerbt
@@ -603,7 +643,8 @@ void UWiesbadenWeatherFXComponent::TickComponent(float DeltaTime, ELevelTick Tic
 		// Atmosphaere faerbt sich am Horizont von selbst mit (AtmosphereSunLight).
 		Sun->SetWorldRotation(WiesbadenSolar::SunLightRotation(State->SunElevationDeg, State->SunAzimuthDeg));
 		Sun->SetLightColor(Params.SunLightColor);
-		Sun->SetIntensity(Params.SunIntensity);
+		// Blitz kurz auf die Sonnenstaerke addieren (0 ausserhalb eines Gewitters).
+		Sun->SetIntensity(Params.SunIntensity + UpdateLightning(Params, DeltaTime));
 	}
 
 	// Himmel (Nebel, Wolken, Himmelslicht) - der sichtbare Teil des Wetters.

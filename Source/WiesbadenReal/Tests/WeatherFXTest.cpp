@@ -490,6 +490,17 @@ bool FWeatherFXSkyTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Daempfung faellt monoton"),
 		FX::SkyLightFactorFor(0.9f) < FX::SkyLightFactorFor(0.2f));
 
+	// -- Gewitter: Blitz setzt hart ein und klingt schnell ab ----------------
+	TestTrue(TEXT("kein Gewitter: kein Blitz"), FX::LightningFlashLux(0.0f, 0.18f) == 0.0f);
+	TestTrue(TEXT("Blitzbeginn ueberstrahlt die Mittagssonne"),
+		FX::LightningFlashLux(0.18f, 0.18f) > FX::GetMaxSunIntensityLux());
+	TestTrue(TEXT("Blitz klingt ab"),
+		FX::LightningFlashLux(0.05f, 0.18f) < FX::LightningFlashLux(0.15f, 0.18f));
+	// Quadratisch, nicht linear: auf halber Restdauer ist es deutlich unter der Haelfte.
+	TestTrue(TEXT("Abklingen ist ueberproportional"),
+		FX::LightningFlashLux(0.09f, 0.18f) < 0.5f * FX::LightningFlashLux(0.18f, 0.18f));
+	TestTrue(TEXT("entartete Dauer -> kein Blitz"), FX::LightningFlashLux(0.1f, 0.0f) == 0.0f);
+
 	// -- Zusammenspiel: Regen ist truebe, klar ist es nicht -------------------
 	{
 		const FWiesbadenWeatherState Clear = MakeFXState(
