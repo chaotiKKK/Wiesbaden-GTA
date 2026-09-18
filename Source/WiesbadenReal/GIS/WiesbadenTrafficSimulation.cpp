@@ -45,6 +45,7 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 	SpawnLaneIds.Reset();
 	ConnectionLengthCm.Reset();
 	LaneSuccessorIndices.Reset();
+	NearbySpawnLaneLengthCm = 0.0;
 	LaneNeighbours.Reset();
 	VehiclesByLaneCache.Reset();
 	SpawnAccumulator = 0.0;
@@ -210,6 +211,7 @@ void FWiesbadenTrafficSimulation::Reset()
 	SpawnLaneIds.Reset();
 	ConnectionLengthCm.Reset();
 	LaneSuccessorIndices.Reset();
+	NearbySpawnLaneLengthCm = 0.0;
 	LaneNeighbours.Reset();
 	VehiclesByLaneCache.Reset();
 	SpawnAccumulator = 0.0;
@@ -592,6 +594,25 @@ void FWiesbadenTrafficSimulation::SamplePolyline(const TArray<FVector>& Polyline
 	OutForward = FVector::ForwardVector;
 }
 
+int32 FWiesbadenTrafficSimulation::GetTargetVehicleCount() const
+{
+	// Ohne Beobachter gibt es keinen Umkreis - dann gilt die harte Obergrenze.
+	// Darauf stuetzen sich die datenreinen Tests, die ohne Welt laufen.
+	if (!bHasObserver)
+	{
+		return Settings.MaxVehicles;
+	}
+
+	// Die Spurlaenge im Umkreis traegt den Zielbestand: dieselbe Dichte ergibt
+	// am Stadtrand wenige, in der Innenstadt viele Fahrzeuge - dort ist mehr
+	// Fahrbahn zu fuellen.
+	const float Density = FMath::Clamp(Settings.TrafficDensity, 0.0f, 1.0f);
+	const double LaneKm = NearbySpawnLaneLengthCm / 100000.0;
+	return FMath::Clamp(
+		FMath::RoundToInt32(LaneKm * Settings.VehiclesPerLaneKm * Density),
+		0, Settings.MaxVehicles);
+}
+
 void FWiesbadenTrafficSimulation::SelectSpawnLanesNear(
 	const TArray<FRoadLane>& Lanes,
 	const TArray<int32>& Candidates,
@@ -656,6 +677,15 @@ void FWiesbadenTrafficSimulation::SetObserverLocation(const FVector& InLocation)
 		SelectSpawnLanesNear(
 			Network->Lanes, SpawnLaneIds, InLocation,
 			Settings.SpawnRadiusMeters * 100.0, NearbySpawnLaneIds);
+
+		// Bezugsgroesse fuer die erlebte Dichte (Fahrzeuge je Kilometer).
+		// Faellt hier praktisch umsonst ab - die Auswahl laeuft ohnehin nur
+		// alle paar hundert Meter Fahrt.
+		NearbySpawnLaneLengthCm = 0.0;
+		for (const int32 LaneId : NearbySpawnLaneIds)
+		{
+			NearbySpawnLaneLengthCm += Network->Lanes[LaneId].LengthCm;
+		}
 
 		LastSpawnSearchLocation = InLocation;
 		bNearbyLanesValid = true;
@@ -1307,12 +1337,8 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		// nachgefuellt statt mit fester Rate zu tropfen: der Spieler soll
 		// nicht erst nach einer halben Stunde Verkehr sehen. Bei 1 Fahrzeug
 		// je Sekunde haette das Erreichen von 3.000 Fahrzeugen 50 Minuten
-		// gedauert.
-		const int32 TargetCount = bHasObserver
-			? FMath::Min(
-				FMath::RoundToInt32(Settings.TargetVehiclesInRadius * Density),
-				Settings.MaxVehicles)
-			: Settings.MaxVehicles;
+		// gedauert. Eine Quelle fuer den Wert - die Diagnose liest denselben.
+		const int32 TargetCount = GetTargetVehicleCount();
 
 		const int32 Deficit = TargetCount - Vehicles.Num();
 

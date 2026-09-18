@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
+﻿// Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #pragma once
 
@@ -189,14 +189,25 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	double DespawnRadiusMeters = 900.0;
 
 	/**
-	 * Fahrzeuge im Umkreis bei voller Dichte. Bestimmt zusammen mit
-	 * TrafficDensity, wie belebt die Strassen wirken.
+	 * Fahrzeuge je SPURKILOMETER im Umkreis bei voller Dichte (1.0).
 	 *
-	 * MaxVehicles bleibt die harte Obergrenze; dieser Wert ist das Ziel, das
-	 * die Simulation im Umkreis anstrebt.
+	 * Frueher stand hier eine feste Stueckzahl je Umkreis (110). Die ist die
+	 * falsche Groesse: wie belebt eine Strasse WIRKT, haengt nicht daran, wie
+	 * viele Fahrzeuge irgendwo im 600-m-Radius sind, sondern wie dicht sie auf
+	 * der Fahrbahn stehen. Am Stadtrand liegen rund 37 km Spur im Umkreis, in
+	 * der Innenstadt ein Vielfaches - dieselbe Stueckzahl ergab dort also eine
+	 * noch leerere Strasse. Mit einer Dichte passt sich die Zahl der Umgebung
+	 * an: 37 km * 12 /km * Dichte 0.5 = rund 220 Fahrzeuge (vorher 55).
+	 *
+	 * Bezug: 6 Fahrzeuge je km bei Standard-Dichte heisst eines alle 165 m -
+	 * belebt, aber kein Stau. Gemessen am Startplatz: 55 Fahrzeuge kosteten
+	 * 132 Bilder/s, 147 kosteten 128, 368 noch 120 - die Zahl ist nicht das
+	 * Bildraten-Nadeloehr, die Obergrenze setzt die Glaubwuerdigkeit.
+	 *
+	 * MaxVehicles bleibt die harte Obergrenze.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "0"))
-	int32 TargetVehiclesInRadius = 110;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "0.0"))
+	double VehiclesPerLaneKm = 12.0;
 
 	/**
 	 * Deterministischer Streu-Startwert: beeinflusst die individuelle
@@ -557,6 +568,26 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	/** Liefert die aktuelle Dichte 0..1 (aus den Settings). */
 	float GetDensity() const { return Settings.TrafficDensity; }
 
+	/**
+	 * Zielbestand im Umkreis nach aktueller Dichte (Spurkilometer *
+	 * VehiclesPerLaneKm * TrafficDensity, gekappt auf MaxVehicles). Ohne
+	 * Beobachter gilt MaxVehicles - dann gibt es keinen Umkreis.
+	 */
+	int32 GetTargetVehicleCount() const;
+
+	/**
+	 * Befahrbare Spurlaenge im Spawn-Umkreis in Kilometern.
+	 *
+	 * Eine nackte Fahrzeugzahl sagt nichts darueber, ob die Strassen belebt
+	 * wirken: 55 Fahrzeuge sind auf einem Dorfanger viel und im Wiesbadener
+	 * Netz fast nichts. Erst Fahrzeuge JE KILOMETER ist die Groesse, die der
+	 * Spieler sieht.
+	 */
+	double GetNearbyLaneKm() const { return NearbySpawnLaneLengthCm / 100000.0; }
+
+	/** Anzahl der Spuren im Spawn-Umkreis (Bezugsgroesse zu GetNearbyLaneKm). */
+	int32 GetNearbyLaneCount() const { return NearbySpawnLaneIds.Num(); }
+
 private:
 	/** Wunschgeschwindigkeit eines Fahrzeugs auf seiner aktuellen Spur. */
 	double ComputeDesiredSpeed(const FTrafficVehicle& Vehicle) const;
@@ -718,6 +749,10 @@ private:
 	 * Spuren und waere je Frame zu teuer.
 	 */
 	TArray<int32> NearbySpawnLaneIds;
+
+	/** Summierte Laenge von NearbySpawnLaneIds in cm - mit der Auswahl gepflegt. */
+	double NearbySpawnLaneLengthCm = 0.0;
+
 	FVector LastSpawnSearchLocation = FVector::ZeroVector;
 	bool bNearbyLanesValid = false;
 };

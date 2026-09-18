@@ -1270,9 +1270,18 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 
 			if (!R.HasTrafficDrawDefect())
 			{
+				// Die Stueckzahl allein sagt nicht, ob die Strassen belebt
+				// WIRKEN - dafuer zaehlt die Zahl je Strassenkilometer im
+				// Umkreis. Ohne sie liest sich "55 Fahrzeuge" wie viel und
+				// ist in einem 600-m-Umkreis Wiesbadener Netz fast nichts.
+				const double LaneKm = TrafficSimulation.GetNearbyLaneKm();
 				UE_LOG(LogWbTraffic, Log,
-					TEXT("Verkehr laeuft: %d Fahrzeuge simuliert, %d davon im Sichtbereich gezeichnet."),
-					R.ActiveVehicles, R.TrafficVehiclesVisible);
+					TEXT("Verkehr laeuft: %d von %d Fahrzeugen (Ziel bei Dichte %.2f), ")
+					TEXT("%d gezeichnet; %.1f km Spur im Umkreis (%d Spuren) = %.1f Fahrzeuge/km."),
+					R.ActiveVehicles, TrafficSimulation.GetTargetVehicleCount(),
+					TrafficSimulation.GetDensity(), R.TrafficVehiclesVisible,
+					LaneKm, TrafficSimulation.GetNearbyLaneCount(),
+					LaneKm > 0.0 ? R.ActiveVehicles / LaneKm : 0.0);
 			}
 			else
 			{

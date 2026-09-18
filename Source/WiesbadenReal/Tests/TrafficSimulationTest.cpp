@@ -1066,3 +1066,60 @@ bool FTrafficBicycleModelTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficTargetDensityTest,
+	"WiesbadenReal.Traffic.Zielbestand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficTargetDensityTest::RunTest(const FString& Parameters)
+{
+	// Das Netz hat drei Spuren zu je 100 m, alle im Spawn-Umkreis: 0.3 km.
+	// Frueher stand hier eine feste Stueckzahl je Umkreis - die ergab am
+	// Stadtrand dieselbe Zahl wie in der Innenstadt und liess beide leer
+	// wirken. Jetzt traegt die Spurlaenge den Zielbestand.
+	const FRoadNetwork Network = MakeNetwork();
+
+	FWiesbadenTrafficSettings Settings = MakeSettings(0.5f);
+	Settings.VehiclesPerLaneKm = 100.0;
+	Settings.SpawnRadiusMeters = 600.0;
+
+	FWiesbadenTrafficSimulation Sim;
+	Sim.Initialize(Network, Settings);
+
+	// Ohne Beobachter gibt es keinen Umkreis - dann gilt die harte Obergrenze.
+	// Darauf stuetzen sich die uebrigen datenreinen Tests.
+	TestEqual(TEXT("Ohne Beobachter: MaxVehicles als Ziel"),
+		Sim.GetTargetVehicleCount(), Settings.MaxVehicles);
+
+	Sim.SetObserverLocation(FVector::ZeroVector);
+	TestEqual(TEXT("Alle drei Spuren liegen im Umkreis"), Sim.GetNearbyLaneCount(), 3);
+	TestTrue(TEXT("Spurlaenge im Umkreis 0.3 km"),
+		FMath::IsNearlyEqual(Sim.GetNearbyLaneKm(), 0.3, 0.001));
+
+	// 0.3 km * 100 je km * Dichte 0.5 = 15.
+	TestEqual(TEXT("Zielbestand folgt Spurlaenge x Dichte"), Sim.GetTargetVehicleCount(), 15);
+
+	// Doppelte Dichte -> doppelter Zielbestand (linear, keine Sprungstelle).
+	Settings.TrafficDensity = 1.0f;
+	FWiesbadenTrafficSimulation Voll;
+	Voll.Initialize(Network, Settings);
+	Voll.SetObserverLocation(FVector::ZeroVector);
+	TestEqual(TEXT("Volle Dichte verdoppelt den Zielbestand"), Voll.GetTargetVehicleCount(), 30);
+
+	// MaxVehicles bleibt die harte Obergrenze.
+	Settings.MaxVehicles = 10;
+	FWiesbadenTrafficSimulation Gedeckelt;
+	Gedeckelt.Initialize(Network, Settings);
+	Gedeckelt.SetObserverLocation(FVector::ZeroVector);
+	TestEqual(TEXT("MaxVehicles deckelt den Zielbestand"), Gedeckelt.GetTargetVehicleCount(), 10);
+
+	// Ausserhalb des Umkreises traegt keine Spur mehr - kein Verkehr.
+	FWiesbadenTrafficSimulation Fern;
+	Settings.MaxVehicles = 3000;
+	Fern.Initialize(Network, Settings);
+	Fern.SetObserverLocation(FVector(10000000.0, 0.0, 0.0));
+	TestEqual(TEXT("Keine Spur im Umkreis -> Zielbestand 0"), Fern.GetTargetVehicleCount(), 0);
+
+	return true;
+}
