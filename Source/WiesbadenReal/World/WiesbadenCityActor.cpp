@@ -44,17 +44,23 @@ AWiesbadenCityActor::AWiesbadenCityActor()
 	PedestrianSpawner->SetupAttachment(Root);
 }
 
-void AWiesbadenCityActor::UpdateTrafficVehicles(const TArray<FTrafficVehicle>& Vehicles)
+void AWiesbadenCityActor::UpdateTrafficVehicles(
+	const TArray<FTrafficVehicle>& Vehicles, bool bNight)
 {
 	if (TrafficVehicleSpawner)
 	{
-		TrafficVehicleSpawner->UpdateVehicles(Vehicles);
+		TrafficVehicleSpawner->UpdateVehicles(Vehicles, bNight);
 	}
 }
 
 int32 AWiesbadenCityActor::GetVisibleTrafficVehicleCount() const
 {
 	return TrafficVehicleSpawner ? TrafficVehicleSpawner->LastVisibleVehicleCount : 0;
+}
+
+TArray<int32> AWiesbadenCityActor::GetLastLampCounts() const
+{
+	return TrafficVehicleSpawner ? TrafficVehicleSpawner->LastLampCounts : TArray<int32>();
 }
 
 void AWiesbadenCityActor::UpdatePedestrians(const TArray<FPlacedPedestrian>& Placed)

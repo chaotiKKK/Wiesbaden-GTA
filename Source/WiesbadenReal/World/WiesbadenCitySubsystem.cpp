@@ -1195,6 +1195,22 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 				Traffic.MeanSpeedKmh, TrafficSimulation.GetVehiclesHeldAtRed(),
 				Traffic.LaneChangesThisTick);
 
+			// Lampen: ohne Zaehlung ist auf einem Nachtbild nicht zu sagen, ob
+			// eine rote Flaeche vom Bremslicht kommt oder vom Eigenlicht des
+			// Spielerautos.
+			if (CityActor)
+			{
+				const TArray<int32> Lamps = CityActor->GetLastLampCounts();
+				if (Lamps.Num() >= 4)
+				{
+					UE_LOG(LogWbTraffic, Log,
+						TEXT("Fahrzeuglampen: %d Bremslichter, %d Blinker, %d Scheinwerfer, ")
+						TEXT("%d Rueckleuchten (%s)."),
+						Lamps[0], Lamps[1], Lamps[2], Lamps[3],
+						Weather.GetState().bIsNight ? TEXT("Nacht") : TEXT("Tag"));
+				}
+			}
+
 			// Verteilung auf die Strassenklassen. "Hauptstrassen tragen mehr
 			// Verkehr" bleibt eine Behauptung, solange sie niemand nachzaehlt -
 			// und die Einsatzorte werden genau danach gewichtet.
@@ -1378,7 +1394,10 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 	// Sichtbare Fahrzeuge (ISM-Pool am CityActor) aus der Simulation speisen.
 	if (CityActor)
 	{
-		CityActor->UpdateTrafficVehicles(TrafficSimulation.Vehicles);
+		// Nachtlicht aus der 24-h-Beleuchtung: die Simulation kennt keine
+		// Uhrzeit, die Darstellung braucht sie fuer Scheinwerfer und
+		// Rueckleuchten.
+		CityActor->UpdateTrafficVehicles(TrafficSimulation.Vehicles, Weather.GetState().bIsNight);
 
 		// Fussgaenger analog: die Simulation liefert Positionen, der ISM-Pool
 		// am CityActor zeichnet sie.

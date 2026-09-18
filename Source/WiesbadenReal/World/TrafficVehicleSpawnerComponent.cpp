@@ -45,12 +45,44 @@ UTrafficVehicleSpawnerComponent::UTrafficVehicleSpawnerComponent()
 	{
 		VehicleMesh = TrafficBeetle.Object;
 	}
+
+	// Lampenkoerper: der Engine-Wuerfel, klein skaliert. Ein eigenes Mesh
+	// dafuer waere ein Asset mehr ohne jeden Gewinn - aus Fahrerabstand ist
+	// eine Lampe ein Lichtpunkt, keine Form.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> LampCube(
+		TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (LampCube.Succeeded())
+	{
+		LampMesh = LampCube.Object;
+	}
+
+	// Lampen-Materialien: die des Kaefers, nicht selbst erzeugte.
+	//
+	// Erst ein per Python angelegtes Leuchtmaterial, dann das engine-eigene
+	// EmissiveMeshMaterial - BEIDE rendeten im Spiel-Lauf dunkel (im Bild
+	// standen schwarze Kaesten auf den Autos, mit Karomuster = Ersatzmaterial).
+	// Die Materialien des Kaefers rendern nachweislich; sie sind beleuchtet
+	// statt emissiv, sehen bei Nacht aber sauber aus, weil Himmelslicht und
+	// Strassenlaternen sie treffen.
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MatBrake(
+		TEXT("/Game/Vehicles/Beetle/Bremslicht.Bremslicht"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MatIndicator(
+		TEXT("/Game/Vehicles/Beetle/BlinkerH.BlinkerH"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MatHead(
+		TEXT("/Game/Vehicles/Beetle/Silber.Silber"));
+
+	LampMaterials.SetNum(LampPoolCount);
+	LampMaterials[0] = MatBrake.Succeeded() ? MatBrake.Object : nullptr;        // Bremse
+	LampMaterials[1] = MatIndicator.Succeeded() ? MatIndicator.Object : nullptr;// Blinker
+	LampMaterials[2] = MatHead.Succeeded() ? MatHead.Object : nullptr;          // Scheinwerfer
+	LampMaterials[3] = MatBrake.Succeeded() ? MatBrake.Object : nullptr;        // Rueckleuchte
 }
 
 void UTrafficVehicleSpawnerComponent::BeginPlay()
 {
 	Super::BeginPlay();
 	EnsureInstancePools();
+	EnsureLampPools();
 }
 
 void UTrafficVehicleSpawnerComponent::EnsureInstancePools()
@@ -299,9 +331,157 @@ void UTrafficVehicleSpawnerComponent::UpdateCollisionProxies(const TArray<FTraff
 	ActiveCollisionProxyCount = Nearest.Num();
 }
 
-void UTrafficVehicleSpawnerComponent::UpdateVehicles(const TArray<FTrafficVehicle>& Vehicles)
+void UTrafficVehicleSpawnerComponent::EnsureLampPools()
+{
+	// NUR EINMAL aufbauen.
+	//
+	// UpdateVehicles laeuft je Bild; ohne diese Sperre wurden die vier
+	// Komponenten JEDES BILD zerstoert und neu angelegt. Die Instanzen kamen
+	// dabei zwar an (die Zaehlung stimmte), aber das per SetMaterial gesetzte
+	// Leuchtmaterial wurde nicht wirksam - im Bild standen dunkle Kaesten auf
+	// den Autos. Die Fahrzeug-Gruppen fallen nicht auf, weil sie die
+	// Materialien des Meshes benutzen und gar kein SetMaterial brauchen.
+	if (LampInstances.Num() == LampPoolCount && LampInstances[0] != nullptr)
+	{
+		return;
+	}
+
+	for (UInstancedStaticMeshComponent* Instance : LampInstances)
+	{
+		if (Instance && Instance->GetAttachParent())
+		{
+			Instance->DestroyComponent();
+		}
+	}
+	LampInstances.Reset();
+
+	if (!LampMesh || LampMaterials.Num() != LampPoolCount)
+	{
+		return;
+	}
+
+	for (int32 i = 0; i < LampPoolCount; ++i)
+	{
+		UInstancedStaticMeshComponent* Instances = NewObject<UInstancedStaticMeshComponent>(this);
+		Instances->SetupAttachment(this);
+		Instances->RegisterComponent();
+		Instances->SetStaticMesh(LampMesh);
+		Instances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+		// Lampen werfen keinen Schatten: sie sind Lichtquellen, und der
+		// Schattenwurf hunderter Wuerfelchen kostet ohne jeden Gewinn.
+		Instances->SetCastShadow(false);
+
+		Instances->SetMaterial(0, LampMaterials[i]);
+
+		LampInstances.Add(Instances);
+	}
+}
+
+void UTrafficVehicleSpawnerComponent::ComputeLampTransforms(
+	const FTransform& VehicleTransform,
+	const FVector& BoundsOrigin,
+	const FVector& BoundsExtent,
+	bool bFront,
+	FTransform& OutLeft,
+	FTransform& OutRight)
+{
+	// Alles aus den Bounds ableiten: Laengsachse X, Querachse Y, Hoehe Z.
+	// Die Einrueckungen sind Anteile, keine festen Zentimeter - ein laengeres
+	// Fahrzeug bekommt seine Lampen damit von selbst weiter aussen.
+	const double LengthSign = bFront ? 1.0 : -1.0;
+	const double AlongCm = BoundsOrigin.X + LengthSign * (BoundsExtent.X - 8.0);
+	const double SideCm = FMath::Max(BoundsExtent.Y - 16.0, 5.0);
+
+	// Lampenhoehe: knapp ueber dem unteren Rand des Fahrzeugs, nicht in der
+	// Mitte - dort saessen sie im Fenster.
+	const double UpCm = BoundsOrigin.Z - BoundsExtent.Z + BoundsExtent.Z * 0.72;
+
+	// Wuerfel ist 100 cm; eine Lampe ist rund 18 x 10 x 9 cm.
+	const FVector LampScale(0.20f, 0.12f, 0.10f);
+
+	OutLeft = FTransform(FRotator::ZeroRotator,
+		FVector(AlongCm, BoundsOrigin.Y + SideCm, UpCm), LampScale) * VehicleTransform;
+	OutRight = FTransform(FRotator::ZeroRotator,
+		FVector(AlongCm, BoundsOrigin.Y - SideCm, UpCm), LampScale) * VehicleTransform;
+}
+
+void UTrafficVehicleSpawnerComponent::UpdateLamps(
+	const TArray<FPlacedTrafficVehicle>& Placed, bool bNight)
+{
+	if (LampInstances.Num() < 4 || !VehicleMesh)
+	{
+		return;
+	}
+
+	enum ELampPool { Brake = 0, Indicator = 1, Head = 2, Tail = 3 };
+
+	const FBoxSphereBounds MeshBounds = VehicleMesh->GetBounds();
+	const FVector Origin = MeshBounds.Origin;
+	const FVector Extent = MeshBounds.BoxExtent;
+
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+
+	TArray<TArray<FTransform>> ByPool;
+	ByPool.SetNum(LampInstances.Num());
+
+	for (const FPlacedTrafficVehicle& P : Placed)
+	{
+		FTransform RearLeft, RearRight, FrontLeft, FrontRight;
+		ComputeLampTransforms(P.Transform, Origin, Extent, /*bFront=*/false, RearLeft, RearRight);
+		ComputeLampTransforms(P.Transform, Origin, Extent, /*bFront=*/true, FrontLeft, FrontRight);
+
+		if (P.bBraking)
+		{
+			ByPool[Brake].Add(RearLeft);
+			ByPool[Brake].Add(RearRight);
+		}
+		else if (bNight)
+		{
+			// Rueckleuchte nur, wenn NICHT gebremst wird - sonst lagen zwei
+			// Lampen ineinander und die schwaechere flimmerte durch.
+			ByPool[Tail].Add(RearLeft);
+			ByPool[Tail].Add(RearRight);
+		}
+
+		if (bNight)
+		{
+			ByPool[Head].Add(FrontLeft);
+			ByPool[Head].Add(FrontRight);
+		}
+
+		if (P.Indicator != EVehicleIndicator::None
+			&& FWiesbadenTrafficSimulation::IsIndicatorLit(P.VehicleId, Now))
+		{
+			// Vorne UND hinten auf der blinkenden Seite - so ist die Richtung
+			// aus beiden Blickwinkeln zu erkennen.
+			const bool bLeft = (P.Indicator == EVehicleIndicator::Left);
+			ByPool[Indicator].Add(bLeft ? FrontLeft : FrontRight);
+			ByPool[Indicator].Add(bLeft ? RearLeft : RearRight);
+		}
+	}
+
+	LastLampCounts.SetNum(LampInstances.Num());
+	for (int32 i = 0; i < LampInstances.Num(); ++i)
+	{
+		LastLampCounts[i] = ByPool[i].Num();
+		if (UInstancedStaticMeshComponent* Instances = LampInstances[i])
+		{
+			Instances->ClearInstances();
+			if (ByPool[i].Num() > 0)
+			{
+				Instances->AddInstances(ByPool[i], /*bShouldReturnIndices=*/false,
+					/*bWorldSpace=*/true);
+			}
+		}
+	}
+}
+
+void UTrafficVehicleSpawnerComponent::UpdateVehicles(
+	const TArray<FTrafficVehicle>& Vehicles, bool bNight)
 {
 	EnsureInstancePools();
+	EnsureLampPools();
 
 	// Kollisionskoerper den naechsten Fahrzeugen nachfuehren. Bewusst vor der
 	// Sichtbarkeitspruefung: auch wenn kein Instanz-Pool existiert, soll der
@@ -347,12 +527,24 @@ void UTrafficVehicleSpawnerComponent::UpdateVehicles(const TArray<FTrafficVehicl
 		}
 	}
 
+	UpdateLamps(Placed, bNight);
+
 	LastVisibleVehicleCount = Placed.Num();
 }
 
 void UTrafficVehicleSpawnerComponent::ClearVehicles()
 {
 	for (UInstancedStaticMeshComponent* Instances : VehicleInstances)
+	{
+		if (Instances)
+		{
+			Instances->ClearInstances();
+		}
+	}
+
+	// Ohne das blieben die Lampen als frei schwebende Lichtpunkte stehen, wo
+	// zuletzt Fahrzeuge waren - besonders auffaellig beim Levelwechsel.
+	for (UInstancedStaticMeshComponent* Instances : LampInstances)
 	{
 		if (Instances)
 		{

@@ -194,6 +194,8 @@ void FWiesbadenTrafficSimulation::PlaceTrafficVehicles(
 			H *= 16777619u;
 		}
 		Placed.ColorIndex = static_cast<int32>(H % static_cast<uint32>(Palette));
+		Placed.bBraking = Vehicle.bBraking;
+		Placed.Indicator = Vehicle.Indicator;
 
 		OutPlaced.Add(Placed);
 	}
@@ -305,6 +307,60 @@ void FWiesbadenTrafficSimulation::CollectClassDistribution(
 		}
 		++Out.FindOrAdd(Network->Segments[SegmentId].HighwayType, 0);
 	}
+}
+
+bool FWiesbadenTrafficSimulation::ShouldShowBrakeLight(
+	double PrevSpeedCmS, double SpeedCmS, double DesiredSpeedCmS, double DeltaSeconds)
+{
+	// Stillstand trotz Fahrwunsch: die Kolonne vor der Ampel leuchtet.
+	constexpr double CrawlCmS = 60.0;          // gut 2 km/h
+	if (SpeedCmS < CrawlCmS && DesiredSpeedCmS > CrawlCmS)
+	{
+		return true;
+	}
+
+	if (DeltaSeconds <= 0.0)
+	{
+		return false;
+	}
+
+	// Sonst: nennenswerte Verzoegerung. 150 cm/s^2 ist deutlich weniger als
+	// eine Vollbremsung, aber mehr als das Ausrollen eine Kuppe hinauf -
+	// sonst flackerten die Lichter der ganzen Stadt im Takt des Gelaendes.
+	constexpr double BrakeThresholdCmS2 = 150.0;
+	const double Deceleration = (PrevSpeedCmS - SpeedCmS) / DeltaSeconds;
+	return Deceleration > BrakeThresholdCmS2;
+}
+
+EVehicleIndicator FWiesbadenTrafficSimulation::IndicatorForTurn(ETurnType Turn)
+{
+	switch (Turn)
+	{
+	case ETurnType::Left:
+	case ETurnType::UTurn:      // Wenden wird links angezeigt
+		return EVehicleIndicator::Left;
+	case ETurnType::Right:
+		return EVehicleIndicator::Right;
+	default:
+		return EVehicleIndicator::None;
+	}
+}
+
+bool FWiesbadenTrafficSimulation::IsIndicatorLit(int32 VehicleId, double TimeSeconds)
+{
+	constexpr double PeriodSeconds = 1.0 / 1.5;   // 1,5 Hz
+
+	// Phase je Fahrzeug aus der Id - sonst blinkt eine ganze Kreuzung im
+	// Gleichtakt, was unnatuerlich aussieht.
+	const double Phase = static_cast<double>(
+		Hash2(static_cast<uint32>(VehicleId), 0x9E3779B9u) % 1000u) / 1000.0;
+
+	double T = FMath::Fmod(TimeSeconds / PeriodSeconds + Phase, 1.0);
+	if (T < 0.0)
+	{
+		T += 1.0;
+	}
+	return T < 0.5;
 }
 
 double FWiesbadenTrafficSimulation::GetRoadClassWeight(EOSMHighwayType Type)
@@ -1454,6 +1510,58 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 			}
 			const double Ceiling = PreviousSpeedCmS[i] + MaxSpeedUp;
 			Vehicles[i].SpeedCmS = FMath::Max(0.0, FMath::Min(Vehicles[i].SpeedCmS, Ceiling));
+		}
+	}
+
+	// -- 1f) Lampenzustand -----------------------------------------------------
+	//
+	// NACH allen Geschwindigkeitsregeln: erst hier steht die Geschwindigkeit
+	// dieses Schritts endgueltig fest. Davor waere das Bremslicht die Antwort
+	// auf einen Zwischenwert, den das Fahrzeug nie gefahren ist.
+	for (int32 i = 0; i < Vehicles.Num(); ++i)
+	{
+		FTrafficVehicle& Vehicle = Vehicles[i];
+
+		const double PrevSpeed = PreviousSpeedCmS.IsValidIndex(i)
+			? PreviousSpeedCmS[i] : Vehicle.SpeedCmS;
+		Vehicle.bBraking = ShouldShowBrakeLight(
+			PrevSpeed, Vehicle.SpeedCmS, Vehicle.DesiredSpeedCmS, Dt);
+
+		// Blinker: auf der Verbindung die gefahrene Richtung, davor die
+		// gewaehlte - und nur im Anfahr-Fenster vor der Kreuzung. Wer 300 m
+		// vorher blinkt, blinkt die halbe Stadt entlang.
+		Vehicle.Indicator = EVehicleIndicator::None;
+		if (!Network)
+		{
+			continue;
+		}
+
+		if (!Vehicle.bOnLane)
+		{
+			if (Network->Connections.IsValidIndex(Vehicle.ConnectionIndex))
+			{
+				Vehicle.Indicator = IndicatorForTurn(
+					Network->Connections[Vehicle.ConnectionIndex].TurnType);
+			}
+			continue;
+		}
+
+		if (!Network->Lanes.IsValidIndex(Vehicle.LaneId))
+		{
+			continue;
+		}
+
+		constexpr double IndicateDistanceCm = 3000.0;   // 30 m vor der Kreuzung
+		const double LaneLength = Network->Lanes[Vehicle.LaneId].LengthCm;
+		if (LaneLength <= 0.0 || Vehicle.DistanceCm < LaneLength - IndicateDistanceCm)
+		{
+			continue;
+		}
+
+		const int32 Next = PickSuccessorConnection(Vehicle);
+		if (Network->Connections.IsValidIndex(Next))
+		{
+			Vehicle.Indicator = IndicatorForTurn(Network->Connections[Next].TurnType);
 		}
 	}
 

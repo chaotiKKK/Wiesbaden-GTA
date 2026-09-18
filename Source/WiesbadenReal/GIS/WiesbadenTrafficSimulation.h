@@ -14,6 +14,15 @@ struct FWiesbadenTrafficLightSystem;
  * Sichtbare Fahrzeug-Platzierung (fuer den ISM-Spawner): Position/Rotation
  * aus der Simulation plus deterministischer Farb-Index.
  */
+/** Blinker eines Fahrzeugs. */
+UENUM(BlueprintType)
+enum class EVehicleIndicator : uint8
+{
+	None  UMETA(DisplayName = "Aus"),
+	Left  UMETA(DisplayName = "Links"),
+	Right UMETA(DisplayName = "Rechts")
+};
+
 USTRUCT(BlueprintType)
 struct WIESBADENREAL_API FPlacedTrafficVehicle
 {
@@ -34,6 +43,14 @@ struct WIESBADENREAL_API FPlacedTrafficVehicle
 	/** Einschlag der Vorderraeder in Radiant (positiv = links). */
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	float SteerAngleRad = 0.0f;
+
+	/** Bremslicht an. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	bool bBraking = false;
+
+	/** Gesetzter Blinker (Dauerzustand; das Blinken macht die Darstellung). */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	EVehicleIndicator Indicator = EVehicleIndicator::None;
 };
 
 /** Ein Fahrzeug der Verkehrs-Simulation auf dem Spur-Graph. */
@@ -77,6 +94,14 @@ struct WIESBADENREAL_API FTrafficVehicle
 	/** Normierte Fahrtrichtung (fuer spaetere Fahrzeug-Meshes). */
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	FVector Forward = FVector::ForwardVector;
+
+	/** Bremslicht an: deutliche Verzoegerung oder Halt trotz Fahrwunsch. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	bool bBraking = false;
+
+	/** Gesetzter Blinker vor dem Abbiegen. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	EVehicleIndicator Indicator = EVehicleIndicator::None;
 
 	/**
 	 * Restliche Sperrzeit bis zum naechsten Spurwechsel in Sekunden.
@@ -675,6 +700,32 @@ public:
 	 * irrte durch Wohngebiete, waehrend die Hauptachsen leer blieben.
 	 */
 	static double GetRoadClassWeight(EOSMHighwayType Type);
+
+	/**
+	 * Bremslicht an? (datenrein, testbar)
+	 *
+	 * Zwei Faelle, beide noetig: eine deutliche Verzoegerung (der Fahrer tritt
+	 * auf die Bremse) UND Stillstand trotz Fahrwunsch (er steht in der
+	 * Schlange und haelt den Fuss auf dem Pedal). Ohne den zweiten Fall bliebe
+	 * eine wartende Kolonne dunkel - gerade dort, wo Bremslichter im Bild am
+	 * meisten ausmachen.
+	 *
+	 * Die Schwelle ist eine VERZOEGERUNG, keine Geschwindigkeitsdifferenz:
+	 * sonst haengt das Ergebnis an der Bildrate.
+	 */
+	static bool ShouldShowBrakeLight(double PrevSpeedCmS, double SpeedCmS,
+		double DesiredSpeedCmS, double DeltaSeconds);
+
+	/** Blinker aus der Abbiegerichtung der gewaehlten Verbindung (datenrein). */
+	static EVehicleIndicator IndicatorForTurn(ETurnType Turn);
+
+	/**
+	 * Leuchtet der Blinker in diesem Augenblick? (datenrein, testbar)
+	 *
+	 * Die Phase kommt aus der Fahrzeug-Id: blinkten alle im Gleichtakt, saehe
+	 * eine Kreuzung aus wie eine Lichterkette. 1,5 Hz ist der uebliche Takt.
+	 */
+	static bool IsIndicatorLit(int32 VehicleId, double TimeSeconds);
 
 	/**
 	 * Waehlt aus KUMULIERTEN Gewichten deterministisch einen Index

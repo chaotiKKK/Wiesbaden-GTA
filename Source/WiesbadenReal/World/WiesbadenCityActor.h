@@ -58,7 +58,7 @@ public:
 	 * 1-km-Culling um den Player). Wird vom CitySubsystem pro Tick gerufen,
 	 * nachdem die Simulation weitergetickt wurde.
 	 */
-	void UpdateTrafficVehicles(const TArray<FTrafficVehicle>& Vehicles);
+	void UpdateTrafficVehicles(const TArray<FTrafficVehicle>& Vehicles, bool bNight = false);
 
 	/**
 	 * Zahl der zuletzt tatsaechlich gezeichneten Verkehrsfahrzeuge.
@@ -70,6 +70,9 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Verkehr")
 	int32 GetVisibleTrafficVehicleCount() const;
+
+	/** Gesetzte Lampen des letzten Bildes (Bremse, Blinker, Scheinwerfer, Rueckleuchte). */
+	TArray<int32> GetLastLampCounts() const;
 
 	/**
 	 * Aktualisiert die sichtbaren Fussgaenger (ISM-Pool). Analog zum Verkehr:

@@ -40,7 +40,13 @@ public:
 	UTrafficVehicleSpawnerComponent();
 
 	/** Aktualisiert die Fahrzeug-Instanzen aus der Simulation (idempotent). */
-	void UpdateVehicles(const TArray<FTrafficVehicle>& Vehicles);
+	/**
+	 * Aktualisiert die Fahrzeug-Instanzen aus der Simulation (idempotent).
+	 *
+	 * @param bNight Scheinwerfer und Rueckleuchten an. Kommt von der
+	 *               24-h-Beleuchtung; die Simulation selbst kennt keine Uhrzeit.
+	 */
+	void UpdateVehicles(const TArray<FTrafficVehicle>& Vehicles, bool bNight = false);
 
 	/** Entfernt alle Fahrzeug-Instanzen. */
 	void ClearVehicles();
@@ -68,6 +74,17 @@ public:
 	/** Anzahl der tatsaechlich instanziierten Fahrzeuge (Diagnose). */
 	UPROPERTY(VisibleAnywhere, Transient, Category = "Wiesbaden|Verkehr")
 	int32 LastVisibleVehicleCount = 0;
+
+	/**
+	 * Gesetzte Lampen des letzten Bildes: Bremse, Blinker, Scheinwerfer,
+	 * Rueckleuchte (Diagnose).
+	 *
+	 * Auf einem Nachtbild ist nicht zu unterscheiden, ob eine rote Flaeche vom
+	 * neuen Bremslicht kommt oder vom Eigenlicht des Spielerautos. Gezaehlt
+	 * ist sie eindeutig.
+	 */
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Wiesbaden|Verkehr")
+	TArray<int32> LastLampCounts;
 
 	// -- Kollision ----------------------------------------------------------
 
@@ -107,6 +124,21 @@ public:
 	 * @param OutIndices Indizes in Vehicles, aufsteigend nach Abstand,
 	 *                   hoechstens MaxCount Eintraege.
 	 */
+	/**
+	 * Lampenpunkte eines Fahrzeugs im WELT-Raum (datenrein, testbar).
+	 *
+	 * Die Abstaende kommen aus den Mesh-Bounds, nicht aus festen Zahlen: sonst
+	 * haengen die Lampen in der Luft, sobald ein anderes Fahrzeugmodell
+	 * einzieht.
+	 */
+	static void ComputeLampTransforms(
+		const FTransform& VehicleTransform,
+		const FVector& BoundsOrigin,
+		const FVector& BoundsExtent,
+		bool bFront,
+		FTransform& OutLeft,
+		FTransform& OutRight);
+
 	static void SelectNearestVehicles(
 		const TArray<FTrafficVehicle>& Vehicles,
 		const FVector& Center,
@@ -124,6 +156,20 @@ private:
 	/** Baut die ISM-Gruppen (eine je Palette-Farbe) einmalig auf. */
 	void EnsureInstancePools();
 
+	/**
+	 * Legt die vier Lampen-Gruppen an (Bremse, Blinker, Scheinwerfer, Rueckleuchte).
+	 *
+	 * Eigene Instanzen statt emissiver Materialslots: das Verkehrs-Mesh des
+	 * Kaefers hat nur vier allgemeine Slots (nachgesehen, nicht vermutet), also
+	 * keinen, den man je Fahrzeug leuchten lassen koennte. Ein winziger Wuerfel
+	 * je Lampe kostet im ISM praktisch nichts und traegt die Farbe selbst.
+	 */
+	void EnsureLampPools();
+
+	/** Setzt die Lampen-Instanzen aus den platzierten Fahrzeugen neu. */
+	void UpdateLamps(const TArray<FPlacedTrafficVehicle>& Placed, bool bNight);
+
+
 	/** Legt den Pool der Kollisionskoerper an (einmalig). */
 	void EnsureCollisionProxies();
 
@@ -138,6 +184,21 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<UMaterialInstanceDynamic*> InstanceMaterials;
+
+	/** Zahl der Lampen-Gruppen: Bremse, Blinker, Scheinwerfer, Rueckleuchte. */
+	static constexpr int32 LampPoolCount = 4;
+
+	/** Lampen-Gruppen: 0 Bremse, 1 Blinker, 2 Scheinwerfer, 3 Rueckleuchte. */
+	UPROPERTY(Transient)
+	TArray<UInstancedStaticMeshComponent*> LampInstances;
+
+	/** Material je Lampen-Gruppe (Bremse, Blinker, Scheinwerfer, Rueckleuchte). */
+	UPROPERTY(Transient)
+	TArray<UMaterialInterface*> LampMaterials;
+
+	/** Wuerfel als Lampenkoerper (Engine-Grundform). */
+	UPROPERTY(Transient)
+	UStaticMesh* LampMesh = nullptr;
 
 	/** Letzte Fahrzeug-Ids je Instanz-Index (stabile Zuordnung). */
 	TArray<int32> LastVehicleIds;
