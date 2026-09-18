@@ -15,6 +15,9 @@ class UDirectionalLightComponent;
 class UExponentialHeightFogComponent;
 class UVolumetricCloudComponent;
 class USkyLightComponent;
+class UMaterialInterface;
+class UMaterialInstanceDynamic;
+class APostProcessVolume;
 
 /**
  * Effekt-Typen der Wetter-FX (Reihenfolge = WeatherFXCatalog.json).
@@ -166,6 +169,56 @@ struct WIESBADENREAL_API FWiesbadenWeatherFXParams
 };
 
 /**
+ * Regen und Schnee OHNE Niagara: Steuerwerte fuer das Post-Process-Overlay
+ * (/Game/Materials/PostProcess/M_WbWeatherOverlay).
+ *
+ * Warum es das gibt: die Niagara-Systeme muessen von Hand im Editor gebaut
+ * werden - Python exportiert die Niagara-Editor-API nicht. Ein
+ * Post-Process-Material dagegen ist ein gewoehnlicher Materialgraph und
+ * vollstaendig skriptbar (Tools/add_weather_postprocess.py). Der Niederschlag
+ * entsteht damit im Bildraum statt als Partikel.
+ *
+ * Grenze der Technik, ehrlich benannt: Bildschirm-Niederschlag hat keine Tiefe.
+ * Er verschwindet nicht hinter Haeusern und wird von Bruecken nicht
+ * abgeschirmt. Dafuer kostet er einen Vollbild-Durchgang statt zehntausender
+ * Partikel und ist ohne jede Handarbeit im Editor da.
+ *
+ * Die Ableitung ist datenrein und getestet (Weather.Overlay); das Setzen der
+ * Material-Parameter ist duenne Verdrahtung.
+ */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FWiesbadenWeatherOverlayParams
+{
+	GENERATED_BODY()
+
+	/** Regendichte 0..1 (Anteil der Bildspalten, in denen es faellt). */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|Overlay")
+	float RainStrength = 0.0f;
+
+	/** Schneedichte 0..1. */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|Overlay")
+	float SnowStrength = 0.0f;
+
+	/** Schraeglage im Bildraum aus dem Wind (0 = senkrecht, 1 = stark schraeg). */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|Overlay")
+	float Slant = 0.0f;
+
+	/** Farbe der Tropfen/Flocken - folgt der Lichtfarbe der Sonne. */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|Overlay")
+	FLinearColor Tint = FLinearColor::White;
+
+	/** Helligkeit 0..1: nachts gedaempft, sonst waere der Regen greller als die Stadt. */
+	UPROPERTY(BlueprintReadOnly, Category = "Weather|Overlay")
+	float Brightness = 1.0f;
+
+	/** Leitet die Overlay-Werte aus den FX-Parametern ab (deterministisch). */
+	static FWiesbadenWeatherOverlayParams FromFXParams(const FWiesbadenWeatherFXParams& FX);
+
+	/** True, wenn ueberhaupt etwas zu zeichnen ist (sonst Volume abschalten). */
+	bool IsVisible() const { return RainStrength > 0.001f || SnowStrength > 0.001f; }
+};
+
+/**
  * Treibt Niagara-Wetter-Effekte (Regen, Schnee, Nebel, Wolken, Gewitter) aus
  * der datenreinen FWiesbadenWeatherSystem des City-Subsystems.
  *
@@ -293,6 +346,20 @@ private:
 	 */
 	UVolumetricCloudComponent* FindOrSpawnClouds();
 
+	/**
+	 * Regen/Schnee als Bildschirm-Overlay stellen (ohne Niagara).
+	 *
+	 * Laeuft UNABHAENGIG von den NS_-Assets: auch wenn kein einziges
+	 * Niagara-System existiert, faellt damit sichtbarer Niederschlag.
+	 */
+	void UpdateOverlay(const FWiesbadenWeatherFXParams& Params);
+
+	/**
+	 * Legt Material-Instanz und unbegrenztes PostProcessVolume an (einmalig).
+	 * Gibt false zurueck, wenn das Material fehlt - dann bleibt es dabei.
+	 */
+	bool EnsureOverlay();
+
 	/** Himmelslicht des Levels (fuer die Daempfung unter Wolken). */
 	USkyLightComponent* FindSkyLight() const;
 
@@ -318,6 +385,35 @@ private:
 	 */
 	void ValidateSystem(UNiagaraSystem* System, EWiesbadenWeatherFXType Type,
 		const FString& EffectName) const;
+
+	// -- Bildschirm-Niederschlag (ohne Niagara) --------------------------------
+
+	/** Lebende Instanz von M_WbWeatherOverlay; traegt die Parameter je Bild. */
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> OverlayMID = nullptr;
+
+	/** Unbegrenztes PostProcessVolume, das das Overlay traegt. */
+	UPROPERTY(Transient)
+	TObjectPtr<APostProcessVolume> OverlayVolume = nullptr;
+
+	/** Fehlendes Overlay-Material nur einmal melden. */
+	bool bOverlayWarned = false;
+
+	/** Einmal-Beleg, dass das Overlay steht (mit den EINGESCHWUNGENEN Werten). */
+	bool bOverlayReported = false;
+
+	/** Staerken des letzten Bildes - der Beleg soll nicht waehrend der
+	 *  Wetter-Ueberblendung feuern und dann 0,01 statt 0,70 melden. BEIDE
+	 *  Werte, denn bei Schnee steht der Regen von Anfang an auf 0 und der
+	 *  Beleg haette sich fuer "eingeschwungen" gehalten. */
+	float LastOverlayRain = -1.0f;
+	float LastOverlaySnow = -1.0f;
+
+	/** Wie viele Bilder die Staerken schon unveraendert sind. */
+	int32 OverlaySettledFrames = 0;
+
+	/** Lagebericht ueber die Wetter-Partikel nur einmal je Sitzung ausgeben. */
+	bool bReportedFXSetup = false;
 
 	// Gespawnte Effekte (GC-verfolgt). Wiederverwendet ueber die Lebenszeit.
 	UPROPERTY(Transient)
