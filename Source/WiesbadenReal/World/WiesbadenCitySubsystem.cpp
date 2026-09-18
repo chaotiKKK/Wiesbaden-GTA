@@ -385,6 +385,34 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 	{
 		bTimeOverrideApplied = true;
 		ResolveTimeSource();
+
+		// Wetterlage erzwingen (-WbWeather=Rain|Fog|Cloudy|Snow|Storm|Clear).
+		// Gegenstueck zu -WbTime: ohne den Schalter liesse sich Regen oder Nebel
+		// nicht gezielt fotografieren - die Lage kommt sonst nur aus dem Prompt.
+		FString ForcedWeather;
+		if (FParse::Value(FCommandLine::Get(), TEXT("WbWeather="), ForcedWeather) && !ForcedWeather.IsEmpty())
+		{
+			static const TMap<FString, ECityWeatherPreset> Presets = {
+				{ TEXT("clear"), ECityWeatherPreset::Clear },
+				{ TEXT("cloudy"), ECityWeatherPreset::Cloudy },
+				{ TEXT("rain"), ECityWeatherPreset::Rain },
+				{ TEXT("storm"), ECityWeatherPreset::Thunderstorm },
+				{ TEXT("thunderstorm"), ECityWeatherPreset::Thunderstorm },
+				{ TEXT("fog"), ECityWeatherPreset::Fog },
+				{ TEXT("snow"), ECityWeatherPreset::Snow },
+			};
+			if (const ECityWeatherPreset* Preset = Presets.Find(ForcedWeather.ToLower()))
+			{
+				Weather.SetTargetWeather(*Preset);
+				UE_LOG(LogWbCore, Log, TEXT("Wetterlage auf '%s' gesetzt (-WbWeather)."), *ForcedWeather);
+			}
+			else
+			{
+				UE_LOG(LogWbCore, Warning,
+					TEXT("-WbWeather=%s unbekannt. Erlaubt: Clear, Cloudy, Rain, Storm, Fog, Snow."),
+					*ForcedWeather);
+			}
+		}
 	}
 
 	// Ladereichweite der World Partition setzen - einmalig.

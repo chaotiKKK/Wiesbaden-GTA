@@ -201,22 +201,34 @@ bool FWeatherFXAssetPathsTest::RunTest(const FString& Parameters)
 		EWiesbadenWeatherFXType::Rain, EWiesbadenWeatherFXType::Snow,
 		EWiesbadenWeatherFXType::Fog, EWiesbadenWeatherFXType::Clouds,
 		EWiesbadenWeatherFXType::Storm };
+	// Nebel und Wolken sind engine-nativ (Hoehennebel + Wolkenschicht, siehe
+	// UpdateSky) und erwarten KEIN Niagara-Asset - leerer Pfad. Vorher suchte
+	// die Komponente hier zwei Systeme, die es nie gab.
+	TestTrue(TEXT("Nebel: kein Niagara-Pfad"),
+		UWiesbadenWeatherFXComponent::GetDefaultAssetPath(EWiesbadenWeatherFXType::Fog).IsEmpty());
+	TestTrue(TEXT("Wolken: kein Niagara-Pfad"),
+		UWiesbadenWeatherFXComponent::GetDefaultAssetPath(EWiesbadenWeatherFXType::Clouds).IsEmpty());
+
 	TSet<FString> Seen;
 	for (const EWiesbadenWeatherFXType Type : Types)
 	{
 		const FString Path = UWiesbadenWeatherFXComponent::GetDefaultAssetPath(Type);
-		TestTrue(TEXT("Pfad nicht leer"), !Path.IsEmpty());
+		if (Path.IsEmpty())
+		{
+			continue;   // engine-nativ
+		}
 		TestTrue(TEXT("Pfad eindeutig"), !Seen.Contains(Path));
 		Seen.Add(Path);
 	}
+	TestEqual(TEXT("Drei Partikel-Effekte bleiben"), Seen.Num(), 3);
 
 	// Exakte Pfade (Konvention: /Game/Niagara/NS_Weather<Name>.NS_Weather<Name>).
 	TestEqual(TEXT("Rain-Pfad"),
 		UWiesbadenWeatherFXComponent::GetDefaultAssetPath(EWiesbadenWeatherFXType::Rain),
 		TEXT("/Game/Niagara/NS_WeatherRain.NS_WeatherRain"));
-	TestEqual(TEXT("Clouds-Pfad"),
-		UWiesbadenWeatherFXComponent::GetDefaultAssetPath(EWiesbadenWeatherFXType::Clouds),
-		TEXT("/Game/Niagara/NS_WeatherClouds.NS_WeatherClouds"));
+	TestEqual(TEXT("Snow-Pfad"),
+		UWiesbadenWeatherFXComponent::GetDefaultAssetPath(EWiesbadenWeatherFXType::Snow),
+		TEXT("/Game/Niagara/NS_WeatherSnow.NS_WeatherSnow"));
 
 	return true;
 }
@@ -429,6 +441,73 @@ bool FWeatherNightFloorTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("Tagwert erreicht die volle Staerke"),
 		NoonParams.SunIntensity > MaxLux * 0.5f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWeatherFXSkyTest,
+	"WiesbadenReal.Weather.FXSky",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Die Kurven des engine-nativen Himmels (Nebel, Wolkenschicht, Himmelslicht).
+ *
+ * Partikel koennen die Himmelskuppel nicht anfassen - Nebel und Bewoelkung
+ * laufen deshalb ueber Hoehennebel und Wolkenschicht der Engine. Hier stehen
+ * die Umrechnungen, die UpdateSky auf die Actors schreibt.
+ */
+bool FWeatherFXSkyTest::RunTest(const FString& Parameters)
+{
+	using FX = FWiesbadenWeatherFXParams;
+
+	// -- Nebel: klarer Himmel behaelt die Grundtruebung der Karte -------------
+	TestTrue(TEXT("klar: Grundtruebung 0,008"),
+		FMath::IsNearlyEqual(FX::FogDensityFor(0.0f), 0.008f, 1e-4f));
+	TestTrue(TEXT("dichter Nebel ist deutlich dichter als klar"),
+		FX::FogDensityFor(1.0f) > FX::FogDensityFor(0.0f) * 10.0f);
+	TestTrue(TEXT("Nebel waechst monoton"),
+		FX::FogDensityFor(0.8f) > FX::FogDensityFor(0.3f));
+	// Ausserhalb 0..1 wird geklemmt - keine negative oder absurde Dichte.
+	TestTrue(TEXT("unter 0 geklemmt"),
+		FMath::IsNearlyEqual(FX::FogDensityFor(-5.0f), FX::FogDensityFor(0.0f), 1e-6f));
+	TestTrue(TEXT("ueber 1 geklemmt"),
+		FMath::IsNearlyEqual(FX::FogDensityFor(9.0f), FX::FogDensityFor(1.0f), 1e-6f));
+
+	// -- Wolken: unter 5 % gar nichts zeichnen -------------------------------
+	TestTrue(TEXT("wolkenlos: keine Schicht"), FX::CloudLayerHeightKm(0.0f) == 0.0f);
+	TestTrue(TEXT("Schleier unter 5 %: keine Schicht"), FX::CloudLayerHeightKm(0.04f) == 0.0f);
+	TestTrue(TEXT("bedeckt: Schicht vorhanden"), FX::CloudLayerHeightKm(0.7f) > 0.0f);
+	TestTrue(TEXT("mehr Bedeckung = maechtigere Schicht"),
+		FX::CloudLayerHeightKm(1.0f) > FX::CloudLayerHeightKm(0.3f));
+	// Je bedeckter, desto TIEFER haengt die Decke.
+	TestTrue(TEXT("Regendecke haengt tiefer als Schoenwetterwolken"),
+		FX::CloudLayerBottomKm(1.0f) < FX::CloudLayerBottomKm(0.2f));
+
+	// -- Himmelslicht: Bedeckung schluckt Umgebungslicht ---------------------
+	TestTrue(TEXT("klar: volles Himmelslicht"),
+		FMath::IsNearlyEqual(FX::SkyLightFactorFor(0.0f), 1.0f, 1e-4f));
+	TestTrue(TEXT("bedeckt: deutlich gedaempft"), FX::SkyLightFactorFor(1.0f) < 0.6f);
+	TestTrue(TEXT("Daempfung faellt monoton"),
+		FX::SkyLightFactorFor(0.9f) < FX::SkyLightFactorFor(0.2f));
+
+	// -- Zusammenspiel: Regen ist truebe, klar ist es nicht -------------------
+	{
+		const FWiesbadenWeatherState Clear = MakeFXState(
+			ECityWeatherPreset::Clear, ECityWeatherPreset::Clear, 1.0f, 12.0f, 1.0f);
+		const FWiesbadenWeatherState Rain = MakeFXState(
+			ECityWeatherPreset::Rain, ECityWeatherPreset::Rain, 1.0f, 12.0f, 1.0f);
+		const FX RainParams = FX::FromWeatherState(Rain);
+		const FX ClearParams = FX::FromWeatherState(Clear);
+
+		TestTrue(TEXT("Regen: dichterer Nebel als bei klarem Himmel"),
+			FX::FogDensityFor(RainParams.FogDensity) > FX::FogDensityFor(ClearParams.FogDensity));
+		TestTrue(TEXT("Regen: Wolkendecke vorhanden"),
+			FX::CloudLayerHeightKm(RainParams.CloudOpacity) > 0.0f);
+		TestTrue(TEXT("klar: keine geschlossene Decke"),
+			FX::CloudLayerHeightKm(ClearParams.CloudOpacity) < FX::CloudLayerHeightKm(RainParams.CloudOpacity));
+		TestTrue(TEXT("Regen: Himmelslicht gedaempfter"),
+			FX::SkyLightFactorFor(RainParams.CloudOpacity) < FX::SkyLightFactorFor(ClearParams.CloudOpacity));
+	}
 
 	return true;
 }

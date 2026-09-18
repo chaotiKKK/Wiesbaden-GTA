@@ -1,6 +1,6 @@
 {
   "formatVersion": 1,
-  "description": "Spezifikation der fuenf Niagara-Wetter-Assets (World/WiesbadenWeatherFX). Die Datei ist die editorfaehige Blaupause: Jedes NS_-Asset muss die gelisteten User-Parameter EXPONIEREN (nur User-Namespace ist aus C++/Blueprint setzbar - SetVariableFloat/SetVariableLinearColor). Die C++-Seite (UWiesbadenWeatherFXComponent::ValidateSystem) prueft zur Laufzeit, ob zugewiesene Systeme diesen Vertrag erfuellen, und warnt bei fehlenden Parametern. Jedes Asset spezifiziert zusaetzlich explizite Fixed Bounds (bounds-Feld) - ohne sie culled die Engine grosse raeumliche Effekte (Wolken-Schale, Nebel, Regenbox) weg.",
+  "description": "Spezifikation der Wetter-Effekte (World/WiesbadenWeatherFX). HYBRID: Regen, Schnee und Gewitter sind Niagara-Systeme (NS_-Assets, die die gelisteten User-Parameter EXPONIEREN muessen - nur der User-Namespace ist aus C++ setzbar); NEBEL und WOLKEN laufen dagegen engine-nativ ueber ExponentialHeightFog und VolumetricCloud, weil Partikel die Himmelskuppel nicht veraendern koennen. Die C++-Seite prueft die Niagara-Vertraege zur Laufzeit (ValidateSystem) und stellt Nebel/Wolken in UpdateSky; deren Kurven sind datenrein getestet (Weather.FXSky). Fixed Bounds bleiben fuer die Partikel-Systeme Pflicht - ohne sie culled die Engine grosse raeumliche Effekte weg.",
   "assets": [
     {
       "id": "NS_WeatherRain",
@@ -155,7 +155,7 @@
     {
       "id": "NS_WeatherFog",
       "displayName": "Nebel",
-      "build": "Niagara System mit einem CPU-Emitter 'FogPatch' (grosser weicher Sprite-Klotz), EmitterUpdate->Color (Set Particle Color, Alpha an User.FogDensity gebunden - Modul /Niagara/Modules/Update/Color/Color); Render->Sprite mit dichtem Radial-Gradient-Material BOUNDS: Fixed-Bounds am System setzen (siehe bounds-Feld), da CPUSim-Emitter ohne explizite Bounds bei Distanz-Culling verschwinden koennen.",
+      "build": "ENGINE-NATIV, kein Niagara-Asset: Hoehennebel des Levels (AExponentialHeightFog, vom Bake angelegt). UpdateSky setzt SetFogDensity aus FWiesbadenWeatherFXParams::FogDensityFor(FogDensity) und die Streufarbe aus SunLightColor. Kurve getestet in Weather.FXSky.",
       "emitters": [
         {
           "name": "FogPatch",
@@ -221,12 +221,13 @@
         ],
         "note": "flacher Nebelteppich, grossflaechig gegen Distance-Culling"
       },
-      "path": "/Game/Niagara/NS_WeatherFog.NS_WeatherFog"
+      "path": "/Game/Niagara/NS_WeatherFog.NS_WeatherFog",
+      "engineNative": true
     },
     {
       "id": "NS_WeatherClouds",
       "displayName": "Wolken",
-      "build": "Niagara System mit einem CPU-Emitter 'CloudLayer' (Himmelsschale), EmitterUpdate->Color (Set Particle Color, Alpha an User.CloudOpacity gebunden - Modul /Niagara/Modules/Update/Color/Color); Render->Sprite auf einer Kugel/Halbschale ueber der Stadt BOUNDS: Fixed-Bounds am System setzen (siehe bounds-Feld), da CPUSim-Emitter ohne explizite Bounds bei Distanz-Culling verschwinden koennen.",
+      "build": "ENGINE-NATIV, kein Niagara-Asset: Wolkenschicht (AVolumetricCloud). Fehlt sie in der Karte, ruestet FindOrSpawnClouds sie zur Laufzeit nach - kein Re-Bake noetig. UpdateSky setzt Untergrenze und Dicke aus CloudLayerBottomKm/CloudLayerHeightKm und daempft das Himmelslicht ueber SkyLightFactorFor. Die Deckung selbst steckt im Wolken-Material der Engine und ist nicht von C++ stellbar.",
       "emitters": [
         {
           "name": "CloudLayer",
@@ -292,7 +293,8 @@
         ],
         "note": "Himmelsschale ueber Stadt + Umland - OHNE Fixed Bounds wird das System bei Distanz-Culling weggeculled"
       },
-      "path": "/Game/Niagara/NS_WeatherClouds.NS_WeatherClouds"
+      "path": "/Game/Niagara/NS_WeatherClouds.NS_WeatherClouds",
+      "engineNative": true
     },
     {
       "id": "NS_WeatherStorm",

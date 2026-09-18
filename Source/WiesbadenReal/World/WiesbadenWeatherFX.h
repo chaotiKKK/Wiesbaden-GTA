@@ -12,6 +12,9 @@
 
 class AWiesbadenCityActor;
 class UDirectionalLightComponent;
+class UExponentialHeightFogComponent;
+class UVolumetricCloudComponent;
+class USkyLightComponent;
 
 /**
  * Effekt-Typen der Wetter-FX (Reihenfolge = WeatherFXCatalog.json).
@@ -113,6 +116,29 @@ struct WIESBADENREAL_API FWiesbadenWeatherFXParams
 	/** Anteil der Tagesstaerke, der nachts als Mondlicht stehen bleibt. */
 	static float GetNightSunFloor();
 
+	// -- Himmel engine-nativ (Nebel, Wolken, Himmelslicht) ---------------------
+	//
+	// Nebel und Bewoelkung laufen NICHT ueber Niagara: Partikel koennen den
+	// Himmel nicht veraendern, und genau das ist der sichtbare Teil des Wetters.
+	// Hoehennebel und Wolkenschicht sind Engine-Actors und voll skriptbar; die
+	// Kurven hier sind datenrein und getestet (Weather.FXSky).
+
+	/**
+	 * Dichte des Hoehennebels aus der Nebel-Intensitaet. Klarer Himmel behaelt
+	 * die dezente Grundtruebung der Karte (0,008 aus EnsureLightingActors),
+	 * dichter Nebel legt eine graue Wand darueber.
+	 */
+	static float FogDensityFor(float FogIntensity01);
+
+	/** Untergrenze der Wolkenschicht in km - je bedeckter, desto tiefer. */
+	static float CloudLayerBottomKm(float CloudOpacity01);
+
+	/** Dicke der Wolkenschicht in km; 0 heisst "keine Wolken zeichnen". */
+	static float CloudLayerHeightKm(float CloudOpacity01);
+
+	/** Faktor auf das Himmelslicht: eine geschlossene Decke schluckt Umgebungslicht. */
+	static float SkyLightFactorFor(float CloudOpacity01);
+
 	/**
 	 * Gibt die geforderten User-Parameter-Namen fuer einen Effekt-Typ zurueck
 	 * (Vertrag aus WeatherFXCatalog.json, praefixfrei wie ApplyParams sie setzt).
@@ -201,6 +227,22 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Weather|FX|Light")
 	TObjectPtr<UDirectionalLightComponent> SunLight = nullptr;
 
+	// -- Himmel (in BeginPlay aufgeloest, siehe UpdateSky) ----------------------
+	UPROPERTY(Transient)
+	TObjectPtr<UExponentialHeightFogComponent> WeatherFog = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UVolumetricCloudComponent> WeatherClouds = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<USkyLightComponent> WeatherSkyLight = nullptr;
+
+	/** Ausgangshelligkeit des Himmelslichts (aus der Karte) als Bezug der Daempfung. */
+	float BaseSkyLightIntensity = -1.0f;
+
+	/** Letzter Sichtbarkeitszustand der Wolken - nicht je Bild umschalten. */
+	bool bCloudsVisible = true;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -214,6 +256,29 @@ private:
 
 	/** Findet die erste DirectionalLight des Levels (Fallback in BeginPlay). */
 	UDirectionalLightComponent* FindSunLight() const;
+
+	/**
+	 * Nebel, Wolkenschicht und Himmelslicht aus dem Wetter stellen.
+	 *
+	 * Der sichtbare Teil des Wetters: ohne das bleibt der Himmel bei Regen
+	 * strahlend blau, weil Partikel die Himmelskuppel nicht anfassen koennen.
+	 */
+	void UpdateSky(const FWiesbadenWeatherFXParams& Params);
+
+	/** Hoehennebel des Levels (EnsureLightingActors legt ihn in jeder Karte an). */
+	UExponentialHeightFogComponent* FindFog() const;
+
+	/**
+	 * Wolkenschicht des Levels - und legt sie an, wenn keine da ist.
+	 *
+	 * Gebackene Karten haben keinen Wolken-Actor (der Bake erzeugt nur Sonne,
+	 * Himmel und Nebel). Zur Laufzeit nachruesten spart einen zweistuendigen
+	 * Re-Bake und wirkt sofort auf jeder bestehenden Karte.
+	 */
+	UVolumetricCloudComponent* FindOrSpawnClouds();
+
+	/** Himmelslicht des Levels (fuer die Daempfung unter Wolken). */
+	USkyLightComponent* FindSkyLight() const;
 
 	/** Laedt nicht manuell zugewiesene Effekt-Systeme aus den Default-Pfaden. */
 	void LoadDefaultSystems();

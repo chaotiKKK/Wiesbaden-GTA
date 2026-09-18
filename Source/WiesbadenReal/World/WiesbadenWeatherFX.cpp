@@ -6,6 +6,11 @@
 
 #include "Components/DirectionalLightComponent.h"
 #include "Engine/DirectionalLight.h"
+#include "Components/ExponentialHeightFogComponent.h"
+#include "Components/SkyLightComponent.h"
+#include "Components/VolumetricCloudComponent.h"
+#include "Engine/ExponentialHeightFog.h"
+#include "Engine/SkyLight.h"
 #include "World/WiesbadenSolar.h"
 #include "EngineUtils.h"
 #include "NiagaraFunctionLibrary.h"
@@ -104,6 +109,38 @@ float FWiesbadenWeatherFXParams::GetMaxSunIntensityLux()
 	return MaxSunIntensity;
 }
 
+float FWiesbadenWeatherFXParams::FogDensityFor(float FogIntensity01)
+{
+	// 0,008 ist die Grundtruebung, die der Bake jeder Karte mitgibt
+	// (EnsureLightingActors) - klarer Himmel soll genau so aussehen wie bisher.
+	// Bei dichtem Nebel (1,0) sinkt die Sicht auf wenige hundert Meter.
+	return 0.008f + 0.19f * FMath::Clamp(FogIntensity01, 0.0f, 1.0f);
+}
+
+float FWiesbadenWeatherFXParams::CloudLayerBottomKm(float CloudOpacity01)
+{
+	// Schoenwetterwolken stehen hoch, eine geschlossene Regendecke drueckt tief.
+	return FMath::Lerp(6.0f, 2.5f, FMath::Clamp(CloudOpacity01, 0.0f, 1.0f));
+}
+
+float FWiesbadenWeatherFXParams::CloudLayerHeightKm(float CloudOpacity01)
+{
+	// Unter 5 % Bedeckung gar nichts zeichnen: die Volumen-Abtastung kostet
+	// Bildzeit, und ein paar Schleierwolken sieht ohnehin niemand.
+	const float Cover = FMath::Clamp(CloudOpacity01, 0.0f, 1.0f);
+	if (Cover < 0.05f)
+	{
+		return 0.0f;
+	}
+	return FMath::Lerp(1.5f, 10.0f, Cover);
+}
+
+float FWiesbadenWeatherFXParams::SkyLightFactorFor(float CloudOpacity01)
+{
+	// Voll bedeckt schluckt die Decke gut die Haelfte des Umgebungslichts.
+	return FMath::Lerp(1.0f, 0.45f, FMath::Clamp(CloudOpacity01, 0.0f, 1.0f));
+}
+
 float FWiesbadenWeatherFXParams::GetNightSunFloor()
 {
 	return NightSunFloor;
@@ -175,9 +212,12 @@ FString UWiesbadenWeatherFXComponent::GetDefaultAssetPath(EWiesbadenWeatherFXTyp
 	case EWiesbadenWeatherFXType::Snow:
 		return TEXT("/Game/Niagara/NS_WeatherSnow.NS_WeatherSnow");
 	case EWiesbadenWeatherFXType::Fog:
-		return TEXT("/Game/Niagara/NS_WeatherFog.NS_WeatherFog");
 	case EWiesbadenWeatherFXType::Clouds:
-		return TEXT("/Game/Niagara/NS_WeatherClouds.NS_WeatherClouds");
+		// Engine-nativ statt Niagara: Hoehennebel und Wolkenschicht sind
+		// Engine-Actors (siehe UpdateSky). Ein leerer Pfad heisst "kein
+		// Niagara-Asset erwartet" - vorher suchte die Komponente hier zwei
+		// Systeme, die es nie gab, und warnte bei jedem Start.
+		return FString();
 	case EWiesbadenWeatherFXType::Storm:
 		return TEXT("/Game/Niagara/NS_WeatherStorm.NS_WeatherStorm");
 	}
@@ -269,6 +309,19 @@ void UWiesbadenWeatherFXComponent::BeginPlay()
 				TEXT("WeatherFX: Keine DirectionalLight im Level gefunden - Sonnenlicht bleibt ungesteuert."));
 		}
 	}
+
+	// Himmel engine-nativ: Nebel und Himmelslicht liegen dank EnsureLightingActors
+	// in jeder Karte, die Wolkenschicht wird bei Bedarf nachgeruestet.
+	WeatherFog = FindFog();
+	WeatherSkyLight = FindSkyLight();
+	if (WeatherSkyLight)
+	{
+		BaseSkyLightIntensity = WeatherSkyLight->Intensity;
+	}
+	WeatherClouds = FindOrSpawnClouds();
+	UE_LOG(LogWbCore, Log,
+		TEXT("WeatherFX: Himmel engine-nativ - Nebel=%d Wolken=%d Himmelslicht=%d (Basis %.2f)."),
+		WeatherFog ? 1 : 0, WeatherClouds ? 1 : 0, WeatherSkyLight ? 1 : 0, BaseSkyLightIntensity);
 }
 
 void UWiesbadenWeatherFXComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -352,6 +405,104 @@ UDirectionalLightComponent* UWiesbadenWeatherFXComponent::FindSunLight() const
 		}
 	}
 	return nullptr;
+}
+
+UExponentialHeightFogComponent* UWiesbadenWeatherFXComponent::FindFog() const
+{
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+	for (TActorIterator<AExponentialHeightFog> It(World); It; ++It)
+	{
+		if (UExponentialHeightFogComponent* Comp = It->GetComponent())
+		{
+			return Comp;
+		}
+	}
+	return nullptr;
+}
+
+USkyLightComponent* UWiesbadenWeatherFXComponent::FindSkyLight() const
+{
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+	for (TActorIterator<ASkyLight> It(World); It; ++It)
+	{
+		if (USkyLightComponent* Comp = It->GetLightComponent())
+		{
+			return Comp;
+		}
+	}
+	return nullptr;
+}
+
+UVolumetricCloudComponent* UWiesbadenWeatherFXComponent::FindOrSpawnClouds()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+	for (TActorIterator<AVolumetricCloud> It(World); It; ++It)
+	{
+		// FindComponentByClass statt eines Actor-Getters: AVolumetricCloud haelt
+		// die Komponente als Member ohne oeffentlichen Zugriff.
+		if (UVolumetricCloudComponent* Comp = It->FindComponentByClass<UVolumetricCloudComponent>())
+		{
+			return Comp;
+		}
+	}
+
+	// Keine Wolkenschicht in der Karte: nachruesten. Transient, damit der Actor
+	// nicht in eine gebackene Karte zurueckgeschrieben wird.
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.ObjectFlags |= RF_Transient;
+	AVolumetricCloud* Cloud = World->SpawnActor<AVolumetricCloud>(
+		FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+	return Cloud ? Cloud->FindComponentByClass<UVolumetricCloudComponent>() : nullptr;
+}
+
+void UWiesbadenWeatherFXComponent::UpdateSky(const FWiesbadenWeatherFXParams& Params)
+{
+	// Nebel: Dichte aus der Wetterlage, Farbe aus dem Sonnenlicht - so faerbt
+	// sich der Dunst abends warm und nachts kuehl mit.
+	if (WeatherFog)
+	{
+		WeatherFog->SetFogDensity(FWiesbadenWeatherFXParams::FogDensityFor(Params.FogDensity));
+		WeatherFog->SetFogInscatteringColor(Params.SunLightColor);
+	}
+
+	// Wolken: Hoehe und Dicke aus der Bewoelkung. Die Deckung selbst steckt im
+	// Wolken-Material der Engine und ist von hier nicht stellbar - eine tiefe,
+	// maechtige Schicht liest sich aber als geschlossene Decke.
+	if (WeatherClouds)
+	{
+		const float HeightKm = FWiesbadenWeatherFXParams::CloudLayerHeightKm(Params.CloudOpacity);
+		const bool bWantVisible = HeightKm > 0.0f;
+		if (bWantVisible)
+		{
+			WeatherClouds->SetLayerBottomAltitude(
+				FWiesbadenWeatherFXParams::CloudLayerBottomKm(Params.CloudOpacity));
+			WeatherClouds->SetLayerHeight(HeightKm);
+		}
+		if (bWantVisible != bCloudsVisible)
+		{
+			WeatherClouds->SetVisibility(bWantVisible, /*bPropagateToChildren=*/true);
+			bCloudsVisible = bWantVisible;
+		}
+	}
+
+	// Himmelslicht: unter geschlossener Decke wird die Szene sichtbar flauer.
+	if (WeatherSkyLight && BaseSkyLightIntensity >= 0.0f)
+	{
+		WeatherSkyLight->SetIntensity(BaseSkyLightIntensity
+			* FWiesbadenWeatherFXParams::SkyLightFactorFor(Params.CloudOpacity));
+	}
 }
 
 void UWiesbadenWeatherFXComponent::ApplyParams(UNiagaraComponent* FX,
@@ -454,6 +605,9 @@ void UWiesbadenWeatherFXComponent::TickComponent(float DeltaTime, ELevelTick Tic
 		Sun->SetLightColor(Params.SunLightColor);
 		Sun->SetIntensity(Params.SunIntensity);
 	}
+
+	// Himmel (Nebel, Wolken, Himmelslicht) - der sichtbare Teil des Wetters.
+	UpdateSky(Params);
 
 	LastAppliedParams = Params;
 }
