@@ -223,6 +223,15 @@ public:
 	/** Der Hinweis auf wirkungslose Aufnahme-Schalter ist raus. */
 	bool bStaleGotoFlagsReported = false;
 
+	/** Zuletzt an die Zellen gereichte Stunde des Fensterlichts. */
+	float LastWindowLightHours = -1.0f;
+
+	/** Die einmalige Fensterlicht-Bilanz ist raus. */
+	bool bWindowLightReported = false;
+
+	/** Sekunden seit dem letzten Durchgang durch die geladenen Zellen. */
+	float WindowLightSweepTimer = 0.0f;
+
 	/** Gemeldete Aussetzer - gedeckelt, damit eine lange Fahrt das Protokoll nicht flutet. */
 	int32 HitchesReported = 0;
 

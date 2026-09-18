@@ -1150,6 +1150,51 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		}
 	}
 
+	// Fensterlicht der Stadt nach der Uhrzeit.
+	//
+	// Nur bei merklicher Aenderung: ein Durchgang durch die geladenen Zellen
+	// je Bild waere Verschwendung, die Sonne bewegt sich langsam. 0,05 Stunden
+	// sind drei Minuten Spielzeit.
+	if (const UWorld* LightWorld = GetWorld())
+	{
+		const float NowHours = Weather.GetState().TimeOfDayHours;
+
+		// Nicht nur bei Uhrzeit-Aenderung, sondern auch in ruhigem Takt.
+		//
+		// World Partition streamt laufend neue Zellen herein. Liefe der
+		// Durchgang nur bei Stundenwechsel, blieben alle spaeter geladenen
+		// Zellen dunkel - bei fester Uhrzeit (-WbTime) fuer immer. Genau das
+		// war im ersten Nachtbild zu sehen: hinten leuchtende Fenster, vorn
+		// dunkle. Der Durchgang selbst ist billig, weil ApplyWindowLight je
+		// Zelle sofort zurueckkehrt, wenn die Stunde schon gesetzt ist.
+		WindowLightSweepTimer += DeltaTime;
+		const bool bHourChanged = FMath::Abs(NowHours - LastWindowLightHours) > 0.05f;
+		const bool bSweepDue = WindowLightSweepTimer >= 2.0f;
+
+		if (bHourChanged || bSweepDue)
+		{
+			WindowLightSweepTimer = 0.0f;
+			LastWindowLightHours = NowHours;
+			int32 Touched = 0;
+			for (TActorIterator<AWiesbadenCityChunk> It(const_cast<UWorld*>(LightWorld)); It; ++It)
+			{
+				It->ApplyWindowLight(NowHours);
+				++Touched;
+			}
+
+			if (!bWindowLightReported && Touched > 0)
+			{
+				bWindowLightReported = true;
+				UE_LOG(LogWbStreaming, Log,
+					TEXT("Fensterlicht: %d geladene Zellen gesetzt, Uhrzeit %.2f h ")
+					TEXT("(Wohnen %.2f, Buero %.2f)."),
+					Touched, NowHours,
+					AWiesbadenCityChunk::WindowLightStrength(EWbBuildingUse::Residential, NowHours),
+					AWiesbadenCityChunk::WindowLightStrength(EWbBuildingUse::Office, NowHours));
+			}
+		}
+	}
+
 	// Bildzeit mitschreiben.
 	//
 	// Die Zaehler werden nach vier Sekunden EINMAL zurueckgesetzt: Bis dahin

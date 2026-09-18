@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "World/WiesbadenCityChunk.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 
 #include "World/WiesbadenStreamingCost.h"
 
@@ -91,6 +93,156 @@ void AWiesbadenCityChunk::SetRegionAssets(const TArray<FPlacedRegionAsset>& InAs
 	// Nachtraegliche Verteilung kann Zellen geleert oder gefuellt haben -
 	// die Ankerung darf dem nicht hinterherhaengen.
 	AnchorStreamingBounds();
+}
+
+EWbBuildingUse AWiesbadenCityChunk::BuildingUseFromMaterialName(const FString& MaterialName)
+{
+	// Die Fassadennamen kommen aus der Pipeline: MI_WbFacade_<Art>.
+	if (MaterialName.Contains(TEXT("Buerohaus"))
+		|| MaterialName.Contains(TEXT("Glasturm"))
+		|| MaterialName.Contains(TEXT("Hochhaus")))
+	{
+		return EWbBuildingUse::Office;
+	}
+
+	if (MaterialName.Contains(TEXT("Wohnhaus"))
+		|| MaterialName.Contains(TEXT("Altbau"))
+		|| MaterialName.Contains(TEXT("Nachkrieg"))
+		|| MaterialName.Contains(TEXT("Ziegel"))
+		|| MaterialName.Contains(TEXT("Klinker"))
+		|| MaterialName.Contains(TEXT("Backstein"))
+		|| MaterialName.Contains(TEXT("Sandstein")))
+	{
+		return EWbBuildingUse::Residential;
+	}
+
+	return EWbBuildingUse::Other;
+}
+
+float AWiesbadenCityChunk::WindowLightStrength(EWbBuildingUse Use, float TimeOfDayHours)
+{
+	// Stunde auf [0, 24) bringen - die Uhr kann ueber Mitternacht laufen.
+	float H = FMath::Fmod(TimeOfDayHours, 24.0f);
+	if (H < 0.0f)
+	{
+		H += 24.0f;
+	}
+
+	// Stuetzstellen (Stunde, Staerke), dazwischen linear. Eine Tabelle statt
+	// verschachtelter Bedingungen: so ist die Kurve an einem Blick ablesbar
+	// und im Test Stuetzstelle fuer Stuetzstelle pruefbar.
+	struct FKey { float Hour; float Value; };
+
+	// Wohnen: morgens kurz hell, tagsueber aus, abends lange hell, nachts
+	// einzelne Fenster.
+	static const FKey Residential[] = {
+		{ 0.0f, 0.10f }, { 5.0f, 0.10f }, { 6.5f, 0.55f }, { 8.0f, 0.30f },
+		{ 9.0f, 0.00f }, { 16.0f, 0.00f }, { 18.5f, 0.85f }, { 21.0f, 1.00f },
+		{ 22.5f, 0.85f }, { 24.0f, 0.10f }
+	};
+
+	// Buero: Feierabend statt Abendprogramm - um 23 Uhr ist Schluss.
+	static const FKey Office[] = {
+		{ 0.0f, 0.04f }, { 6.0f, 0.04f }, { 7.5f, 0.70f }, { 9.0f, 0.25f },
+		{ 16.0f, 0.25f }, { 17.5f, 0.80f }, { 20.0f, 0.55f }, { 22.0f, 0.15f },
+		{ 24.0f, 0.04f }
+	};
+
+	const FKey* Keys = nullptr;
+	int32 Count = 0;
+	float Scale = 1.0f;
+
+	switch (Use)
+	{
+	case EWbBuildingUse::Office:
+		Keys = Office;
+		Count = UE_ARRAY_COUNT(Office);
+		break;
+	case EWbBuildingUse::Residential:
+		Keys = Residential;
+		Count = UE_ARRAY_COUNT(Residential);
+		break;
+	default:
+		// Unbekannte Nutzung: wie Wohnen, aber gedaempft - lieber zu wenig
+		// Licht als ein Schuppen, der aussieht wie ein Wohnzimmer.
+		Keys = Residential;
+		Count = UE_ARRAY_COUNT(Residential);
+		Scale = 0.45f;
+		break;
+	}
+
+	for (int32 i = 0; i + 1 < Count; ++i)
+	{
+		if (H <= Keys[i + 1].Hour)
+		{
+			const float Span = Keys[i + 1].Hour - Keys[i].Hour;
+			const float Alpha = Span > KINDA_SMALL_NUMBER
+				? (H - Keys[i].Hour) / Span : 0.0f;
+			return FMath::Lerp(Keys[i].Value, Keys[i + 1].Value, Alpha) * Scale;
+		}
+	}
+
+	return Keys[Count - 1].Value * Scale;
+}
+
+void AWiesbadenCityChunk::ApplyWindowLight(float TimeOfDayHours)
+{
+	// Idempotent: erst ab einer merklichen Aenderung neu setzen. Ohne das
+	// entstuenden je Bild neue dynamische Materialinstanzen fuer jede geladene
+	// Zelle.
+	if (AppliedWindowLightHours >= 0.0f
+		&& FMath::Abs(AppliedWindowLightHours - TimeOfDayHours) < 0.05f)
+	{
+		return;
+	}
+	AppliedWindowLightHours = TimeOfDayHours;
+
+	// Gebackener Pfad: BuildingStaticMesh. Laufzeit-Pfad: BuildingMesh.
+	UMeshComponent* Targets[] = {
+		Cast<UMeshComponent>(BuildingStaticMesh), Cast<UMeshComponent>(BuildingMesh) };
+
+	for (UMeshComponent* Mesh : Targets)
+	{
+		if (!Mesh)
+		{
+			continue;
+		}
+
+		const int32 SlotCount = Mesh->GetNumMaterials();
+		for (int32 Slot = 0; Slot < SlotCount; ++Slot)
+		{
+			UMaterialInterface* Material = Mesh->GetMaterial(Slot);
+			if (!Material)
+			{
+				continue;
+			}
+
+			// Die Nutzungsart steckt im Namen des ZUGEWIESENEN Materials. Bei
+			// einer dynamischen Instanz traegt der Name den der Vorlage, also
+			// bleibt die Zuordnung ueber die Zeit stabil.
+			const EWbBuildingUse Use = BuildingUseFromMaterialName(Material->GetName());
+			const float Strength = WindowLightStrength(Use, TimeOfDayHours);
+
+			UMaterialInstanceDynamic* Dynamic = Cast<UMaterialInstanceDynamic>(Material);
+			if (!Dynamic)
+			{
+				Dynamic = Mesh->CreateDynamicMaterialInstance(Slot, Material);
+			}
+			if (Dynamic)
+			{
+				// Sichtprüfung statt Rechnung: die Kurve liefert 0..1 als
+				// "wie viel Licht", das Material macht daraus ZWEIERLEI -
+				// den Anteil der erleuchteten Fenster UND ihre Helligkeit.
+				// Ungedaempft leuchteten bei 0,9 rund neun von zehn Fenstern
+				// gleisshell; im Nachtbild war die Fassade ein Leuchtkasten.
+				// 0,38 ergibt gut ein Drittel erleuchtete Fenster in ruhigem
+				// Warmton - nachgemessen am Bild, nicht geschaetzt.
+				constexpr float VisualCalibration = 0.38f;
+				Dynamic->SetScalarParameterValue(
+					TEXT("FensterlichtStaerke"), Strength * VisualCalibration);
+			}
+		}
+	}
 }
 
 void AWiesbadenCityChunk::BeginPlay()

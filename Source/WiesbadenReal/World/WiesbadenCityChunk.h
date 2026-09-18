@@ -28,6 +28,20 @@ class URegionAssetSpawnerComponent;
  * ResolveRoadMaterial/ResolveBuildingMaterial-Lookup-Pfade haengen an dessen
  * UPROPERTY-Material-Maps).
  */
+/** Nutzungsart eines Gebaeudes - entscheidet, wann seine Fenster leuchten. */
+UENUM(BlueprintType)
+enum class EWbBuildingUse : uint8
+{
+	/** Wohnen: abends lange hell, nachts einzelne Fenster. */
+	Residential UMETA(DisplayName = "Wohnen"),
+
+	/** Buero/Gewerbe: frueh am Abend hell, nach Feierabend dunkel. */
+	Office      UMETA(DisplayName = "Buero"),
+
+	/** Alles andere - behandelt wie Wohnen, aber gedaempft. */
+	Other       UMETA(DisplayName = "Sonstige")
+};
+
 UCLASS()
 class WIESBADENREAL_API AWiesbadenCityChunk : public AActor
 {
@@ -92,6 +106,34 @@ public:
 	void SetBuildingSectionMaterial(int32 SectionIndex, UMaterialInterface* Material);
 
 	UProceduralMeshComponent* GetRoadMesh() const { return RoadMesh; }
+
+	/**
+	 * Nutzungsart aus dem Namen des Fassaden-Materials (datenrein, testbar).
+	 *
+	 * Die Nutzung steckt schon in der Fassadenwahl der Pipeline
+	 * (MI_WbFacade_Buerohaus, _Wohnhaus, _Altbau ...) - sie dort abzulesen ist
+	 * genauer als jede Schaetzung aus Hoehe oder Grundflaeche und braucht
+	 * keinen Re-Bake.
+	 */
+	static EWbBuildingUse BuildingUseFromMaterialName(const FString& MaterialName);
+
+	/**
+	 * Staerke des Fensterlichts 0..1 zu einer Tageszeit (datenrein, testbar).
+	 *
+	 * Am Tag null: ein leuchtendes Fenster bei Sonnenschein sieht falsch aus,
+	 * und sehen wuerde man es ohnehin nicht. Wohnen und Buero laufen bewusst
+	 * AUSEINANDER - ein Buerohaus, das um zwei Uhr nachts hell ist wie ein
+	 * Wohnblock, verraet sofort, dass da eine einzige Kurve fuer alles gilt.
+	 */
+	static float WindowLightStrength(EWbBuildingUse Use, float TimeOfDayHours);
+
+	/**
+	 * Setzt das Fensterlicht dieser Zelle nach der Tageszeit.
+	 *
+	 * Je Material-Fach eine eigene Staerke, denn in einer Zelle stehen Wohn-
+	 * und Buerohaeuser nebeneinander. Idempotent: gleiche Stunde, keine Arbeit.
+	 */
+	void ApplyWindowLight(float TimeOfDayHours);
 
 	/** Kanal einer Road-Section; INDEX_NONE, wenn unbekannt. */
 	int32 GetRoadSectionChannel(int32 SectionIndex) const
@@ -224,4 +266,7 @@ private:
 	/** True, sobald BakeToStaticMeshes gelaufen ist: die Material-Setter zielen
 	 *  dann auf die StaticMesh-Slots statt auf die (geleerten) ProcMeshes. */
 	bool bBakedToStaticMesh = false;
+
+	/** Zuletzt gesetzte Stunde des Fensterlichts (-1 = noch nie gesetzt). */
+	float AppliedWindowLightHours = -1.0f;
 };
