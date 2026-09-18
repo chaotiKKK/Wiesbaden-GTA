@@ -2645,3 +2645,39 @@ BRAUCHT `MSYS2_ARG_CONV_EXCL='*'`, sonst wird `/Game/Maps/<Karte>` zu
 - **Reihenfolge der Sessions ist egal, aber:** `WbHeli` MUSS vor `WbCam`/`WbHeliFly` stehen (alles
   laeuft im selben Frame der Deferred-Exec-Kette durch); der Heli ist beim ersten Frame schon
   abgesetzt (GameMode-BeginPlay), `WbHeli` greift also sofort.
+
+## Kompletter Stadt-Bake: Rezept, Dauer, und was er NICHT braucht (18.09.2026)
+
+- **Rezept in EINER Datei:** `rebake_alkis16.cmd` (Muster fuer jeden Neubau; die alten
+  `rebake_alkis10..13.cmd`/`rebake_lod2.cmd` sind nur noch Beispiele). Quelle ist die zuletzt
+  gebackene Karte, Ziel eine NEUE (`WB_SOURCE_MAP`/`WB_TARGET_MAP`) - ein Bake ueberschreibt nie
+  die gespielte Stadt. Dauer mit dem VOLLEN Editor: 920 s fuer 2010 Kacheln, 1,43 Mio. Region-Assets
+  (Speicherspitze ~19 GB bei 31,7 GB Maschinen-RAM; der Commandlet-Weg starb an 42 GiB virtuell).
+  Alle Datenquellen explizit per Env, weil `rebuild_city.py` sie set-and-verify prueft und bei
+  einem nicht greifenden Override ABBRICHT: `WB_OSM_FILE` (Original + nachgeholte Wald-Relationen),
+  `WB_ALKIS_FILE` (LoD2-Hoehen/Daecher), `WB_DEM_FILE` (DGM1; setzt `import_dem` mit auf True),
+  `WB_USE_OSM_TREES=1`, `WB_MAX_SEGMENT_CM=220`.
+- **Fertig erkennt man den Lauf NICHT am Prozess**, sondern an der neuen Zeile in
+  `Saved/BuildHistory/CityBuilds.csv` (`MapPath`, `Result=ok`) und an
+  `###WBSTADT### FERTIG - Karte ... liegt vor.` im `rebake_alkis16.log`; Ausgabe kommt gepuffert,
+  die Datei kann minutenlang 0 Byte bleiben - am RAM-Wachstum des Editors weiterarbeiten.
+- **Die Pipeline setzt die neue Karte SELBST als Default** (`Config/DefaultEngine.ini`:
+  `GameDefaultMap` + `EditorStartupMap`) - die Aenderung steht danach im `git status` und gehoert
+  mit in den Commit. Getrackt ist nur die `Content/Maps/*.umap` (~13 KB, Huelle + WorldBuilder);
+  die ~2000 externen Actor-Pakete (`Content/__ExternalActors__`, 1,9 GB) und die 3431
+  Chunk-Meshes (`Content/Generated/`) sind per .gitignore draussen - ein frischer Checkout braucht
+  weiterhin einen Bake.
+- **KEIN Anker-Pass nach einem frischen Bake:** `AnchorStreamingBounds()` laeuft im Build-Pfad
+  jeder Kachel (`BakeToStaticMeshes`) und noch einmal in `BeginPlay`. Gegenprobe im Spiel ist die
+  Streaming-Diagnose: `Diagnose: Spieler bei (...); geladene Chunks Distanz 60..1831 m, davon
+  **0 jenseits 2 km**, 0 jenseits 4 km.` (`Tools/anchor_chunk_bounds.py` bleibt nur fuer Karten
+  noetig, die VOR diesem Fix gebacken wurden.)
+- **Zwei Fallen beim Belegbild einer neuen Karte:** `-unattended` startet keinen GameMode -
+  dann fehlen die Laufzeit-Actors (keine `Liniendatei ... gelesen`-Zeile, keine Nerobergbahn) und
+  es sieht aus, als haette die neue Karte keinen Inhalt; und `-WbScreenshot` feuert schon beim
+  Weltstart, also VOR `Bringing World ... up for play` - das Luftbild ist schwarz (350 KB statt
+  ~1,7 MB). Richtig ist `-WbShotWhenReady -WbCamHeight=<m>` (wartet auf `IsCityReady()`,
+  Settle-Countdown, dann EIN HighResShot, danach Selbstende) - so macht es `shot_alkis16.cmd`.
+  Gegenprobe, dass die Karte traegt: `Bringing World ...Alkis16 up for play`,
+  `Liniendatei line3/line6.json gelesen`, `Strang): 9559 Primitive-Komponenten ... 573
+  Instanz-Komponenten mit 716593 Instanzen`, 0 Zeilen `missing usage flag`.
