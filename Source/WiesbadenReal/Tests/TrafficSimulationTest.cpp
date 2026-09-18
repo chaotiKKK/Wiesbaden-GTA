@@ -794,7 +794,6 @@ bool FTrafficRedLightStopTest::RunTest(const FString& Parameters)
 	Network.Intersections.Add(Intersection);
 
 	FWiesbadenTrafficLightSettings LightSettings;
-	LightSettings.CycleSeconds = 30.0;
 	LightSettings.GreenSecondsPerCycle = 15.0;
 
 	FWiesbadenTrafficLightSystem Lights;

@@ -1513,6 +1513,10 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			// Das Verdikt (FAHR-Evidenz, nicht Geometrie) trifft der Report; hier nur
 			// noch die Darstellung. ApproachedSignal/Held sind Lebenszeit-Summen seit
 			// dem Stadt-Spawn, nicht der letzte Tick.
+			int32 LightsWithLeftPhase = 0;
+			double MeanCycleSeconds = 0.0;
+			TrafficLightSystem.GetProgramStatistics(LightsWithLeftPhase, MeanCycleSeconds);
+
 			switch (R.TrafficLightVerdict())
 			{
 			case EWiesbadenTrafficLightVerdict::Effective:
@@ -1520,8 +1524,14 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					TEXT("Ampeln wirksam: %d im Netz, %d Halte-Ereignis(se) an Rot (bei %d Anfahrten auf ")
 					TEXT("signalisierte Verbindungen), naechste Ampel %.0f m (Zyklus %.0f s, Gruen %.0f s)."),
 					R.TrafficLightCount, R.VehiclesHeldAtRed, R.VehiclesApproachingSignal, NearestLightM,
-					TrafficLightSystem.Settings.CycleSeconds,
-					TrafficLightSystem.Settings.GreenSecondsPerCycle);
+					MeanCycleSeconds, TrafficLightSystem.Settings.GreenSecondsPerCycle);
+
+				UE_LOG(LogWbTraffic, Log,
+					TEXT("Signalprogramm: %d von %d Kreuzungen mit eigener Abbiegephase, ")
+					TEXT("mittlerer Umlauf %.0f s%s."),
+					LightsWithLeftPhase, R.TrafficLightCount, MeanCycleSeconds,
+					TrafficLightSystem.Settings.bGreenWave
+						? TEXT(", gruene Welle an") : TEXT(", gruene Welle aus"));
 				break;
 
 			case EWiesbadenTrafficLightVerdict::Broken:

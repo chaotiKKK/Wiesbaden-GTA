@@ -8,6 +8,25 @@ namespace
 	constexpr double MinCycleSeconds = 2.0;
 }
 
+double FWiesbadenTrafficLightSystem::RoadClassRank(EOSMHighwayType Type)
+{
+	// Nur eine Rangfolge, um den Hauptarm einer Kreuzung zu finden - keine
+	// Verkehrsmenge. Die Gewichtung des Verkehrs liegt bewusst woanders
+	// (FWiesbadenTrafficSimulation::GetRoadClassWeight); hier zaehlt allein,
+	// welche Strasse die Achse der gruenen Welle vorgibt.
+	switch (Type)
+	{
+	case EOSMHighwayType::Motorway:
+	case EOSMHighwayType::Trunk:			return 6.0;
+	case EOSMHighwayType::Primary:			return 5.0;
+	case EOSMHighwayType::Secondary:		return 4.0;
+	case EOSMHighwayType::Tertiary:			return 3.0;
+	case EOSMHighwayType::Unclassified:		return 2.0;
+	case EOSMHighwayType::Residential:		return 1.0;
+	default:								return 0.5;
+	}
+}
+
 uint32 FWiesbadenTrafficLightSystem::Hash2(uint32 A, uint32 B)
 {
 	uint32 H = 2166136261u;
@@ -29,9 +48,33 @@ float FWiesbadenTrafficLightSystem::HashFraction(uint32 Hash)
 	return static_cast<float>(Hash % 1000u) / 1000.0f;
 }
 
-int32 FWiesbadenTrafficLightSystem::ComputeGroupIndex(const FRoadLane& Lane, int32 GroupCount) const
+int32 FWiesbadenTrafficLightSystem::AxisForBearing(double BearingDeg)
 {
-	if (GroupCount <= 1 || Lane.Centerline.Num() < 2)
+	// Auf [0, 360) bringen, sonst faellt eine Peilung von -90 Grad in die
+	// falsche Achse - und genau solche Werte liefert Atan2.
+	double Normalized = FMath::Fmod(BearingDeg, 360.0);
+	if (Normalized < 0.0)
+	{
+		Normalized += 360.0;
+	}
+	return (Normalized < 180.0) ? 0 : 1;
+}
+
+bool FWiesbadenTrafficLightSystem::IsLeftTurn(ETurnType Turn)
+{
+	// Wenden zaehlt mit: es kreuzt denselben Gegenverkehr wie das Linksabbiegen.
+	return Turn == ETurnType::Left || Turn == ETurnType::UTurn;
+}
+
+int32 FWiesbadenTrafficLightSystem::GroupForApproach(int32 Axis, bool bLeftTurn)
+{
+	return FMath::Clamp(Axis, 0, 1) * 2 + (bLeftTurn ? 1 : 0);
+}
+
+int32 FWiesbadenTrafficLightSystem::ComputeGroupIndex(
+	const FRoadLane& Lane, ETurnType Turn) const
+{
+	if (Lane.Centerline.Num() < 2)
 	{
 		return 0;
 	}
@@ -41,11 +84,7 @@ int32 FWiesbadenTrafficLightSystem::ComputeGroupIndex(const FRoadLane& Lane, int
 	const FVector Prev = Lane.Centerline[Lane.Centerline.Num() - 2];
 	const double BearingDeg = FMath::RadiansToDegrees(FMath::Atan2(Last.Y - Prev.Y, Last.X - Prev.X));
 
-	// Zwei Hauptachsen (0/180 und 90/270) - der Richtungsgruppen-Index ist der
-	// Achsen-Slot. Mehr als 2 Gruppen werden auf 2 aufgeteilt (Slot = Index mod
-	// GroupCount ist bei GroupCount=2 identisch zur Achse).
-	const int32 Axis = (BearingDeg >= 0.0 && BearingDeg < 180.0) ? 0 : 1;
-	return Axis % GroupCount;
+	return GroupForApproach(AxisForBearing(BearingDeg), IsLeftTurn(Turn));
 }
 
 void FWiesbadenTrafficLightSystem::Initialize(
@@ -53,7 +92,6 @@ void FWiesbadenTrafficLightSystem::Initialize(
 {
 	Network = &InNetwork;
 	Settings = InSettings;
-	Settings.CycleSeconds = FMath::Max(Settings.CycleSeconds, MinCycleSeconds);
 	Lights.Reset();
 	ConnectionToLight.Reset();
 	ElapsedSeconds = 0.0;
@@ -87,13 +125,7 @@ void FWiesbadenTrafficLightSystem::Initialize(
 		FWiesbadenTrafficLight Light;
 		Light.NodeId = Intersection.NodeId;
 		Light.Location = Intersection.Location;
-		Light.GroupCount = 2; // Zwei Achsen-Gruppen (0/180 vs 90/270).
-
-		// Deterministischer Phasen-Offset aus Node-Id + Seed, damit nicht alle
-		// Ampeln der Stadt synchron schalten.
-		Light.PhaseOffsetSeconds = HashFraction(
-			Hash2(static_cast<uint32>(Intersection.NodeId), static_cast<uint32>(Settings.RandomSeed)))
-			* Settings.CycleSeconds;
+		Light.GroupCount = 4;   // zwei Achsen mal geradeaus/links
 
 		// Connections dieser Kreuzung einer Richtungsgruppe zuordnen.
 		if (const TArray<int32>* NodeConnections = ConnectionsByNode.Find(Intersection.NodeId))
@@ -106,14 +138,140 @@ void FWiesbadenTrafficLightSystem::Initialize(
 					continue;
 				}
 
-				const int32 Group = ComputeGroupIndex(InNetwork.Lanes[Connection.FromLaneId], Light.GroupCount);
+						const int32 Group = ComputeGroupIndex(
+					InNetwork.Lanes[Connection.FromLaneId], Connection.TurnType);
 				Light.ConnectionGroups.Add(ConnectionIndex, Group);
 				ConnectionToLight.Add(ConnectionIndex, LightIndex);
 			}
 		}
 
+		BuildSignalProgram(Light);
+		Light.PhaseOffsetSeconds = ComputePhaseOffset(Intersection, InNetwork, Light.CycleSeconds);
+
 		Lights.Add(MoveTemp(Light));
 	}
+}
+
+void FWiesbadenTrafficLightSystem::BuildSignalProgram(FWiesbadenTrafficLight& Light) const
+{
+	Light.Phases.Reset();
+
+	// Gibt es auf dieser Achse ueberhaupt Linksabbieger? Eine Abbiegephase fuer
+	// eine Bewegung, die es an dieser Kreuzung nicht gibt, verschenkt nur
+	// Umlaufzeit - und davon haengt ab, wie lange alle anderen warten.
+	bool bHasLeft[2] = { false, false };
+	for (const TPair<int32, int32>& Pair : Light.ConnectionGroups)
+	{
+		const int32 Group = Pair.Value;
+		if ((Group % 2) == 1)
+		{
+			bHasLeft[FMath::Clamp(Group / 2, 0, 1)] = true;
+		}
+	}
+
+	// Feste Zeiten je Phase: Rot-Gelb vorweg, Gelb und Raeumzeit hinterher.
+	const double Fixed = FMath::Max(Settings.RedAmberSeconds, 0.0)
+		+ FMath::Max(Settings.AmberSeconds, 0.0)
+		+ FMath::Max(Settings.AllRedSeconds, 0.0);
+
+	// Die GRUENZEITEN sind die Eingabe, der Umlauf ist ihre Summe. Ein fester
+	// Umlauf mit Gruen als Rest laesst jede zusaetzliche Phase die
+	// Hauptrichtung auffressen - nachgemessen ging das Geradeaus-Gruen mit
+	// einer Abbiegephase in 30 s Umlauf von 9 auf 3,5 Sekunden zurueck.
+	const bool bLeftPhases = Settings.bProtectedLeftTurns;
+	const double ThroughSlot = FMath::Max(Settings.GreenSecondsPerCycle, 1.0) + Fixed;
+	const double LeftSlot = FMath::Max(Settings.LeftTurnGreenSeconds, 1.0) + Fixed;
+
+	for (int32 Axis = 0; Axis < 2; ++Axis)
+	{
+		FWiesbadenSignalPhase Through;
+		Through.Group = GroupForApproach(Axis, false);
+		Through.DurationSeconds = static_cast<float>(ThroughSlot);
+		Light.Phases.Add(Through);
+
+		if (bLeftPhases && bHasLeft[Axis])
+		{
+			// NACHLAUFEND, nicht vorlaufend: erst raeumt der Geradeausverkehr
+			// derselben Achse, dann biegen die Wartenden ab.
+			FWiesbadenSignalPhase Left;
+			Left.Group = GroupForApproach(Axis, true);
+			Left.DurationSeconds = static_cast<float>(LeftSlot);
+			Light.Phases.Add(Left);
+		}
+	}
+
+	Light.CycleSeconds = 0.0;
+	for (const FWiesbadenSignalPhase& Phase : Light.Phases)
+	{
+		Light.CycleSeconds += Phase.DurationSeconds;
+	}
+}
+
+double FWiesbadenTrafficLightSystem::ComputePhaseOffset(
+	const FRoadIntersection& Intersection, const FRoadNetwork& InNetwork, double CycleSeconds) const
+{
+	const double Cycle = FMath::Max(CycleSeconds, MinCycleSeconds);
+
+	// Rueckfall: ein Hash aus Knoten-Id und Startwert. Damit schaltet wenigstens
+	// nicht die ganze Stadt im Gleichtakt.
+	const double HashOffset = HashFraction(
+		Hash2(static_cast<uint32>(Intersection.NodeId), static_cast<uint32>(Settings.RandomSeed)))
+		* Cycle;
+
+	if (!Settings.bGreenWave)
+	{
+		return HashOffset;
+	}
+
+	// Hauptachse der Kreuzung: der Arm mit der hoechsten Strassenklasse.
+	const FIntersectionArm* MainArm = nullptr;
+	double BestWeight = -1.0;
+	for (const FIntersectionArm& Arm : Intersection.Arms)
+	{
+		if (!InNetwork.Segments.IsValidIndex(Arm.SegmentId))
+		{
+			continue;
+		}
+		const double Weight = RoadClassRank(InNetwork.Segments[Arm.SegmentId].HighwayType);
+		if (Weight > BestWeight)
+		{
+			BestWeight = Weight;
+			MainArm = &Arm;
+		}
+	}
+
+	if (!MainArm)
+	{
+		return HashOffset;
+	}
+
+	FVector2D Dir(MainArm->OutwardDirection.X, MainArm->OutwardDirection.Y);
+	if (!Dir.Normalize())
+	{
+		return HashOffset;
+	}
+
+	// Richtung auf eine Halbebene normieren.
+	//
+	// Zwei benachbarte Ampeln derselben Strasse koennen ihren Hauptarm in
+	// ENTGEGENGESETZTE Richtungen zeigen haben - ohne diese Normierung haetten
+	// sie Versatz mit verschiedenem Vorzeichen, und aus der Welle wuerde ein
+	// Gegentakt.
+	if (Dir.X < 0.0 || (FMath::IsNearlyZero(Dir.X) && Dir.Y < 0.0))
+	{
+		Dir = -Dir;
+	}
+
+	const double SpeedCmS = FMath::Max(Settings.GreenWaveSpeedKmh, 5.0) * 100000.0 / 3600.0;
+	const double ProjectionCm = Intersection.Location.X * Dir.X + Intersection.Location.Y * Dir.Y;
+
+	// Fahrzeit vom Ursprung der Achse bis hierher, auf den Umlauf gefaltet.
+	double Offset = FMath::Fmod(ProjectionCm / SpeedCmS, Cycle);
+	if (Offset < 0.0)
+	{
+		Offset += Cycle;
+	}
+	return Offset;
 }
 
 void FWiesbadenTrafficLightSystem::Reset()
@@ -131,6 +289,32 @@ void FWiesbadenTrafficLightSystem::Tick(float DeltaSeconds)
 	{
 		ElapsedSeconds += DeltaSeconds;
 	}
+}
+
+void FWiesbadenTrafficLightSystem::GetProgramStatistics(
+	int32& OutWithLeftPhase, double& OutMeanCycleSeconds) const
+{
+	OutWithLeftPhase = 0;
+	OutMeanCycleSeconds = 0.0;
+	if (Lights.Num() == 0)
+	{
+		return;
+	}
+
+	double CycleSum = 0.0;
+	for (const FWiesbadenTrafficLight& Light : Lights)
+	{
+		CycleSum += Light.CycleSeconds;
+		for (const FWiesbadenSignalPhase& Phase : Light.Phases)
+		{
+			if ((Phase.Group % 2) == 1)
+			{
+				++OutWithLeftPhase;
+				break;
+			}
+		}
+	}
+	OutMeanCycleSeconds = CycleSum / Lights.Num();
 }
 
 bool FWiesbadenTrafficLightSystem::HasTrafficLightAt(int64 NodeId) const
@@ -152,19 +336,36 @@ ESignalAspect FWiesbadenTrafficLightSystem::GetGroupAspect(int32 LightIndex, int
         return ESignalAspect::Green;
     }
     const FWiesbadenTrafficLight& Light = Lights[LightIndex];
-    const int32 Groups = FMath::Max(Light.GroupCount, 1);
+    if (Light.Phases.Num() == 0)
+    {
+        return ESignalAspect::Green;
+    }
 
-    const double Cycle = FMath::Max(Settings.CycleSeconds, MinCycleSeconds);
-    const double Half = Cycle / static_cast<double>(Groups);
+    const double Cycle = FMath::Max(Light.CycleSeconds, MinCycleSeconds);
     double Phase = FMath::Fmod(ElapsedSeconds + Light.PhaseOffsetSeconds, Cycle);
     if (Phase < 0.0)
     {
         Phase += Cycle;
     }
 
-    // Nur die gerade aktive Achse ist ueberhaupt nicht-rot.
-    const int32 Active = FMath::Clamp(static_cast<int32>(Phase / Half), 0, Groups - 1);
-    if (Group != Active)
+    // Das laufende Zeitfenster suchen. Wenige Phasen je Kreuzung - eine
+    // lineare Suche ist hier billiger als jede Vorberechnung.
+    int32 Active = Light.Phases.Num() - 1;
+    double PhaseStart = 0.0;
+    for (int32 i = 0; i < Light.Phases.Num(); ++i)
+    {
+        const double End = PhaseStart + Light.Phases[i].DurationSeconds;
+        if (Phase < End)
+        {
+            Active = i;
+            break;
+        }
+        PhaseStart = End;
+    }
+
+    // NUR die freigegebene Gruppe ist ueberhaupt nicht-rot. Damit koennen sich
+    // Linksabbieger und Gegenverkehr nicht begegnen.
+    if (Light.Phases[Active].Group != Group)
     {
         return ESignalAspect::Red;
     }
@@ -172,14 +373,14 @@ ESignalAspect FWiesbadenTrafficLightSystem::GetGroupAspect(int32 LightIndex, int
     const double RA = FMath::Max(Settings.RedAmberSeconds, 0.0);
     const double AM = FMath::Max(Settings.AmberSeconds, 0.0);
     const double AR = FMath::Max(Settings.AllRedSeconds, 0.0);
-    const double GreenAvail = FMath::Max(Half - RA - AM - AR, 0.0);
-    const double G = FMath::Clamp(Settings.GreenSecondsPerCycle, 0.0, GreenAvail);
+    const double Slot = Light.Phases[Active].DurationSeconds;
+    const double Green = FMath::Max(Slot - RA - AM - AR, 0.0);
 
-    const double T = Phase - static_cast<double>(Active) * Half;
+    const double T = Phase - PhaseStart;
     if (T < RA) { return ESignalAspect::RedAmber; }
-    if (T < RA + G) { return ESignalAspect::Green; }
-    if (T < RA + G + AM) { return ESignalAspect::Amber; }
-    return ESignalAspect::Red; // Allrot-Raeumzeit
+    if (T < RA + Green) { return ESignalAspect::Green; }
+    if (T < RA + Green + AM) { return ESignalAspect::Amber; }
+    return ESignalAspect::Red;   // Allrot-Raeumzeit
 }
 
 ESignalAspect FWiesbadenTrafficLightSystem::GetConnectionAspect(int32 ConnectionIndex) const

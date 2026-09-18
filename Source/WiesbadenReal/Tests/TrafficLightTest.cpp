@@ -112,7 +112,6 @@ namespace
 	FWiesbadenTrafficLightSettings MakeLightSettings()
 	{
 		FWiesbadenTrafficLightSettings Settings;
-		Settings.CycleSeconds = 30.0;
 		Settings.GreenSecondsPerCycle = 15.0;
 		Settings.RandomSeed = 424242;
 		return Settings;
@@ -237,8 +236,10 @@ bool FTrafficLightSystemTest::RunTest(const FString& Parameters)
 	    // -- 5. Aspektmodell: Konfliktfreiheit, Dauern, Gruen-Delegation. --------
     {
         FWiesbadenTrafficLightSettings S;
-        S.CycleSeconds = 30.0;
-        S.GreenSecondsPerCycle = 15.0; // wird auf GreenAvail (9 s) geklemmt
+        // Die Gruenzeit ist jetzt die EINGABE, nicht der Rest eines festen
+        // Umlaufs: 15 s Gruen plus 1 s Rot-Gelb, 3 s Gelb und 2 s Raeumzeit
+        // ergeben eine Phase von 21 s, also 42 s Umlauf fuer beide Achsen.
+        S.GreenSecondsPerCycle = 15.0;
         S.RedAmberSeconds = 1.0;
         S.AmberSeconds = 3.0;
         S.AllRedSeconds = 2.0;
@@ -251,11 +252,17 @@ bool FTrafficLightSystemTest::RunTest(const FString& Parameters)
         double Dur[4] = { 0.0, 0.0, 0.0, 0.0 };
         bool bNeverBothNonRed = true;
         bool bGreenDelegationOk = true;
-        const int32 StepsC = FMath::RoundToInt(30.0 / Dt);
+        // Ueber einen GANZEN Umlauf messen, sonst sind die Dauern
+        // abgeschnitten und der Test misst das Messfenster statt des Programms.
+        const double CycleC = Sys.Lights[0].CycleSeconds;
+        const int32 StepsC = FMath::RoundToInt(CycleC / Dt);
         for (int32 i = 0; i < StepsC; ++i)
         {
+            // Gruppe = Achse * 2 + (links ? 1 : 0). Das Testnetz hat nur
+            // Geradeaus-Verbindungen, die Gruppen sind also 0 und 2 - nicht
+            // mehr 0 und 1 wie vor den Abbiegephasen.
             const ESignalAspect A0 = Sys.GetGroupAspect(0, 0);
-            const ESignalAspect A1 = Sys.GetGroupAspect(0, 1);
+            const ESignalAspect A1 = Sys.GetGroupAspect(0, 2);
             Dur[static_cast<int32>(A0)] += Dt;
             const bool N0 = A0 != ESignalAspect::Red;
             const bool N1 = A1 != ESignalAspect::Red;
@@ -268,8 +275,10 @@ bool FTrafficLightSystemTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Aspekt: Gruen-Delegation stimmt mit Aspekt ueberein"), bGreenDelegationOk);
         TestTrue(TEXT("Aspekt: Rot-Gelb ~1 s"),
             FMath::Abs(Dur[static_cast<int32>(ESignalAspect::RedAmber)] - 1.0) < 0.3);
-        TestTrue(TEXT("Aspekt: Gruen ~9 s"),
-            FMath::Abs(Dur[static_cast<int32>(ESignalAspect::Green)] - 9.0) < 0.3);
+        TestTrue(FString::Printf(TEXT("Aspekt: Umlauf %.0f s"), CycleC),
+            FMath::Abs(CycleC - 42.0) < 0.1);
+        TestTrue(TEXT("Aspekt: Gruen ~15 s (die eingestellte Gruenzeit)"),
+            FMath::Abs(Dur[static_cast<int32>(ESignalAspect::Green)] - 15.0) < 0.3);
         TestTrue(TEXT("Aspekt: Gelb ~3 s"),
             FMath::Abs(Dur[static_cast<int32>(ESignalAspect::Amber)] - 3.0) < 0.3);
     }

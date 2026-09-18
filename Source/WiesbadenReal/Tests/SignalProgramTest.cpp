@@ -1,0 +1,325 @@
+// Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
+
+#include "Misc/AutomationTest.h"
+
+#include "GIS/WiesbadenTrafficLights.h"
+
+namespace
+{
+	FRoadLane MakeSignalLane(int32 Id, const TArray<FVector>& Line)
+	{
+		FRoadLane Lane;
+		Lane.LaneId = Id;
+		Lane.SegmentId = 0;
+		Lane.Direction = ELaneDirection::Forward;
+		Lane.Centerline = Line;
+		Lane.LengthCm = 0.0;
+		for (int32 i = 1; i < Line.Num(); ++i)
+		{
+			Lane.LengthCm += FVector::Dist(Line[i], Line[i - 1]);
+		}
+		Lane.SpeedLimitKmh = 50.0;
+		return Lane;
+	}
+
+	FLaneConnection MakeConnection(int32 From, int32 To, int64 Node, ETurnType Turn)
+	{
+		FLaneConnection C;
+		C.FromLaneId = From;
+		C.ToLaneId = To;
+		C.IntersectionNodeId = Node;
+		C.TurnType = Turn;
+		C.ConnectionPath = { FVector(10000.0, 0.0, 0.0), FVector(10500.0, 0.0, 0.0) };
+		return C;
+	}
+
+	/**
+	 * Kreuzung mit Linksabbiegern: Spur 0 kommt von Westen (Peilung 0, Achse 0)
+	 * und faehrt entweder geradeaus oder links; Spur 1 kommt von Norden
+	 * (Peilung -90, Achse 1) und faehrt geradeaus.
+	 */
+	FRoadNetwork MakeLeftTurnNetwork()
+	{
+		FRoadNetwork Network;
+		Network.Lanes.Add(MakeSignalLane(0, { FVector(0.0, 0.0, 0.0), FVector(10000.0, 0.0, 0.0) }));
+		Network.Lanes.Add(MakeSignalLane(1, { FVector(10000.0, 10000.0, 0.0), FVector(10000.0, 0.0, 0.0) }));
+		Network.Lanes.Add(MakeSignalLane(2, { FVector(10500.0, 0.0, 0.0), FVector(20000.0, 0.0, 0.0) }));
+		Network.Lanes.Add(MakeSignalLane(3, { FVector(10000.0, 500.0, 0.0), FVector(10000.0, 10000.0, 0.0) }));
+
+		FRoadIntersection Intersection;
+		Intersection.NodeId = 42;
+		Intersection.Location = FVector(10000.0, 0.0, 0.0);
+		Intersection.Control = EIntersectionControl::TrafficSignals;
+		Intersection.RadiusCm = 500.0;
+		Network.Intersections.Add(Intersection);
+
+		Network.Connections.Add(MakeConnection(0, 2, 42, ETurnType::Through));   // Achse 0 geradeaus
+		Network.Connections.Add(MakeConnection(0, 3, 42, ETurnType::Left));      // Achse 0 LINKS
+		Network.Connections.Add(MakeConnection(1, 3, 42, ETurnType::Through));   // Achse 1 geradeaus
+
+		FRoadSegment Segment;
+		Segment.SegmentId = 0;
+		Segment.HighwayType = EOSMHighwayType::Secondary;
+		Segment.LengthCm = 20000.0;
+		Network.Segments.Add(Segment);
+
+		return Network;
+	}
+
+	FWiesbadenTrafficLightSettings MakeProgramSettings()
+	{
+		FWiesbadenTrafficLightSettings S;
+		S.GreenSecondsPerCycle = 20.0;
+		S.RedAmberSeconds = 1.0;
+		S.AmberSeconds = 3.0;
+		S.AllRedSeconds = 2.0;
+		S.LeftTurnGreenSeconds = 5.0;
+		S.bProtectedLeftTurns = true;
+		S.bGreenWave = false;      // fuer die Programm-Tests stoert der Ortsversatz
+		S.RandomSeed = 4242;
+		return S;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSignalGroupTest,
+	"WiesbadenReal.Traffic.Signalgruppen",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSignalGroupTest::RunTest(const FString& Parameters)
+{
+	using FSys = FWiesbadenTrafficLightSystem;
+
+	// -- 1. Achse aus der Peilung, auch bei negativen Winkeln. --------------
+	//
+	// Atan2 liefert -180..180. Ohne Normierung faellt -90 Grad in die falsche
+	// Achse, und eine ganze Anfahrtsrichtung bekommt das Signal der Querachse.
+	TestEqual(TEXT("Peilung 0 -> Achse 0"), FSys::AxisForBearing(0.0), 0);
+	TestEqual(TEXT("Peilung 90 -> Achse 0"), FSys::AxisForBearing(90.0), 0);
+	TestEqual(TEXT("Peilung 200 -> Achse 1"), FSys::AxisForBearing(200.0), 1);
+	TestEqual(TEXT("Peilung -90 ist 270 -> Achse 1"), FSys::AxisForBearing(-90.0), 1);
+	TestEqual(TEXT("Peilung 360 ist 0 -> Achse 0"), FSys::AxisForBearing(360.0), 0);
+
+	// -- 2. Gruppen: geradeaus und rechts teilen sich eine, links bekommt
+	//       eine eigene. ---------------------------------------------------
+	TestEqual(TEXT("Achse 0 geradeaus -> Gruppe 0"), FSys::GroupForApproach(0, false), 0);
+	TestEqual(TEXT("Achse 0 links -> Gruppe 1"), FSys::GroupForApproach(0, true), 1);
+	TestEqual(TEXT("Achse 1 geradeaus -> Gruppe 2"), FSys::GroupForApproach(1, false), 2);
+	TestEqual(TEXT("Achse 1 links -> Gruppe 3"), FSys::GroupForApproach(1, true), 3);
+
+	TestTrue(TEXT("Links zaehlt als Linksabbieger"), FSys::IsLeftTurn(ETurnType::Left));
+	TestTrue(TEXT("Wenden kreuzt denselben Gegenverkehr"), FSys::IsLeftTurn(ETurnType::UTurn));
+	TestFalse(TEXT("Rechts braucht keine eigene Phase"), FSys::IsLeftTurn(ETurnType::Right));
+	TestFalse(TEXT("Geradeaus braucht keine eigene Phase"), FSys::IsLeftTurn(ETurnType::Through));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSignalProgramTest,
+	"WiesbadenReal.Traffic.Signalprogramm",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSignalProgramTest::RunTest(const FString& Parameters)
+{
+	const FRoadNetwork Network = MakeLeftTurnNetwork();
+	FWiesbadenTrafficLightSystem Sys;
+	Sys.Initialize(Network, MakeProgramSettings());
+
+	TestEqual(TEXT("Eine Ampel"), Sys.GetTrafficLightCount(), 1);
+	if (Sys.Lights.Num() != 1)
+	{
+		return false;
+	}
+	const FWiesbadenTrafficLight& Light = Sys.Lights[0];
+
+	// -- 1. Die Linksabbieger-Verbindung liegt in einer EIGENEN Gruppe. -----
+	const int32* GroupThrough = Light.ConnectionGroups.Find(0);
+	const int32* GroupLeft = Light.ConnectionGroups.Find(1);
+	const int32* GroupCross = Light.ConnectionGroups.Find(2);
+	TestTrue(TEXT("Alle drei Verbindungen sind zugeordnet"),
+		GroupThrough && GroupLeft && GroupCross);
+	if (!GroupThrough || !GroupLeft || !GroupCross)
+	{
+		return false;
+	}
+	TestNotEqual(TEXT("Linksabbieger nicht in der Geradeaus-Gruppe"), *GroupLeft, *GroupThrough);
+	TestEqual(TEXT("Geradeaus Achse 0 -> Gruppe 0"), *GroupThrough, 0);
+	TestEqual(TEXT("Links Achse 0 -> Gruppe 1"), *GroupLeft, 1);
+	TestEqual(TEXT("Querachse geradeaus -> Gruppe 2"), *GroupCross, 2);
+
+	// -- 2. Das Programm hat eine Abbiegephase - aber nur fuer die Achse,
+	//       die auch Linksabbieger hat. ---------------------------------
+	int32 LeftPhases = 0;
+	for (const FWiesbadenSignalPhase& Phase : Light.Phases)
+	{
+		if ((Phase.Group % 2) == 1)
+		{
+			++LeftPhases;
+			TestEqual(TEXT("Die Abbiegephase gehoert zu Achse 0"), Phase.Group, 1);
+		}
+	}
+	TestEqual(TEXT("Genau eine Abbiegephase (nur Achse 0 hat Linksabbieger)"), LeftPhases, 1);
+	TestEqual(TEXT("Drei Phasen: zwei Hauptrichtungen plus eine Abbiegephase"),
+		Light.Phases.Num(), 3);
+
+	// -- 3. KONFLIKTFREIHEIT: nie zwei Gruppen gleichzeitig nicht-rot. ------
+	//
+	// Das ist die Zusage, an der alles haengt. Waeren Linksabbieger und
+	// Gegenverkehr gleichzeitig frei, fuehren sie ineinander - der Verkehr
+	// beachtet keinen Gegenverkehr.
+	{
+		constexpr double Dt = 0.05;
+		const int32 Steps = FMath::RoundToInt(Light.CycleSeconds * 2.0 / Dt);
+		bool bNeverTwo = true;
+		int32 GreenSeen[4] = { 0, 0, 0, 0 };
+
+		for (int32 i = 0; i < Steps; ++i)
+		{
+			int32 NonRed = 0;
+			for (int32 Group = 0; Group < 4; ++Group)
+			{
+				const ESignalAspect A = Sys.GetGroupAspect(0, Group);
+				if (A != ESignalAspect::Red)
+				{
+					++NonRed;
+				}
+				if (A == ESignalAspect::Green)
+				{
+					++GreenSeen[Group];
+				}
+			}
+			bNeverTwo = bNeverTwo && (NonRed <= 1);
+			Sys.Tick(static_cast<float>(Dt));
+		}
+
+		TestTrue(TEXT("Nie zwei Gruppen gleichzeitig nicht-rot"), bNeverTwo);
+		TestTrue(TEXT("Geradeaus Achse 0 wird gruen"), GreenSeen[0] > 0);
+		TestTrue(TEXT("Linksabbieger Achse 0 wird gruen"), GreenSeen[1] > 0);
+		TestTrue(TEXT("Geradeaus Achse 1 wird gruen"), GreenSeen[2] > 0);
+		TestEqual(TEXT("Die Gruppe ohne Phase bleibt dauerhaft rot"), GreenSeen[3], 0);
+
+		// Die Abbiegephase ist KURZ, die Hauptphase lang - sonst warten alle
+		// anderen fuer eine Handvoll Abbieger.
+		TestTrue(FString::Printf(
+			TEXT("Hauptphase (%d Schritte gruen) traegt mehr als die Abbiegephase (%d)"),
+			GreenSeen[0], GreenSeen[1]),
+			GreenSeen[0] > GreenSeen[1]);
+	}
+
+	// -- 4. Eine Kreuzung OHNE Linksabbieger bekommt keine Abbiegephase. ----
+	//
+	// Sonst stuenden bei 60 s Umlauf 11 s fuer eine Bewegung, die es dort
+	// nicht gibt - und alle anderen warten laenger.
+	{
+		FRoadNetwork Plain = MakeLeftTurnNetwork();
+		Plain.Connections.RemoveAt(1);   // die Linksabbieger-Verbindung raus
+
+		FWiesbadenTrafficLightSystem PlainSys;
+		PlainSys.Initialize(Plain, MakeProgramSettings());
+		TestEqual(TEXT("Ohne Linksabbieger nur zwei Phasen"),
+			PlainSys.Lights[0].Phases.Num(), 2);
+
+		// Die Hauptphase bleibt GLEICH lang - der UMLAUF wird kuerzer.
+		// Genau das ist der Gewinn der abgeleiteten Umlaufzeit: eine
+		// zusaetzliche Phase verlaengert den Umlauf, statt der Hauptrichtung
+		// ihr Gruen wegzunehmen.
+		TestTrue(TEXT("Die Hauptphase bleibt gleich lang"),
+			FMath::IsNearlyEqual(PlainSys.Lights[0].Phases[0].DurationSeconds,
+				Light.Phases[0].DurationSeconds, 0.01f));
+		TestTrue(FString::Printf(TEXT("Der Umlauf ist kuerzer (%.0f statt %.0f s)"),
+			PlainSys.Lights[0].CycleSeconds, Light.CycleSeconds),
+			PlainSys.Lights[0].CycleSeconds < Light.CycleSeconds - 1.0);
+	}
+
+	// -- 5. Abbiegephasen abschaltbar. --------------------------------------
+	{
+		FWiesbadenTrafficLightSettings S = MakeProgramSettings();
+		S.bProtectedLeftTurns = false;
+		FWiesbadenTrafficLightSystem NoLeft;
+		NoLeft.Initialize(Network, S);
+		TestEqual(TEXT("Ohne Abbiegephasen bleiben zwei Phasen"),
+			NoLeft.Lights[0].Phases.Num(), 2);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGreenWaveTest,
+	"WiesbadenReal.Traffic.GrueneWelle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FGreenWaveTest::RunTest(const FString& Parameters)
+{
+	// Zwei Ampeln auf DERSELBEN geraden Achse, 300 m auseinander. Ihre Arme
+	// zeigen bewusst in ENTGEGENGESETZTE Richtungen - ohne Normierung auf eine
+	// Halbebene haetten die Versaetze verschiedene Vorzeichen, und aus der
+	// Welle wuerde ein Gegentakt.
+	FRoadNetwork Network;
+
+	FRoadSegment Segment;
+	Segment.SegmentId = 0;
+	Segment.HighwayType = EOSMHighwayType::Primary;
+	Segment.LengthCm = 100000.0;
+	Network.Segments.Add(Segment);
+
+	auto AddLight = [&Network](int64 NodeId, double XCm, const FVector& Outward)
+	{
+		FRoadIntersection I;
+		I.NodeId = NodeId;
+		I.Location = FVector(XCm, 0.0, 0.0);
+		I.Control = EIntersectionControl::TrafficSignals;
+		FIntersectionArm Arm;
+		Arm.SegmentId = 0;
+		Arm.OutwardDirection = Outward;
+		I.Arms.Add(Arm);
+		Network.Intersections.Add(I);
+	};
+
+	AddLight(1, 0.0, FVector(1.0, 0.0, 0.0));
+	AddLight(2, 30000.0, FVector(-1.0, 0.0, 0.0));   // Arm zeigt zurueck
+
+	FWiesbadenTrafficLightSettings S;
+	S.bGreenWave = true;
+	S.GreenWaveSpeedKmh = 50.0;
+
+	FWiesbadenTrafficLightSystem Sys;
+	Sys.Initialize(Network, S);
+	TestEqual(TEXT("Zwei Ampeln"), Sys.GetTrafficLightCount(), 2);
+	if (Sys.Lights.Num() != 2)
+	{
+		return false;
+	}
+
+	// 300 m bei 50 km/h sind 21,6 s.
+	const double ExpectedSeconds = 300.0 / (50.0 * 1000.0 / 3600.0);
+	const double Actual = Sys.Lights[1].PhaseOffsetSeconds - Sys.Lights[0].PhaseOffsetSeconds;
+
+	TestTrue(FString::Printf(
+		TEXT("Versatz %.2f s entspricht der Fahrzeit %.2f s"), Actual, ExpectedSeconds),
+		FMath::Abs(Actual - ExpectedSeconds) < 0.2);
+
+	// -- Abschaltbar: dann wieder der Hash, also NICHT die Fahrzeit. --------
+	{
+		FWiesbadenTrafficLightSettings NoWave = S;
+		NoWave.bGreenWave = false;
+		FWiesbadenTrafficLightSystem Hashed;
+		Hashed.Initialize(Network, NoWave);
+		const double HashDelta =
+			Hashed.Lights[1].PhaseOffsetSeconds - Hashed.Lights[0].PhaseOffsetSeconds;
+		TestTrue(TEXT("Ohne gruene Welle folgt der Versatz nicht der Fahrzeit"),
+			FMath::Abs(HashDelta - ExpectedSeconds) > 0.5);
+	}
+
+	// -- Die Geschwindigkeit geht ein: schneller ausgelegt, kleinerer Versatz.
+	{
+		FWiesbadenTrafficLightSettings Fast = S;
+		Fast.GreenWaveSpeedKmh = 100.0;
+		FWiesbadenTrafficLightSystem FastSys;
+		FastSys.Initialize(Network, Fast);
+		const double FastDelta =
+			FastSys.Lights[1].PhaseOffsetSeconds - FastSys.Lights[0].PhaseOffsetSeconds;
+		TestTrue(FString::Printf(TEXT("Doppelte Auslegung halbiert den Versatz (%.2f s)"), FastDelta),
+			FMath::Abs(FastDelta - ExpectedSeconds * 0.5) < 0.2);
+	}
+
+	return true;
+}

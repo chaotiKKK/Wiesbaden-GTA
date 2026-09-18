@@ -461,10 +461,14 @@ bool AWiesbadenBusRoute::RedGateAhead(double InArcCm, const FVector& Dir, bool b
 		if (Delta > 0.0 && Delta < BestDelta) { BestDelta = Delta; BestGate = gi; }
 	}
 	if (BestGate == INDEX_NONE) { return false; }
-	// Anfahrts-Achse (0/1) aus der Peilung - dieselbe Regel wie ComputeGroupIndex.
+	// Anfahrts-Achse aus der Peilung - ueber DIE Fassung des Ampelsystems, nicht
+	// ueber eine eigene Kopie der Regel. Der Bus faehrt geradeaus, liest also die
+	// Geradeaus-Gruppe seiner Achse; seit es Abbiegephasen gibt, ist die
+	// Gruppennummer nicht mehr gleich der Achse.
 	const double BearingDeg = FMath::RadiansToDegrees(FMath::Atan2(Dir.Y, Dir.X));
-	const int32 Axis = (BearingDeg >= 0.0 && BearingDeg < 180.0) ? 0 : 1;
-	const ESignalAspect A = CitySubsystem->TrafficLightSystem.GetGroupAspect(Gates[BestGate].LightIndex, Axis);
+	const int32 Group = FWiesbadenTrafficLightSystem::GroupForApproach(
+		FWiesbadenTrafficLightSystem::AxisForBearing(BearingDeg), /*bLeftTurn=*/false);
+	const ESignalAspect A = CitySubsystem->TrafficLightSystem.GetGroupAspect(Gates[BestGate].LightIndex, Group);
 	if (A == ESignalAspect::Green) { return false; }
 	OutStopArcCm = bForward ? (Gates[BestGate].ArcCm - RedStopMarginCm)
 	                        : (Gates[BestGate].ArcCm + RedStopMarginCm);
