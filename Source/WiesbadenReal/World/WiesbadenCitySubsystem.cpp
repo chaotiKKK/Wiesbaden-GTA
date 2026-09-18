@@ -1240,6 +1240,34 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 				Traffic.MeanSpeedKmh, TrafficSimulation.GetVehiclesHeldAtRed(),
 				TrafficSimulation.GetLifetimeLaneChanges());
 
+			// Wie viele warten gerade auf einen freien Kreuzungsweg? Ohne diese
+			// Zahl laesst sich "die Kreuzungsregel kostet Fluss" nicht von
+			// "der Stau kommt woanders her" unterscheiden.
+			UE_LOG(LogWbTraffic, Log,
+				TEXT("Kreuzungen: %d Fahrzeuge warten auf einen freien Weg."),
+				TrafficSimulation.GetVehiclesHeldAtJunction());
+
+			// Stecken Fahrzeuge INEINANDER? Im Probespiel standen wartende
+			// Kaefer sichtbar zur Haelfte ineinander. Die Abstandsregeln
+			// arbeiten je Bahn - die Aufschluesselung sagt, welche Grenze
+			// verletzt wird, statt dass man auf Verdacht baut.
+			{
+				FWiesbadenTrafficSimulation::FOverlapReport Overlap;
+				TrafficSimulation.CountVehicleOverlaps(Overlap);
+				if (Overlap.Pairs > 0)
+				{
+					UE_LOG(LogWbTraffic, Log,
+						TEXT("Fahrzeuge ineinander: %d Paare (%d Fahrzeuge) - ")
+						TEXT("%d selbe Bahn, %d selbe Kreuzung, %d Spur+Verbindung, %d sonstige."),
+						Overlap.Pairs, Overlap.VehiclesInvolved, Overlap.SameEdge,
+						Overlap.SameJunction, Overlap.LaneAndConnection, Overlap.Other);
+				}
+				else
+				{
+					UE_LOG(LogWbTraffic, Log, TEXT("Fahrzeuge ineinander: keine."));
+				}
+			}
+
 			// Warum NICHT gewechselt wird. Die blosse Zahl der Spurwechsel
 			// sagt nichts darueber, woran es haengt - und ohne das aendert man
 			// auf Verdacht.
@@ -1598,21 +1626,25 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			// dem Stadt-Spawn, nicht der letzte Tick.
 			int32 LightsWithLeftPhase = 0;
 			double MeanCycleSeconds = 0.0;
-			TrafficLightSystem.GetProgramStatistics(LightsWithLeftPhase, MeanCycleSeconds);
+			double MinCycleSeconds = 0.0;
+			double MaxCycleSeconds = 0.0;
+			TrafficLightSystem.GetProgramStatistics(LightsWithLeftPhase, MeanCycleSeconds,
+				MinCycleSeconds, MaxCycleSeconds);
 
 			switch (R.TrafficLightVerdict())
 			{
 			case EWiesbadenTrafficLightVerdict::Effective:
 				UE_LOG(LogWbTraffic, Log,
 					TEXT("Ampeln wirksam: %d im Netz, %d Halte-Ereignis(se) an Rot (bei %d Anfahrten auf ")
-					TEXT("signalisierte Verbindungen), naechste Ampel %.0f m (Zyklus %.0f s, Gruen %.0f s)."),
+					TEXT("signalisierte Verbindungen), naechste Ampel %.0f m (Umlauf %.0f s im Mittel)."),
 					R.TrafficLightCount, R.VehiclesHeldAtRed, R.VehiclesApproachingSignal, NearestLightM,
-					MeanCycleSeconds, TrafficLightSystem.Settings.GreenSecondsPerCycle);
+					MeanCycleSeconds);
 
 				UE_LOG(LogWbTraffic, Log,
 					TEXT("Signalprogramm: %d von %d Kreuzungen mit eigener Abbiegephase, ")
-					TEXT("mittlerer Umlauf %.0f s%s."),
+					TEXT("Umlauf %.0f s im Mittel, Spanne %.0f..%.0f s%s."),
 					LightsWithLeftPhase, R.TrafficLightCount, MeanCycleSeconds,
+					MinCycleSeconds, MaxCycleSeconds,
 					TrafficLightSystem.Settings.bGreenWave
 						? TEXT(", gruene Welle an") : TEXT(", gruene Welle aus"));
 				break;

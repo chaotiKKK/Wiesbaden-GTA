@@ -49,6 +49,7 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 	NearbySpawnLaneLengthCm = 0.0;
 	NearbySpawnCumulativeWeights.Reset();
 	LaneNeighbours.Reset();
+	ConnectionConflicts.Reset();
 	VehiclesByLaneCache.Reset();
 	SpawnAccumulator = 0.0;
 	TotalSpawned = 0;
@@ -143,6 +144,11 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 			LaneSuccessorIndices.FindOrAdd(Connection.FromLaneId).Add(i);
 		}
 	}
+
+	// Welche Wege durch eine Kreuzung liegen einander im Weg? Einmal hier -
+	// das Netz aendert sich nicht mehr, und je Tick waeren es Zehntausende
+	// Strecken-Schnitte.
+	BuildConnectionConflicts();
 }
 
 void FWiesbadenTrafficSimulation::PlaceTrafficVehicles(
@@ -227,6 +233,7 @@ void FWiesbadenTrafficSimulation::Reset()
 	NearbySpawnLaneLengthCm = 0.0;
 	NearbySpawnCumulativeWeights.Reset();
 	LaneNeighbours.Reset();
+	ConnectionConflicts.Reset();
 	VehiclesByLaneCache.Reset();
 	SpawnAccumulator = 0.0;
 	TotalSpawned = 0;
@@ -1035,6 +1042,499 @@ double FWiesbadenTrafficSimulation::ComputeObstacleAwareSpeed(
 	return FMath::Min(CurrentSpeedCmS, MaxSpeed);
 }
 
+namespace
+{
+	/**
+	 * Schnittpunkt zweier Strecken in der Ebene, mit den Parametern auf beiden.
+	 *
+	 * Hoehe bleibt aussen vor - wie ueberall hier: sonst gilt die Bruecke ueber
+	 * der Strasse als Kreuzungskonflikt.
+	 */
+	bool WbSegmentIntersection2D(const FVector& A0, const FVector& A1,
+		const FVector& B0, const FVector& B1, double& OutTA, double& OutTB)
+	{
+		OutTA = 0.0;
+		OutTB = 0.0;
+
+		const FVector2D P(A0.X, A0.Y);
+		const FVector2D R(A1.X - A0.X, A1.Y - A0.Y);
+		const FVector2D Q(B0.X, B0.Y);
+		const FVector2D S(B1.X - B0.X, B1.Y - B0.Y);
+
+		const double Cross = R.X * S.Y - R.Y * S.X;
+		if (FMath::IsNearlyZero(Cross, 1e-9))
+		{
+			// Parallel. Kollinear ueberlappende Strecken zaehlen NICHT als
+			// Kreuzung: das sind die parallel gefuehrten Wege derselben Achse,
+			// und die stoeren einander nicht.
+			return false;
+		}
+
+		const FVector2D QP = Q - P;
+		const double T = (QP.X * S.Y - QP.Y * S.X) / Cross;
+		const double U = (QP.X * R.Y - QP.Y * R.X) / Cross;
+		if (T < 0.0 || T > 1.0 || U < 0.0 || U > 1.0)
+		{
+			return false;
+		}
+
+		OutTA = T;
+		OutTB = U;
+		return true;
+	}
+}
+
+bool FWiesbadenTrafficSimulation::SegmentsIntersect2D(
+	const FVector& A0, const FVector& A1, const FVector& B0, const FVector& B1)
+{
+	double TA = 0.0;
+	double TB = 0.0;
+	return WbSegmentIntersection2D(A0, A1, B0, B1, TA, TB);
+}
+
+bool FWiesbadenTrafficSimulation::FindConnectionConflict(
+	const FLaneConnection& A, const FLaneConnection& B,
+	double& OutClearOnA, double& OutClearOnB)
+{
+	OutClearOnA = 0.0;
+	OutClearOnB = 0.0;
+
+	// Aus DERSELBEN Spur: kein Konflikt. Die beiden faechern aus einer Kolonne
+	// auf, und dort haelt die Folgeregel sie bereits auseinander. Wer sie hier
+	// sperrt, laesst jede Kreuzung nur noch im Gaensemarsch abfliessen.
+	if (A.FromLaneId == B.FromLaneId)
+	{
+		return false;
+	}
+
+	const auto PathLength = [](const FLaneConnection& C)
+	{
+		double Sum = 0.0;
+		for (int32 i = 1; i < C.ConnectionPath.Num(); ++i)
+		{
+			Sum += FVector::Dist(C.ConnectionPath[i], C.ConnectionPath[i - 1]);
+		}
+		return Sum;
+	};
+
+	// In DIESELBE Spur: Konflikt bis zum Ende. Die beiden treffen sich beim
+	// Einfaedeln, auch wenn sich die Wege vorher nicht schneiden - frei wird es
+	// erst, wenn einer die Verbindung verlassen hat.
+	if (A.ToLaneId == B.ToLaneId)
+	{
+		OutClearOnA = PathLength(A);
+		OutClearOnB = PathLength(B);
+		return true;
+	}
+
+	double AlongA = 0.0;
+	for (int32 i = 1; i < A.ConnectionPath.Num(); ++i)
+	{
+		const double SegmentA = FVector::Dist(A.ConnectionPath[i], A.ConnectionPath[i - 1]);
+		double AlongB = 0.0;
+		for (int32 k = 1; k < B.ConnectionPath.Num(); ++k)
+		{
+			const double SegmentB = FVector::Dist(B.ConnectionPath[k], B.ConnectionPath[k - 1]);
+			double TA = 0.0;
+			double TB = 0.0;
+			if (WbSegmentIntersection2D(A.ConnectionPath[i - 1], A.ConnectionPath[i],
+				B.ConnectionPath[k - 1], B.ConnectionPath[k], TA, TB))
+			{
+				// Erster Schnittpunkt genuegt: ab da liegen die Wege ineinander.
+				OutClearOnA = AlongA + TA * SegmentA;
+				OutClearOnB = AlongB + TB * SegmentB;
+				return true;
+			}
+			AlongB += SegmentB;
+		}
+		AlongA += SegmentA;
+	}
+	return false;
+}
+
+bool FWiesbadenTrafficSimulation::DoConnectionsConflict(
+	const FLaneConnection& A, const FLaneConnection& B)
+{
+	double ClearA = 0.0;
+	double ClearB = 0.0;
+	return FindConnectionConflict(A, B, ClearA, ClearB);
+}
+
+void FWiesbadenTrafficSimulation::BuildConnectionConflicts()
+{
+	ConnectionConflicts.Reset();
+	if (!Network)
+	{
+		return;
+	}
+
+	// Nach Knoten gruppieren: nur Verbindungen DESSELBEN Knotens koennen
+	// einander im Weg liegen.
+	TMap<int64, TArray<int32>> ConnectionsByNode;
+	for (int32 i = 0; i < Network->Connections.Num(); ++i)
+	{
+		ConnectionsByNode.FindOrAdd(Network->Connections[i].IntersectionNodeId).Add(i);
+	}
+
+	int32 ConflictPairs = 0;
+	for (const TPair<int64, TArray<int32>>& Node : ConnectionsByNode)
+	{
+		const TArray<int32>& Indices = Node.Value;
+		for (int32 a = 0; a < Indices.Num(); ++a)
+		{
+			for (int32 b = a + 1; b < Indices.Num(); ++b)
+			{
+				const int32 IndexA = Indices[a];
+				const int32 IndexB = Indices[b];
+				double ClearOnA = 0.0;
+				double ClearOnB = 0.0;
+				if (!FindConnectionConflict(Network->Connections[IndexA],
+					Network->Connections[IndexB], ClearOnA, ClearOnB))
+				{
+					continue;
+				}
+
+				// Gemerkt wird jeweils, ab welcher Bogenlaenge der ANDERE aus
+				// dem Weg ist - das ist die Zahl, die die Laufzeitregel braucht.
+				ConnectionConflicts.FindOrAdd(IndexA).Add({ IndexB, ClearOnB });
+				ConnectionConflicts.FindOrAdd(IndexB).Add({ IndexA, ClearOnA });
+				++ConflictPairs;
+			}
+		}
+	}
+
+	UE_LOG(LogWbTraffic, Log,
+		TEXT("Verkehr: %d Verbindungen an %d Knoten, %d kreuzende Paare vorgemerkt."),
+		Network->Connections.Num(), ConnectionsByNode.Num(), ConflictPairs);
+}
+
+void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
+{
+	if (!Network || ConnectionConflicts.Num() == 0)
+	{
+		return;
+	}
+
+	// Wie weit ist das HINTERSTE Fahrzeug auf jeder Verbindung? Nur das kann
+	// einen Konfliktpunkt noch besetzen - alle davor haben ihn passiert.
+	//
+	// Genau daran haengt die Brauchbarkeit der Regel: sperrt jedes Fahrzeug
+	// seine ganze Verbindung, bis es sie verlassen hat, steht die Stadt
+	// (gemessen 56 % Steher statt 36 %). Wer den Kreuzungspunkt hinter sich
+	// hat, ist aus dem Weg.
+	TMap<int32, double> RearmostOnConnection;
+	for (const FTrafficVehicle& Vehicle : Vehicles)
+	{
+		if (Vehicle.bOnLane || Vehicle.ConnectionIndex == INDEX_NONE)
+		{
+			continue;
+		}
+		double& Rearmost = RearmostOnConnection.FindOrAdd(
+			Vehicle.ConnectionIndex, TNumericLimits<double>::Max());
+		Rearmost = FMath::Min(Rearmost, Vehicle.DistanceCm);
+	}
+
+	// Wer bereits IM Knoten ist, wird nie gestoppt - sonst steht er quer und
+	// blockiert alles, was noch kommt.
+	//
+	// Das eigene Heck zaehlt mit: der Konfliktpunkt ist erst frei, wenn das
+	// ganze Fahrzeug darueber hinaus ist.
+	const double TailCm = FMath::Max(Settings.VehicleHalfLengthCm, 0.0) * 2.0;
+
+	const auto IsConflictBlocked = [&RearmostOnConnection, TailCm]
+		(const FConnectionConflict& Conflict)
+	{
+		const double* Rearmost = RearmostOnConnection.Find(Conflict.OtherConnection);
+		return Rearmost && (*Rearmost <= Conflict.ClearDistanceOnOtherCm + TailCm);
+	};
+
+	// Anwaerter: Fahrzeuge kurz vor der Haltelinie mit gewaehlter Verbindung.
+	struct FEntryCandidate
+	{
+		int32 VehicleIndex = INDEX_NONE;
+		int32 ConnectionIndex = INDEX_NONE;
+		double DistanceToLineCm = 0.0;
+		int32 VehicleId = INDEX_NONE;
+	};
+
+	const double StopDistance = FMath::Max(Settings.MinGapCm * 0.5, 100.0);
+
+	TArray<FEntryCandidate> Candidates;
+	for (int32 i = 0; i < Vehicles.Num(); ++i)
+	{
+		const FTrafficVehicle& Vehicle = Vehicles[i];
+		if (!Vehicle.bOnLane || !Network->Lanes.IsValidIndex(Vehicle.LaneId))
+		{
+			continue;
+		}
+		const double LaneLength = Network->Lanes[Vehicle.LaneId].LengthCm;
+		if (LaneLength <= 0.0 || Vehicle.DistanceCm < LaneLength - StopDistance)
+		{
+			continue;
+		}
+		const int32 Next = PickSuccessorConnection(Vehicle);
+		if (Next == INDEX_NONE || !ConnectionConflicts.Contains(Next))
+		{
+			continue;   // freie Fahrt: dieser Weg kreuzt keinen anderen
+		}
+
+		FEntryCandidate Candidate;
+		Candidate.VehicleIndex = i;
+		Candidate.ConnectionIndex = Next;
+		Candidate.DistanceToLineCm = LaneLength - Vehicle.DistanceCm;
+		Candidate.VehicleId = Vehicle.VehicleId;
+		Candidates.Add(Candidate);
+	}
+
+	// Wer zuerst da ist, faehrt zuerst - und bei Gleichstand entscheidet die
+	// Fahrzeug-Id. Ohne diese feste Reihenfolge waere die Vergabe von der
+	// Array-Reihenfolge abhaengig und der Lauf nicht mehr wiederholbar; ohne
+	// Reihenfolge ueberhaupt fahren zwei gleichzeitig los und stecken wieder
+	// ineinander.
+	Candidates.Sort([](const FEntryCandidate& A, const FEntryCandidate& B)
+	{
+		if (A.DistanceToLineCm != B.DistanceToLineCm)
+		{
+			return A.DistanceToLineCm < B.DistanceToLineCm;
+		}
+		return A.VehicleId < B.VehicleId;
+	});
+
+	// Wie weit ist das hinterste Fahrzeug auf jeder SPUR? Braucht die
+	// Blockierfreihaltung: wer keinen Platz hinter der Kreuzung hat, darf nicht
+	// hinein.
+	TMap<int32, double> RearmostOnLane;
+	for (const FTrafficVehicle& Vehicle : Vehicles)
+	{
+		if (!Vehicle.bOnLane || Vehicle.LaneId == INDEX_NONE)
+		{
+			continue;
+		}
+		double& Rearmost = RearmostOnLane.FindOrAdd(
+			Vehicle.LaneId, TNumericLimits<double>::Max());
+		Rearmost = FMath::Min(Rearmost, Vehicle.DistanceCm);
+	}
+
+	// Vorfahrt: Gewicht der Strassenklasse, aus der eine Verbindung kommt.
+	const auto ApproachWeight = [this](int32 ConnectionIndex)
+	{
+		if (!Network->Connections.IsValidIndex(ConnectionIndex))
+		{
+			return 1.0;
+		}
+		const int32 FromLane = Network->Connections[ConnectionIndex].FromLaneId;
+		if (!Network->Lanes.IsValidIndex(FromLane))
+		{
+			return 1.0;
+		}
+		const int32 SegmentId = Network->Lanes[FromLane].SegmentId;
+		if (!Network->Segments.IsValidIndex(SegmentId))
+		{
+			return 1.0;
+		}
+		return GetRoadClassWeight(Network->Segments[SegmentId].HighwayType);
+	};
+
+	// Kommt auf der kreuzenden Zufahrt gleich jemand? Gemessen wird die ZEIT
+	// bis zur Haltelinie, nicht die Strecke: ein stehendes Fahrzeug kommt
+	// nicht, ein schnelles ist frueher da als es aussieht.
+	const auto TimeToLineSeconds = [this](int32 ConnectionIndex)
+	{
+		if (!Network->Connections.IsValidIndex(ConnectionIndex))
+		{
+			return TNumericLimits<double>::Max();
+		}
+		const int32 FromLane = Network->Connections[ConnectionIndex].FromLaneId;
+		const TArray<int32>* Queue = VehiclesByLaneCache.Find(FromLane);
+		if (!Queue || Queue->Num() == 0 || !Network->Lanes.IsValidIndex(FromLane))
+		{
+			return TNumericLimits<double>::Max();
+		}
+
+		// Der Korb ist absteigend nach Distanz sortiert - vorne steht, wer der
+		// Kreuzung am naechsten ist.
+		const FTrafficVehicle& Front = Vehicles[(*Queue)[0]];
+		const double Remaining = Network->Lanes[FromLane].LengthCm - Front.DistanceCm;
+		if (Remaining <= 0.0)
+		{
+			return 0.0;
+		}
+		if (Front.SpeedCmS <= 1.0)
+		{
+			return TNumericLimits<double>::Max();   // steht: kommt nicht
+		}
+		return Remaining / Front.SpeedCmS;
+	};
+
+	for (const FEntryCandidate& Candidate : Candidates)
+	{
+		const double MyWeight = ApproachWeight(Candidate.ConnectionIndex);
+		bool bBlocked = false;
+
+		// BLOCKIERFREIHALTUNG: nicht in die Kreuzung fahren, wenn dahinter kein
+		// Platz ist.
+		//
+		// Ohne diese Regel rollt das Fahrzeug in den Knoten und bleibt dort
+		// stehen, weil die Zielspur voll ist. Damit ist sein Konfliktpunkt
+		// dauerhaft belegt, alle kreuzenden Stroeme halten, deren Spuren laufen
+		// voll - und die Sperre wandert durch das Netz. Genau so entsteht der
+		// Unterschied zwischen "Kreuzung kostet etwas Zeit" und "Stadt steht".
+		if (Settings.bKeepJunctionsClear
+			&& Network->Connections.IsValidIndex(Candidate.ConnectionIndex))
+		{
+			const int32 ToLane = Network->Connections[Candidate.ConnectionIndex].ToLaneId;
+			if (const double* RearmostAhead = RearmostOnLane.Find(ToLane))
+			{
+				if (*RearmostAhead < Settings.MinGapCm)
+				{
+					bBlocked = true;
+				}
+			}
+		}
+		const TArray<FConnectionConflict>* Conflicts = bBlocked
+			? nullptr : ConnectionConflicts.Find(Candidate.ConnectionIndex);
+		if (Conflicts)
+		{
+			for (const FConnectionConflict& Conflict : *Conflicts)
+			{
+				// Jemand steht im Konfliktpunkt: da faehrt niemand hinein,
+				// egal wer Vorfahrt hat.
+				if (IsConflictBlocked(Conflict))
+				{
+					bBlocked = true;
+					break;
+				}
+
+				// VORFAHRT: wer aus der kleineren Strasse kommt, wartet auf eine
+				// Luecke in der groesseren. Ohne das haelt auch die Hauptachse
+				// an jeder Wohnstrassen-Einmuendung - und die Stadt steht.
+				if (Settings.JunctionYieldSeconds > 0.0
+					&& ApproachWeight(Conflict.OtherConnection) > MyWeight
+					&& TimeToLineSeconds(Conflict.OtherConnection) < Settings.JunctionYieldSeconds)
+				{
+					bBlocked = true;
+					break;
+				}
+			}
+		}
+
+		if (bBlocked)
+		{
+			Vehicles[Candidate.VehicleIndex].SpeedCmS = 0.0;
+			++LastVehiclesHeldAtJunction;
+			continue;
+		}
+
+		// Freigegeben: das Fahrzeug steht ab sofort am Anfang seiner Verbindung
+		// (Bogenlaenge 0) und besetzt damit deren Konfliktpunkte. Sonst faehrt
+		// im selben Tick ein zweites in denselben Konflikt.
+		double& Rearmost = RearmostOnConnection.FindOrAdd(
+			Candidate.ConnectionIndex, TNumericLimits<double>::Max());
+		Rearmost = 0.0;
+	}
+}
+
+bool FWiesbadenTrafficSimulation::AreVehiclesOverlapping(
+	const FVector& LocationA, const FVector& ForwardA,
+	const FVector& LocationB, const FVector& ForwardB,
+	double HalfLengthCm, double HalfWidthCm)
+{
+	const FVector2D FwdA = FVector2D(ForwardA.X, ForwardA.Y).GetSafeNormal();
+	const FVector2D FwdB = FVector2D(ForwardB.X, ForwardB.Y).GetSafeNormal();
+	if (FwdA.IsNearlyZero() || FwdB.IsNearlyZero())
+	{
+		return false;
+	}
+
+	const FVector2D RightA(FwdA.Y, -FwdA.X);
+	const FVector2D RightB(FwdB.Y, -FwdB.X);
+	const FVector2D Delta(LocationB.X - LocationA.X, LocationB.Y - LocationA.Y);
+
+	const double HalfL = FMath::Max(HalfLengthCm, 0.0);
+	const double HalfW = FMath::Max(HalfWidthCm, 0.0);
+
+	// Separating Axis Theorem: findet sich EINE Achse, auf der sich die
+	// Projektionen nicht ueberschneiden, stehen die beiden frei.
+	const FVector2D Axes[4] = { FwdA, RightA, FwdB, RightB };
+	for (const FVector2D& Axis : Axes)
+	{
+		const double Distance = FMath::Abs(FVector2D::DotProduct(Delta, Axis));
+		const double ReachA = HalfL * FMath::Abs(FVector2D::DotProduct(FwdA, Axis))
+			+ HalfW * FMath::Abs(FVector2D::DotProduct(RightA, Axis));
+		const double ReachB = HalfL * FMath::Abs(FVector2D::DotProduct(FwdB, Axis))
+			+ HalfW * FMath::Abs(FVector2D::DotProduct(RightB, Axis));
+		if (Distance >= ReachA + ReachB)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+void FWiesbadenTrafficSimulation::CountVehicleOverlaps(FOverlapReport& Out) const
+{
+	Out = FOverlapReport();
+
+	TSet<int32> Involved;
+	for (int32 i = 0; i < Vehicles.Num(); ++i)
+	{
+		const FTrafficVehicle& A = Vehicles[i];
+		for (int32 j = i + 1; j < Vehicles.Num(); ++j)
+		{
+			const FTrafficVehicle& B = Vehicles[j];
+
+			// Grobfilter zuerst: der genaue Test lohnt nur in Reichweite.
+			const double Dx = B.Location.X - A.Location.X;
+			const double Dy = B.Location.Y - A.Location.Y;
+			if ((Dx * Dx + Dy * Dy) > FMath::Square(2.0 * Settings.VehicleHalfLengthCm))
+			{
+				continue;
+			}
+
+			if (!AreVehiclesOverlapping(A.Location, A.Forward, B.Location, B.Forward,
+				Settings.VehicleHalfLengthCm, Settings.VehicleHalfWidthCm))
+			{
+				continue;
+			}
+
+			++Out.Pairs;
+			Involved.Add(A.VehicleId);
+			Involved.Add(B.VehicleId);
+
+			if (A.bOnLane && B.bOnLane)
+			{
+				if (A.LaneId == B.LaneId) { ++Out.SameEdge; }
+				else { ++Out.Other; }
+			}
+			else if (!A.bOnLane && !B.bOnLane)
+			{
+				if (A.ConnectionIndex == B.ConnectionIndex)
+				{
+					++Out.SameEdge;
+				}
+				else if (Network
+					&& Network->Connections.IsValidIndex(A.ConnectionIndex)
+					&& Network->Connections.IsValidIndex(B.ConnectionIndex)
+					&& Network->Connections[A.ConnectionIndex].IntersectionNodeId
+						== Network->Connections[B.ConnectionIndex].IntersectionNodeId)
+				{
+					++Out.SameJunction;
+				}
+				else
+				{
+					++Out.Other;
+				}
+			}
+			else
+			{
+				++Out.LaneAndConnection;
+			}
+		}
+	}
+
+	Out.VehiclesInvolved = Involved.Num();
+}
+
 double FWiesbadenTrafficSimulation::RequiredLaneChangeGapCm(
 	const FWiesbadenTrafficSettings& InSettings, double SpeedCmS)
 {
@@ -1565,6 +2065,7 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 	// Verbindung rot ist: anhalten. Bei Gruen/ohne Ampel bleibt die
 	// Geschwindigkeit aus der Kopf-zu-Schwanz-Berechnung.
 	LastVehiclesHeldAtRed = 0;
+	LastVehiclesHeldAtJunction = 0;
 
 	if (TrafficLights && Network)
 	{
@@ -1638,6 +2139,15 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 			Vehicle.bWasHeldAtRed = bHeldAtRed;
 		}
 	}
+
+	// -- 1b2) Kreuzungskonflikte ------------------------------------------------
+	//
+	// NACH der Ampelregel: an signalisierten Knoten trennt schon das
+	// Signalprogramm die Stroeme, dort greift diese Regel praktisch nie. Nur
+	// rund 1.073 der ~20.213 Kreuzungen sind Ampeln - an allen uebrigen war
+	// bisher gar nichts, was zwei kreuzende Fahrzeuge auseinandergehalten
+	// haette.
+	ApplyJunctionConflicts();
 
 	// -- 1c) Ruecksicht auf das Spielerfahrzeug ---------------------------------
 	//

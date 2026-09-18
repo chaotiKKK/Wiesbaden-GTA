@@ -35,9 +35,49 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSettings
 	 * Tempo 15 statt 19 km/h).
 	 *
 	 * Der Umlauf einer Kreuzung steht in FWiesbadenTrafficLight::CycleSeconds.
+	 *
+	 * Dieser Wert gilt fuer die GROESSTE Kreuzung. Kleine Knoten bekommen
+	 * weniger (bis herunter zu MinGreenSecondsPerCycle) - eine Wohnstrassen-
+	 * kreuzung mit demselben Takt wie eine sechsspurige Hauptkreuzung laesst
+	 * Fahrer vor leeren Querstrassen warten.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "1.0"))
 	double GreenSecondsPerCycle = 15.0;
+
+	/**
+	 * Gruenzeit der Hauptrichtung an der KLEINSTEN Kreuzung (s).
+	 *
+	 * Untergrenze, nicht Richtwert: darunter raeumt eine Zufahrt nicht mehr
+	 * zuverlaessig, und der Anteil fester Zeiten (Rot-Gelb, Gelb, Raeumzeit)
+	 * am Umlauf waechst ins Absurde.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "1.0"))
+	double MinGreenSecondsPerCycle = 7.0;
+
+	/**
+	 * Raster, auf das der Umlauf gerundet wird (s). 0 schaltet es ab.
+	 *
+	 * DIESES RASTER IST DER PREIS FUER DIE GRUENE WELLE. Eine Welle setzt
+	 * voraus, dass die Ampeln einer Achse im GLEICHEN Takt laufen - sonst
+	 * laeuft der Versatz binnen weniger Umlaeufe davon und die Welle zerfaellt.
+	 * Wuerde jede Kreuzung ihren genauen Wunschumlauf bekommen (38,4 s hier,
+	 * 41,1 s dort), waere genau das die Folge. Mit dem Raster landen
+	 * aehnlich grosse Kreuzungen auf demselben Umlauf; die Groesse wirkt sich
+	 * dann in der Gruen-AUFTEILUNG aus. Genau so wird es auch real gemacht:
+	 * gemeinsamer Umlauf im Zug, eigene Aufteilung je Knoten.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "0.0"))
+	double CycleQuantumSeconds = 10.0;
+
+	/**
+	 * Raeumgeschwindigkeit fuer die Allrot-Zeit (km/h).
+	 *
+	 * Wer bei Gelb noch in der Kreuzung ist, braucht laenger, um eine breite
+	 * Kreuzung zu verlassen als eine schmale. AllRedSeconds ist die
+	 * Untergrenze, die Breite bestimmt den Rest.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "1.0"))
+	double ClearanceSpeedKmh = 25.0;
 
 	/** Distanz vor der Haltelinie, ab der ein Fahrzeug bei Rot stoppt (cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "0.0"))
@@ -58,7 +98,8 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSettings
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "0.0"))
     double AmberSeconds = 3.0;
 
-    /** Allrot-Raeumzeit nach Gelb, bevor die andere Achse startet (s). */
+    /** MINDEST-Allrotzeit nach Gelb (s); breite Kreuzungen bekommen mehr
+     *  (siehe ClearanceSpeedKmh). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "0.0"))
     double AllRedSeconds = 2.0;
 
@@ -153,6 +194,20 @@ struct WIESBADENREAL_API FWiesbadenTrafficLight
 	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
 	double CycleSeconds = 0.0;
 
+	/**
+	 * Groesse dieser Kreuzung, 0 (Wohnstrasse) bis 1 (Hauptknoten).
+	 *
+	 * Steht hier, damit im Spiel nachvollziehbar ist, WARUM eine Kreuzung
+	 * ihren Takt hat - ohne das Mass ist ein Umlauf von 30 s gegen 60 s nur
+	 * eine Zahl, die man nicht pruefen kann.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
+	float SizeScore = 0.5f;
+
+	/** Gruenzeit der Hauptrichtung dieser Kreuzung (s). */
+	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
+	double GreenSeconds = 0.0;
+
 	/** Deterministischer Phasen-Offset in Sekunden (aus NodeId + Seed). */
 	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
 	double PhaseOffsetSeconds = 0.0;
@@ -228,7 +283,17 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSystem
 	 * Ohne diese beiden Zahlen laesst sich nicht beurteilen, ob der laengere
 	 * Umlauf die Konfliktfreiheit wert ist.
 	 */
-	void GetProgramStatistics(int32& OutWithLeftPhase, double& OutMeanCycleSeconds) const;
+	/**
+	 * Kennzahlen der Signalprogramme.
+	 *
+	 * Die SPANNE steht mit drin, weil der Mittelwert allein die Frage nicht
+	 * beantwortet, um die es hier geht: solange jede Kreuzung denselben Takt
+	 * hatte, sah ein Mittelwert von 42 s genauso aus wie 26..68 s. Erst
+	 * Minimum und Maximum zeigen, ob sich der Umlauf wirklich nach der
+	 * Groesse richtet.
+	 */
+	void GetProgramStatistics(int32& OutWithLeftPhase, double& OutMeanCycleSeconds,
+		double& OutMinCycleSeconds, double& OutMaxCycleSeconds) const;
 
 	/** Anzahl der Ampeln (TrafficSignals-Kreuzungen). */
 	int32 GetTrafficLightCount() const { return Lights.Num(); }
@@ -296,7 +361,8 @@ private:
 	int32 ComputeGroupIndex(const FRoadLane& Lane, ETurnType Turn) const;
 
 	/** Baut das Signalprogramm einer Kreuzung aus ihren Richtungsgruppen. */
-	void BuildSignalProgram(FWiesbadenTrafficLight& Light) const;
+	void BuildSignalProgram(FWiesbadenTrafficLight& Light,
+		const FRoadIntersection& Intersection) const;
 
 	/** Phasenversatz: gruene Welle entlang der Hauptachse, sonst Hash. */
 	double ComputePhaseOffset(const FRoadIntersection& Intersection,
@@ -304,6 +370,60 @@ private:
 
 	/** Rangfolge der Strassenklassen - nur zum Finden der Hauptachse. */
 	static double RoadClassRank(EOSMHighwayType Type);
+
+	// -- Groesse einer Kreuzung -> Zeiten des Signalprogramms -----------------
+	//
+	// Alles statisch und datenrein: die Zuordnung Groesse -> Zeit ist die
+	// eigentliche Entscheidung und wird direkt geprueft (Traffic.UmlaufGroesse),
+	// nicht ueber ein aufgebautes Netz hinweg erraten.
+
+public:
+	/**
+	 * Volle Fahrbahnbreite der breitesten Zufahrt in Metern.
+	 *
+	 * Das ist der Weg, den ein Fahrzeug quer durch die Kreuzung zuruecklegt,
+	 * und zugleich ein gutes Mass fuer die Zahl der Fahrstreifen, die je
+	 * Freigabe abfliessen. Liefert 0, wenn die Kreuzung keine Armdaten hat.
+	 */
+	static double WidestApproachMeters(const FRoadIntersection& Intersection);
+
+	/**
+	 * Groesse einer Kreuzung als Zahl 0..1.
+	 *
+	 * Zwei Dinge machen eine Kreuzung gross: die Fahrbahnbreite (wie viel
+	 * abfliesst und wie weit zu raeumen ist) und die Zahl der Arme. Die Breite
+	 * wiegt schwerer - ein fuenfarmiger Knoten aus Wohnstrassen bleibt klein.
+	 *
+	 * Ohne Armdaten (synthetische Netze) wird 0,5 geliefert: eine mittlere
+	 * Kreuzung, statt aus fehlenden Daten eine Groesse zu erfinden.
+	 */
+	static double JunctionSize01(const FRoadIntersection& Intersection);
+
+	/** Gruenzeit der Hauptrichtung fuer eine Kreuzung dieser Groesse (s). */
+	static double GreenSecondsFor(const FWiesbadenTrafficLightSettings& InSettings,
+		double Size01);
+
+	/** Gruenzeit der Abbiegephase fuer eine Kreuzung dieser Groesse (s). */
+	static double LeftGreenSecondsFor(const FWiesbadenTrafficLightSettings& InSettings,
+		double Size01);
+
+	/** Allrot-Raeumzeit: Querungsweg durch Raeumgeschwindigkeit, mind. AllRedSeconds. */
+	static double ClearanceSecondsFor(const FWiesbadenTrafficLightSettings& InSettings,
+		double WidthMeters);
+
+	/**
+	 * Rundet einen Wunschumlauf auf das gemeinsame Raster (CycleQuantumSeconds).
+	 *
+	 * @param RequiredCycleSeconds Was der Umlauf mindestens tragen muss (feste
+	 *        Zeiten, Abbiegephasen, Mindestgruen). Darunter wird AUFgerundet
+	 *        statt kaufmaennisch - sonst liegt der tatsaechliche Umlauf
+	 *        zwischen zwei Rasterstufen, und genau diese Ampel laeuft der
+	 *        gruenen Welle davon.
+	 */
+	static double QuantiseCycle(const FWiesbadenTrafficLightSettings& InSettings,
+		double DesiredCycleSeconds, double RequiredCycleSeconds = 0.0);
+
+private:
 
 	/** Deterministischer FNV-1a-Hash ueber zwei uint32. */
 	static uint32 Hash2(uint32 A, uint32 B);

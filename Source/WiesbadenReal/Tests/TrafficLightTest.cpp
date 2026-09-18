@@ -236,9 +236,21 @@ bool FTrafficLightSystemTest::RunTest(const FString& Parameters)
 	    // -- 5. Aspektmodell: Konfliktfreiheit, Dauern, Gruen-Delegation. --------
     {
         FWiesbadenTrafficLightSettings S;
-        // Die Gruenzeit ist jetzt die EINGABE, nicht der Rest eines festen
-        // Umlaufs: 15 s Gruen plus 1 s Rot-Gelb, 3 s Gelb und 2 s Raeumzeit
-        // ergeben eine Phase von 21 s, also 42 s Umlauf fuer beide Achsen.
+        // Die Gruenzeit ist die EINGABE, nicht der Rest eines festen Umlaufs -
+        // und sie haengt seit den groessenabhaengigen Programmen an der
+        // Kreuzung, nicht mehr fest an den Einstellungen.
+        //
+        // Das Testnetz hat KEINE Armdaten, die Kreuzung gilt damit als mittlere
+        // (JunctionSize01 = 0,5). Daraus: Gruen = Lerp(7, 15, 0,5) = 11 s,
+        // feste Zeiten 1 + 3 + 2 = 6 s (Raeumzeit bleibt bei Breite 0 auf der
+        // Mindest-Allrotzeit), Wunschumlauf 2 * 17 = 34 s. Das 10-s-Raster -
+        // der Preis fuer die gruene Welle - macht daraus 30 s, und die
+        // verbleibenden 30 - 2*6 = 18 s teilen sich die beiden
+        // Geradeaus-Phasen: 9 s Gruen je Achse.
+        //
+        // Frueher stand hier 15 s Gruen und 42 s Umlauf - fuer JEDE Kreuzung
+        // gleich, vom Wohnweg bis zum sechsspurigen Knoten. Genau das ist der
+        // Stand, den die groessenabhaengigen Zeiten abloesen.
         S.GreenSecondsPerCycle = 15.0;
         S.RedAmberSeconds = 1.0;
         S.AmberSeconds = 3.0;
@@ -275,10 +287,19 @@ bool FTrafficLightSystemTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Aspekt: Gruen-Delegation stimmt mit Aspekt ueberein"), bGreenDelegationOk);
         TestTrue(TEXT("Aspekt: Rot-Gelb ~1 s"),
             FMath::Abs(Dur[static_cast<int32>(ESignalAspect::RedAmber)] - 1.0) < 0.3);
-        TestTrue(FString::Printf(TEXT("Aspekt: Umlauf %.0f s"), CycleC),
-            FMath::Abs(CycleC - 42.0) < 0.1);
-        TestTrue(TEXT("Aspekt: Gruen ~15 s (die eingestellte Gruenzeit)"),
-            FMath::Abs(Dur[static_cast<int32>(ESignalAspect::Green)] - 15.0) < 0.3);
+        TestTrue(FString::Printf(TEXT("Aspekt: Umlauf %.0f s (mittlere Kreuzung, 10-s-Raster)"),
+            CycleC),
+            FMath::Abs(CycleC - 30.0) < 0.1);
+        // Der Umlauf MUSS auf dem Raster liegen: nur gleicher Takt traegt die
+        // gruene Welle. Eine Ampel dazwischen laeuft ihr unsichtbar davon.
+        // Beide Enden zaehlen - die Phasendauern sind float, eine Summe trifft
+        // 30 s auch als 29,99999 und Fmod liefert dann fast ein volles Raster.
+        const double GridRest = FMath::Fmod(CycleC, S.CycleQuantumSeconds);
+        TestTrue(FString::Printf(TEXT("Aspekt: Umlauf %.1f s liegt auf dem Raster"), CycleC),
+            (GridRest < 0.05) || ((S.CycleQuantumSeconds - GridRest) < 0.05));
+        TestTrue(FString::Printf(TEXT("Aspekt: Gruen ~9 s (Rest des Rasterumlaufs, %.1f s)"),
+            Dur[static_cast<int32>(ESignalAspect::Green)]),
+            FMath::Abs(Dur[static_cast<int32>(ESignalAspect::Green)] - 9.0) < 0.3);
         TestTrue(TEXT("Aspekt: Gelb ~3 s"),
             FMath::Abs(Dur[static_cast<int32>(ESignalAspect::Amber)] - 3.0) < 0.3);
     }
