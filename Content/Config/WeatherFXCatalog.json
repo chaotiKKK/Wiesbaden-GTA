@@ -1,11 +1,11 @@
 {
   "formatVersion": 1,
-  "description": "Spezifikation der Wetter-Effekte (World/WiesbadenWeatherFX). HYBRID: Regen, Schnee und Gewitter sind Niagara-Systeme (NS_-Assets, die die gelisteten User-Parameter EXPONIEREN muessen - nur der User-Namespace ist aus C++ setzbar); NEBEL und WOLKEN laufen dagegen engine-nativ ueber ExponentialHeightFog und VolumetricCloud, weil Partikel die Himmelskuppel nicht veraendern koennen. Die C++-Seite prueft die Niagara-Vertraege zur Laufzeit (ValidateSystem) und stellt Nebel/Wolken in UpdateSky; deren Kurven sind datenrein getestet (Weather.FXSky). Fixed Bounds bleiben fuer die Partikel-Systeme Pflicht - ohne sie culled die Engine grosse raeumliche Effekte weg.",
+  "description": "Spezifikation der Wetter-Effekte (World/WiesbadenWeatherFX). HYBRID: Regen, Schnee und Gewitter sind Niagara-Systeme (NS_-Assets, die die gelisteten User-Parameter EXPONIEREN muessen - nur der User-Namespace ist aus C++ setzbar); NEBEL und WOLKEN laufen dagegen engine-nativ ueber ExponentialHeightFog und VolumetricCloud, weil Partikel die Himmelskuppel nicht veraendern koennen. Die C++-Seite prueft die Niagara-Vertraege zur Laufzeit (ValidateSystem) und stellt Nebel/Wolken in UpdateSky; deren Kurven sind datenrein getestet (Weather.FXSky). Fixed Bounds bleiben fuer die Partikel-Systeme Pflicht - ohne sie culled die Engine grosse raeumliche Effekte weg. Die Anleitung zum Bau der NS_-Assets im Niagara-Editor steht in docs/Wetter_Niagara_Anleitung.md.",
   "assets": [
     {
       "id": "NS_WeatherRain",
       "displayName": "Regen",
-      "build": "Niagara System mit einem CPU-Emitter 'Rain', Modul-Reihenfolge: EmitterSpawn->SpawnRate; ParticleUpdate->AddVelocity->GravityForce; Render->Sprite BOUNDS: Fixed-Bounds am System setzen (siehe bounds-Feld), da CPUSim-Emitter ohne explizite Bounds bei Distanz-Culling verschwinden koennen.",
+      "build": "Niagara System mit einem CPU-Emitter 'Rain', Modul-Reihenfolge: EmitterSpawn->SpawnRate; ParticleSpawn->AddVelocity; ParticleUpdate->GravityForce; Render->Sprite BOUNDS: Fixed-Bounds am System setzen (siehe bounds-Feld), da CPUSim-Emitter ohne explizite Bounds bei Distanz-Culling verschwinden koennen.",
       "emitters": [
         {
           "name": "Rain",
@@ -15,13 +15,14 @@
               "module": "SpawnRate",
               "source": "User.RainSpawnRate",
               "unit": "Partikel/s"
+            },
+            {
+              "module": "AddVelocity",
+              "value": "Vector(0, 0, -1400) cm/s",
+              "note": "AddVelocity gehoert in die SPAWN-Stufe: in ParticleUpdate addiert das Modul seinen Wert in JEDEM Bild erneut und die Partikel beschleunigen unbegrenzt. Die Engine sortiert das Modul selbst unter /Niagara/Modules/Spawn/Velocity/. Korrigiert am 2026-09-18 beim Bau der Systeme."
             }
           ],
           "updateStage": [
-            {
-              "module": "AddVelocity",
-              "value": "Vector(0, 0, -1400) cm/s"
-            },
             {
               "module": "GravityForce",
               "value": "Vector(0, 0, -980) cm/s^2"
@@ -78,7 +79,7 @@
     {
       "id": "NS_WeatherSnow",
       "displayName": "Schnee",
-      "build": "Niagara System mit einem CPU-Emitter 'Snow', Modul-Reihenfolge: EmitterSpawn->SpawnRate; ParticleUpdate->AddVelocity->GravityForce (langsamer als Regen); Render->Sprite BOUNDS: Fixed-Bounds am System setzen (siehe bounds-Feld), da CPUSim-Emitter ohne explizite Bounds bei Distanz-Culling verschwinden koennen.",
+      "build": "Niagara System mit einem CPU-Emitter 'Snow', Modul-Reihenfolge: EmitterSpawn->SpawnRate; ParticleSpawn->AddVelocity; ParticleUpdate->GravityForce (langsamer als Regen); Render->Sprite BOUNDS: Fixed-Bounds am System setzen (siehe bounds-Feld), da CPUSim-Emitter ohne explizite Bounds bei Distanz-Culling verschwinden koennen.",
       "emitters": [
         {
           "name": "Snow",
@@ -88,13 +89,14 @@
               "module": "SpawnRate",
               "source": "User.SnowSpawnRate",
               "unit": "Partikel/s"
+            },
+            {
+              "module": "AddVelocity",
+              "value": "Vector(0, 0, -250) cm/s",
+              "note": "AddVelocity gehoert in die SPAWN-Stufe: in ParticleUpdate addiert das Modul seinen Wert in JEDEM Bild erneut und die Partikel beschleunigen unbegrenzt. Die Engine sortiert das Modul selbst unter /Niagara/Modules/Spawn/Velocity/. Korrigiert am 2026-09-18 beim Bau der Systeme."
             }
           ],
           "updateStage": [
-            {
-              "module": "AddVelocity",
-              "value": "Vector(0, 0, -250) cm/s"
-            },
             {
               "module": "GravityForce",
               "value": "Vector(0, 0, -60) cm/s^2"

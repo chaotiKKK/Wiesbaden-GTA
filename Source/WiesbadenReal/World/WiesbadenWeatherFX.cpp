@@ -13,6 +13,11 @@
 #include "Engine/SkyLight.h"
 #include "World/WiesbadenSolar.h"
 #include "EngineUtils.h"
+#include "Engine/PostProcessVolume.h"
+#include "GameFramework/PlayerController.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
+#include "NiagaraComponent.h"
 #include "NiagaraFunctionLibrary.h"
 #include "World/WiesbadenCitySubsystem.h"
 
@@ -158,6 +163,52 @@ float FWiesbadenWeatherFXParams::GetNightSunFloor()
 	return NightSunFloor;
 }
 
+namespace
+{
+	/** Pfad des per Python gebauten Overlay-Materials. */
+	const TCHAR* WeatherOverlayMaterialPath =
+		TEXT("/Game/Materials/PostProcess/M_WbWeatherOverlay.M_WbWeatherOverlay");
+
+	/** Maximale Schraeglage im Bildraum bei Sturm (Vollausschlag des Windes). */
+	constexpr float MaxOverlaySlant = 0.55f;
+
+	/** Windgeschwindigkeit, bei der die Schraeglage voll ausschlaegt (m/s). */
+	constexpr float FullSlantWindMs = 27.0f;
+
+	/** Untergrenze der Overlay-Helligkeit - nachts sichtbar, aber nicht grell. */
+	constexpr float MinOverlayBrightness = 0.30f;
+}
+
+FWiesbadenWeatherOverlayParams FWiesbadenWeatherOverlayParams::FromFXParams(
+	const FWiesbadenWeatherFXParams& FX)
+{
+	FWiesbadenWeatherOverlayParams Out;
+
+	// Die Partikelraten sind der gemeinsame Massstab fuer beide Wege: das
+	// Overlay soll bei derselben Wetterlage genauso dicht fallen wie die
+	// Niagara-Systeme, wenn sie eines Tages danebenstehen. Regen und Schnee
+	// haben dabei EIGENE Vollraten (1200 gegen 600) - mit einer gemeinsamen
+	// Zahl waere Schnee bei gleichem Wetter nur halb so dicht.
+	Out.RainStrength = FMath::Clamp(FX.RainSpawnRate / FullRainSpawnRate, 0.0f, 1.0f);
+	Out.SnowStrength = FMath::Clamp(FX.SnowSpawnRate / FullSnowSpawnRate, 0.0f, 1.0f);
+
+	// Wind schraeg stellen. Im Bildraum, also unabhaengig von der Blickrichtung
+	// - eine echte Windrichtung braeuchte die Kamera-Basis und waere bei einer
+	// Drehung um 180 Grad trotzdem falsch herum.
+	Out.Slant = MaxOverlaySlant
+		* FMath::Clamp(FX.WindSpeed / FullSlantWindMs, 0.0f, 1.0f);
+
+	// Farbe vom Licht: bei Abendsonne warme Tropfen, nachts kuehle.
+	Out.Tint = FX.SunLightColor;
+
+	// Helligkeit folgt dem Umgebungslicht. Ohne Untergrenze verschwaende der
+	// Regen nachts voellig, obwohl gerade dann Strassenlaternen ihn zeigen.
+	Out.Brightness = FMath::Max(
+		FMath::Clamp(FX.AmbientLightMultiplier, 0.0f, 1.0f), MinOverlayBrightness);
+
+	return Out;
+}
+
 FWiesbadenWeatherFXParams FWiesbadenWeatherFXParams::FromWeatherState(const FWiesbadenWeatherState& State)
 {
 	FWiesbadenWeatherFXParams Out;
@@ -287,6 +338,18 @@ void UWiesbadenWeatherFXComponent::LoadDefaultSystems()
 		{
 			UE_LOG(LogWbCore, Log, TEXT("WeatherFX: Effekt '%s' automatisch aus %s zugewiesen."),
 				*Path, *Path);
+		}
+		else
+		{
+			// Laut werden. Ein fehlendes NS_-Asset war bisher voellig stumm:
+			// man stellt -WbWeather=Rain ein, es passiert nichts, und nichts im
+			// Protokoll sagt warum. Die Systeme muessen von Hand im
+			// Niagara-Editor gebaut werden (Python exportiert die Niagara-
+			// Editor-API nicht) - siehe docs/Wetter_Niagara_Anleitung.md.
+			UE_LOG(LogWbCore, Warning,
+				TEXT("WeatherFX: %s FEHLT - dieser Effekt bleibt unsichtbar. ")
+				TEXT("Asset im Niagara-Editor anlegen (docs/Wetter_Niagara_Anleitung.md)."),
+				*Path);
 		}
 	};
 
@@ -560,6 +623,111 @@ void UWiesbadenWeatherFXComponent::ApplyParams(UNiagaraComponent* FX,
 	FX->SetVariableLinearColor(TEXT("SunLightColor"), Params.SunLightColor);
 }
 
+bool UWiesbadenWeatherFXComponent::EnsureOverlay()
+{
+	if (OverlayMID && OverlayVolume)
+	{
+		return true;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	UMaterialInterface* Base = LoadObject<UMaterialInterface>(
+		nullptr, WeatherOverlayMaterialPath);
+	if (!Base)
+	{
+		if (!bOverlayWarned)
+		{
+			bOverlayWarned = true;
+			UE_LOG(LogWbCore, Warning,
+				TEXT("WeatherFX: Overlay-Material %s fehlt - Regen/Schnee ohne Niagara ")
+				TEXT("bleiben aus. Mit Tools/add_weather_postprocess.py erzeugen."),
+				WeatherOverlayMaterialPath);
+		}
+		return false;
+	}
+
+	OverlayMID = UMaterialInstanceDynamic::Create(Base, this);
+	if (!OverlayMID)
+	{
+		return false;
+	}
+
+	// Unbegrenztes Volume: der Niederschlag soll ueberall fallen, nicht nur in
+	// einem Kasten. Hohe Prioritaet, damit die Post-Process-Volumes der
+	// gebackenen Karte das Overlay nicht ueberschreiben.
+	FActorSpawnParameters Params;
+	Params.Name = TEXT("WbWeatherOverlayVolume");
+	Params.ObjectFlags |= RF_Transient;
+	OverlayVolume = World->SpawnActor<APostProcessVolume>(Params);
+	if (!OverlayVolume)
+	{
+		return false;
+	}
+	OverlayVolume->bUnbound = true;
+	OverlayVolume->BlendWeight = 1.0f;
+	OverlayVolume->Priority = 1000.0f;
+	OverlayVolume->Settings.WeightedBlendables.Array.Add(
+		FWeightedBlendable(1.0f, OverlayMID));
+
+	UE_LOG(LogWbCore, Log,
+		TEXT("WeatherFX: Bildschirm-Niederschlag bereit (%s, unbegrenztes Volume)."),
+		WeatherOverlayMaterialPath);
+	return true;
+}
+
+void UWiesbadenWeatherFXComponent::UpdateOverlay(const FWiesbadenWeatherFXParams& Params)
+{
+	const FWiesbadenWeatherOverlayParams Overlay =
+		FWiesbadenWeatherOverlayParams::FromFXParams(Params);
+
+	if (!EnsureOverlay())
+	{
+		return;
+	}
+
+	// Ganz abschalten, wenn nichts faellt: ein Vollbild-Durchgang, der nur
+	// Nullen addiert, kostet trotzdem jedes Bild Fuellrate.
+	const bool bVisible = Overlay.IsVisible();
+	OverlayVolume->bEnabled = bVisible;
+	if (!bVisible)
+	{
+		return;
+	}
+
+	OverlayMID->SetScalarParameterValue(TEXT("RegenStaerke"), Overlay.RainStrength);
+	OverlayMID->SetScalarParameterValue(TEXT("SchneeStaerke"), Overlay.SnowStrength);
+	OverlayMID->SetScalarParameterValue(TEXT("Schraeglage"), Overlay.Slant);
+	OverlayMID->SetScalarParameterValue(TEXT("Helligkeit"), Overlay.Brightness);
+	OverlayMID->SetVectorParameterValue(TEXT("Farbe"), Overlay.Tint);
+
+	// Beleg erst, wenn der Wert steht. Ein Wetterwechsel blendet ueber 8 s ein;
+	// wer im zweiten Bild protokolliert, schreibt "Regen 0.01" ins Log und
+	// sucht danach einen Fehler, den es nicht gibt.
+	const bool bSettled =
+		FMath::IsNearlyEqual(Overlay.RainStrength, LastOverlayRain, 0.0005f) &&
+		FMath::IsNearlyEqual(Overlay.SnowStrength, LastOverlaySnow, 0.0005f);
+	LastOverlayRain = Overlay.RainStrength;
+	LastOverlaySnow = Overlay.SnowStrength;
+
+	// Ein einzelnes ruhiges Bild reicht nicht: waehrend der Ueberblendung gibt
+	// es kurze Bilder, in denen sich der Wert um weniger als die Schwelle
+	// bewegt. Der Beleg meldete so "Schnee 0.04" statt 0,70.
+	OverlaySettledFrames = bSettled ? OverlaySettledFrames + 1 : 0;
+	if (!bOverlayReported && OverlaySettledFrames > 60)
+	{
+		bOverlayReported = true;
+		UE_LOG(LogWbCore, Log,
+			TEXT("WeatherFX: Overlay faellt - Regen %.2f, Schnee %.2f, Schraeglage %.2f, ")
+			TEXT("Helligkeit %.2f."),
+			Overlay.RainStrength, Overlay.SnowStrength, Overlay.Slant, Overlay.Brightness);
+	}
+}
+
 void UWiesbadenWeatherFXComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 	FActorComponentTickFunction* ThisTickFunction)
 {
@@ -573,10 +741,48 @@ void UWiesbadenWeatherFXComponent::TickComponent(float DeltaTime, ELevelTick Tic
 
 	const FWiesbadenWeatherFXParams Params = FWiesbadenWeatherFXParams::FromWeatherState(*State);
 
+	// Regen/Schnee im Bildraum - haengt NICHT an den Niagara-Assets.
+	UpdateOverlay(Params);
+
 	// Effekt aktualisieren: System-Asset vorhanden -> spawnen (einmalig) und
 	// Parameter setzen; sonst existierenden Effekt deaktivieren.
-	USceneComponent* AttachRoot = GetOwner() ? GetOwner()->GetRootComponent() : nullptr;
-	const auto UpdateFX = [this, &Params, AttachRoot](
+	//
+	// DER EFFEKT FOLGT DER KAMERA, er haengt nicht am Besitzer.
+	//
+	// Zwei Gruende, beide hart: Erstens ist der Besitzer dieser Komponente der
+	// GameMode, und der hat GAR KEINE Wurzelkomponente -
+	// GetOwner()->GetRootComponent() ist nullptr, SpawnSystemAttached wurde nie
+	// gerufen. Ein fertiges NS_WeatherRain waere nie erschienen. Zweitens
+	// verlangt der Katalog feste Bounds von +-200 m; an den Weltursprung
+	// gebunden regnete es nur dort, waehrend der Spieler Kilometer entfernt
+	// steht. An den Pawn haengen geht auch nicht: der wechselt beim Ein- und
+	// Aussteigen (Auto, zu Fuss, Helikopter) und wird dabei zerstoert.
+	UWorld* FXWorld = GetWorld();
+	FVector ViewLocation = FVector::ZeroVector;
+	bool bHasView = false;
+	if (FXWorld)
+	{
+		if (const APlayerController* PC = FXWorld->GetFirstPlayerController())
+		{
+			FRotator ViewRotation = FRotator::ZeroRotator;
+			PC->GetPlayerViewPoint(ViewLocation, ViewRotation);
+			bHasView = true;
+		}
+	}
+
+	if (!bReportedFXSetup && bHasView)
+	{
+		bReportedFXSetup = true;
+		const USceneComponent* OwnerRoot = GetOwner() ? GetOwner()->GetRootComponent() : nullptr;
+		UE_LOG(LogWbCore, Log,
+			TEXT("WeatherFX: Partikel-Systeme Regen=%d Schnee=%d Gewitter=%d; ")
+			TEXT("Besitzer-Wurzel=%s, Effekte folgen der Kamera bei (%.0f, %.0f, %.0f)."),
+			RainSystem ? 1 : 0, SnowSystem ? 1 : 0, StormSystem ? 1 : 0,
+			OwnerRoot ? TEXT("vorhanden") : TEXT("KEINE (darum Kamera-Nachfuehrung)"),
+			ViewLocation.X, ViewLocation.Y, ViewLocation.Z);
+	}
+
+	const auto UpdateFX = [this, &Params, FXWorld, ViewLocation, bHasView](
 		TObjectPtr<UNiagaraComponent>& FX, UNiagaraSystem* System,
 		EWiesbadenWeatherFXType Type, const FString& EffectName, bool bWanted)
 	{
@@ -586,14 +792,13 @@ void UWiesbadenWeatherFXComponent::TickComponent(float DeltaTime, ELevelTick Tic
 		}
 		if (!FX)
 		{
-			if (!bWanted || !AttachRoot)
+			if (!bWanted || !FXWorld || !bHasView)
 			{
-				return; // nichts zu spawnen, nichts aktiv (oder kein Owner-Root)
+				return; // nichts zu spawnen, nichts aktiv (oder noch keine Kamera)
 			}
-			FX = UNiagaraFunctionLibrary::SpawnSystemAttached(
-				System, AttachRoot, NAME_None,
-				FVector::ZeroVector, FRotator::ZeroRotator,
-				EAttachLocation::KeepRelativeOffset, /*bAutoDestroy=*/false);
+			FX = UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+				FXWorld, System, ViewLocation, FRotator::ZeroRotator,
+				FVector::OneVector, /*bAutoDestroy=*/false);
 			if (!FX)
 			{
 				return;
@@ -605,6 +810,13 @@ void UWiesbadenWeatherFXComponent::TickComponent(float DeltaTime, ELevelTick Tic
 			// gesetzt -> einmalig warnen (sonst verschwindet der Effekt).
 			WarnMissingFixedBounds(System, EffectName);
 		}
+		// Der Kamera nachfuehren - sonst bleibt die Regenbox dort stehen, wo
+		// sie einmal entstanden ist, und man faehrt aus dem Wetter heraus.
+		if (bHasView)
+		{
+			FX->SetWorldLocation(ViewLocation);
+		}
+
 		// Nur beim Uebergang inaktiv -> aktiv aktivieren. Activate(true) auf einem
 		// bereits laufenden System setzt es zurueck (EResetMode::ResetSystem,
 		// siehe UNiagaraComponent::ActivateInternal) - ein Pro-Tick-Aufruf wuerde
