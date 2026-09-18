@@ -229,4 +229,89 @@ bool FHeliStandDistanceTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLegacyHelicopterStandSpotsTest,
+	"WiesbadenReal.Vehicles.HeliStandplaetze",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FLegacyHelicopterStandSpotsTest::RunTest(const FString& Parameters)
+{
+	const FVector Anchor(1000.0, 2000.0, 300.0);
+	constexpr double Yaw = 30.0;
+	constexpr double StandCm = 1800.0;
+
+	const TArray<FVector> Spots =
+		AWiesbadenGameMode::BuildHelicopterStandCandidates(Anchor, Yaw, StandCm);
+
+	TestTrue(TEXT("Es gibt Ausweichplaetze"), Spots.Num() > 1);
+
+	// 1. Der GEWOHNTE Platz bleibt die erste Wahl: geradeaus, im gerechneten
+	//    Abstand. Sonst haette die Fahrbahnpruefung die Aufstellung veraendert,
+	//    auch wo gar keine Strasse liegt.
+	const FVector Expected = Anchor + FRotator(0.0, Yaw, 0.0).Vector() * StandCm;
+	TestTrue(TEXT("Erster Platz ist der bisherige (geradeaus, gerechneter Abstand)"),
+		Spots[0].Equals(Expected, 0.01));
+
+	// 2. Alle Plaetze liegen auf der Hoehe des Ankers - die Hoehe kommt erst
+	//    aus dem Bodenlot, nicht aus der Faecherung.
+	bool bSameHeight = true;
+	for (const FVector& Spot : Spots)
+	{
+		bSameHeight = bSameHeight && FMath::IsNearlyEqual(Spot.Z, Anchor.Z, 0.01);
+	}
+	TestTrue(TEXT("Die Faecherung aendert die Hoehe nicht"), bSameHeight);
+
+	// 3. Kein Platz liegt naeher als der gerechnete Standabstand: sonst
+	//    koennten sich beim Ausweichen die Rotorkreise durchdringen - genau das,
+	//    wogegen der Abstand gerechnet wurde.
+	double MinDistance = TNumericLimits<double>::Max();
+	for (const FVector& Spot : Spots)
+	{
+		MinDistance = FMath::Min(MinDistance, FVector::Dist2D(Spot, Anchor));
+	}
+	TestTrue(FString::Printf(TEXT("Naechster Platz %.2f m >= Standabstand %.2f m"),
+		MinDistance / 100.0, StandCm / 100.0),
+		MinDistance >= StandCm - 0.01);
+
+	// 4. Erst seitlich ausweichen, dann weiter weg: unter den ersten Plaetzen
+	//    muss der Abstand noch der gerechnete sein. Ein Sprung auf 2,4-fache
+	//    Entfernung waere ein ganz anderes Bild.
+	int32 SameDistanceCount = 0;
+	for (const FVector& Spot : Spots)
+	{
+		if (FMath::IsNearlyEqual(FVector::Dist2D(Spot, Anchor), StandCm, 1.0))
+		{
+			++SameDistanceCount;
+		}
+	}
+	TestTrue(FString::Printf(TEXT("%d Plaetze im gewohnten Abstand, nur die Richtung wechselt"),
+		SameDistanceCount), SameDistanceCount >= 8);
+
+	// 5. Keine zwei gleichen Plaetze - jede Probe soll eine neue Stelle testen.
+	bool bAllDistinct = true;
+	for (int32 i = 0; i < Spots.Num() && bAllDistinct; ++i)
+	{
+		for (int32 k = i + 1; k < Spots.Num(); ++k)
+		{
+			if (Spots[i].Equals(Spots[k], 1.0))
+			{
+				bAllDistinct = false;
+				break;
+			}
+		}
+	}
+	TestTrue(TEXT("Alle Plaetze sind verschieden"), bAllDistinct);
+
+	// 6. Die Faecherung deckt alle Richtungen ab - sonst bliebe eine Strasse,
+	//    die genau quer liegt, unausweichlich.
+	bool bSawOpposite = false;
+	const FVector Backwards = Anchor + FRotator(0.0, Yaw + 180.0, 0.0).Vector() * StandCm;
+	for (const FVector& Spot : Spots)
+	{
+		bSawOpposite = bSawOpposite || Spot.Equals(Backwards, 1.0);
+	}
+	TestTrue(TEXT("Auch die Gegenrichtung wird geprueft"), bSawOpposite);
+
+	return true;
+}
+
 #endif // WITH_EDITOR

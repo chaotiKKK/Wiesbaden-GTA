@@ -31,6 +31,22 @@ FIntPoint FWiesbadenRoadClearance::CellOf(const FVector2D& Point)
 void FWiesbadenRoadClearance::Build(const FRoadNetwork& Network, double ExtraMarginCm,
 	bool bIncludeSidewalk)
 {
+	BuildInternal(Network, ExtraMarginCm, bIncludeSidewalk,
+		/*bLimitToArea=*/false, FVector2D::ZeroVector, 0.0);
+}
+
+void FWiesbadenRoadClearance::BuildAround(const FRoadNetwork& Network,
+	const FVector2D& Center, double AreaRadiusCm, double ExtraMarginCm,
+	bool bIncludeSidewalk)
+{
+	BuildInternal(Network, ExtraMarginCm, bIncludeSidewalk,
+		/*bLimitToArea=*/true, Center, FMath::Max(0.0, AreaRadiusCm));
+}
+
+void FWiesbadenRoadClearance::BuildInternal(const FRoadNetwork& Network,
+	double ExtraMarginCm, bool bIncludeSidewalk, bool bLimitToArea,
+	const FVector2D& Center, double AreaRadiusCm)
+{
 	Spans.Reset();
 	Cells.Reset();
 
@@ -48,6 +64,28 @@ void FWiesbadenRoadClearance::Build(const FRoadNetwork& Network, double ExtraMar
 		if (Line.Num() < 2)
 		{
 			continue;
+		}
+
+		// Ausserhalb des gefragten Umkreises gar nicht erst eintragen. Grob
+		// ueber die Stuetzpunkte - ein Abschnitt, der den Kreis nur streift,
+		// darf ruhig mitkommen, einer der ihn verfehlt kostet sonst Speicher
+		// und Zeit fuer nichts.
+		if (bLimitToArea)
+		{
+			bool bNear = false;
+			for (const FVector& Point : Line)
+			{
+				if (FVector2D::DistSquared(FVector2D(Point.X, Point.Y), Center)
+					<= AreaRadiusCm * AreaRadiusCm)
+				{
+					bNear = true;
+					break;
+				}
+			}
+			if (!bNear)
+			{
+				continue;
+			}
 		}
 
 		// Halbe Fahrbahn, wahlweise plus Gehweg, plus Zuschlag.

@@ -44,6 +44,17 @@ public:
 	void Build(const FRoadNetwork& Network, double ExtraMarginCm,
 		bool bIncludeSidewalk = true);
 
+	/**
+	 * Wie Build, aber nur Abschnitte im Umkreis von Center.
+	 *
+	 * Fuer eine EINZELNE Frage - "liegt dieser Standplatz auf der Fahrbahn?" -
+	 * ist der Index ueber alle rund 125.000 Abschnitte der Stadt unnoetig und
+	 * zu teuer. Der Umkreis muss alle geprueften Punkte umfassen, sonst meldet
+	 * IsBlocked ausserhalb faelschlich "frei".
+	 */
+	void BuildAround(const FRoadNetwork& Network, const FVector2D& Center,
+		double AreaRadiusCm, double ExtraMarginCm, bool bIncludeSidewalk = true);
+
 	/** True, wenn der Punkt auf oder neben einer Fahrbahn liegt. */
 	bool IsBlocked(const FVector2D& Point) const;
 
@@ -75,6 +86,11 @@ private:
 	static constexpr double CellSizeCm = 5000.0;
 
 	static FIntPoint CellOf(const FVector2D& Point);
+
+	/** Gemeinsamer Kern von Build und BuildAround. */
+	void BuildInternal(const FRoadNetwork& Network, double ExtraMarginCm,
+		bool bIncludeSidewalk, bool bLimitToArea,
+		const FVector2D& Center, double AreaRadiusCm);
 
 	TArray<FSpan> Spans;
 

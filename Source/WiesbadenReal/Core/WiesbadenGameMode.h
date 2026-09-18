@@ -13,6 +13,7 @@
 
 class UWiesbadenCitySubsystem;
 class AWiesbadenStoreMerchant;
+struct FWiesbadenRoadClearance;
 
 /**
  * GameMode des Wiesbaden-Core-Moduls.
@@ -124,6 +125,24 @@ public:
 	static double ComputeHelicopterStandDistanceCm(
 		double OwnDiscCm, double LegacyDiscCm, double OwnLengthCm, double LegacyLengthCm);
 
+	/**
+	 * Standplaetze fuer das Standstueck, in der Reihenfolge des Vorzugs
+	 * (datenrein, ohne Welt pruefbar: WiesbadenReal.Vehicles.HeliStandplaetze).
+	 *
+	 * Der erste Eintrag ist der bisherige Platz - geradeaus vor dem Spielerheli
+	 * im gerechneten Abstand. Er wurde BLIND gesetzt: fuehrt dort eine Strasse
+	 * entlang, stand die Maschine auf der Fahrbahn. Die weiteren Eintraege
+	 * weichen faecherfoermig aus (erst seitlich im selben Abstand, dann weiter
+	 * weg), damit ein Ausweichen so wenig wie moeglich an der gewohnten
+	 * Aufstellung aendert.
+	 *
+	 * @param Anchor          Standort des Spielerhelis.
+	 * @param ForwardYawDeg   Blickrichtung des Spielerhelis in Grad.
+	 * @param StandDistanceCm Gerechneter Standabstand.
+	 */
+	static TArray<FVector> BuildHelicopterStandCandidates(
+		const FVector& Anchor, double ForwardYawDeg, double StandDistanceCm);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -176,6 +195,25 @@ protected:
 	 * stechende Rotoren.
 	 */
 	bool SpawnLegacyHelicopterNearStart();
+
+
+	/**
+	 * True, wenn an dieser Stelle KEINE Fahrbahn liegt und der Boden traegt.
+	 *
+	 * Die Fahrbahn kommt aus dem STRASSENNETZ, nicht aus der Kollision: das
+	 * Standstueck wird im ersten Bild gesetzt, da ist noch keine Stadtkachel
+	 * gestreamt und ein Lot trifft nur die Landschaft. Die Hoehe kommt weiterhin
+	 * aus dem Lot. Abgetastet wird der ganze RUMPF-Grundriss, nicht nur die
+	 * Mitte - sonst steht die Maschine mit der Nase auf der Strasse.
+	 *
+	 * @param Point       Zu pruefender Standort (Z beliebig).
+	 * @param FootprintCm Halbe Rumpflaenge als Grundriss-Radius.
+	 * @param Carriageway Fahrbahn-Index um den Ankerpunkt.
+	 * @param OutGroundZ  Hoehe der Aufstandsflaeche, wenn der Platz frei ist.
+	 */
+	bool IsHelicopterStandFree(
+		const FVector& Point, double FootprintCm,
+		const FWiesbadenRoadClearance& Carriageway, double& OutGroundZ) const;
 
 	/**
 	 * Wechselt zwischen Fahrzeug und zu Fuss (Taste F).
