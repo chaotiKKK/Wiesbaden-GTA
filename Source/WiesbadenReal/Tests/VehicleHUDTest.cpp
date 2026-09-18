@@ -303,6 +303,50 @@ bool FVehicleHUDControlLegendTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// -- F1 schaltet das SICHTBARE um ----------------------------------------
+	//
+	// Im Probespiel gefunden: nach dem Selbst-Ausblenden stand unten weiter
+	// "F1  Steuerung", der erste Druck tat aber nichts - der Merker war noch
+	// true und wurde auf false geschaltet. Man musste zweimal druecken.
+	{
+		using FHud = AWiesbadenVehicleHUD;
+		constexpr float Dauer = 20.0f;
+
+		TestTrue(TEXT("Sichtbare Legende -> ein Druck blendet aus"),
+			FHud::ToggleControlLegendVisible(/*bShown=*/true, 5.0f, Dauer) == false);
+
+		// DER FEHLER: eingeschaltet, aber abgelaufen = unsichtbar. Ein Druck
+		// muss sie HOLEN, nicht ein zweites Mal ausschalten.
+		TestTrue(TEXT("Abgelaufene Legende -> ein Druck holt sie zurueck"),
+			FHud::ToggleControlLegendVisible(/*bShown=*/true, Dauer + 1.0f, Dauer));
+
+		TestTrue(TEXT("Ausgeschaltete Legende -> ein Druck holt sie zurueck"),
+			FHud::ToggleControlLegendVisible(/*bShown=*/false, 5.0f, Dauer));
+
+		// Genau auf der Grenze gilt sie noch als sichtbar (wie beim Zeichnen).
+		TestTrue(TEXT("Genau am Ende der Standzeit noch sichtbar -> ausblenden"),
+			FHud::ToggleControlLegendVisible(/*bShown=*/true, Dauer, Dauer) == false);
+	}
+
+	// -- Erstkontakt-Banner ohne haengenden Gedankenstrich --------------------
+	//
+	// Der Untertitel ist leer, solange kein Missionsziel in der Naehe liegt -
+	// das ist der Normalfall. Fest formatiert stand da "Marktstrasse — ".
+	{
+		using FHud = AWiesbadenVehicleHUD;
+
+		TestEqual(TEXT("ohne Untertitel nur der Ort"),
+			FHud::ComposeFirstRunBanner(TEXT("Marktstrasse"), FString()),
+			FString(TEXT("Marktstrasse")));
+
+		TestTrue(TEXT("ohne Untertitel kein Gedankenstrich"),
+			!FHud::ComposeFirstRunBanner(TEXT("Marktstrasse"), FString()).Contains(TEXT("—")));
+
+		TestEqual(TEXT("mit Untertitel beides mit Trenner"),
+			FHud::ComposeFirstRunBanner(TEXT("Marktstrasse"), TEXT("zum Ziel Halle 120 m")),
+			FString(TEXT("Marktstrasse — zum Ziel Halle 120 m")));
+	}
+
 	return true;
 }
 

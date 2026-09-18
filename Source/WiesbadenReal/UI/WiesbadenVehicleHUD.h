@@ -89,6 +89,25 @@ public:
 	static void GetControlLegendLines(bool bInVehicle, TArray<FString>& OutLines);
 
 	/**
+	 * Sichtbarkeit der Legende NACH einem F1-Druck - datenrein.
+	 *
+	 * Umgeschaltet wird, was auf dem Schirm steht, nicht der Merker: nach dem
+	 * Selbst-Ausblenden ist bShown noch true, obwohl nichts zu sehen ist. Ohne
+	 * diese Unterscheidung schaltete der erste Druck eine unsichtbare Legende
+	 * aus und man musste zweimal druecken.
+	 */
+	static bool ToggleControlLegendVisible(
+		bool bShown, float ElapsedSeconds, float LegendSeconds);
+
+	/**
+	 * Banner der Erstkontakt-Hilfe - datenrein.
+	 *
+	 * Ohne Untertitel (kein Missionsziel in der Naehe = Normalfall) darf kein
+	 * Gedankenstrich stehenbleiben.
+	 */
+	static FString ComposeFirstRunBanner(const FString& Title, const FString& Subtitle);
+
+	/**
 	 * Waehlt den Handlungshinweis zu Fuss (datenrein, testbar).
 	 *
 	 * Negative Entfernung heisst "nichts dieser Art in der Welt".
@@ -417,6 +436,9 @@ private:
 	struct FFirstRunPrompt
 	{
 		bool bArmed = false;                 // earned after stream-complete + idle
+		bool bConsumed = false;              // once withdrawn it stays withdrawn:
+											// Erstkontakt heisst einmal, nicht
+											// bei jedem Halt wieder
 		float ArmingStartedAt = -1000.0f;    // world time when first earned
 		float ExpiresAt = -1000.0f;          // world time when the prompt should
 											// stop nagging even if still idle
