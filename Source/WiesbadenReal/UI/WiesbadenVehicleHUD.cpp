@@ -801,8 +801,14 @@ void AWiesbadenVehicleHUD::DrawHUD()
 
 FString AWiesbadenVehicleHUD::BuildFootPrompt(
 	double NearestVehicleCm, double NearestFunicularCm,
-	double VehicleReachCm, double FunicularReachCm)
+	double VehicleReachCm, double FunicularReachCm,
+	bool bVehicleIsHelicopter)
 {
+	// Der Helikopter wird benannt: er steht 12 m neben dem Auto, sieht aus der
+	// Ferne aus wie Kulisse, und mit dem gleichen "F Einsteigen" wie am Wagen
+	// steigt man reflexhaft wieder in den Wagen.
+	const TCHAR* const VehicleText =
+		bVehicleIsHelicopter ? TEXT("F   Helikopter besteigen") : TEXT("F   Einsteigen");
 	// Das NAEHERE gewinnt, wenn beides in Reichweite ist - sonst blinkte an
 	// der Talstation neben dem geparkten Wagen zweierlei durcheinander.
 	const bool bVehicle = NearestVehicleCm >= 0.0 && NearestVehicleCm <= VehicleReachCm;
@@ -811,12 +817,12 @@ FString AWiesbadenVehicleHUD::BuildFootPrompt(
 	if (bVehicle && bFunicular)
 	{
 		return NearestVehicleCm <= NearestFunicularCm
-			? TEXT("F   Einsteigen")
+			? VehicleText
 			: TEXT("E   Nerobergbahn - mitfahren");
 	}
 	if (bVehicle)
 	{
-		return TEXT("F   Einsteigen");
+		return VehicleText;
 	}
 	if (bFunicular)
 	{
@@ -881,8 +887,14 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenHelicopter::StaticClass(), Helicopters);
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenNerobergbahn::StaticClass(), Funiculars);
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenStoreMerchant::StaticClass(), Merchants);
-		Cars.Append(Helicopters);
-		CachedFootVehicleCm = NearestOf(Cars).DistanceCm;
+		// Auto und Helikopter GETRENNT messen: nur so weiss der Hinweis, ob er
+		// den Ka-52 oder den Wagen meint (beide zaehlen als "Fahrzeug").
+		const FNearest NearestCar = NearestOf(Cars);
+		const FNearest NearestHeli = NearestOf(Helicopters);
+		const bool bHeliCloser = NearestHeli.DistanceCm >= 0.0
+			&& (NearestCar.DistanceCm < 0.0 || NearestHeli.DistanceCm < NearestCar.DistanceCm);
+		CachedFootVehicleCm = bHeliCloser ? NearestHeli.DistanceCm : NearestCar.DistanceCm;
+		bCachedFootVehicleIsHelicopter = bHeliCloser;
 		CachedFootFunicularCm = NearestOf(Funiculars).DistanceCm;
 
 		// Der Haendler wird als Actor gemerkt, nicht nur als Entfernung.
@@ -898,7 +910,7 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 
 	const FString Prompt = BuildFootPrompt(
 		CachedFootVehicleCm, CachedFootFunicularCm,
-		FootVehicleReachCm, FootFunicularReachCm);
+		FootVehicleReachCm, FootFunicularReachCm, bCachedFootVehicleIsHelicopter);
 
 	if (Prompt.IsEmpty())
 	{
@@ -983,9 +995,15 @@ void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString
 		OutLines.Add(TEXT("C                   Kamera       M  Karte zeigen/verbergen"));
 		OutLines.Add(TEXT("Gamepad   A Hupe  B Handbremse  X Rueckwaerts  Y Aussteigen"));
 		OutLines.Add(TEXT("          LB RB Blinker   Kreuz hoch Licht   runter Warnblinker"));
-		// Helikopter-Belegung nur bei eingestegtem Fahrzeug sichtbar (WiesbadenHelicopter::ReadInput).
-		OutLines.Add(TEXT("Helikopter:  RT hoch  LT runter  LR Kreuz links/rechts  rechter Stick Nick/Roll"));
-		OutLines.Add(TEXT("            A aussteigen  B:nicht belegt"));
+		// Helikopter-Belegung (AWiesbadenHelicopter::ReadInput). Hier standen nur
+		// die Gamepad-Tasten - wer mit Tastatur spielte, sass im Cockpit und kam
+		// nicht hoch, weil das Kollektiv nirgends genannt war. Im Wagen ist die
+		// Leertaste die Handbremse; im Heli hebt sie ab. Genau diese Verwechslung
+		// liess den Ka-52 "nicht fliegbar" wirken.
+		OutLines.Add(TEXT("Helikopter   Leertaste  Kollektiv hoch    Strg  Kollektiv runter"));
+		OutLines.Add(TEXT("             W S  Nicken   A D  Rollen     Q E  Gieren"));
+		OutLines.Add(TEXT("             G   Triebwerk an/aus          F  Aussteigen"));
+		OutLines.Add(TEXT("  Gamepad    RT hoch  LT runter  Sticks Nick/Roll/Gier  Y Triebwerk"));
 		return;
 	}
 

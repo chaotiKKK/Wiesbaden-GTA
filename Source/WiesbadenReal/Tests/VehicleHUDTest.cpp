@@ -157,6 +157,19 @@ bool FVehicleHUDControlLegendTest::RunTest(const FString& Parameters)
 	// AWiesbadenGameMode::Tick - Ein- und Aussteigen liegt auf F.
 	TestTrue(TEXT("Aussteigen genannt"), VehicleText.Contains(TEXT("Aussteigen")));
 
+	// Helikopter-Steuerung MUSS die Tastatur nennen.
+	//
+	// Hier standen lange nur Gamepad-Tasten ("RT hoch / LT runter"). Der Ka-52
+	// laesst sich per Tastatur fliegen (AWiesbadenHelicopter::ReadInput:
+	// Leertaste/Strg fuer das Kollektiv), aber das stand nirgends im Spiel - er
+	// galt deshalb als "nicht fliegbar". Der Test haelt die Tasten fest, die der
+	// Heli wirklich liest.
+	TestTrue(TEXT("Heli: Kollektiv hoch genannt"), VehicleText.Contains(TEXT("Kollektiv hoch")));
+	TestTrue(TEXT("Heli: Kollektiv runter genannt"), VehicleText.Contains(TEXT("Kollektiv runter")));
+	TestTrue(TEXT("Heli: Strg genannt"), VehicleText.Contains(TEXT("Strg")));
+	TestTrue(TEXT("Heli: Gieren genannt"), VehicleText.Contains(TEXT("Gieren")));
+	TestTrue(TEXT("Heli: Triebwerk genannt"), VehicleText.Contains(TEXT("Triebwerk")));
+
 	TArray<FString> FootLines;
 	AWiesbadenVehicleHUD::GetControlLegendLines(/*bInVehicle=*/false, FootLines);
 
@@ -215,6 +228,15 @@ bool FVehicleHUDControlLegendTest::RunTest(const FString& Parameters)
 		// Entfernung 0 durchgehen - sonst stuende der Hinweis dauerhaft da.
 		TestTrue(TEXT("Kein Fahrzeug vorhanden -> kein Hinweis"),
 			FHud::BuildFootPrompt(-1.0, -1.0, CarReach, RailReach).IsEmpty());
+
+		// Ist das naechste Fahrzeug der Helikopter, nennt der Hinweis ihn beim
+		// Namen - sonst steigt man reflexhaft wieder in den Wagen daneben.
+		TestTrue(TEXT("Heli in Reichweite: Hinweis nennt den Helikopter"),
+			FHud::BuildFootPrompt(300.0, 9000.0, CarReach, RailReach, /*bVehicleIsHelicopter=*/true)
+				.Contains(TEXT("Helikopter")));
+		TestTrue(TEXT("Auto in Reichweite: weiterhin Einsteigen"),
+			FHud::BuildFootPrompt(300.0, 9000.0, CarReach, RailReach, /*bVehicleIsHelicopter=*/false)
+				.Contains(TEXT("Einsteigen")));
 	}
 
 	// -- Konkreter Haendler-Cue ----------------------------------------------

@@ -97,7 +97,8 @@ public:
 	 */
 	static FString BuildFootPrompt(
 		double NearestVehicleCm, double NearestFunicularCm,
-		double VehicleReachCm, double FunicularReachCm);
+		double VehicleReachCm, double FunicularReachCm,
+		bool bVehicleIsHelicopter = false);
 
 protected:
 	/** Skalenendwert des Tachos in km/h. */
@@ -339,6 +340,10 @@ private:
 	 */
 	float FootPromptScanAge = 1000.0f;
 	double CachedFootVehicleCm = -1.0;
+	/** Ist das naechste Fahrzeug der Helikopter? Dann nennt der Hinweis ihn beim
+	 *  Namen - sonst steht neben dem Ka-52 dasselbe "F Einsteigen" wie am Auto,
+	 *  und wer aus dem Wagen steigt, landet wieder im Wagen. */
+	bool bCachedFootVehicleIsHelicopter = false;
 	double CachedFootFunicularCm = -1.0;
 
 	/**
