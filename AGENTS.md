@@ -2689,3 +2689,107 @@ naechsten Lauf (auch die Default-Karte wird dann nicht geladen).
   Gegenprobe, dass die Karte traegt: `Bringing World ...Alkis16 up for play`,
   `Liniendatei line3/line6.json gelesen`, `Strang): 9559 Primitive-Komponenten ... 573
   Instanz-Komponenten mit 716593 Instanzen`, 0 Zeilen `missing usage flag`.
+
+## Wetter ohne Niagara: Post-Process-Overlay (18.09.2026)
+
+- **Der Grund, warum nie etwas fiel, war eine Zeile:** `WiesbadenWeatherFX` haengte das
+  Partikelsystem an `GetOwner()->GetRootComponent()` - Besitzer ist der GameMode, und der hat
+  KEINE Wurzelkomponente. `if (!bWanted || !AttachRoot) return;` brach also in jedem Tick ab, ohne
+  Fehler, ohne Log. Bei wurzellosen Besitzern (GameMode, GameState, Subsysteme) nicht anhaengen,
+  sondern `SpawnSystemAtLocation` + je Tick `SetWorldLocation(ViewLocation)` (Kamera-Nachfuehrung);
+  einmal je Sitzung protokollieren, WELCHER Weg genommen wurde
+  (`Besitzer-Wurzel=KEINE (darum Kamera-Nachfuehrung)`) - sonst ist dieselbe Stille wieder moeglich.
+- **Niagara ist aus Python NICHT baubar** (gemessen, `Saved/probe_niagara_templates.txt`): keine
+  `NiagaraEditorLibrary`, die Factory erzeugt nur leere Systeme, `unreal.NiagaraSystem` zeigt weder
+  Emitter noch `fixed_bounds` noch `exposed_parameters`. Post-Process-MATERIALIEN sind dagegen
+  vollstaendig skriptbar (`Tools/add_weather_postprocess.py` baut `M_WbWeatherOverlay` komplett aus
+  Python). Wer einen sichtbaren Effekt braucht und keine Handarbeit im Editor will: Post-Process
+  nehmen. Die Handanleitung fuer den Niagara-Weg liegt in `docs/Wetter_Niagara_Anleitung.md`.
+- **`SceneTexture` liefert float4.** `float4 + float3` ist ein Material-Compilerfehler, der NICHT
+  auffaellt: UE faellt still auf das Standard-Post-Process zurueck und reicht die Szene unveraendert
+  durch - es sieht exakt so aus, als taete der Effekt nichts. Auf RGB maskieren. Gefunden nur, indem
+  eine Wegwerf-Variante gebaut wurde, die NUR das Muster ausgibt (ohne Szene): erst damit war
+  "Effekt unsichtbar" von "Material tot" zu unterscheiden.
+- **Bildschirmraum-Fallen:** Regenstreifen schmaler als ein Bildschirmpixel verschwinden komplett
+  (auf 2-3 px verbreitern). Eine Schneeflocke, die in ZELLkoordinaten rund ist, wird zum Strich, wenn
+  die Zelle 24x375 px misst - Zellen quadratisch rechnen. Danach blieb ein sichtbares Raster: dagegen
+  Spaltenversatz per Hash, Helligkeitsstreuung und eine Scherung des Gitters.
+- **Die 8-s-Wetterblende luegt Diagnosen an:** eine Pruefung, die beim ersten stabil AUSSEHENDEN
+  Bild feuert, misst mitten in der Blende. N aufeinanderfolgende unveraenderte Bilder fordern.
+
+## Messdisziplin: warum "der Verkehr wechselt NIE die Spur" falsch gemessen war (18.09.2026)
+
+- **Ein Tick-Zaehler kann "nie" nicht von "selten" unterscheiden.** Die Diagnose druckte
+  `LaneChangesThisTick`; bei 4 s Sperrzeit je Fahrzeug steht dort auch bei gesundem Ueberholen fast
+  immer 0. Richtig: Lebenszeit-SUMME plus Ablehnungsgruende (ohne Nachbarspur / Luecke zu eng / ohne
+  Gewinn) und die Seite der engen Luecke. Erst diese Aufschluesselung zeigte, dass 92 % der
+  Ablehnungen an "Nebenspur vorn dicht" lagen - also am zu SPAETEN Ausloeser, nicht an der Regel.
+- **Der Defekt sass in den VOREINSTELLUNGEN**, nicht in der Formel: `LaneChangeMinGapCm` 1400 cm
+  gegen einen Folgeabstand `MinGapCm` von 700 cm - eine solche Luecke entsteht in einer Kolonne
+  nirgends. Ein Test, der sich seine Settings selbst baut, haette die Formel mit gesunden Zahlen
+  gefuettert und gruen gemeldet. `Traffic.SpurwechselLuecke` prueft darum Abschnitt 0 gegen ein
+  DEFAULT-konstruiertes `FWiesbadenTrafficSettings` und enthaelt die Gegenprobe gegen die alten
+  1400 cm. Regel: wenn der Fehler in Defaults steckt, muss der Test die Defaults anfassen.
+- **A/B zweier Spiellaeufe ist wertlos, solange das Auto selbst faehrt.** Ich habe zwei Laeufe
+  verglichen, um einen "Sprenkel" zu erklaeren - die Kamera stand schlicht woanders, es war eine
+  andere Hausfassade. Vergleichsbilder nur mit festem Ort (`-WbGoto`) und stehendem Fahrzeug.
+- Ergebnis der vier Fixes (Alkis16, 271 Fahrzeuge, 75-95 s): **53 -> 308 Spurwechsel**, Tempo und
+  Stauanteil unveraendert (16 km/h, 38 % Steher). Der Rest ist ECHTER Stau, kein Regelfehler.
+
+## Stau-Karte: was eine Messkarte erst brauchbar macht (18.09.2026)
+
+`-WbStauKarte` schaltet `bCollectLaneFlow` ein und schreibt bei JEDER Diagnose (alle 15 s, nicht erst
+am Ende) `Saved/Diagnose/staukarte.txt`; `python Tools/render_stau_karte.py` zeichnet daraus
+`staukarte.png`. Messlauf: `-game -WbStauKarte -WbGoto=<Strasse> -WbQuitAfter=190`.
+
+- **Farbe = Tempo GETEILT DURCH LIMIT**, nicht Tempo: 30 km/h sind in der Tempo-30-Zone freie Fahrt
+  und auf der Hauptachse Stau. Eine Karte nach absolutem Tempo faerbt jede Wohnstrasse rot.
+- **Punktgroesse = Zahl der Messwerte** (ein roter Punkt aus 30 Werten ist Zufall, einer aus 40.000
+  ein Befund); Rangliste nach STRASSE gewichtet buendeln, sonst fuellt eine Achse die ganze Liste.
+- **Ausschnitt aus den MESSWERTEN**, nicht aus dem Netz - gemessen wird nur um den Spieler, das
+  6-km-Netz als Rahmen macht daraus einen Fleck in der Ecke. Fahrzeuge IN Kreuzungen (`!bOnLane`)
+  zaehlen nicht mit, sonst faerbt jede Ampel ihre Kreuzung als Dauerstau.
+- Die UTF-16-Falle von `FFileHelper::SaveStringToFile` (s. Abschnitt "Overpass liefert auch WAYS
+  doppelt") hat hier ZUM ZWEITEN MAL zugeschlagen: deutsche Strassennamen entscheiden ueber die
+  Kodierung derselben Datei. Jede neue Diagnose-Ausgabe mit Ortsnamen gleich mit
+  `ForceUTF8WithoutBOM` schreiben, der Leser erkennt beides.
+- Befund (Alkis16, 190 s): Bahnhofsplatz 32 % des Limits, Konrad-Adenauer-Ring 32 %, Am Landeshaus
+  19 %, Kaiser-Friedrich-Ring 44 %. Der Startplatz des Spielers ist NICHT darunter - das geparkte
+  Spielerauto erklaert den Stau nicht.
+
+## Ausliefern in diesem Repo: es gibt KEINE CI (18.09.2026)
+
+- `gh pr checks` meldet "no checks reported", `statusCheckRollup` ist leer - **nie behaupten, die
+  Checks seien gruen.** Der Nachweis ist lokal: `build_only.cmd` plus volle Suite
+  (`Automation RunTests WiesbadenReal`, Stand 18.09.2026: **235** `Result={Success}`), und zwar VOR
+  dem Commit auf dem isolierten Stand, nicht auf dem Arbeitsbaum mit fremden Straengen darin.
+- **Branch wechseln, obwohl die committete Datei lokal weiter modifiziert ist:** erst
+  `git rev-parse <commit>^{tree}` gegen `origin/main^{tree}` pruefen - sind sie gleich, fasst
+  `git checkout -B main origin/main` keine Datei an und die lokalen Aenderungen der anderen Straenge
+  ueberleben unangetastet. Ohne diesen Vergleich ist jeder Checkout ein Risiko fuer fremde WIP.
+- **Hartcodiertes CRLF in einem Python-Patch kippt eine LF-Datei komplett auf CRLF** (Diff zeigte
+  2055/1838 statt 231/14). Vor jedem Commit `git diff --numstat` gegen
+  `git diff --numstat --ignore-cr-at-eol -w` halten; weichen sie stark ab, ist es ein
+  Zeilenenden-Unfall. Reparatur: Bytes LF-only neu schreiben, MD5 des normalisierten Inhalts
+  vergleichen - der Code muss dabei Byte fuer Byte gleich bleiben.
+- **Python-Heredocs und Backslashes:** ein Zeilenumbruch-Escape innerhalb von `TEXT("...")` wurde
+  beim Patchen zum echten Umbruch -> `error C2001: Zeilenvorschub in Konstante`. Nicht raten,
+  sondern den Backslash als `chr(92)` bauen.
+
+## Probe-Bake Alkis17: gebacken heisst nicht live (18.09.2026)
+
+- Ergaenzung zum Bake-Rezept weiter oben: `rebuild_city.py` verdrahtet die neue Karte SELBST als
+  `GameDefaultMap`/`EditorStartupMap`. Das ist richtig fuer einen Bake, der live gehen soll - bei
+  einem PROBE-Bake muss `Config/DefaultEngine.ini` zurueckgenommen werden, denn welche Karte gespielt
+  wird, ist die Entscheidung des Nutzers. Nach JEDEM Bake `git status Config/` ansehen.
+- Der Editor schreibt `Config/DefaultEngine.ini` als CRLF, obwohl HEAD LF ist: der Diff zeigt dann
+  212 geaenderte Zeilen fuer zwei echte Werte.
+- Abnahme Alkis17 (924 s): `0 von 29 Chunk-Actors ohne Render-Geometrie`, 1073 Ampeln, 121 Bilder/s,
+  1,9 GB externe Actors (= Alkis16). Lokal als `27e0c9a` committet, **nicht** live geschaltet.
+
+## Audio-Buesse: verdrahtet, aber zwei davon ohne Quelle (18.09.2026)
+
+Das Mischpult hat 7 Buesse (`Master/Music/SFX/Ambience/UI/Voice/Vehicle`) mit dB-Reglern und Ducking
+(-10 dB, 0,15 s / 0,4 s) - aber auf **`Music` und `Ambience` sendet nichts**; 19 der 27 Audio-Assets
+sind Halteansagen. `Build.cs` bindet kein Audio-Modul ein, MetaSounds ist nicht aktiviert. Wer dort
+etwas hoerbar machen will, faengt bei der Quelle an, nicht beim Regler.

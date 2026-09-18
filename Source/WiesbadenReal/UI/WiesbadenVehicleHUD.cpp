@@ -682,12 +682,20 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	}
 
 	// F1 schaltet die Legende um (Flanke, damit ein Tastendruck einmal zaehlt).
+	//
+	// Umgeschaltet wird das, was der Spieler SIEHT - nicht der Merker allein.
+	// Nach dem Selbst-Ausblenden (ElapsedSeconds > ControlLegendSeconds) stand
+	// bShowControlLegend noch auf true, obwohl nichts mehr zu sehen war: der
+	// erste Druck schaltete also eine unsichtbare Legende "aus" und es passierte
+	// gar nichts. Der Bildschirm bot die ganze Zeit "F1  Steuerung" an, und man
+	// musste zweimal druecken.
 	if (APlayerController* PC = GetOwningPlayerController())
 	{
 		const bool bKeyDown = PC->IsInputKeyDown(EKeys::F1);
 		if (bKeyDown && !bLegendKeyHeld)
 		{
-			bShowControlLegend = !bShowControlLegend;
+			bShowControlLegend = ToggleControlLegendVisible(
+				bShowControlLegend, ElapsedSeconds, ControlLegendSeconds);
 
 			// Beim Einschalten die Standzeit neu starten, sonst waere die
 			// Legende nach Ablauf der Einblenddauer nicht mehr zurueckzuholen.
@@ -1016,6 +1024,23 @@ void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString
 	OutLines.Add(TEXT("E                   Nerobergbahn - mitfahren"));
 	// Im Wagen bedient die Kurbel den Wasserschieber (AWiesbadenNerobergbahn).
 	OutLines.Add(TEXT("K                   Kurbel drehen - im Nerobergbahn-Wagen"));
+}
+
+bool AWiesbadenVehicleHUD::ToggleControlLegendVisible(
+	bool bShown, float ElapsedSeconds, float LegendSeconds)
+{
+	const bool bVisible = bShown && ElapsedSeconds <= LegendSeconds;
+	return !bVisible;
+}
+
+FString AWiesbadenVehicleHUD::ComposeFirstRunBanner(
+	const FString& Title, const FString& Subtitle)
+{
+	if (Subtitle.IsEmpty())
+	{
+		return Title;
+	}
+	return FString::Printf(TEXT("%s — %s"), *Title, *Subtitle);
 }
 
 void AWiesbadenVehicleHUD::DrawControlLegend(bool bInVehicle, float X, float Y)
@@ -2368,14 +2393,27 @@ void AWiesbadenVehicleHUD::UpdateFirstRunOnboarding()
 	if (FirstRun.bArmed && !FirstRun.Title.IsEmpty())
 	{
 		ShowFirstRunContextHintOnce();
-		ShowTransientHint(
-			FString::Printf(TEXT("%s — %s"), *FirstRun.Title, *FirstRun.Subtitle));
+
+		// Der Untertitel ist "bewusst leer", wenn kein Missionsziel in der Naehe
+		// liegt - das ist der Normalfall. Trotzdem wurde fest "%s — %s"
+		// formatiert: der erste Satz, den ein neuer Spieler sieht, war
+		// "Marktstrasse — " mit haengendem Gedankenstrich.
+		ShowTransientHint(ComposeFirstRunBanner(FirstRun.Title, FirstRun.Subtitle));
 	}
 
 	// Ehrlich zuruecknehmen: abgelaufen, nicht mehr im Leerlauf oder abgedriftet.
 	if (FirstRun.bArmed && ShouldWithdrawFirstRunPrompt(*HudWorld, bPlayerIdle))
 	{
 		FirstRun.bArmed = false;
+
+		// Und dann WIRKLICH vorbei: ohne diesen Merker griff oben sofort wieder
+		// ArmFirstRunPrompt (Bedingung ist nur "Stadt fertig + Leerlauf"), der
+		// Hinweis kam bei jedem Halt zurueck - mit dem Strassennamen der ersten
+		// Scharfschaltung. Nach einer Fahrt quer durch die Stadt stand im Wagen
+		// weiter "Marktstrasse", waehrend das HUD "Nerotal" anzeigte.
+		FirstRun.bConsumed = true;
+		FirstRun.Title.Reset();
+		FirstRun.Subtitle.Reset();
 	}
 }
 
@@ -2383,8 +2421,9 @@ void AWiesbadenVehicleHUD::ArmFirstRunPrompt(
 	const UWorld& World, const UWiesbadenCitySubsystem* City, bool bPlayerIdle)
 {
 	// Verdient: erst wenn die Stadt fertig gestreamt ist UND der Spieler noch
-	// nichts getan hat.
-	if (!City || !City->IsCityStreamingComplete() || !bPlayerIdle)
+	// nichts getan hat - und nur EINMAL je Sitzung (bConsumed), sonst ist es
+	// keine Erstkontakt-Hilfe mehr, sondern eine Dauerschleife bei jedem Halt.
+	if (FirstRun.bConsumed || !City || !City->IsCityStreamingComplete() || !bPlayerIdle)
 	{
 		return;
 	}
