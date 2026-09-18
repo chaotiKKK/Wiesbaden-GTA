@@ -1577,9 +1577,21 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 
 			if (!R.HasPedestrianDrawDefect())
 			{
+				// Personen JE KILOMETER Gehweg im Umkreis - die Stueckzahl allein
+				// sagt nicht, ob der Gehweg belebt WIRKT. Dazu die Zielzahl und
+				// die Aussen-Ausduennung, sonst ist "zu leer" nicht von "hier
+				// ist absichtlich wenig los" zu unterscheiden.
+				const double WalkKm = PedestrianSimulation.GetNearbySidewalkKm();
 				UE_LOG(LogWbCore, Log,
-					TEXT("Fussgaenger laufen: %d simuliert, %d gezeichnet (%.1f km Gehweg)."),
-					R.PedestriansSimulated, R.PedestriansDrawn,
+					TEXT("Fussgaenger laufen: %d von %d (Ziel bei Dichte %.2f, Aussen-Anteil %.2f), ")
+					TEXT("%d gezeichnet; %.2f km Gehweg im Umkreis (%d Abschnitte) = %.1f je km ")
+					TEXT("[Netz gesamt %.1f km]."),
+					R.PedestriansSimulated, PedestrianSimulation.GetTargetPedestrianCount(),
+					PedestrianSimulation.GetDensity(),
+					PedestrianSimulation.GetOuterFractionHere(),
+					R.PedestriansDrawn, WalkKm,
+					PedestrianSimulation.GetNearbySegmentCount(),
+					WalkKm > 0.0 ? R.PedestriansSimulated / WalkKm : 0.0,
 					PedestrianSimulation.GetReport().TotalSidewalkKm);
 			}
 			else

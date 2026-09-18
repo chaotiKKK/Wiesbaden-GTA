@@ -142,6 +142,7 @@ void FWiesbadenPedestrianSimulation::SetObserverLocation(const FVector& InLocati
 void FWiesbadenPedestrianSimulation::RefreshNearbySegments()
 {
 	NearbySegmentIndices.Reset();
+	NearbySidewalkLengthCm = 0.0;
 	if (!Network || !bHasObserver)
 	{
 		return;
@@ -165,8 +166,31 @@ void FWiesbadenPedestrianSimulation::RefreshNearbySegments()
 		if (Dx * Dx + Dy * Dy <= RadiusSq)
 		{
 			NearbySegmentIndices.Add(SegmentIndex);
+
+			// Bezugsgroesse fuer die erlebte Dichte. Faellt bei der ohnehin
+			// noetigen Umkreissuche ab - beide Seiten zaehlen, wo es beide gibt.
+			const bool bLeftWalk = HasSidewalkOnSide(Segment.SidewalkType, false);
+			const bool bRightWalk = HasSidewalkOnSide(Segment.SidewalkType, true);
+			NearbySidewalkLengthCm +=
+				Segment.LengthCm * ((bLeftWalk && bRightWalk) ? 2.0 : 1.0);
 		}
 	}
+}
+
+int32 FWiesbadenPedestrianSimulation::GetTargetPedestrianCount() const
+{
+	// EINE Quelle fuer die Zielzahl - SpawnMissing und die Diagnose lesen
+	// denselben Wert, sonst melden sie frueher oder spaeter Verschiedenes.
+	return FMath::RoundToInt(
+		static_cast<float>(Settings.TargetPedestriansInRadius)
+		* FMath::Clamp(Settings.Density, 0.0f, 1.0f)
+		* static_cast<float>(GetOuterFractionHere()));
+}
+
+double FWiesbadenPedestrianSimulation::GetOuterFractionHere() const
+{
+	return ComputeOuterFraction(
+		FVector2D(ObserverLocation.X, ObserverLocation.Y), Settings);
 }
 
 double FWiesbadenPedestrianSimulation::ComputeOuterFraction(
@@ -202,11 +226,7 @@ void FWiesbadenPedestrianSimulation::SpawnMissing()
 	// Bisher galt ueberall dieselbe Dichte: am Nordfriedhof und auf der
 	// Platter Strasse Richtung Taunusstein liefen so viele Menschen herum wie
 	// in der Fussgaengerzone. Dort geht in Wirklichkeit niemand zu Fuss.
-	const int32 Target = FMath::RoundToInt(
-		static_cast<float>(Settings.TargetPedestriansInRadius)
-		* FMath::Clamp(Settings.Density, 0.0f, 1.0f)
-		* static_cast<float>(ComputeOuterFraction(
-			FVector2D(ObserverLocation.X, ObserverLocation.Y), Settings)));
+	const int32 Target = GetTargetPedestrianCount();
 
 	int32 Missing = Target - Pedestrians.Num();
 	if (Missing <= 0)

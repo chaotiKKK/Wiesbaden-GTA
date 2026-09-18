@@ -102,7 +102,7 @@ struct WIESBADENREAL_API FWiesbadenPedestrianSettings
 	 * zur Mittagszeit, nicht wie ein normaler Wohnbezirk.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fussgaenger", meta = (ClampMin = "0"))
-	int32 TargetPedestriansInRadius = 70;
+	int32 TargetPedestriansInRadius = 200;
 
 	/**
 	 * Mittelpunkt der Innenstadt in Weltkoordinaten (cm).
@@ -226,6 +226,21 @@ struct WIESBADENREAL_API FWiesbadenPedestrianSimulation
 	 * Je angefangenem Ring nach aussen faellt der Anteil um
 	 * OuterFalloffPerRing, bis zur Untergrenze MinOuterFraction.
 	 */
+	/** Gehweglaenge im Spawn-Umkreis in Kilometern (Bezugsgroesse der Dichte). */
+	double GetNearbySidewalkKm() const { return NearbySidewalkLengthCm / 100000.0; }
+
+	/** Zahl der Gehweg-Abschnitte im Spawn-Umkreis. */
+	int32 GetNearbySegmentCount() const { return NearbySegmentIndices.Num(); }
+
+	/** Zielzahl am aktuellen Ort (Dichte und Aussen-Ausduennung eingerechnet). */
+	int32 GetTargetPedestrianCount() const;
+
+	/** Ausduennungs-Anteil am aktuellen Ort (1 = Innenstadt). */
+	double GetOuterFractionHere() const;
+
+	/** Eingestellte Dichte 0..1 (fuer die Diagnose). */
+	float GetDensity() const { return Settings.Density; }
+
 	static double ComputeOuterFraction(
 		const FVector2D& Location, const FWiesbadenPedestrianSettings& Settings);
 
@@ -307,6 +322,16 @@ private:
 
 	/** Davon die in Spielernaehe - daraus wird gespawnt. */
 	TArray<int32> NearbySegmentIndices;
+
+	/**
+	 * Gehweglaenge im Umkreis in cm (beide Seiten, wo vorhanden).
+	 *
+	 * Eine nackte Personenzahl sagt nichts darueber, ob ein Gehweg belebt
+	 * WIRKT: 45 Personen sind auf einer Gasse viel und auf 12 km Gehweg
+	 * nichts. Erst Personen JE KILOMETER ist die Groesse, die man sieht -
+	 * dieselbe Lehre wie beim Verkehr.
+	 */
+	double NearbySidewalkLengthCm = 0.0;
 
 	const FRoadNetwork* Network = nullptr;
 
