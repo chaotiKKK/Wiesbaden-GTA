@@ -182,6 +182,48 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "100.0"))
 	double MinGapCm = 700.0;
 
+	/**
+	 * Zeitluecke, die ein wartepflichtiges Fahrzeug in der Vorfahrtstrasse
+	 * abwartet, in Sekunden.
+	 *
+	 * Ohne Vorfahrt haelt an jeder ampellosen Kreuzung AUCH die Hauptstrasse,
+	 * sobald aus einer Wohnstrasse jemand im Knoten steht - gemessen brach der
+	 * Fluss damit von 36 auf 56 % Steher ein. Mit ihr wartet der
+	 * Wartepflichtige auf eine Luecke, und die Hauptachse laeuft durch.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "0.0"))
+	double JunctionYieldSeconds = 3.0;
+
+	/**
+	 * Blockierfreihaltung: nicht in die Kreuzung fahren, wenn dahinter kein
+	 * Platz ist.
+	 *
+	 * Sie ist der teuerste Teil der Kreuzungsregel und zugleich der, der die
+	 * letzten ineinander steckenden Paare beseitigt. Gemessen am Bahnhofsplatz
+	 * (je 200 s): mit ihr 0,5 Paare je Diagnose bei 51,5 % Stehern, ohne sie
+	 * 3,6 Paare bei 46,2 %. Abschaltbar, damit diese Abwaegung nachrechenbar
+	 * bleibt statt in einer Zahl zu verschwinden.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	bool bKeepJunctionsClear = true;
+
+	/**
+	 * Halbe Laenge und halbe Breite eines Verkehrsfahrzeugs in cm.
+	 *
+	 * Beschreibt DASSELBE Auto wie die Kollisionsbox des Spawners
+	 * (UTrafficVehicleSpawnerComponent::VehicleCollisionExtent, 207/77/77) -
+	 * wer eine der beiden Zahlen aendert, muss die andere mitziehen. Gebraucht
+	 * werden sie, wo es um den Platz geht, den ein Fahrzeug WIRKLICH einnimmt:
+	 * die Konfliktpruefung an Kreuzungen und die Ueberlappungs-Diagnose. Der
+	 * Folgeabstand MinGapCm ist davon unabhaengig - er misst von Mitte zu
+	 * Mitte und ist absichtlich groesser als ein Fahrzeug lang ist.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "50.0"))
+	double VehicleHalfLengthCm = 207.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "20.0"))
+	double VehicleHalfWidthCm = 77.0;
+
 	/** Untergrenze der Wunschgeschwindigkeit in km/h. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "5.0"))
 	double MinSpeedKmh = 20.0;
@@ -630,6 +672,99 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	}
 	int32 GetLifetimeVehiclesApproachingSignal() const { return LifetimeVehiclesApproachingSignal; }
 
+	/** Fahrzeuge, die in diesem Tick vor einem belegten Kreuzungsweg warten. */
+	int32 GetVehiclesHeldAtJunction() const { return LastVehiclesHeldAtJunction; }
+
+	/**
+	 * Fahrzeuge, die INEINANDER stecken - aufgeschluesselt nach Bahn-Beziehung.
+	 *
+	 * Die Abstandsregeln arbeiten je Bahn (Spur bzw. Verbindung). Wo zwei
+	 * Fahrzeuge auf VERSCHIEDENEN Bahnen denselben Platz beanspruchen, greift
+	 * keine von ihnen - im Spiel sieht man das als Kaefer, die zur Haelfte
+	 * ineinander stehen. Ohne diese Aufschluesselung laesst sich nicht sagen,
+	 * WELCHE Grenze verletzt wird, und man baut auf Verdacht.
+	 */
+	struct FOverlapReport
+	{
+		/** Ineinander steckende Paare insgesamt. */
+		int32 Pairs = 0;
+
+		/** Davon: beide auf DERSELBEN Bahn (waere ein Fehler der Folgeregel). */
+		int32 SameEdge = 0;
+
+		/** Davon: beide auf Verbindungen DESSELBEN Knotens (Kreuzungskonflikt). */
+		int32 SameJunction = 0;
+
+		/** Davon: eines auf einer Spur, eines auf einer Verbindung. */
+		int32 LaneAndConnection = 0;
+
+		/** Davon: alles Uebrige (verschiedene Spuren, verschiedene Knoten). */
+		int32 Other = 0;
+
+		/** Fahrzeuge, die an mindestens einem Paar beteiligt sind. */
+		int32 VehiclesInvolved = 0;
+	};
+
+	/**
+	 * Zaehlt die ineinander steckenden Paare (O(n^2), nur fuer die Diagnose).
+	 *
+	 * Bewusst NICHT je Tick: bei 330 Fahrzeugen sind das 54.000 Paarpruefungen.
+	 * Die Diagnose ruft es alle 15 s.
+	 */
+	void CountVehicleOverlaps(FOverlapReport& Out) const;
+
+	/**
+	 * Stecken zwei Fahrzeuge ineinander? Datenrein, ohne Netz und ohne Welt.
+	 *
+	 * Rechteck gegen Rechteck in der EBENE (Separating Axis Theorem ueber die
+	 * vier Kantennormalen). Ein blosser Mittenabstand genuegt nicht: zwei
+	 * Fahrzeuge auf Nachbarspuren stehen voellig zu Recht 3 m nebeneinander,
+	 * zwei hintereinander duerfen sich bei 3 m schon beruehren.
+	 *
+	 * Hoehe bleibt aussen vor - wie ueberall in dieser Simulation: sonst gilt
+	 * die Bruecke ueber der Strasse als Konflikt.
+	 */
+	static bool AreVehiclesOverlapping(
+		const FVector& LocationA, const FVector& ForwardA,
+		const FVector& LocationB, const FVector& ForwardB,
+		double HalfLengthCm, double HalfWidthCm);
+
+	/**
+	 * Wo genau liegen sich zwei Verbindungen im Weg?
+	 *
+	 * Liefert zusaetzlich die Bogenlaenge, ab der ein Fahrzeug den Konfliktpunkt
+	 * HINTER sich hat - erst damit wird die Regel brauchbar: sperrt jedes
+	 * Fahrzeug seine ganze Verbindung, bis es sie verlassen hat, steht die
+	 * Stadt (gemessen 56 % Steher statt 36 %). Wer den Kreuzungspunkt passiert
+	 * hat, ist aus dem Weg.
+	 *
+	 * @param OutClearOnA Bogenlaenge auf A, ab der A den Punkt passiert hat.
+	 * @param OutClearOnB Dasselbe auf B.
+	 */
+	static bool FindConnectionConflict(const FLaneConnection& A, const FLaneConnection& B,
+		double& OutClearOnA, double& OutClearOnB);
+
+	/** Schneiden sich zwei Strecken in der Ebene? (Hoehe bleibt aussen vor.) */
+	static bool SegmentsIntersect2D(const FVector& A0, const FVector& A1,
+		const FVector& B0, const FVector& B1);
+
+	/**
+	 * Koennen zwei Verbindungen desselben Knotens nicht gleichzeitig befahren
+	 * werden? Datenrein, ohne Netz.
+	 *
+	 * Drei Faelle, und die Reihenfolge ist wichtig:
+	 *  - GLEICHE Quellspur: KEIN Konflikt. Die beiden faecheren aus derselben
+	 *    Kolonne auf, und dort haelt sie die Folgeregel schon auseinander. Wer
+	 *    sie hier sperrt, laesst eine Kreuzung nur noch einzeln abfliessen.
+	 *  - GLEICHE Zielspur: Konflikt. Zwei Fahrzeuge, die in dieselbe Spur
+	 *    einfaedeln, treffen sich am Ende, auch wenn die Wege sich vorher nicht
+	 *    schneiden.
+	 *  - Sonst: Konflikt genau dann, wenn sich die Wege kreuzen. Der
+	 *    Gegenverkehr derselben Achse faehrt damit weiter gleichzeitig - seine
+	 *    Wege liegen parallel nebeneinander.
+	 */
+	static bool DoConnectionsConflict(const FLaneConnection& A, const FLaneConnection& B);
+
 	/** Ehrliches, verkehrsUNABHAENGIGES Signal: war seit Initialize je eine von
 	 *  einer Ampel kontrollierte Verbindung rot? False heisst bei geladener Stadt:
 	 *  die Sim ist gar nicht an das Ampelsystem gekoppelt (SetTrafficLightSystem
@@ -983,6 +1118,9 @@ private:
 	/** Zaehler des letzten Ticks - siehe GetVehiclesHeldAtRed(). */
 	int32 LastVehiclesHeldAtRed = 0;
 
+	/** Fahrzeuge, die dieser Tick vor einem belegten Kreuzungsweg gehalten hat. */
+	int32 LastVehiclesHeldAtJunction = 0;
+
 	/** Seit Initialize aufsummierte Kennzahlen fuer die ehrliche Ampel-Diagnose. */
 	int32 LifetimeVehiclesHeldAtRed = 0;
 	int32 LifetimeLaneChanges = 0;
@@ -1015,6 +1153,40 @@ private:
 	 * ueber die Gegenfahrbahn will hier niemand.
 	 */
 	TMap<int32, TArray<int32>> LaneNeighbours;
+
+	/**
+	 * Verbindungen, die einander im Weg liegen: Index -> Indizes am SELBEN
+	 * Knoten, deren Wege sich kreuzen oder in dieselbe Spur muenden.
+	 *
+	 * Einmal beim Initialisieren gerechnet - das Netz aendert sich nicht, und
+	 * je Tick waeren das Zehntausende Strecken-Schnitte.
+	 */
+	struct FConnectionConflict
+	{
+		/** Die kreuzende Verbindung. */
+		int32 OtherConnection = INDEX_NONE;
+
+		/**
+		 * Bogenlaenge auf der ANDEREN Verbindung, ab der sie mich nicht mehr
+		 * stoert - der Konfliktpunkt liegt dann hinter dem Fahrzeug.
+		 */
+		double ClearDistanceOnOtherCm = 0.0;
+	};
+
+	TMap<int32, TArray<FConnectionConflict>> ConnectionConflicts;
+
+	/** Verbindungen je Kreuzungsknoten (fuer die Konflikt-Vorberechnung). */
+	void BuildConnectionConflicts();
+
+	/**
+	 * Haelt Fahrzeuge vor der Kreuzung, solange ein kreuzender Weg belegt ist.
+	 *
+	 * Ohne diese Regel fahren zwei Fahrzeuge aus verschiedenen Zufahrten
+	 * gleichzeitig in denselben Knoten - jedes haelt auf seiner eigenen Bahn
+	 * brav Abstand, aber die beiden Bahnen kreuzen sich. Gemessen waren das
+	 * bis zu 105 ineinander steckende Paare je Diagnose.
+	 */
+	void ApplyJunctionConflicts();
 
 	/** Fahrzeug-Indizes je Spur, absteigend nach Distanz. Pro Tick neu. */
 	TMap<int32, TArray<int32>> VehiclesByLaneCache;

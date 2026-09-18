@@ -145,14 +145,136 @@ void FWiesbadenTrafficLightSystem::Initialize(
 			}
 		}
 
-		BuildSignalProgram(Light);
+		BuildSignalProgram(Light, Intersection);
 		Light.PhaseOffsetSeconds = ComputePhaseOffset(Intersection, InNetwork, Light.CycleSeconds);
 
 		Lights.Add(MoveTemp(Light));
 	}
 }
 
-void FWiesbadenTrafficLightSystem::BuildSignalProgram(FWiesbadenTrafficLight& Light) const
+namespace
+{
+	/**
+	 * Fahrbahnbreite, ab der eine Kreuzung als klein bzw. gross gilt (m).
+	 *
+	 * Die Untergrenze ist keine gegriffene Zahl: FIntersectionArm::HalfWidthCm
+	 * steht ohne OSM-Angabe auf 325 cm, eine gewoehnliche zweispurige Strasse
+	 * ist also 6,5 m breit - das ist die kleinste Kreuzung, die im Netz
+	 * vorkommt. 20 m sind rund sechs Fahrstreifen; darueber hinaus laenger zu
+	 * schalten bringt nichts mehr.
+	 */
+	constexpr double SmallJunctionMeters = 6.5;
+	constexpr double LargeJunctionMeters = 20.0;
+
+	/** Armzahl, ab der die Zahl der Arme voll durchschlaegt. */
+	constexpr int32 SmallJunctionArms = 3;
+	constexpr int32 LargeJunctionArms = 6;
+
+	/** Gewicht der Breite gegenueber der Armzahl. */
+	constexpr double WidthWeight = 0.75;
+
+	/** Groesse einer Kreuzung ohne Armdaten (synthetische Netze). */
+	constexpr double UnknownJunctionSize = 0.5;
+
+	/** Anteil der Abbiege-Gruenzeit, der an der kleinsten Kreuzung bleibt. */
+	constexpr double MinLeftGreenFraction = 0.6;
+
+	/** Kuerzester Umlauf nach dem Runden (s). */
+	constexpr double MinQuantisedCycleSeconds = 20.0;
+}
+
+double FWiesbadenTrafficLightSystem::WidestApproachMeters(const FRoadIntersection& Intersection)
+{
+	double MaxHalfCm = 0.0;
+	for (const FIntersectionArm& Arm : Intersection.Arms)
+	{
+		MaxHalfCm = FMath::Max(MaxHalfCm, Arm.HalfWidthCm);
+	}
+	// Die BREITESTE Zufahrt, nicht der Mittelwert: was zu queren ist, bestimmt
+	// die groesste Strasse. Eine Hauptstrasse mit drei einmuendenden
+	// Wohnstrassen ist eine grosse Kreuzung, auch wenn der Mittelwert das
+	// verwischt.
+	return (MaxHalfCm * 2.0) / 100.0;
+}
+
+double FWiesbadenTrafficLightSystem::JunctionSize01(const FRoadIntersection& Intersection)
+{
+	const double WidthM = WidestApproachMeters(Intersection);
+	if (WidthM <= 0.0)
+	{
+		return UnknownJunctionSize;
+	}
+
+	const double WidthTerm = FMath::Clamp(
+		(WidthM - SmallJunctionMeters) / (LargeJunctionMeters - SmallJunctionMeters), 0.0, 1.0);
+
+	const double ArmTerm = FMath::Clamp(
+		static_cast<double>(Intersection.GetArmCount() - SmallJunctionArms)
+			/ static_cast<double>(LargeJunctionArms - SmallJunctionArms), 0.0, 1.0);
+
+	return FMath::Clamp(WidthWeight * WidthTerm + (1.0 - WidthWeight) * ArmTerm, 0.0, 1.0);
+}
+
+double FWiesbadenTrafficLightSystem::GreenSecondsFor(
+	const FWiesbadenTrafficLightSettings& InSettings, double Size01)
+{
+	const double MinGreen = FMath::Max(InSettings.MinGreenSecondsPerCycle, 1.0);
+	const double MaxGreen = FMath::Max(InSettings.GreenSecondsPerCycle, MinGreen);
+	return FMath::Lerp(MinGreen, MaxGreen, FMath::Clamp(Size01, 0.0, 1.0));
+}
+
+double FWiesbadenTrafficLightSystem::LeftGreenSecondsFor(
+	const FWiesbadenTrafficLightSettings& InSettings, double Size01)
+{
+	// Auch die Abbiegephase folgt der Groesse, aber schwaecher: selbst an
+	// einem kleinen Knoten muessen die Wartenden herauskommen.
+	const double Full = FMath::Max(InSettings.LeftTurnGreenSeconds, 1.0);
+	return FMath::Lerp(Full * MinLeftGreenFraction, Full, FMath::Clamp(Size01, 0.0, 1.0));
+}
+
+double FWiesbadenTrafficLightSystem::ClearanceSecondsFor(
+	const FWiesbadenTrafficLightSettings& InSettings, double WidthMeters)
+{
+	const double SpeedMs = FMath::Max(InSettings.ClearanceSpeedKmh, 1.0) / 3.6;
+	const double NeededSeconds = FMath::Max(WidthMeters, 0.0) / SpeedMs;
+	return FMath::Max(FMath::Max(InSettings.AllRedSeconds, 0.0), NeededSeconds);
+}
+
+double FWiesbadenTrafficLightSystem::QuantiseCycle(
+	const FWiesbadenTrafficLightSettings& InSettings, double DesiredCycleSeconds,
+	double RequiredCycleSeconds)
+{
+	const double Quantum = InSettings.CycleQuantumSeconds;
+	if (Quantum <= 0.0)
+	{
+		// Raster abgeschaltet: jede Kreuzung bekommt ihren Wunschumlauf - dann
+		// gibt es auch keine gemeinsame Welle mehr, das ist die Zusage.
+		return FMath::Max(FMath::Max(DesiredCycleSeconds, RequiredCycleSeconds), 0.0);
+	}
+
+	// Nach unten ist bei einem Umlauf Schluss, in dem ueberhaupt noch etwas
+	// abfliessen kann; das Raster darf nicht auf 0 runden.
+	const double Floor = FMath::Max(MinQuantisedCycleSeconds, Quantum);
+
+	// Aufrunden, nicht nur runden, sobald der Umlauf eine Untergrenze tragen
+	// muss.
+	//
+	// DAS IST DIE STELLE, AN DER DAS RASTER SONST GEBROCHEN WAERE: kaufmaennisch
+	// gerundet konnte der Umlauf UNTER die Summe aus festen Zeiten und
+	// Mindestgruen fallen. Die Gruenzeit wurde dann hochgezogen und der
+	// tatsaechliche Umlauf lag zwischen zwei Rasterstufen - genau die krumme
+	// Zahl, gegen die das Raster antritt. Solche Ampeln laufen gegen die Welle
+	// davon, und zwar unsichtbar: die Statistik zeigt nur den Mittelwert.
+	const double Needed = FMath::Max(RequiredCycleSeconds, Floor);
+	const double CeilToQuantum = FMath::CeilToDouble(Needed / Quantum) * Quantum;
+
+	const double Rounded = FMath::RoundToDouble(DesiredCycleSeconds / Quantum) * Quantum;
+
+	return FMath::Max(Rounded, CeilToQuantum);
+}
+
+void FWiesbadenTrafficLightSystem::BuildSignalProgram(FWiesbadenTrafficLight& Light,
+	const FRoadIntersection& Intersection) const
 {
 	Light.Phases.Reset();
 
@@ -169,18 +291,72 @@ void FWiesbadenTrafficLightSystem::BuildSignalProgram(FWiesbadenTrafficLight& Li
 		}
 	}
 
+	// -- Die Groesse der Kreuzung bestimmt die Zeiten. ----------------------
+	//
+	// Vorher trug jede Kreuzung dieselbe Gruenzeit, und damit denselben
+	// Umlauf: die Wohnstrassenkreuzung mit zwei Fahrstreifen genauso wie der
+	// sechsspurige Knoten. Fuer den Fahrer heisst das, vor einer leeren
+	// Querstrasse so lange zu stehen wie vor einer Hauptachse.
+	Light.SizeScore = static_cast<float>(JunctionSize01(Intersection));
+	const double WidthM = WidestApproachMeters(Intersection);
+
 	// Feste Zeiten je Phase: Rot-Gelb vorweg, Gelb und Raeumzeit hinterher.
+	// Die Raeumzeit folgt der Breite - ueber eine 20-m-Kreuzung braucht man
+	// laenger als ueber eine 6-m-Kreuzung.
 	const double Fixed = FMath::Max(Settings.RedAmberSeconds, 0.0)
 		+ FMath::Max(Settings.AmberSeconds, 0.0)
-		+ FMath::Max(Settings.AllRedSeconds, 0.0);
+		+ ClearanceSecondsFor(Settings, WidthM);
 
-	// Die GRUENZEITEN sind die Eingabe, der Umlauf ist ihre Summe. Ein fester
+	// Die GRUENZEITEN sind die Eingabe, der Umlauf ihre Summe. Ein fester
 	// Umlauf mit Gruen als Rest laesst jede zusaetzliche Phase die
 	// Hauptrichtung auffressen - nachgemessen ging das Geradeaus-Gruen mit
 	// einer Abbiegephase in 30 s Umlauf von 9 auf 3,5 Sekunden zurueck.
 	const bool bLeftPhases = Settings.bProtectedLeftTurns;
-	const double ThroughSlot = FMath::Max(Settings.GreenSecondsPerCycle, 1.0) + Fixed;
-	const double LeftSlot = FMath::Max(Settings.LeftTurnGreenSeconds, 1.0) + Fixed;
+	const double ThroughGreen = GreenSecondsFor(Settings, Light.SizeScore);
+	const double LeftGreen = LeftGreenSecondsFor(Settings, Light.SizeScore);
+
+	int32 ThroughPhases = 0;
+	int32 LeftPhases = 0;
+	for (int32 Axis = 0; Axis < 2; ++Axis)
+	{
+		++ThroughPhases;
+		if (bLeftPhases && bHasLeft[Axis])
+		{
+			++LeftPhases;
+		}
+	}
+
+	const double DesiredCycle = ThroughPhases * (ThroughGreen + Fixed)
+		+ LeftPhases * (LeftGreen + Fixed);
+
+	// -- Umlauf auf das gemeinsame Raster. ----------------------------------
+	//
+	// Ohne das Raster haette jede Kreuzung ihren krummen Wunschumlauf, und die
+	// gruene Welle waere hin: sie setzt voraus, dass die Ampeln einer Achse im
+	// gleichen Takt laufen. Gerundet wird der Umlauf, die Differenz geht in
+	// die Hauptrichtung - so wie real auch: gemeinsamer Umlauf im Zug, eigene
+	// Aufteilung je Knoten.
+	//
+	// Mitgegeben wird, was der Umlauf MINDESTENS tragen muss: feste Zeiten,
+	// Abbiegephasen und das Mindestgruen der Hauptrichtung. Sonst rundet das
+	// Raster nach unten, die Gruenzeit muss hochgezogen werden, und der
+	// tatsaechliche Umlauf liegt zwischen zwei Rasterstufen - dann laeuft diese
+	// Ampel gegen die Welle davon.
+	const double MinGreen = FMath::Max(Settings.MinGreenSecondsPerCycle, 1.0);
+	const double LeftBudget = LeftPhases * (LeftGreen + Fixed);
+	const double RequiredCycle = ThroughPhases * (MinGreen + Fixed) + LeftBudget;
+
+	const double Cycle = QuantiseCycle(Settings, DesiredCycle, RequiredCycle);
+
+	// Was nach den festen Zeiten und den Abbiegephasen uebrig bleibt, teilen
+	// sich die Geradeaus-Phasen. Die Untergrenze steht hier nur noch als Netz:
+	// nach RequiredCycle kann sie rechnerisch nicht mehr greifen.
+	const double ThroughBudget = Cycle - LeftBudget - ThroughPhases * Fixed;
+	const double AdjustedThroughGreen = FMath::Max(
+		ThroughBudget / FMath::Max(ThroughPhases, 1), MinGreen);
+
+	const double ThroughSlot = AdjustedThroughGreen + Fixed;
+	const double LeftSlot = LeftGreen + Fixed;
 
 	for (int32 Axis = 0; Axis < 2; ++Axis)
 	{
@@ -200,11 +376,16 @@ void FWiesbadenTrafficLightSystem::BuildSignalProgram(FWiesbadenTrafficLight& Li
 		}
 	}
 
+	// Der tatsaechliche Umlauf ist die Summe der Phasen, nicht der Wunsch. Mit
+	// RequiredCycle trifft sie das Raster; die Summe bleibt trotzdem die
+	// massgebliche Zahl - an ihr laeuft die Schaltung, und ein Test haelt
+	// fest, dass beide uebereinstimmen (Traffic.UmlaufGroesse).
 	Light.CycleSeconds = 0.0;
 	for (const FWiesbadenSignalPhase& Phase : Light.Phases)
 	{
 		Light.CycleSeconds += Phase.DurationSeconds;
 	}
+	Light.GreenSeconds = AdjustedThroughGreen;
 }
 
 double FWiesbadenTrafficLightSystem::ComputePhaseOffset(
@@ -292,19 +473,25 @@ void FWiesbadenTrafficLightSystem::Tick(float DeltaSeconds)
 }
 
 void FWiesbadenTrafficLightSystem::GetProgramStatistics(
-	int32& OutWithLeftPhase, double& OutMeanCycleSeconds) const
+	int32& OutWithLeftPhase, double& OutMeanCycleSeconds,
+	double& OutMinCycleSeconds, double& OutMaxCycleSeconds) const
 {
 	OutWithLeftPhase = 0;
 	OutMeanCycleSeconds = 0.0;
+	OutMinCycleSeconds = 0.0;
+	OutMaxCycleSeconds = 0.0;
 	if (Lights.Num() == 0)
 	{
 		return;
 	}
 
 	double CycleSum = 0.0;
+	OutMinCycleSeconds = TNumericLimits<double>::Max();
 	for (const FWiesbadenTrafficLight& Light : Lights)
 	{
 		CycleSum += Light.CycleSeconds;
+		OutMinCycleSeconds = FMath::Min(OutMinCycleSeconds, Light.CycleSeconds);
+		OutMaxCycleSeconds = FMath::Max(OutMaxCycleSeconds, Light.CycleSeconds);
 		for (const FWiesbadenSignalPhase& Phase : Light.Phases)
 		{
 			if ((Phase.Group % 2) == 1)

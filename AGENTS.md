@@ -2793,3 +2793,80 @@ Das Mischpult hat 7 Buesse (`Master/Music/SFX/Ambience/UI/Voice/Vehicle`) mit dB
 (-10 dB, 0,15 s / 0,4 s) - aber auf **`Music` und `Ambience` sendet nichts**; 19 der 27 Audio-Assets
 sind Halteansagen. `Build.cs` bindet kein Audio-Modul ein, MetaSounds ist nicht aktiviert. Wer dort
 etwas hoerbar machen will, faengt bei der Quelle an, nicht beim Regler.
+
+## Umlauf nach Kreuzungsgroesse: Raster ODER Welle - die Entscheidung (18.09.2026)
+
+Die Frage, an der die Arbeit monatelang lag: jede Kreuzung ihren genauen
+Wunschumlauf geben (dann passt die Zeit zur Groesse) oder alle auf ein
+gemeinsames Raster runden (dann gibt es eine gruene Welle)? **Entschieden fuer
+das Raster** - und damit so, wie es real gemacht wird: *gemeinsamer Umlauf im
+Zug, eigene Aufteilung je Knoten*. Eine Welle setzt gleichen Takt voraus; mit
+38,4 s hier und 41,1 s dort laeuft der Versatz binnen weniger Umlaeufe davon.
+Die Groesse wirkt deshalb in der Gruen-AUFTEILUNG, nicht im Takt.
+
+- Die Groesse (`JunctionSize01`, 0..1) kommt aus der **breitesten Zufahrt**
+  (nicht dem Mittel - eine Hauptstrasse mit einmuendenden Wohnstrassen ist eine
+  grosse Kreuzung) und der Armzahl, Breite mit 75 % gewichtet. Ohne Armdaten
+  (synthetische Testnetze) bewusst 0,5 statt einer erfundenen Groesse.
+- **Die Falle beim Raster:** kaufmaennisch gerundet kann der Umlauf UNTER die
+  Summe aus festen Zeiten und Mindestgruen fallen. Die Gruenzeit wird dann
+  hochgezogen, und der tatsaechliche Umlauf liegt ZWISCHEN zwei Rasterstufen -
+  genau die krumme Zahl, gegen die das Raster antritt. Solche Ampeln laufen der
+  Welle unsichtbar davon, die Statistik zeigt nur den Mittelwert. Darum nimmt
+  `QuantiseCycle` einen `RequiredCycleSeconds` entgegen und rundet dann AUF.
+- Beim Pruefen des Rasters NICHT `Fmod(Umlauf, Raster) == 0` verlangen: die
+  Phasendauern sind `float`, eine Summe trifft 70 s auch als 69,99999 - und
+  `Fmod` liefert dann fast ein VOLLES Raster statt null. Beide Enden zaehlen.
+- Beleg (Alkis16, Bahnhofsplatz, 230 s, je 15 Messpunkte, gleicher Ort/Seed):
+  mit den groessenabhaengigen Programmen **35,6 % Steher und 17,3 km/h**, ohne
+  sie 38,5 % und 16,5 km/h; mittlerer Umlauf 39 s (Spanne 30..70) statt 51 s
+  fuer alle. Die Spanne gehoert in die Diagnose - ein Mittelwert allein sieht
+  bei "alle gleich" genauso aus wie bei "30..70".
+
+## Fahrzeuge steckten ineinander: die Abstandsregel endete an der Bahngrenze (18.09.2026)
+
+Im Probespiel standen wartende Kaefer sichtbar zur Haelfte ineinander. Die
+Ursache war NICHT die Folgeregel, sondern ihr Geltungsbereich.
+
+- **Zuerst messen, dann bauen.** Die neue Diagnose (`Fahrzeuge ineinander: N
+  Paare - X selbe Bahn, Y selbe Kreuzung, ...`, alle 15 s) hat die Frage in
+  einem Lauf entschieden: **0 Paare auf derselben Bahn** - die Kopf-zu-Schwanz-
+  Regel arbeitet fehlerfrei -, dafuer 42 Paare je Diagnose auf VERSCHIEDENEN
+  Verbindungen desselben Knotens. `ApplyHeadway` laeuft je Korb
+  (`VehiclesByLane` bzw. `VehiclesByConnection`); zwei Fahrzeuge in
+  verschiedenen Koerben sehen einander nie. `ApplyCrossEdgeHeadway` schliesst
+  nur die eigene Folgebahn an, nicht die kreuzende.
+- **Ueberlappung braucht ein Rechteck, keinen Mittenabstand.** Nebeneinander auf
+  der Nachbarspur sind 3 m voellig richtig, hintereinander sind 3 m eine
+  Beruehrung. Darum Rechteck gegen Rechteck (Separating Axis Theorem ueber vier
+  Achsen), Hoehe bewusst aussen vor.
+- **Die Regel: wer in den Knoten will, braucht einen freien Kreuzungspunkt.**
+  Konfliktpaare je Knoten einmal beim Initialisieren (199.867 Verbindungen,
+  54.368 Knoten, 152.038 kreuzende Paare, ~90 ms - je Tick waeren es
+  Zehntausende Strecken-Schnitte). Gleiche Quellspur = KEIN Konflikt (die
+  faechern aus einer Kolonne auf), gleiche Zielspur = Konflikt bis zum Ende,
+  sonst der geometrische Schnittpunkt.
+- **Die drei Stufen und ihr Preis** (Bahnhofsplatz, je 200 s, Mittelwerte):
+
+  | Stand | Steher | Tempo | Paare | davon Kreuzung |
+  |---|---|---|---|---|
+  | ohne Regel | 34,5 % | 17,6 km/h | 65,9 | 42,2 |
+  | Verbindung ganz gesperrt | 47,3 % | 13,8 km/h | 23,9 | 5,6 |
+  | nur bis zum Konfliktpunkt | 46,5 % | 14,1 km/h | 16,7 | 4,6 |
+  | + Vorfahrt nach Strassenklasse | 46,2 % | 14,4 km/h | 17,8 | 3,6 |
+  | + Blockierfreihaltung | 51,5 % | 12,7 km/h | 9,2 | **0,5** |
+
+  Merksaetze daraus: (1) Wer seine ganze Verbindung sperrt, bis er sie
+  verlassen hat, kostet 10 Prozentpunkte umsonst - der Konfliktpunkt genuegt.
+  (2) OHNE Vorfahrt haelt auch die Hauptachse vor jeder Wohnstrassen-
+  einmuendung. (3) Die Blockierfreihaltung ist der teuerste Schritt UND der
+  einzige, der die Paare in der Kreuzung wirklich auf null bringt - darum
+  abschaltbar (`bKeepJunctionsClear`), damit die Abwaegung nachrechenbar bleibt.
+- **Der Ausgangswert 34,5 % ist kein Ziel.** Er stammt aus einer Welt, in der
+  Fahrzeuge einander durchdringen - physikalisch unmoeglicher Verkehr. Am
+  normalen Startplatz (nicht am schlimmsten Knoten) kostet die Regel 16-23 %
+  Steher bei 18-19 km/h, und die Kreuzungspaare sind dort **null**.
+- **Offen bleibt**: 3-11 Paare "sonstige" - Fahrzeuge auf verschiedenen SPUREN,
+  die sich ueberlappen. Das ist Spur-Geometrie (zu eng gelegte Parallel- oder
+  Gegenspuren), keine Kreuzungsfrage.
+
