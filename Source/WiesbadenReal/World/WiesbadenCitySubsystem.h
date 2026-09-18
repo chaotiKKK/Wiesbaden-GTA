@@ -174,6 +174,9 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Traffic")
 	FWiesbadenTrafficLightSystem TrafficLightSystem;
 
+	/** Gemeldete Aussetzer - gedeckelt, damit eine lange Fahrt das Protokoll nicht flutet. */
+	int32 HitchesReported = 0;
+
 	/** Fussgaenger auf den Gehwegen. Laeuft parallel zum Verkehr. */
 	FWiesbadenPedestrianSimulation PedestrianSimulation;
 

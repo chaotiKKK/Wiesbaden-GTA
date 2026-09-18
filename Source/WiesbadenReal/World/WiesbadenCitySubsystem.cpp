@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "World/WiesbadenCitySubsystem.h"
+#include "World/WiesbadenStreamingCost.h"
 
 #include "WiesbadenReal.h"
 
@@ -848,8 +849,14 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		{
 			AutoDriveElapsed += DeltaTime;
 
-			// Erst nach der Ladephase losfahren (die Karte braucht ueber drei Minuten).
-			float StartAfter = 240.0f;
+			// Erst nach der Ladephase losfahren.
+			//
+			// Die 240 s stammen von der UNGEBACKENEN Karte, die ihre Stadt zur
+			// Laufzeit baut. Eine gebackene Karte steht nach Sekunden - dort
+			// liess der alte Wert eine 150-s-Messung komplett ohne Fahrt laufen
+			// und meldete trotzdem "keine Aussetzer". Ein Messwert, der still
+			// nichts misst, ist schlimmer als keiner.
+			float StartAfter = HasBakedCityInLevel() ? 10.0f : 240.0f;
 			FParse::Value(FCommandLine::Get(), TEXT("WbAutoDriveStart="), StartAfter);
 
 			if (AutoDriveElapsed > StartAfter)
@@ -1144,6 +1151,35 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 
 	// Bildzeit dieses Bildes einrechnen (Vorlauf/Reset/Ausreisser stecken im Profiler).
 	FrameProfiler.SampleFrame(DeltaTime * 1000.0);
+
+	// Aussetzer ZUORDNEN, nicht nur zaehlen.
+	//
+	// DeltaTime ist die Dauer des VORIGEN Bildes; die Zaehler sammeln seit dem
+	// letzten Tick, decken also genau dieses Intervall ab. Damit steht in
+	// derselben Zeile, wie viel Nachladearbeit in dem langen Bild lag - der
+	// Unterschied zwischen "es ruckelt beim Fahren" und einer Ursache.
+	{
+		const double FrameMs = DeltaTime * 1000.0;
+		if (FrameMs > 50.0 && HitchesReported < 40)
+		{
+			++HitchesReported;
+			// Strangzeiten des LETZTEN Bildes - also genau des langen. Ohne sie
+			// bleibt offen, ob der Spiel-Strang rechnete oder die Grafikkarte
+			// stand; das sind zwei voellig verschiedene Ursachen.
+			UE_LOG(LogWbStreaming, Warning,
+				TEXT("Aussetzer %.0f ms (Spiel %.0f, Renderer %.0f, Grafikkarte %.0f ms): ")
+				TEXT("%d Zelle(n), %d Instanzen; Zell-BeginPlay %.0f ms ")
+				TEXT("(davon Aufbau %.0f, Ankerung %.0f)."),
+				FrameMs,
+				FPlatformTime::ToMilliseconds(GGameThreadTime),
+				FPlatformTime::ToMilliseconds(GRenderThreadTime),
+				FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles()),
+				FWbStreamingCost::Cells, FWbStreamingCost::Instances,
+				FWbStreamingCost::BeginPlayMs, FWbStreamingCost::SpawnMs,
+				FWbStreamingCost::AnchorMs);
+		}
+		FWbStreamingCost::Reset();
+	}
 	// Kreuzungs-Rundgang treiben (nur mit -WbTour aktiv).
 	TickJunctionTour(DeltaTime);
 

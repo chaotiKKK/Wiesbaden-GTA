@@ -2,6 +2,8 @@
 
 #include "World/WiesbadenCityChunk.h"
 
+#include "World/WiesbadenStreamingCost.h"
+
 #include "WiesbadenReal.h"
 #include "ProceduralMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -93,6 +95,11 @@ void AWiesbadenCityChunk::SetRegionAssets(const TArray<FPlacedRegionAsset>& InAs
 
 void AWiesbadenCityChunk::BeginPlay()
 {
+	// Zuordnung der Nachlade-Aussetzer: dieser Aufruf laeuft im Spiel-Strang,
+	// wenn World Partition die Zelle hereinstreamt.
+	const FWbStreamingCostScope CostScope(FWbStreamingCost::BeginPlayMs);
+	++FWbStreamingCost::Cells;
+
 	Super::BeginPlay();
 
 	if (RegionAssetSpawner && RegionAssets.Num() > 0)
@@ -114,6 +121,8 @@ void AWiesbadenCityChunk::BeginPlay()
 
 void AWiesbadenCityChunk::AnchorStreamingBounds()
 {
+	const FWbStreamingCostScope CostScope(FWbStreamingCost::AnchorMs);
+
 	// Packetschmutz VOR den Aenderungen: Programmatische Transforms rufen
 	// (anders als Gizmo-Zuege) kein PostEditMove auf - ohne Modify(true)
 	// bliebe das External-Actor-Package sauber, save_dirty_packages haette

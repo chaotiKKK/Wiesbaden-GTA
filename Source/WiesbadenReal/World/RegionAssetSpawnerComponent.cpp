@@ -2,6 +2,8 @@
 
 #include "World/RegionAssetSpawnerComponent.h"
 
+#include "World/WiesbadenStreamingCost.h"
+
 #include "WiesbadenReal.h"
 
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
@@ -334,6 +336,12 @@ void URegionAssetSpawnerComponent::AnchorEmptyInstanceComponents(const FVector& 
 
 void URegionAssetSpawnerComponent::SpawnRegionAssets(const FRegionAssetLayout& Layout)
 {
+	// Zuordnung der Nachlade-Aussetzer: dieser Aufruf laeuft im Spiel-Strang,
+	// wenn World Partition eine Zelle hereinstreamt. Ohne die Messung bleibt
+	// "Aussetzer 90 ms" eine Beobachtung ohne Ursache.
+	const FWbStreamingCostScope CostScope(FWbStreamingCost::SpawnMs);
+	FWbStreamingCost::Instances += Layout.Assets.Num();
+
 	ClearRegionAssets();
 
 	// Nach Kategorie gruppieren (ein ISM/Draw-Call je Kategorie).
