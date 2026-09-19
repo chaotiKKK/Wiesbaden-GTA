@@ -1243,9 +1243,17 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			// Wie viele warten gerade auf einen freien Kreuzungsweg? Ohne diese
 			// Zahl laesst sich "die Kreuzungsregel kostet Fluss" nicht von
 			// "der Stau kommt woanders her" unterscheiden.
-			UE_LOG(LogWbTraffic, Log,
-				TEXT("Kreuzungen: %d Fahrzeuge warten auf einen freien Weg."),
-				TrafficSimulation.GetVehiclesHeldAtJunction());
+			{
+				int32 KeinPlatz = 0, KonfliktBelegt = 0, Vorfahrt = 0;
+				TrafficSimulation.GetJunctionBlockReasons(KeinPlatz, KonfliktBelegt, Vorfahrt);
+				UE_LOG(LogWbTraffic, Log,
+					TEXT("Kreuzungen: %d Fahrzeuge bremsen oder warten - ")
+					TEXT("%d kein Platz dahinter, %d Weg belegt, %d Vorfahrt abwarten; ")
+					TEXT("%d davon Linksabbieger."),
+					TrafficSimulation.GetVehiclesHeldAtJunction(),
+					KeinPlatz, KonfliktBelegt, Vorfahrt,
+					TrafficSimulation.GetBlockedLeftTurners());
+			}
 
 			// Stecken Fahrzeuge INEINANDER? Im Probespiel standen wartende
 			// Kaefer sichtbar zur Haelfte ineinander. Die Abstandsregeln
@@ -1258,9 +1266,14 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 				{
 					UE_LOG(LogWbTraffic, Log,
 						TEXT("Fahrzeuge ineinander: %d Paare (%d Fahrzeuge) - ")
-						TEXT("%d selbe Bahn, %d selbe Kreuzung, %d Spur+Verbindung, %d sonstige."),
+						TEXT("%d selbe Bahn, %d selbe Kreuzung, %d Spur+Verbindung, %d sonstige; ")
+						TEXT("%d nur Karosserie, schmalste Spur %.0f cm, Seitenversatz bis %.0f cm; ")
+						TEXT("Spurpaare: %d selber Abschnitt, %d verschiedene, engste Bahnen %.0f cm."),
 						Overlap.Pairs, Overlap.VehiclesInvolved, Overlap.SameEdge,
-						Overlap.SameJunction, Overlap.LaneAndConnection, Overlap.Other);
+						Overlap.SameJunction, Overlap.LaneAndConnection, Overlap.Other,
+						Overlap.OnlyBodies, Overlap.NarrowestLaneCm, Overlap.MaxBodyOffsetCm,
+						Overlap.SameSegmentLanes, Overlap.CrossSegmentLanes,
+						Overlap.MinLaneRailDistanceCm);
 				}
 				else
 				{
@@ -4216,7 +4229,34 @@ void UWiesbadenCitySubsystem::InitializeCity()
 		{
 			if (!Builder->RoadNetwork.IsEmpty())
 			{
-				TrafficSimulation.Initialize(Builder->RoadNetwork, Builder->TrafficSettings);
+				// Verkehrsdichte fuer Messlaeufe uebersteuern: -WbVerkehr=<Faktor>.
+				// Ohne den Schalter voellig unveraendert. Gebraucht wird er, um
+				// "die Regel ist zu streng" von "es sind schlicht zu viele
+				// Fahrzeuge fuer die Kreuzungen" zu trennen - ohne ihn laesst
+				// sich das im Spiel nicht auseinanderhalten.
+				FWiesbadenTrafficSettings TrafficSettings = Builder->TrafficSettings;
+				float VerkehrsFaktor = 1.0f;
+				if (FParse::Value(FCommandLine::Get(), TEXT("WbVerkehr="), VerkehrsFaktor)
+					&& VerkehrsFaktor > 0.0f)
+				{
+					TrafficSettings.VehiclesPerLaneKm *= VerkehrsFaktor;
+					UE_LOG(LogWbTraffic, Log,
+						TEXT("-WbVerkehr=%.2f: Fahrzeuge je Spur-km %.1f statt %.1f."),
+						VerkehrsFaktor, TrafficSettings.VehiclesPerLaneKm,
+						Builder->TrafficSettings.VehiclesPerLaneKm);
+				}
+
+				// Messwerkzeug: -WbOhneKreuzungsregel schaltet die
+				// Kreuzungskonflikte ab, damit ihre Wirkung im selben Lauf und
+				// auf derselben Karte gemessen werden kann.
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbOhneKreuzungsregel")))
+				{
+					TrafficSettings.bJunctionConflicts = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbOhneKreuzungsregel: Kreuzungskonflikte AUS (nur zum Messen)."));
+				}
+
+				TrafficSimulation.Initialize(Builder->RoadNetwork, TrafficSettings);
 				// -WbStauKarte: Fluss je Strasse mitschreiben. VOR Initialize
 				// setzen waere zwecklos - Initialize raeumt die Messwerte auf.
 				if (FParse::Param(FCommandLine::Get(), TEXT("WbStauKarte")))

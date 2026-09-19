@@ -586,6 +586,35 @@ ESignalAspect FWiesbadenTrafficLightSystem::GetConnectionAspect(int32 Connection
     return GetGroupAspect(*LightIdx, *GroupPtr);
 }
 
+bool FWiesbadenTrafficLightSystem::CanBeGreenTogether(int32 ConnectionA, int32 ConnectionB) const
+{
+    const int32* LightA = ConnectionToLight.Find(ConnectionA);
+    const int32* LightB = ConnectionToLight.Find(ConnectionB);
+
+    // Ohne Ampel oder an VERSCHIEDENEN Ampeln entscheidet kein gemeinsames
+    // Programm - dann koennen sie zusammentreffen.
+    if (!LightA || !LightB || *LightA != *LightB || !Lights.IsValidIndex(*LightA))
+    {
+        return true;
+    }
+
+    const FWiesbadenTrafficLight& Light = Lights[*LightA];
+    const int32* GroupA = Light.ConnectionGroups.Find(ConnectionA);
+    const int32* GroupB = Light.ConnectionGroups.Find(ConnectionB);
+
+    // Fehlt einer die Gruppe, gilt sie als dauerhaft gruen (siehe
+    // GetConnectionAspect) - im Zweifel also ja.
+    if (!GroupA || !GroupB)
+    {
+        return true;
+    }
+
+    // Dieselbe Gruppe heisst: gleichzeitig frei. Genau dort schuetzt das
+    // Signalprogramm NICHT - zwei Fahrzeuge derselben Freigabe koennen in
+    // dieselbe Spur einfaedeln oder sich beim Abbiegen schneiden.
+    return *GroupA == *GroupB;
+}
+
 bool FWiesbadenTrafficLightSystem::IsConnectionGreen(int32 ConnectionIndex) const
 {
     return GetConnectionAspect(ConnectionIndex) == ESignalAspect::Green;
