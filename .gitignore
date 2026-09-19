@@ -39,8 +39,14 @@ Content/__ExternalObjects__/
 
 # === Gebackener Stadt-Output (regenerierbar via Re-Bake; ~760 MB, gehoert nicht ins Git) ===
 # Content/Generated: gebackene Chunk-StaticMeshes; Content/Materials/AAA: Bake-Materialien.
+# Beides liegt fuer frische Klone gepackt als Release-Asset bereit - einmal
+# Tools\fetch_city_content.cmd laufen lassen (siehe docs/reference/stadtinhalt-holen.md).
 Content/Generated/
 Content/Materials/AAA/
+
+# === Belege der Paketpruefung: Receipts der geholten Release-Assets ===
+INHALT.sha256
+INHALT.BakeMaterialien.sha256
 
 # === Logs und Fehlerdateien ===
 *.log

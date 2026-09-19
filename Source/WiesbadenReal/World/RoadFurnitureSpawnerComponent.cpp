@@ -155,28 +155,47 @@ void URoadFurnitureSpawnerComponent::SpawnSigns(
 	TMap<FString, UHierarchicalInstancedStaticMeshComponent*> PanelBySignId;
 	PanelBySignId.Reserve(Signs.Num());
 
+	// Zeichen ohne Grafik: kein Panel (siehe unten), je Id nur einmal gemeckert.
+	TSet<FString> SkippedSignIds;
+
 	const float PlaneScale = SignSizeCm / 100.0f;    // Engine-Plane = 100x100.
 	const float PoleScaleXy = SignPoleRadiusCm / 50.0f;  // Zylinder-Radius 50.
 	const float PoleScaleZ = SignPoleHeightCm / 100.0f;  // Zylinder-Hoehe 100.
 
 	for (const FSignInstance& Sign : Signs)
 	{
-		UHierarchicalInstancedStaticMeshComponent*& Panel = PanelBySignId.FindOrAdd(Sign.SignId);
+		// Id aus den Daten auf die Form der Grafik bringen (die gebackenen
+		// Kacheln tragen noch " 274.1" bzw. "1042-31[Mo-Sa 08:00-19:00]").
+		const FString SignId = WiesbadenSignAssets::NormalizeSignId(Sign.SignId);
+		if (SignId.IsEmpty() || SkippedSignIds.Contains(SignId))
+		{
+			continue;
+		}
+
+		UHierarchicalInstancedStaticMeshComponent* Panel = PanelBySignId.FindRef(SignId);
 		if (!Panel)
 		{
+			// Tafel nur mit eigener Grafik: ein Panel ohne Materialinstanz traegt
+			// im ISM das Vorgabebild des Basismaterials (M_WbSign -> Sign_206) und
+			// zeigt damit ein sichtbar FALSCHES Schild. Lieber keine Tafel als die
+			// falsche; die Id wird einmal gemeldet und dann uebersprungen.
+			UMaterialInstanceDynamic* MID = WiesbadenSignAssets::CreateMaterial(
+				SignId, SignTextureFolder, SignMaterial, SignTextureParameterName, GetOwner());
+			if (!MID)
+			{
+				SkippedSignIds.Add(SignId);
+				continue;
+			}
+
 			Panel = NewObject<UHierarchicalInstancedStaticMeshComponent>(GetOwner());
 			Panel->SetupAttachment(this);
 			Panel->SetStaticMesh(PanelMesh);
 			Panel->SetCollisionEnabled(
 				bCreateCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
-
-			if (UMaterialInstanceDynamic* MID = WiesbadenSignAssets::CreateMaterial(
-				Sign.SignId, SignTextureFolder, SignMaterial, SignTextureParameterName, GetOwner()))
-			{
-				Panel->SetMaterial(0, MID);
-			}
-
+			Panel->SetMaterial(0, MID);
 			Panel->RegisterComponent();
+
+			PanelBySignId.Add(SignId, Panel);
 			SignPanelInstances.Add(Panel);
 		}
 
@@ -210,7 +229,18 @@ void URoadFurnitureSpawnerComponent::SpawnSigns(
 	if (!SignMaterial)
 	{
 		UE_LOG(LogWbCore, Warning,
-			TEXT("Ausstattungs-Spawner: kein SignMaterial zugewiesen - Tafeln rendern mit Default-Material."));
+			TEXT("Ausstattungs-Spawner: kein SignMaterial zugewiesen - Tafeln werden uebersprungen."));
+	}
+
+	// Eine Zeile statt einer Warnung je Zeichen: was fehlt, ist die importierte
+	// Grafik unter <SignTextureFolder> (PNG allein genuegt nicht - die Engine
+	// laedt nur das Asset).
+	if (SkippedSignIds.Num() > 0)
+	{
+		UE_LOG(LogWbCore, Warning,
+			TEXT("Ausstattungs-Spawner: %d Zeichen ohne Tafel uebersprungen (kein Grafik-Asset in %s): %s"),
+			SkippedSignIds.Num(), *SignTextureFolder,
+			*FString::Join(SkippedSignIds.Array(), TEXT(", ")));
 	}
 }
 

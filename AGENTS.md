@@ -2898,10 +2898,11 @@ Nachkommastelle identisch (10,4 % Steher, 21,0 km/h). Eine deterministische
 Simulation auf demselben Strassennetz ist ein guter Gleichheitsbeweis fuer zwei
 Bakes aus denselben Daten.
 
-**Umgeschaltet** (Alkis17 ist live): `Config/DefaultEngine.ini` (GameDefaultMap
-+ EditorStartupMap) und der fest verdrahtete Standard in
-`Wiesbaden_spielen.cmd`. Die .ini ist reines LF - beim Schreiben NICHT auf CRLF
-kippen, sonst stehen 212 Phantom-Zeilen im Diff.
+**Paket-/Fresh-Clone-Stand ist Alkis16**: `Config/DefaultEngine.ini`
+(GameDefaultMap + EditorStartupMap) muss auf die einzige verifizierte
+`city-content-alkis16`-Veröffentlichung zeigen. Alkis17 bleibt ein lokaler neuer
+Bake und darf ohne passendes Release-Paket nicht zum Default werden. Die .ini ist
+reines LF - beim Schreiben NICHT auf CRLF kippen, sonst entstehen Phantom-Zeilen.
 
 ## Die Spuren waren nicht zu eng - die Karosserie stand daneben (19.09.2026)
 
@@ -3066,3 +3067,39 @@ Auch die Desktop-Verknuepfung entstand per Vorgabe auf Alkis15, und
 1 = Fundstellen mit Datei und Zeile). Das Muster trifft nur KONKRETE Namen -
 Platzhalter wie `WiesbadenCity_AlkisNN` in Beispielen bleiben erlaubt.
 
+## Kartenversionen aufgeraeumt: 48,5 -> 3,7 GB (19.09.2026)
+
+Auf der Platte lagen **13 gebackene Kartenversionen mit 48,5 GB externer
+Actors**. Geblieben sind zwei.
+
+**Behalten - mit Begruendung, nicht aus Gewohnheit:**
+
+* **Alkis16** (1,84 GB) - der verifizierte Paket-/Fresh-Clone-Stand (`GameDefaultMap`).
+* **Alkis17** (1,84 GB) - lokaler neuer Bake und Rueckfall, nicht im verifizierten
+  Release-Paket:
+  `rebake_alkis17.cmd` backt aus Alkis16. Ohne sie gaebe es keine Vorlage fuer
+  den naechsten Neubau. Beide im Spiel nachgeprueft: je 31 Chunk-Actors, **0
+  ohne Render-Geometrie**.
+
+**Geloescht (44,8 GB):** Alkis2 (leere Huelle), Alkis3 und Alkis9Proc (je
+12,9 GB, die alten Voll-/Prozedural-Bakes), Alkis4 und Alkis9SM (je ~4 GB),
+Alkis7, Alkis8 (Nanite-Defekt, stuerzte beim Laden ab), **Alkis10 bis Alkis13**
+(je 1,39 GB - die dokumentierten LEEREN Fehlbakes) und Alkis15 (vom 16er und
+17er abgeloest).
+
+**Mit weg, weil sie nur auf geloeschte Karten zeigten:** `rebake_alkis10..13`,
+`rebake_lod2`, `rebake_lod2_dgm1`, `rebake_nodgm`, `rebuild_baumfrei`,
+`fps_alkis10`. Ein Skript, dessen Karte es nicht mehr gibt, ist keine
+Dokumentation - es ist eine Falle, die im englischen "could not be
+found"-Dialog endet (genau die 14 Faelle, die einen Tag vorher aufgeraeumt
+wurden).
+
+**Was das Loeschen kostet, ehrlich:** Die `.umap`-Huelle (13 KB) holt `git` aus
+der Geschichte zurueck. Die NUTZLAST nicht - sie ist gitignored und nur durch
+einen Neubau wiederherstellbar (~15 min ueber das Bake-Rezept). Bei den leeren
+Fehlbakes ist das kein Verlust, bei den alten Voll-Bakes eine bewusste
+Entscheidung: zwei geprueft gleichwertige Staende genuegen als Rueckfall.
+
+**Merksatz fuers naechste Mal:** Die Zahl der Karten waechst mit jedem Bake um
+1,4 bis 13 GB. Wer nach einem Bake nicht aufraeumt, hat nach zehn Bakes ein
+halbes Terabyte - und Skripte, die auf sechs verschiedene Staende zeigen.

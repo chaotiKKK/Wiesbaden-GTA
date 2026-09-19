@@ -39,6 +39,9 @@ Lernreise.*
 - [WbDev-Konsolenbefehle](reference/wbdev-konsolenbefehle.md)
   - Alle 12 `WbDev`-Execs: Signatur, Wirkung, Voraussetzung, woertlicher
     Log-Nachweis; Aufruf- und Log-Konventionen.
+- [Stadt-Inhalt in einem frischen Klon holen](reference/stadtinhalt-holen.md)
+  - Release-Assets holen, SHA-256 pruefen, entpacken und den gebackenen
+    Stadtstand fuer einen frischen Klon verifizieren.
 
 ## Explanation
 

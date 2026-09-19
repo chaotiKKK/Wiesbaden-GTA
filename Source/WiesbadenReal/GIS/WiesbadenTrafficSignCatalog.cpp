@@ -16,7 +16,61 @@
 
 namespace
 {
-	/** Teilt einen Token in Basis-Id ("274") und Zahlenwert (50) auf. */
+	/**
+	 * Platzhalter-Werte aus OSM, die kein Zeichen sind ("none", "no", "-", "\\").
+	 * Ohne diesen Filter baut die Ausstattung eine Tafel ohne Grafik - ein leeres
+	 * Schild an jeder Markierung, an der jemand "traffic_sign=none" gesetzt hat.
+	 */
+	bool IsPlaceholderToken(const FString& Token)
+	{
+		static const TCHAR* const Placeholder[] =
+		{
+			TEXT("none"), TEXT("no"), TEXT("false"), TEXT("kein"), TEXT("nothing"),
+			TEXT("-"), TEXT("\\"), TEXT("?")
+		};
+		for (const TCHAR* const Wert : Placeholder)
+		{
+			if (Token.Equals(Wert, ESearchCase::IgnoreCase))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Trennt nur ausserhalb von eckigen Bedingungen in einzelne OSM-Zeichen. */
+	void SplitOsmTokens(const FString& Value, TArray<FString>& OutTokens)
+	{
+		OutTokens.Reset();
+		int32 TokenStart = 0;
+		int32 BracketDepth = 0;
+
+		for (int32 Index = 0; Index < Value.Len(); ++Index)
+		{
+			const TCHAR Character = Value[Index];
+			if (Character == TEXT('['))
+			{
+				++BracketDepth;
+			}
+			else if (Character == TEXT(']'))
+			{
+				BracketDepth = FMath::Max(0, BracketDepth - 1);
+			}
+			else if (BracketDepth == 0 && (Character == TEXT(',') || Character == TEXT(';')))
+			{
+				OutTokens.Add(Value.Mid(TokenStart, Index - TokenStart));
+				TokenStart = Index + 1;
+			}
+		}
+
+		OutTokens.Add(Value.Mid(TokenStart));
+	}
+
+	/**
+	 * Teilt einen Token in Basis-Id und Zahlenwert auf: "274[50]" und "274-50" ->
+	 * Basis "274", Wert 50. Unterzeichen mit Punkt ("274.1[30]", "244.1") gehoeren
+	 * zum selben Schild wie ihre Basis - gleiche Tafel, gleicher Wert.
+	 */
 	void SplitBaseValue(const FString& Token, FString& OutBase, int32& OutValue)
 	{
 		OutBase = Token;
@@ -36,6 +90,19 @@ namespace
 			return;
 		}
 
+		// Form "274.1:30" - OSM nutzt den Doppelpunkt als Werttrenner.
+		int32 Colon = INDEX_NONE;
+		if (OutBase.FindLastChar(':', Colon))
+		{
+			const FString Suffix = OutBase.Mid(Colon + 1);
+			if (Suffix.IsNumeric())
+			{
+				OutValue = FCString::Atoi(*Suffix);
+				OutBase = OutBase.Left(Colon);
+				return;
+			}
+		}
+
 		// Form "274-50".
 		int32 Dash = INDEX_NONE;
 		if (OutBase.FindLastChar('-', Dash))
@@ -47,6 +114,16 @@ namespace
 				OutBase = OutBase.Left(Dash);
 			}
 		}
+	}
+
+	/** "274.1" bzw. "278.1" auf die Basis "274"/"278" zurueckfuehren. */
+	FString BaseWithoutSubNumber(const FString& Base)
+	{
+		if (Base.Len() == 5 && Base.StartsWith(TEXT("27")) && Base.EndsWith(TEXT(".1")))
+		{
+			return Base.Left(3);
+		}
+		return Base;
 	}
 
 	/** Kategorie aus dem JSON-String; unbekannt/leer -> Unbekannt. */
@@ -363,11 +440,10 @@ void FWiesbadenTrafficSignCatalog::ParseOsmTag(const FString& OsmTag, TArray<FWi
 	// Eine Momentaufnahme fuer den ganzen Parse-Vorgang (konsistent, eine Kopie).
 	const TArray<FWiesbadenTrafficSign> Catalog = GetCatalog();
 
-	// Mehrere Zeichen, getrennt durch ";" oder ",".
+	// Mehrere Zeichen, getrennt durch ";" oder ",". Trenner innerhalb einer
+	// Bedingung in eckigen Klammern gehoeren dagegen zum Bedingungstext.
 	TArray<FString> Tokens;
-	FString Working = OsmTag;
-	Working.ReplaceInline(TEXT(","), TEXT(";"));
-	Working.ParseIntoArray(Tokens, TEXT(";"), /*InCullEmpty=*/true);
+	SplitOsmTokens(OsmTag, Tokens);
 
 	for (FString Token : Tokens)
 	{
@@ -377,47 +453,87 @@ void FWiesbadenTrafficSignCatalog::ParseOsmTag(const FString& OsmTag, TArray<FWi
 			continue;
 		}
 
-		// "DE:"-Prefix abstreifen (case-insensitive).
+		// "DE:"-Prefix abstreifen (case-insensitive); die Kurzform "DE240" (ohne
+		// Doppelpunkt) steht ebenfalls in den Daten. Danach erneut trimmen: in
+		// "DE: 274.1" steht ein Leerzeichen hinter dem Doppelpunkt, das sonst
+		// als Teil der Zeichen-Id haengen bleibt.
 		if (Token.StartsWith(TEXT("DE:"), ESearchCase::IgnoreCase))
 		{
 			Token = Token.Mid(3);
 		}
+		else if (Token.Len() > 2 && Token.StartsWith(TEXT("DE"), ESearchCase::IgnoreCase)
+			&& FChar::IsDigit(Token[2]))
+		{
+			Token = Token.Mid(2);
+		}
+		Token.TrimStartAndEndInline();
+		if (Token.IsEmpty())
+		{
+			continue;
+		}
 
 		FWiesbadenTrafficSign Sign;
 
-		// 1) Exakte Katalog-Id (z. B. "103-10", "350-10", "1000-32", "325.1").
-		if (FindByIdInCatalog(Catalog, Token, Sign))
+		// Bedingungen in eckigen Klammern gehoeren nicht zur Zeichen-Id
+		// ("1042-31[Mo-Sa 08:00-19:00]", "265[3.5]"); beim Tempolimit steht dort
+		// umgekehrt der Wert ("274[30]") - den liest SplitBaseValue aus dem
+		// vollen Token.
+		FString Bare = Token;
+		int32 Bracket = INDEX_NONE;
+		if (Bare.FindChar('[', Bracket))
 		{
-			Out.Add(Sign);
+			Bare = Bare.Left(Bracket).TrimEnd();
+		}
+
+		// Platzhalter sind keine Zeichen: 349 Knoten der Stadt tragen
+		// "traffic_sign=none", fuenf "no". Auch mit OSM-Bedingung darf daraus
+		// kein unbekanntes Zeichen werden; Python-Importer und C++-Parser bleiben
+		// damit auf derselben Normalisierungsregel.
+		if (IsPlaceholderToken(Bare))
+		{
 			continue;
 		}
 
-		// 2) Alias-Formen aus der Katalog-JSON ("325" -> "325.1", "605" -> "620-40").
-		if (FindByAliasInCatalog(Catalog, Token, Sign))
-		{
-			Out.Add(Sign);
-			continue;
-		}
-
-		// 3) Tempolimit-Syntax "274-50" / "274[30]": Basis + Wert.
+		// 1) Tempolimit mit Wert ("274-50", "274[30]", "274.1:30"): Basis + Wert.
 		FString Base;
 		int32 Value = 0;
 		SplitBaseValue(Token, Base, Value);
-		if (FindByIdInCatalog(Catalog, Base, Sign) && Sign.bSpeedLimit)
+		const FString BaseId = BaseWithoutSubNumber(Base);
+		if (Value > 0 && FindByIdInCatalog(Catalog, BaseId, Sign) && Sign.bSpeedLimit)
 		{
-			if (Value > 0)
-			{
-				Sign.SpeedLimitKmh = Value;
-				// Kanonische Form fuer den Textur-Lookup ("274[30]" -> "274-30").
-				Sign.Id = FString::Printf(TEXT("%s-%d"), *Base, Value);
-			}
+			Sign.SpeedLimitKmh = Value;
+			// Kanonische Form fuer den Textur-Lookup ("274[30]" -> "274-30").
+			Sign.Id = FString::Printf(TEXT("%s-%d"), *BaseId, Value);
 			Out.Add(Sign);
 			continue;
 		}
 
-		// 4) Unbekanntes Zeichen: nicht verlieren, als Unbekannt weiterreichen.
+		// 2) Exakte Katalog-Id (z. B. "103-10", "350-10", "1000-32", "325.1").
+		if (FindByIdInCatalog(Catalog, Bare, Sign))
+		{
+			Out.Add(Sign);
+			continue;
+		}
+
+		// 3) Alias-Formen aus der Katalog-JSON ("325" -> "325.1", "605" -> "620-40").
+		if (FindByAliasInCatalog(Catalog, Bare, Sign))
+		{
+			Out.Add(Sign);
+			continue;
+		}
+
+		// 4) Punkt-Unternummer ohne Wert ("274.1" = Beginn einer Tempo-30-Zone).
+		const FString BareId = BaseWithoutSubNumber(Bare);
+		if (BareId != Bare && FindByIdInCatalog(Catalog, BareId, Sign))
+		{
+			Sign.Id = BareId;
+			Out.Add(Sign);
+			continue;
+		}
+
+		// 5) Unbekanntes Zeichen: nicht verlieren, als Unbekannt weiterreichen.
 		FWiesbadenTrafficSign Unknown;
-		Unknown.Id = Token;
+		Unknown.Id = Bare;
 		Unknown.Name = TEXT("Unbekanntes Verkehrszeichen");
 		Unknown.Category = EWiesbadenSignCategory::Unbekannt;
 		Unknown.OsmValue = FString(TEXT("DE:")) + Token;
@@ -479,14 +595,15 @@ int32 FWiesbadenTrafficSignCatalog::ValidateTextures(
 	const TArray<FString> Ids = GetTexturedIds(Catalog);
 	for (const FString& Id : Ids)
 	{
-		// UE-Asset-Namen ohne Punkt: 325.1 -> Sign_325-1. Nach dem
-		// Editor-Import liegt Sign_<Id>.uasset neben der PNG-Quelle; beides
-		// genuegt.
+		// UE-Asset-Namen ohne Punkt: 325.1 -> Sign_325-1.
 		const FString BaseName = WiesbadenSignAssets::BuildTextureName(Id);
-		const FString PngPath = FPaths::Combine(Folder, BaseName + TEXT(".png"));
 		const FString UAssetPath = FPaths::Combine(Folder, BaseName + TEXT(".uasset"));
 
-		if (!FPaths::FileExists(PngPath) && !FPaths::FileExists(UAssetPath))
+		// Geprueft wird das IMPORTierte Asset: nur das laedt ResolveTexture zur
+		// Laufzeit. Die PNG-Quelle daneben ist der Import-Input, kein Ersatz -
+		// genau diese Verwechslung liess 69 Zeichen ohne Textur dastehen,
+		// waehrend die Pruefung gruen war.
+		if (!FPaths::FileExists(UAssetPath))
 		{
 			OutMissing.Add(Id);
 		}
@@ -506,12 +623,13 @@ void FWiesbadenTrafficSignCatalog::ValidateTexturesAtStartup()
 	if (Missing.Num() == 0)
 	{
 		UE_LOG(LogWbGIS, Log,
-			TEXT("Verkehrszeichen-Katalog: %d Texturen geprueft, alle vorhanden (%s)."),
+			TEXT("Verkehrszeichen-Katalog: %d Texturen geprueft, alle importiert (%s)."),
 			Checked, *Folder);
 		return;
 	}
 
 	UE_LOG(LogWbGIS, Warning,
-		TEXT("Verkehrszeichen-Katalog: %d/%d Texturen fehlen in %s - fehlende Zeichen: %s"),
+		TEXT("Verkehrszeichen-Katalog: %d/%d Texturen fehlen als Asset in %s ")
+		TEXT("(Import: Tools/import_sign_textures.py) - fehlende Zeichen: %s"),
 		Missing.Num(), Checked, *Folder, *FString::Join(Missing, TEXT(", ")));
 }

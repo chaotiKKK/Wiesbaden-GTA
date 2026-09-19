@@ -187,8 +187,11 @@ struct WIESBADENREAL_API FWiesbadenTrafficSignCatalog
 	static TArray<FString> GetTexturedIds(const TArray<FWiesbadenTrafficSign>& Catalog);
 
 	/**
-	 * Prueft, ob zu jedem zu texturierenden Katalog-Eintrag die Textur-Datei
-	 * (Sign_<Id>.png bzw. nach Import .uasset) im Ordner existiert.
+	 * Prueft, ob zu jedem zu texturierenden Katalog-Eintrag das importierte
+	 * Textur-ASSET (Sign_<Id>.uasset) im Ordner liegt. Die PNG-Quelle daneben
+	 * ist nur der Import-Input - die Engine laedt ausschliesslich das Asset,
+	 * deshalb zaehlt eine PNG ohne uasset hier als fehlend
+	 * (Import: Tools/import_sign_textures.py).
 	 * @param OutMissing Wird mit den Ids gefuellt, deren Textur fehlt.
 	 * @return Anzahl gepruefter Ids.
 	 */

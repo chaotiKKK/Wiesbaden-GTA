@@ -32,6 +32,32 @@ namespace WiesbadenSignAssets
 		return Name;
 	}
 
+	/**
+	 * Bringt eine Zeichen-Id aus den Daten auf die Form, unter der die Grafik
+	 * abgelegt ist: trimmt, entfernt den "DE:"-Prefix und eine OSM-Bedingung in
+	 * eckigen Klammern ("1042-31[Mo-Sa 08:00-19:00]" -> "1042-31").
+	 *
+	 * Noetig, weil in den GEBACKENEN Kacheln noch Ids aus aelteren
+	 * Parser-Staenden stecken (u. a. " 274.1" mit Leerzeichen hinter "DE:");
+	 * die Tafel muss trotzdem ihre Grafik finden, ohne dass neu gebacken wird.
+	 */
+	inline FString NormalizeSignId(const FString& SignId)
+	{
+		FString Result = SignId;
+		Result.TrimStartAndEndInline();
+		if (Result.StartsWith(TEXT("DE:"), ESearchCase::IgnoreCase))
+		{
+			Result = Result.Mid(3);
+			Result.TrimStartAndEndInline();
+		}
+		int32 Bracket = INDEX_NONE;
+		if (Result.FindChar('[', Bracket))
+		{
+			Result = Result.Left(Bracket).TrimEnd();
+		}
+		return Result;
+	}
+
 	/** Normalisiert einen Content-Ordner auf einen abschliessenden Slash. */
 	inline FString NormalizeFolder(const FString& Folder)
 	{
@@ -44,8 +70,9 @@ namespace WiesbadenSignAssets
 	}
 
 	/**
-	 * Laedt die Schild-Textur zu einer VzKat-Id (Asset Sign_<Id>.png).
-	 * @return nullptr bei leerer Id oder fehlendem Asset (Warn-Log).
+	 * Laedt die Schild-Textur zu einer VzKat-Id (Asset Sign_<Id>.png). Die Id
+	 * wird vorher normalisiert (siehe NormalizeSignId).
+	 * @return nullptr bei leerer Id oder fehlendem Asset (Warn-Log je Id).
 	 */
 	WIESBADENREAL_API UTexture2D* ResolveTexture(const FString& SignId, const FString& Folder);
 

@@ -14,6 +14,12 @@ nach dem [Diátaxis](https://diataxis.fr/)-Rahmen geordnet (Tutorial / How-to /
 Reference / Explanation). Guter Einstieg: das Tutorial
 [Erste Fahrt durch Wiesbaden](docs/tutorials/erste-fahrt.md).
 
+**Frischer Klon:** Die gebackene Stadt liegt nicht im Repo (2,5 GB je Karte, größte
+Einzeldatei 1,21 GB). Einmal `Tools\fetch_city_content.cmd` laufen lassen — das holt,
+prueft und entpackt den Inhalt der Standardkarte `WiesbadenCity_Alkis16`. Ohne diesen
+Schritt startet die Karte leer. Details:
+[docs/reference/stadtinhalt-holen.md](docs/reference/stadtinhalt-holen.md).
+
 ## Herkunft & Aufteilung
 
 Dieses Projekt wurde ursprünglich in Claude Code unter

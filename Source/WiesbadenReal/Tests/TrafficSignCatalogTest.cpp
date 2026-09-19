@@ -135,6 +135,106 @@ bool FTrafficSignParseTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// Formen, die in den echten Wiesbadener Daten stehen.
+	{
+		// "DE: 274.1" (Leerzeichen hinter dem Doppelpunkt) ergab vorher die Id
+		// " 274.1" - und damit ein Schild ohne auffindbare Grafik.
+		TArray<FWiesbadenTrafficSign> Signs;
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(TEXT("DE: 274.1"), Signs);
+		TestEqual(TEXT("Leerzeichen hinter DE: -> 1 Zeichen"), Signs.Num(), 1);
+		if (Signs.Num() == 1)
+		{
+			TestEqual(TEXT("274.1 ohne Leerzeichen"), Signs[0].Id, TEXT("274.1"));
+		}
+	}
+	{
+		// Kurzform ohne Doppelpunkt.
+		TArray<FWiesbadenTrafficSign> Signs;
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(TEXT("DE240"), Signs);
+		TestEqual(TEXT("DE240 -> 1 Zeichen"), Signs.Num(), 1);
+		if (Signs.Num() == 1)
+		{
+			TestEqual(TEXT("DE240 -> 240"), Signs[0].Id, TEXT("240"));
+		}
+	}
+	{
+		// Doppelpunkt als Werttrenner ("DE:274.1:30").
+		TArray<FWiesbadenTrafficSign> Signs;
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(TEXT("DE:274.1:30"), Signs);
+		TestEqual(TEXT("274.1:30 -> 1 Zeichen"), Signs.Num(), 1);
+		if (Signs.Num() == 1)
+		{
+			TestEqual(TEXT("Id 274-30"), Signs[0].Id, TEXT("274-30"));
+			TestEqual(TEXT("Limit 30"), Signs[0].SpeedLimitKmh, 30);
+		}
+	}
+	{
+		// Unterzeichen mit Punkt und Wert ("DE:274.1[30]").
+		TArray<FWiesbadenTrafficSign> Signs;
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(TEXT("DE:274.1[30]"), Signs);
+		TestEqual(TEXT("274.1[30] -> 1 Zeichen"), Signs.Num(), 1);
+		if (Signs.Num() == 1)
+		{
+			TestEqual(TEXT("Id 274-30"), Signs[0].Id, TEXT("274-30"));
+			TestEqual(TEXT("Limit 30"), Signs[0].SpeedLimitKmh, 30);
+		}
+	}
+	{
+		// Bedingung in eckigen Klammern gehoert nicht zur Id.
+		TArray<FWiesbadenTrafficSign> Signs;
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(TEXT("DE:1042-31[Mo-Sa 08:00-19:00]"), Signs);
+		TestEqual(TEXT("Bedingung -> 1 Zeichen"), Signs.Num(), 1);
+		if (Signs.Num() == 1)
+		{
+			TestEqual(TEXT("Id ohne Bedingung"), Signs[0].Id, TEXT("1042-31"));
+			TestTrue(TEXT("kein Unbekannt-Eintrag"),
+				Signs[0].Category != EWiesbadenSignCategory::Unbekannt);
+		}
+	}
+	{
+		// Komma und Semikolon innerhalb der Bedingung sind kein Zeichen-Trenner.
+		// Diese Schreibweise kommt in den echten OSM-Werten vor.
+		TArray<FWiesbadenTrafficSign> Signs;
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(
+			TEXT("DE:1042-31[Mo-Fr 06:00-11:00,18:30-19:30;Sa 06:00-09:00];DE:206"),
+			Signs);
+		TestEqual(TEXT("Trenner in Bedingung -> 2 Zeichen"), Signs.Num(), 2);
+		if (Signs.Num() == 2)
+		{
+			TestEqual(TEXT("Bedingtes Zeichen bleibt 1042-31"), Signs[0].Id, TEXT("1042-31"));
+			TestEqual(TEXT("Zeichen nach Bedingung bleibt 206"), Signs[1].Id, TEXT("206"));
+		}
+	}
+	{
+		// Gemischte Trenner: Tempolimit + Zusatzzeichen.
+		TArray<FWiesbadenTrafficSign> Signs;
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(TEXT("DE:274-30,1001-30-200"), Signs);
+		TestEqual(TEXT("2 Zeichen"), Signs.Num(), 2);
+		if (Signs.Num() == 2)
+		{
+			TestEqual(TEXT("Id 274-30"), Signs[0].Id, TEXT("274-30"));
+			TestEqual(TEXT("Limit 30"), Signs[0].SpeedLimitKmh, 30);
+			TestEqual(TEXT("Zusatzzeichen 1001-30-200"), Signs[1].Id, TEXT("1001-30-200"));
+		}
+	}
+	{
+		// "none"/"no" sind OSM-Platzhalter und keine Zeichen.
+		TArray<FWiesbadenTrafficSign> Signs;
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(TEXT("none"), Signs);
+		TestEqual(TEXT("none -> 0 Zeichen"), Signs.Num(), 0);
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(TEXT("no"), Signs);
+		TestEqual(TEXT("no -> 0 Zeichen"), Signs.Num(), 0);
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(TEXT("DE:none;DE:206"), Signs);
+		TestEqual(TEXT("none gemischt -> nur 206"), Signs.Num(), 1);
+	}
+	{
+		// Auch ein bedingter OSM-Platzhalter ist kein unbekanntes Zeichen.
+		TArray<FWiesbadenTrafficSign> Signs;
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(
+			TEXT("DE:none[Mo-Fr 08:00-18:00];DE:no[Sa]"), Signs);
+		TestEqual(TEXT("bedingte Platzhalter -> 0 Zeichen"), Signs.Num(), 0);
+	}
+
 	// Unbekanntes Zeichen geht nicht verloren.
 	{
 		TArray<FWiesbadenTrafficSign> Signs;
@@ -263,6 +363,28 @@ bool FTrafficSignTextureValidationTest::RunTest(const FString& Parameters)
 	// Punkt-Id wird zu Bindestrich-Dateiname (325.1 -> Sign_325-1).
 	TestEqual(TEXT("BuildTextureName 325.1"),
 		WiesbadenSignAssets::BuildTextureName(TEXT("325.1")), TEXT("Sign_325-1"));
+
+	// Id-Normalisierung: in den GEBACKENEN Kacheln stehen noch Rohformen aus
+	// aelteren Parser-Staenden - die Tafel muss ihre Grafik trotzdem finden.
+	TestEqual(TEXT("Normalize ' 274.1' (Leerzeichen hinter DE:)"),
+		WiesbadenSignAssets::NormalizeSignId(TEXT(" 274.1")), TEXT("274.1"));
+	TestEqual(TEXT("Normalize '1042-31[Mo-Sa 08:00-19:00]'"),
+		WiesbadenSignAssets::NormalizeSignId(TEXT("1042-31[Mo-Sa 08:00-19:00]")), TEXT("1042-31"));
+	TestEqual(TEXT("Normalize 'DE:274-30'"),
+		WiesbadenSignAssets::NormalizeSignId(TEXT("DE:274-30")), TEXT("274-30"));
+	TestEqual(TEXT("Normalize laesst gueltige Id in Ruhe"),
+		WiesbadenSignAssets::NormalizeSignId(TEXT("325.1")), TEXT("325.1"));
+
+	// Jede Id, die in den gebackenen Kacheln steht, zeigt nach der
+	// Normalisierung auf ein vorhandenes Asset.
+	const FString Ordner = FWiesbadenTrafficSignCatalog::GetDefaultTextureFolder();
+	for (const FString& Roh : {FString(TEXT(" 274.1")), FString(TEXT("1042-31[Mo-Sa 08:00-19:00]"))})
+	{
+		const FString Key = WiesbadenSignAssets::NormalizeSignId(Roh);
+		const FString Asset = FPaths::Combine(Ordner, WiesbadenSignAssets::BuildTextureName(Key) + TEXT(".uasset"));
+		TestTrue(FString::Printf(TEXT("Asset fuer '%s' vorhanden (%s)"), *Roh, *Asset),
+			FPaths::FileExists(Asset));
+	}
 
 	// End-to-End gegen den eingecheckten Textur-Ordner: keine fehlenden Zeichen.
 	TArray<FString> Missing;

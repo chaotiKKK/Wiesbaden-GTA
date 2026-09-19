@@ -1,49 +1,592 @@
 {
 	"signs": [
-		{ "id": "101", "name": "Gefahrstelle", "category": "Gefahrzeichen" },
-		{ "id": "102", "name": "Kreuzung oder Einmuendung mit Vorfahrt von rechts", "category": "Gefahrzeichen" },
-		{ "id": "103-10", "name": "Kurve (links)", "category": "Gefahrzeichen" },
-		{ "id": "103-20", "name": "Kurve (rechts)", "category": "Gefahrzeichen" },
-		{ "id": "105-10", "name": "Doppelkurve (zunaechst links)", "category": "Gefahrzeichen" },
-		{ "id": "105-20", "name": "Doppelkurve (zunaechst rechts)", "category": "Gefahrzeichen" },
-		{ "id": "108-10", "name": "Gefaelle", "category": "Gefahrzeichen", "aliases": ["108"] },
-		{ "id": "112", "name": "Unebene Fahrbahn", "category": "Gefahrzeichen" },
-		{ "id": "123", "name": "Arbeitsstelle", "category": "Gefahrzeichen" },
-		{ "id": "131", "name": "Lichtzeichenanlage", "category": "Gefahrzeichen" },
-		{ "id": "136-10", "name": "Kinder", "category": "Gefahrzeichen", "aliases": ["136"] },
-		{ "id": "138-10", "name": "Radverkehr", "category": "Gefahrzeichen", "aliases": ["138"] },
-		{ "id": "142-10", "name": "Wildwechsel", "category": "Gefahrzeichen", "aliases": ["142"] },
-
-		{ "id": "205", "name": "Vorfahrt gewaehren", "category": "Vorschriftzeichen" },
-		{ "id": "206", "name": "Halt. Vorfahrt gewaehren.", "category": "Vorschriftzeichen" },
-		{ "id": "208", "name": "Vorrang des Gegenverkehrs", "category": "Vorschriftzeichen" },
-		{ "id": "209-20", "name": "Vorgeschriebene Fahrtrichtung rechts", "category": "Vorschriftzeichen" },
-		{ "id": "209-30", "name": "Vorgeschriebene Fahrtrichtung geradeaus", "category": "Vorschriftzeichen" },
-		{ "id": "215", "name": "Kreisverkehr", "category": "Vorschriftzeichen" },
-		{ "id": "220-20", "name": "Einbahnstrasse", "category": "Vorschriftzeichen", "aliases": ["220"] },
-		{ "id": "237", "name": "Radweg", "category": "Vorschriftzeichen" },
-		{ "id": "240", "name": "Gemeinsamer Geh- und Radweg", "category": "Vorschriftzeichen" },
-		{ "id": "241-30", "name": "Getrennter Rad- und Gehweg", "category": "Vorschriftzeichen", "aliases": ["241"] },
-		{ "id": "250", "name": "Verbot fuer Fahrzeuge aller Art", "category": "Vorschriftzeichen" },
-		{ "id": "267", "name": "Verbot der Einfahrt", "category": "Vorschriftzeichen" },
-		{ "id": "276", "name": "Ueberholverbot fuer Kraftfahrzeuge aller Art", "category": "Vorschriftzeichen" },
-		{ "id": "274", "name": "Zulaessige Hoechstgeschwindigkeit", "category": "Vorschriftzeichen", "speedLimit": true },
-		{ "id": "278", "name": "Ende der zulaessigen Hoechstgeschwindigkeit", "category": "Vorschriftzeichen", "speedLimit": true },
-
-		{ "id": "301", "name": "Vorfahrt", "category": "Richtzeichen" },
-		{ "id": "306", "name": "Vorfahrtstrasse", "category": "Richtzeichen" },
-		{ "id": "308", "name": "Vorrang vor dem Gegenverkehr", "category": "Richtzeichen" },
-		{ "id": "314", "name": "Parken", "category": "Richtzeichen" },
-		{ "id": "325.1", "name": "Verkehrsberuhigter Bereich", "category": "Richtzeichen", "aliases": ["325"] },
-		{ "id": "330.2", "name": "Ende der Autobahn", "category": "Richtzeichen" },
-		{ "id": "350-10", "name": "Fussgaengerueberweg", "category": "Richtzeichen" },
-		{ "id": "357", "name": "Sackgasse", "category": "Richtzeichen" },
-		{ "id": "330.1", "name": "Autobahn", "category": "Richtzeichen", "aliases": ["330", "360-50"] },
-
-		{ "id": "1000-32", "name": "Radverkehr kreuzt von rechts und links", "category": "Zusatzzeichen" },
-		{ "id": "1020-30", "name": "Anlieger frei", "category": "Zusatzzeichen" },
-
-		{ "id": "600", "name": "Absperrpfosten", "category": "Verkehrseinrichtung", "noTexture": true },
-		{ "id": "620-40", "name": "Leitpfosten", "category": "Verkehrseinrichtung", "aliases": ["605"] }
+		{
+			"id": "101",
+			"name": "Gefahrstelle",
+			"category": "Gefahrzeichen"
+		},
+		{
+			"id": "102",
+			"name": "Kreuzung oder Einmuendung mit Vorfahrt von rechts",
+			"category": "Gefahrzeichen"
+		},
+		{
+			"id": "103-10",
+			"name": "Kurve (links)",
+			"category": "Gefahrzeichen"
+		},
+		{
+			"id": "103-20",
+			"name": "Kurve (rechts)",
+			"category": "Gefahrzeichen"
+		},
+		{
+			"id": "105-10",
+			"name": "Doppelkurve (zunaechst links)",
+			"category": "Gefahrzeichen"
+		},
+		{
+			"id": "105-20",
+			"name": "Doppelkurve (zunaechst rechts)",
+			"category": "Gefahrzeichen"
+		},
+		{
+			"id": "108-10",
+			"name": "Gefaelle",
+			"category": "Gefahrzeichen",
+			"aliases": [
+				"108"
+			]
+		},
+		{
+			"id": "112",
+			"name": "Unebene Fahrbahn",
+			"category": "Gefahrzeichen"
+		},
+		{
+			"id": "123",
+			"name": "Arbeitsstelle",
+			"category": "Gefahrzeichen"
+		},
+		{
+			"id": "131",
+			"name": "Lichtzeichenanlage",
+			"category": "Gefahrzeichen"
+		},
+		{
+			"id": "136-10",
+			"name": "Kinder",
+			"category": "Gefahrzeichen",
+			"aliases": [
+				"136"
+			]
+		},
+		{
+			"id": "138-10",
+			"name": "Radverkehr",
+			"category": "Gefahrzeichen",
+			"aliases": [
+				"138"
+			]
+		},
+		{
+			"id": "142-10",
+			"name": "Wildwechsel",
+			"category": "Gefahrzeichen",
+			"aliases": [
+				"142"
+			]
+		},
+		{
+			"id": "205",
+			"name": "Vorfahrt gewaehren",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "206",
+			"name": "Halt. Vorfahrt gewaehren.",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "208",
+			"name": "Vorrang des Gegenverkehrs",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "209-20",
+			"name": "Vorgeschriebene Fahrtrichtung rechts",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "209-30",
+			"name": "Vorgeschriebene Fahrtrichtung geradeaus",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "215",
+			"name": "Kreisverkehr",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "220-20",
+			"name": "Einbahnstrasse",
+			"category": "Vorschriftzeichen",
+			"aliases": [
+				"220"
+			]
+		},
+		{
+			"id": "237",
+			"name": "Radweg",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "240",
+			"name": "Gemeinsamer Geh- und Radweg",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "241-30",
+			"name": "Getrennter Rad- und Gehweg",
+			"category": "Vorschriftzeichen",
+			"aliases": [
+				"241"
+			]
+		},
+		{
+			"id": "250",
+			"name": "Verbot fuer Fahrzeuge aller Art",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "267",
+			"name": "Verbot der Einfahrt",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "276",
+			"name": "Ueberholverbot fuer Kraftfahrzeuge aller Art",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "274",
+			"name": "Zulaessige Hoechstgeschwindigkeit",
+			"category": "Vorschriftzeichen",
+			"speedLimit": true
+		},
+		{
+			"id": "278",
+			"name": "Ende der zulaessigen Hoechstgeschwindigkeit",
+			"category": "Vorschriftzeichen",
+			"speedLimit": true
+		},
+		{
+			"id": "301",
+			"name": "Vorfahrt",
+			"category": "Richtzeichen"
+		},
+		{
+			"id": "306",
+			"name": "Vorfahrtstrasse",
+			"category": "Richtzeichen"
+		},
+		{
+			"id": "308",
+			"name": "Vorrang vor dem Gegenverkehr",
+			"category": "Richtzeichen"
+		},
+		{
+			"id": "314",
+			"name": "Parken",
+			"category": "Richtzeichen"
+		},
+		{
+			"id": "325.1",
+			"name": "Verkehrsberuhigter Bereich",
+			"category": "Richtzeichen",
+			"aliases": [
+				"325"
+			]
+		},
+		{
+			"id": "330.2",
+			"name": "Ende der Autobahn",
+			"category": "Richtzeichen"
+		},
+		{
+			"id": "350-10",
+			"name": "Fussgaengerueberweg",
+			"category": "Richtzeichen"
+		},
+		{
+			"id": "357",
+			"name": "Sackgasse",
+			"category": "Richtzeichen"
+		},
+		{
+			"id": "330.1",
+			"name": "Autobahn",
+			"category": "Richtzeichen",
+			"aliases": [
+				"330",
+				"360-50"
+			]
+		},
+		{
+			"id": "1000-32",
+			"name": "Radverkehr kreuzt von rechts und links",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1020-30",
+			"name": "Anlieger frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "600",
+			"name": "Absperrpfosten",
+			"category": "Verkehrseinrichtung",
+			"noTexture": true
+		},
+		{
+			"id": "620-40",
+			"name": "Leitpfosten",
+			"category": "Verkehrseinrichtung",
+			"aliases": [
+				"605"
+			]
+		},
+		{
+			"id": "1000-31",
+			"name": "beide Richtungen, zwei gegengerichtete senkrechte Pfeile",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1010-51",
+			"name": "Kraftfahrzeuge mit einer zulaessigen Gesamtmasse ueber 3,5 t einschliesslich ihrer Anhaenger und Zugmaschinen, ausgenommen Personenkraftwagen und Kraftomnibusse",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1010-52",
+			"name": "Radverkehr",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1010-62",
+			"name": "Kraftraeder, auch mit Beiwagen, Kleinkraftraeder und Mofas",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1010-68",
+			"name": "Elektrokleinstfahrzeuge im Sinne der Elektrokleinstfahrzeuge-Verordnung (eKFV)",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1010-69",
+			"name": "Fahrrad zum Transport von Guetern oder Personen - Lastenfahrrad",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1010-70",
+			"name": "Carsharing",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1012-30",
+			"name": "Ladezone",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1020-12",
+			"name": "Radfahrer und Anlieger frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1022-10",
+			"name": "Radfahrer frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1022-16",
+			"name": "Elektrokleinstfahrzeuge frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1024-10",
+			"name": "Personenkraftwagen frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1024-14",
+			"name": "Kraftomnibusse frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1026-30",
+			"name": "Taxi frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1026-32",
+			"name": "Linienverkehr frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1026-33",
+			"name": "Einsatzfahrzeuge frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1026-35",
+			"name": "Lieferverkehr frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1026-36",
+			"name": "Landwirtschaftlicher Verkehr frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1026-37",
+			"name": "Forstwirtschaftlicher Verkehr frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1026-38",
+			"name": "Land- und forstwirtschaftlicher Verkehr frei",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1040-30",
+			"name": "Zeitliche Beschraenkung (16 - 18 h), 330x600",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1040-32",
+			"name": "Parkscheibe 2 Stunden",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1042-31",
+			"name": "werktags 18 - 19 h",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1044-10",
+			"name": "nur Schwerbehinderte mit aussergewoehnlicher Gehbehinderung und Blinde",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1048-10",
+			"name": "nur Personenkraftwagen",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1048-16",
+			"name": "nur Kraftomnibusse",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1052-35",
+			"name": "Gewichtsangabe (7,5 t)",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "1053-33",
+			"name": "Massenangabe – 7,5 t",
+			"category": "Zusatzzeichen"
+		},
+		{
+			"id": "209",
+			"name": "Vorgeschriebene Fahrtrichtung, rechts",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "209-10",
+			"name": "Vorgeschriebene Fahrtrichtung, links",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "214",
+			"name": "Vorgeschriebene Fahrtrichtung, Geradeaus oder rechts",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "214-10",
+			"name": "Vorgeschriebene Fahrtrichtung, Geradeaus oder links",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "214-20",
+			"name": "Vorgeschriebene Fahrtrichtung geradeaus und rechts",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "214-30",
+			"name": "Vorgeschriebene Fahrtrichtung, Rechts oder links",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "230",
+			"name": "Ladebereich",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "239",
+			"name": "Sonderweg Fussgaenger",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "242",
+			"name": "Beginn eines Fussgaengerbereichs",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "242.1",
+			"name": "Beginn einer Fussgaengerzone",
+			"category": "Vorschriftzeichen",
+			"aliases": [
+				"242-1"
+			]
+		},
+		{
+			"id": "244.1",
+			"name": "Beginn einer Fahrradstrasse",
+			"category": "Vorschriftzeichen",
+			"aliases": [
+				"244-1"
+			]
+		},
+		{
+			"id": "245",
+			"name": "Bussonderfahrstreifen",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "251",
+			"name": "Verbot fuer Kraftwagen und sonstige mehrspurige Kraftfahrzeuge",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "253",
+			"name": "Verbot fuer Kraftfahrzeuge mit einem zulaessigen Gesamtgewicht",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "254",
+			"name": "Verbot fuer Radfahrer",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "257-51",
+			"name": "Verbot fuer Reiter",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "257-54",
+			"name": "Verbot fuer Kraftomnibusse",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "258",
+			"name": "Verbot fuer Reiter",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "259",
+			"name": "Verbot fuer Fussgaenger",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "260",
+			"name": "Verbot fuer Kraftraeder und Mofas und sonstige mehrspurige Kraftfahrzeuge",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "261",
+			"name": "Verbot fuer kennzeichnungspflichtige Kraftfahrzeuge mit gefaehrlichen Guetern",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "262",
+			"name": "Verbot fuer Fahrzeuge deren tatsaechliches Gewicht eine gewisse Grenze ueberschreitet",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "265",
+			"name": "Verbot fuer Fahrzeuge, deren tatsaechliche Hoehe einschliesslich Ladung eine bestimmte Grenze ueberschreitet",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "266",
+			"name": "Verbot fuer Fahrzeuge und Zuege ueber angegebene Laenge einschliesslich Ladung",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "269",
+			"name": "Verbot fuer Fahrzeuge mit wassergefaehrdender Ladung",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "272",
+			"name": "Verbot des Wendens",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "274.1",
+			"name": "Beginn einer Tempo 30-Zone",
+			"category": "Vorschriftzeichen",
+			"aliases": [
+				"274-1"
+			]
+		},
+		{
+			"id": "277.1",
+			"name": "Verbot des Ueberholens von einspurigen Fahrzeugen fuer mehrspurige Kraftfahrzeuge und Kraftraedern mit Beiwagen",
+			"category": "Vorschriftzeichen",
+			"aliases": [
+				"277-1"
+			]
+		},
+		{
+			"id": "283-30",
+			"name": "Absolutes Haltverbot (Mitte), Aufstellung rechts",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "286",
+			"name": "Eingeschraenktes Halteverbot",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "286-30",
+			"name": "Eingeschraenktes Halteverbot (Mitte), Rechtsaufstellung",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "293",
+			"name": "Fussgaengerueberweg",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "295",
+			"name": "Fahrstreifenbegrenzung und Fahrbahnbegrenzung",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "297",
+			"name": "A - Vorankuendigungspfeil",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "298",
+			"name": "Sperrflaechen",
+			"category": "Vorschriftzeichen"
+		},
+		{
+			"id": "315",
+			"name": "Parken auf Gehwegen",
+			"category": "Richtzeichen"
+		},
+		{
+			"id": "317",
+			"name": "Wandererparkplatz",
+			"category": "Richtzeichen"
+		},
+		{
+			"id": "331",
+			"name": "Kraftfahrstrasse",
+			"category": "Richtzeichen"
+		},
+		{
+			"id": "342",
+			"name": "Haifischzaehne",
+			"category": "Richtzeichen"
+		},
+		{
+			"id": "357-50",
+			"name": "Durchlaessige Sackgasse fuer Fussgaenger und Radverkehr",
+			"category": "Richtzeichen"
+		}
 	]
 }

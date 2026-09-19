@@ -24,6 +24,12 @@ REM
 REM Fertig erkennt man den Lauf an der neuen Zeile in
 REM Saved/BuildHistory/CityBuilds.csv (MapPath /Game/Maps/WiesbadenCity_Alkis17)
 REM bzw. an "FERTIG - Karte ... liegt vor." im Log. Dauer ~11 min.
+REM
+REM NACH DEM BAKE ABNEHMEN: bake_abnahme.cmd WiesbadenCity_Alkis17
+REM Ein "FERTIG" des Bakes ist KEIN Beleg - Alkis10 und Alkis11 meldeten
+REM Erfolg und waren im Spiel nur Gras. Die Abnahme faehrt beide Karten und
+REM vergleicht leere Chunks, Strassennetz, Ausstattung, Bildrate und
+REM Ladezeit (letztere erst nach dem Aufwaermen).
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\rebake_alkis17.log
 set WB_SOURCE_MAP=/Game/Maps/WiesbadenCity_Alkis16

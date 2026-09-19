@@ -380,7 +380,12 @@ void URoadFurnitureGenerator::PlaceSigns(
 				Layout.Signs.Add(Instance);
 			}
 
-			NodesWithExplicitSigns.Add(Node.Id);
+			// Platzhalter wie "none"/"no" ergeben bewusst keine Zeichen und
+			// duerfen daher die abgeleitete Kreuzungskontrolle nicht unterdruecken.
+			if (Signs.Num() > 0)
+			{
+				NodesWithExplicitSigns.Add(Node.Id);
+			}
 		}
 	}
 

@@ -1,0 +1,183 @@
+"""Holt den gebackenen Stadt-Inhalt der Karte WiesbadenCity_Alkis16 in einen frischen Klon.
+
+Warum es dieses Skript gibt
+---------------------------
+`Content/__ExternalActors__/`, `Content/Generated/` und `Content/Materials/AAA/`
+stehen in der .gitignore, weil eine einzige gebackene Stadt 2,5 GB belegt
+(groesste Einzeldatei 1,21 GB - ueber GitHubs Grenze von 100 MB fuer normale
+Git-Objekte), dazu 194 MB Bake-Materialien. Git LFS scheidet aus
+Kostengruenden aus: frei sind 1 GiB Speicher und 1 GiB Bandbreite pro Monat,
+ein Klon braucht mehr als das Doppelte. Darum liegt der Inhalt gepackt als
+Release-Asset (unbegrenzte Bandbreite) und dieses Skript holt ihn.
+
+Ablauf je Paket
+---------------
+1. Archiv aus dem GitHub-Release laden (`gh` wenn vorhanden - kann auch private
+   Repos - sonst HTTPS mit GH_TOKEN/GITHUB_TOKEN).
+2. sha256 des Archivs gegen die hier fest hinterlegte Summe pruefen.
+3. In die Projektwurzel entpacken.
+4. Jede Datei einzeln gegen die mitgelieferte INHALT-Liste pruefen.
+
+Aufruf
+------
+    python Tools/fetch_city_content.py              # alles holen und entpacken
+    python Tools/fetch_city_content.py --check      # nur pruefen, was schon da ist
+    python Tools/fetch_city_content.py --asset AaaBakeMaterialien.zip
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+import zipfile
+
+REPO = "chaotiKKK/Wiesbaden-GTA"
+TAG = "city-content-alkis16"
+
+# Was gehoert zu einem spielbaren Klon? Je Paket: Archivname, erwartete Summe
+# (ein vertauschtes Asset faellt damit auf) und die INHALT-Liste, die im Archiv
+# steckt und nach dem Entpacken in der Projektwurzel liegt.
+PAKETE = [
+    {
+        "asset": "WiesbadenCity_Alkis16_content.zip",
+        "sha256": "5e890118f13541c3022402d9d82032319e78c954590f35becc461486d58f5cfa",
+        "manifest": "INHALT.sha256",
+        "inhalt": "Karte WiesbadenCity_Alkis16: Actor-Pakete + gebackene Kacheln (2019 + 4578 Dateien)",
+    },
+    {
+        "asset": "AaaBakeMaterialien.zip",
+        "sha256": "b4eec803975bf96585fe65599b384fd3bcd01f124b32af2a4a5df1237339deb3",
+        "manifest": "INHALT.BakeMaterialien.sha256",
+        "inhalt": "Bake-Materialien Content/Materials/AAA (51 Dateien) - von den "
+                  "Nerobergbahn-Materialien referenzierte Fassadentexturen",
+    },
+]
+
+PROJEKT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def sha256_datei(pfad):
+    h = hashlib.sha256()
+    with open(pfad, "rb") as fh:
+        for block in iter(lambda: fh.read(4 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def hole_archiv(asset, ziel, repo, nur_https):
+    """Laedt ein Asset nach `ziel`. gh zuerst (private Repos), sonst HTTPS."""
+    gh = shutil.which("gh")
+    if gh and not nur_https:
+        print("  Lade ueber gh: %s" % asset)
+        r = subprocess.run([gh, "release", "download", TAG, "--repo", repo,
+                            "--pattern", asset, "--dir", os.path.dirname(ziel),
+                            "--clobber"])
+        if r.returncode == 0 and os.path.exists(ziel):
+            return True
+        print("  gh-Ablauf fehlgeschlagen (Exit %d) - versuche HTTPS." % r.returncode)
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    url = "https://api.github.com/repos/%s/releases/tags/%s" % (repo, TAG)
+    kopf = {"Accept": "application/vnd.github+json", "User-Agent": "wb-fetch"}
+    if token:
+        kopf["Authorization"] = "Bearer " + token
+    print("  Lade ueber HTTPS: %s" % url)
+    with urllib.request.urlopen(urllib.request.Request(url, headers=kopf)) as a:
+        daten = json.load(a)
+    eintrag = next((x for x in daten["assets"] if x["name"] == asset), None)
+    if not eintrag:
+        print("  Asset %s fehlt im Release %s." % (asset, TAG))
+        return False
+    kopf2 = {"Accept": "application/octet-stream", "User-Agent": "wb-fetch"}
+    if token:
+        kopf2["Authorization"] = "Bearer " + token
+    with urllib.request.urlopen(urllib.request.Request(eintrag["url"], headers=kopf2)) as q, \
+            open(ziel, "wb") as fh:
+        shutil.copyfileobj(q, fh, 4 << 20)
+    return True
+
+
+def pruefe_manifest(manifest_pfad, basis):
+    fehlend, falsch, ok = 0, 0, 0
+    with open(manifest_pfad, "r", encoding="utf-8", errors="replace") as fh:
+        zeilen = fh.read().splitlines()
+    for zeile in zeilen:
+        teile = zeile.split()
+        if len(teile) != 3 or len(teile[0]) != 64:
+            continue
+        soll, groesse, rel = teile
+        p = os.path.join(basis, rel)
+        if not os.path.exists(p):
+            fehlend += 1
+            if fehlend <= 5:
+                print("    fehlt: %s" % rel)
+            continue
+        if os.path.getsize(p) != int(groesse) or sha256_datei(p) != soll:
+            falsch += 1
+            print("    stimmt nicht: %s" % rel)
+            continue
+        ok += 1
+    return ok, fehlend, falsch
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Stadt-Inhalt (WiesbadenCity_Alkis16) holen")
+    ap.add_argument("--repo", default=REPO)
+    ap.add_argument("--asset", help="nur dieses Paket holen (Standard: alle)")
+    ap.add_argument("--check", action="store_true", help="nichts laden, nur Vorhandenes pruefen")
+    ap.add_argument("--https", action="store_true", help="gh nicht benutzen, direkt HTTPS")
+    ap.add_argument("--ohne-sha", action="store_true", help="Archivsumme nicht pruefen (nur zum Testen)")
+    args = ap.parse_args()
+
+    pakete = [p for p in PAKETE if not args.asset or p["asset"] == args.asset]
+    if not pakete:
+        print("Unbekanntes Paket: %s" % args.asset)
+        return 2
+
+    fehler = 0
+    if args.check:
+        for p in pakete:
+            m = os.path.join(PROJEKT, p["manifest"])
+            if not os.path.exists(m):
+                print("%s: keine %s gefunden - noch nie geholt?" % (p["asset"], p["manifest"]))
+                fehler += 1
+                continue
+            ok, fehlend, falsch = pruefe_manifest(m, PROJEKT)
+            print("%-32s %d in Ordnung, %d fehlend, %d falsch" % (p["asset"], ok, fehlend, falsch))
+            fehler += 1 if (fehlend or falsch) else 0
+        return 1 if fehler else 0
+
+    with tempfile.TemporaryDirectory(prefix="wb_city_") as tmp:
+        for p in pakete:
+            print(p["asset"])
+            print("  %s" % p["inhalt"])
+            archiv = os.path.join(tmp, p["asset"])
+            if not hole_archiv(p["asset"], archiv, args.repo, args.https):
+                return 2
+            print("  Archiv: %.2f GB" % (os.path.getsize(archiv) / 1e9))
+            if not args.ohne_sha:
+                ist = sha256_datei(archiv)
+                if ist.lower() != p["sha256"].lower():
+                    print("  ABBRUCH: Summe %s weicht von %s ab." % (ist, p["sha256"]))
+                    return 3
+                print("  Summe stimmt: %s" % ist)
+            with zipfile.ZipFile(archiv) as z:
+                print("  Entpacke %d Eintraege nach %s" % (len(z.namelist()), PROJEKT))
+                z.extractall(PROJEKT)
+            m = os.path.join(PROJEKT, p["manifest"])
+            ok, fehlend, falsch = pruefe_manifest(m, PROJEKT)
+            print("  Dateipruefung: %d in Ordnung, %d fehlend, %d falsch" % (ok, fehlend, falsch))
+            if fehlend or falsch:
+                fehler += 1
+    if fehler:
+        return 1
+    print("Fertig. Stadt starten mit: Wiesbaden_spielen.cmd")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

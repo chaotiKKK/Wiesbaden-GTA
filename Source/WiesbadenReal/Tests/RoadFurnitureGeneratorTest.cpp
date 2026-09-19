@@ -199,6 +199,72 @@ bool FRoadFurnitureExplicitSignTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoadFurniturePlaceholderSignTest,
+	"WiesbadenReal.GIS.RoadFurniture.PlaceholderSign",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRoadFurniturePlaceholderSignTest::RunTest(const FString& Parameters)
+{
+	// Ein OSM-Node mit traffic_sign=none ist kein explizites Schild. Er darf
+	// deshalb die aus der Kreuzung abgeleiteten Stoppschilder nicht blockieren.
+	FOSMDataSet DataSet;
+	FOSMNode Node;
+	Node.Id = 0;
+	Node.Location = FGeoCoordinate(8.2400, 50.0824, 0.0);
+	Node.Tags.Add(TEXT("traffic_sign"), TEXT("none"));
+	DataSet.Nodes.Add(Node.Id, Node);
+
+	UGeoCoordinateConverter* Converter = NewObject<UGeoCoordinateConverter>();
+	if (!TestTrue(TEXT("Konverter initialisiert"), Converter->InitializeWithWiesbadenOrigin()))
+	{
+		return false;
+	}
+
+	FRoadNetwork Network;
+	Network.Segments.Add(MakeSegment(0, 1, 0,
+		{ FVector(-5000.0, 0.0, 0.0), FVector(0.0, 0.0, 0.0) }));
+	Network.Segments.Add(MakeSegment(1, 2, 0,
+		{ FVector(5000.0, 0.0, 0.0), FVector(0.0, 0.0, 0.0) }));
+	Network.Segments.Add(MakeSegment(2, 3, 0,
+		{ FVector(0.0, 5000.0, 0.0), FVector(0.0, 0.0, 0.0) }));
+
+	FRoadIntersection Intersection;
+	Intersection.NodeId = 0;
+	Intersection.Location = FVector::ZeroVector;
+	Intersection.Control = EIntersectionControl::Stop;
+	Intersection.RadiusCm = 800.0;
+	for (const FVector& Outward : { FVector(-1.0, 0.0, 0.0), FVector(1.0, 0.0, 0.0), FVector(0.0, 1.0, 0.0) })
+	{
+		FIntersectionArm Arm;
+		Arm.OutwardDirection = Outward;
+		Arm.HalfWidthCm = 325.0;
+		Arm.bIsSegmentStart = false;
+		Arm.BearingDegrees = Outward.Rotation().Yaw;
+		Intersection.Arms.Add(Arm);
+	}
+	Network.Intersections.Add(Intersection);
+
+	FFlatHeightSampler Sampler(0.0);
+	FRoadFurnitureSettings Settings;
+	FRoadFurnitureLayout Layout;
+	URoadFurnitureGenerator* Generator = NewObject<URoadFurnitureGenerator>();
+	const FRoadFurnitureReport Report =
+		Generator->Generate(Network, &DataSet, Converter, &Sampler, Settings, Layout);
+
+	TestTrue(TEXT("Pass erfolgreich"), Report.bSuccess);
+	int32 StopSigns = 0;
+	for (const FSignInstance& Sign : Layout.Signs)
+	{
+		if (Sign.SignId == TEXT("206"))
+		{
+			++StopSigns;
+		}
+	}
+	TestEqual(TEXT("Placeholder blockiert keine 3 abgeleiteten Stoppschilder"), StopSigns, 3);
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStreetLampSynthesisTest,
 	"WiesbadenReal.GIS.RoadFurniture.StreetLampSynthesis",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
