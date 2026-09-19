@@ -14,7 +14,10 @@ rem Aufruf: Tools\run_bus_interior_proof.cmd [Karte] [Spielsekunden]
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\shot_interior.log
 set MAP=%~1
-if "%MAP%"=="" set MAP=WiesbadenCity_Alkis15
+REM  Karte NICHT fest verdrahten - sie kommt aus
+REM  Config\DefaultEngine.ini (siehe Tools\karte.cmd).
+call "%~dp0karte.cmd"
+if "%MAP%"=="" set MAP=%WB_MAP%
 set QUIT=%~2
 if "%QUIT%"=="" set QUIT=45
 "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/%MAP% -game -nullrhi -NoSound -WbBusLog -WbBusLogWagon=601 -WbQuitAfter=%QUIT% -unattended -nop4 -stdout > "%LOG%" 2>&1

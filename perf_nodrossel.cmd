@@ -10,5 +10,8 @@ REM erwischt, muss die Zahl zeigen. Bleibt sie bei 50 ms, greift ein anderer
 REM Mechanismus und headless ist endgueltig nicht messbar.
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\perf_nodrossel.log
-"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis3 -game -windowed -ResX=1600 -ResY=900 -ExecCmds="t.MaxFPS 0, t.IdleWhenNotForeground 0, r.Streaming.FramesForFullUpdate 1" -WbQuitAfter=150 -stdout -unattended -nop4 > "%LOG%" 2>&1
+REM  Karte NICHT fest verdrahten - sie kommt aus
+REM  Config\DefaultEngine.ini (siehe Tools\karte.cmd).
+call "%~dp0Tools\karte.cmd"
+"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" %WB_MAP_PFAD% -game -windowed -ResX=1600 -ResY=900 -ExecCmds="t.MaxFPS 0, t.IdleWhenNotForeground 0, r.Streaming.FramesForFullUpdate 1" -WbQuitAfter=150 -stdout -unattended -nop4 > "%LOG%" 2>&1
 exit /b %ERRORLEVEL%

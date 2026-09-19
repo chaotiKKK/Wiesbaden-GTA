@@ -2870,3 +2870,199 @@ Ursache war NICHT die Folgeregel, sondern ihr Geltungsbereich.
   die sich ueberlappen. Das ist Spur-Geometrie (zu eng gelegte Parallel- oder
   Gegenspuren), keine Kreuzungsfrage.
 
+## Kartenvergleich: der ERSTE Lauf einer Karte misst den Cache, nicht die Karte (19.09.2026)
+
+Alkis17 gegen Alkis16 verglichen, um die Stadt umzuschalten. Beinahe mit dem
+falschen Ergebnis:
+
+| Lauf | LoadMap | GPU-Timeouts |
+|---|---|---|
+| Alkis16 (1.) | 21,2 s | 0 |
+| Alkis17 (1.) | 138,5 s | 1 |
+| Alkis17 (2.) | 83,8 s | 3 |
+| Alkis16 (direkt danach) | 21,1 s | 0 |
+| **Alkis17 (3.)** | **21,2 s** | **0** |
+
+Nach vier Laeufen sah es nach einem klaren Regressionsbefund aus - Alkis17
+viermal so langsam, dazu GPU-Timeouts, und Alkis16 reproduzierte unmittelbar
+danach seine 21 s. Genau das war die Falle: eine Karte, die noch nie gespielt
+wurde, baut beim Laden ihre abgeleiteten Daten auf (Shader/PSO/DDC), und dabei
+laufen GPU-Payloads in den Timeout. Die Zahlenreihe 138 -> 84 -> 21 s zeigt es;
+**zwei Messpunkte haetten die falsche Entscheidung getragen.** Bei einem Trend
+so lange messen, bis er flach ist.
+
+Die uebrigen Kennzahlen waren von Anfang an deckungsgleich und damit der
+belastbarere Teil des Vergleichs: 31 Chunk-Actors, 0 ohne Render-Geometrie,
+1073 Ampeln, 8,6 ms Bildzeit, 1,9 GB externe Actors - und der Verkehr auf eine
+Nachkommastelle identisch (10,4 % Steher, 21,0 km/h). Eine deterministische
+Simulation auf demselben Strassennetz ist ein guter Gleichheitsbeweis fuer zwei
+Bakes aus denselben Daten.
+
+**Umgeschaltet** (Alkis17 ist live): `Config/DefaultEngine.ini` (GameDefaultMap
++ EditorStartupMap) und der fest verdrahtete Standard in
+`Wiesbaden_spielen.cmd`. Die .ini ist reines LF - beim Schreiben NICHT auf CRLF
+kippen, sonst stehen 212 Phantom-Zeilen im Diff.
+
+## Die Spuren waren nicht zu eng - die Karosserie stand daneben (19.09.2026)
+
+Nach dem Kreuzungsfix blieben 3-11 ineinander steckende Paare auf VERSCHIEDENEN
+Spuren. Naheliegende Vermutung: Parallel- und Gegenspuren liegen zu dicht. Die
+Messung sagt etwas anderes.
+
+- **Die Diagnose mass die falsche Position.** Sie prueft(e) `Vehicle.Location` -
+  die Sollposition auf der Bahn. Gezeichnet wird aber `BodyLocation`, die
+  nachlaufende Karosserie (`PlaceTrafficVehicles` nimmt sie, sobald
+  `bBodyInitialized`). Wer Ueberlappungen im BILD erklaeren will, muss die
+  Karosserie messen. Seitdem trennt die Diagnose beides: "N nur Karosserie"
+  zaehlt die Paare, deren Sollpositionen sauber auseinander liegen.
+- **Ergebnis: 26 von 28,5 Paaren waren reine Karosserie-Ueberlappungen**, bei
+  Seitenversaetzen bis 8 m. Die schmalste beteiligte Spur misst 275 cm bei
+  154 cm Fahrzeugbreite - **die Spurbreite war nie das Problem**.
+- **Warum es im Stand nie besser wird:** Das Einspurmodell bewegt die Karosserie
+  mit `Step = Tempo * Dt`. Bei Tempo null bewegt sie sich GAR NICHT. Das
+  Sicherheitsnetz zog nur den Ueberschuss ueber 400 cm ab - wer mit 3,9 m
+  Versatz zum Stehen kam, stand dort fuer immer. Bei 45-60 % Stehern im
+  Stadtzentrum ist das der Normalfall, nicht die Ausnahme.
+- **Die 400 cm waren mit dem SPURWECHSEL begruendet** (die Sollbahn springt um
+  eine Spurbreite, die Karosserie soll gemaechlich herueberziehen). Das gilt im
+  Fahren, nicht im Stehen. Jetzt drei Grenzen: 60 cm im Stand (= (275-154)/2,
+  das Auto bleibt in seiner Spur), 120 cm im Fahren, volle 400 cm nur waehrend
+  der Spurwechsel-Sperrzeit (`LaneChangeCooldown > 0`).
+
+  | Stand | Paare | davon nur Karosserie | Seitenversatz bis |
+  |---|---|---|---|
+  | Grenze fest 400 cm | 28,5 | 26,0 | 829 cm |
+  | + Stand 60 cm | 13,3 | 8,9 | 832 cm |
+  | + Fahrt 120 cm | 13,9 | 8,5 | 554 cm |
+
+  "Selbe Bahn" faellt dabei von 7-13 auf 0: zwei Fahrzeuge mit 7 m Abstand auf
+  der Bahn sahen vorher aus wie ineinander geschoben.
+- **Was BLEIBT, ist ein Netzbefund, kein Spurbefund:** Von den restlichen Paaren
+  liegen die meisten auf Spuren VERSCHIEDENER Abschnitte, mit Sollbahnen bis auf
+  **23 cm** aneinander. Zwei Strassen des Netzes liegen dort uebereinander
+  (doppelt erfasste Wege, Zubringer neben der Hauptfahrbahn). Das ruecken keine
+  Spuren zurecht - das muesste die Netzerzeugung beim Bake aufloesen. Die
+  Diagnose weist es getrennt aus ("Spurpaare: N selber Abschnitt, M
+  verschiedene").
+
+## Fluss am Bahnhofsplatz: fuenf Hebel gemessen, keiner hat ihn zurueckgeholt (19.09.2026)
+
+Die Kreuzungsregel kostet am Bahnhofsplatz Fluss (51 % Steher gegen 34,5 % in
+der Welt, in der Fahrzeuge einander noch durchdrangen). Der Versuch, ihn ohne
+Aufweichen der Regel zurueckzuholen, ist GESCHEITERT - aber er hat die Ursache
+eingegrenzt. Die Reihe ist hier festgehalten, damit sie niemand zweimal laeuft:
+
+| Hebel | Steher | Tempo | Befund |
+|---|---|---|---|
+| Ausgangsstand (Regel scharf) | 51,5 % | 12,7 km/h | |
+| frueheres Bremsen statt Halt an der Linie | 48-62 % | 9-12 km/h | kein Gewinn |
+| Platz hinter der Kreuzung 700 -> 480 cm | 48-59 % | 10-12 km/h | kein Gewinn |
+| ein Drittel weniger Fahrzeuge (`-WbVerkehr=0.65`) | 49-54 % | 12-14 km/h | kaum Gewinn |
+| Ampelkreuzungen ganz ausnehmen | 39-49 % | 12-16 km/h | **Fluss da, aber 64-71 ineinander steckende Paare** |
+| nur zurueckstehen, wo das Signalprogramm trennt | 50-57 % | 10-12 km/h | Ueberlappungen bleiben niedrig, Fluss nicht |
+
+**Was die Reihe zeigt:**
+
+- **Es ist keine einzelne zu strenge Teilregel.** Wer eine Sperre lockert,
+  findet die Wartenden danach bei der naechsten wieder. Die Sperrgruende
+  verteilen sich stabil auf "kein Platz dahinter" (14-23) und "Weg belegt"
+  (24-29); Vorfahrt (1-3) und Linksabbieger (5-9 von ~50) spielen fast keine
+  Rolle - **Abbiegespuren waeren hier also nicht der Hebel**.
+- **Es ist auch nicht schlicht zu viel Verkehr.** Ein Drittel weniger Fahrzeuge
+  brachte 54 -> 52 %. Der Platz ist nicht ueberfuellt, er ist verwickelt.
+- **Der einzige grosse Gewinn kam vom Ausnehmen der Ampelkreuzungen - und er
+  ist nicht zu haben.** Dort explodierten die Ueberlappungen auf 64-71 Paare,
+  mehr als vor der ganzen Kreuzungsarbeit. Damit ist nebenbei belegt, dass das
+  Signalprogramm die Stroeme NICHT sauber trennt: Verbindungen derselben
+  Richtungsgruppe sind gleichzeitig frei und koennen trotzdem in dieselbe Spur
+  einfaedeln. Wer den Fluss wirklich heben will, muss dort ansetzen - an
+  besseren Freigabegruppen, nicht an der Konfliktregel.
+
+**Behalten wurde, was fuer sich richtig ist, auch ohne Messgewinn:** das
+Bremsprofil statt des harten Halts (ein Auto, das 3,5 m vor der Linie auf null
+springt, sieht falsch aus), der Platzbedarf nach Fahrzeuglaenge statt
+Folgeabstand, das Heckmass ab Fahrzeugmitte statt voller Laenge, und das
+Zuruecktreten dort, wo verschiedene Richtungsgruppen ohnehin nie zugleich frei
+sind. Neu als Werkzeug: `-WbVerkehr=<Faktor>` (Dichte im Messlauf uebersteuern)
+und die Aufschluesselung der Sperrgruende in der 15-s-Diagnose.
+
+## Wo die Kreuzungsregel wirklich wirkt: zwei Karten statt einer (19.09.2026)
+
+Frage war, wo die Kreuzungskonflikte den Verkehr veraendert haben. Eine Karte
+allein beantwortet das nicht - sie zeigt, wo es steht, nicht was eine Aenderung
+bewirkt hat. Gebraucht wird ein A/B auf DERSELBEN Karte im SELBEN Build.
+
+- **Dafuer der Schalter `-WbOhneKreuzungsregel`** (`bJunctionConflicts`). Gegen
+  die alte Karte von gestern zu vergleichen waere unsauber gewesen: dort waren
+  auch Kartenversion (Alkis16), Signalprogramme und Karosserie-Modell anders.
+  Beide Laeufe: `-WbStauKarte -WbGoto=Bahnhofsplatz -WbQuitAfter=190`.
+- **Werkzeuge:** `Tools/vergleich_staukarten.py <vorher> <nachher>` (je Strasse,
+  nach Messwerten gewichtet, mit Mindestzahl gegen Rauschen) und
+  `Tools/render_stau_karte.py --diff <vorher> <nachher> [bild]` - eine
+  DIFFERENZkarte. Zwei Karten nebeneinander zu legen beantwortet die Frage
+  nicht: zwischen 1.400 Punkten findet das Auge den Unterschied nicht.
+
+**Befund (59 Strassen mit je ueber 400 Messwerten):** Gesamt 48,4 % -> 36,8 %
+des Limits. Die Wirkung ist NICHT gleichmaessig, sondern liegt fast vollstaendig
+auf den Hauptachsen um den Hauptbahnhof:
+
+| Strasse | ohne Regel | mit Regel | Messwerte |
+|---|---|---|---|
+| Gustav-Stresemann-Ring | 44,5 % | 27,8 % | 1,34 Mio. |
+| Bahnhofsplatz | 26,5 % | 15,3 % | 1,01 Mio. |
+| Mainzer Strasse | 48,3 % | 35,6 % | 721 k |
+| Kaiser-Friedrich-Ring | 46,0 % | 38,5 % | 686 k |
+| Gartenfeldstrasse | 58,2 % | 28,6 % | 32 k |
+
+Das **Wohnstrassennetz bleibt unveraendert** - in der Differenzkarte ist es
+durchgehend grau. Verbessert hat sich nichts ueber der Rauschgrenze (die
+groessten "Gewinne" haben 600-700 Messwerte).
+
+**Merksatz:** Die Regel kostet dort, wo viele Wege sich kreuzen - an den grossen
+Ringknoten. Wer den Preis senken will, muss an diesen wenigen Knoten ansetzen
+(Signalprogramm, Abfluss), nicht an der Regel: sie ruehrt 95 % des Netzes nicht
+an.
+
+## Der Kartenname steht nur noch an EINER Stelle (19.09.2026)
+
+`GameDefaultMap` in `Config/DefaultEngine.ini` ist die Quelle. Alles andere
+liest sie:
+
+* `Tools/karte.cmd` -> setzt `%WB_MAP%` und `%WB_MAP_PFAD%` (Batch)
+* `Tools/karte.py`  -> `standard_karte()` / `standard_karte_pfad()`
+* `Tools/karte.ps1` -> gibt den Kurznamen aus (PowerShell)
+
+**Warum das noetig war - der Zustand davor:** 14 Skripte starteten
+`/Game/Maps/WiesbadenCity_Alkis` - eine Karte, die es seit Alkis2 nicht mehr
+gibt. Der Start endete im englischen Engine-Dialog "could not be found" und
+wartete dort auf einen Klick. Weitere rund 20 Foto-, Mess- und
+Diagnose-Skripte zeigten auf Alkis3, Alkis4 oder Alkis15, waehrend die Stadt
+Alkis17 war. **Ein Messlauf auf einer toten Karte sieht aus wie ein Messlauf.**
+Auch die Desktop-Verknuepfung entstand per Vorgabe auf Alkis15, und
+`kopiere_auf_stick.ps1` sicherte "die aktuelle Stadt" = Alkis4.
+
+**Umgestellt:** 44 `.cmd` (Launcher, alle `diag_*`, `perf_*`, `shot_*`,
+`Tools/run_bus_*`), 9 Python-Werkzeuge (Vorgabe jetzt `standard_karte_pfad()`,
+`WB_*`-Umgebungsvariablen behalten Vorrang) und 4 PowerShell-Skripte
+(`make_play_shortcut.ps1`, `kopiere_auf_stick.ps1`, `flight_check.ps1`,
+`durchfall_regression.ps1`).
+
+**Bewusst NICHT umgestellt** (der Name ist dort die Aussage): die
+`rebake_*.cmd`/`rebuild_*.cmd` - ein Bake schreibt GENAU eine neue Karte -,
+`shot_alkis16.cmd`, `fps_alkis10.cmd`, sowie `AGENTS.md`, `NEUER_PC.md` und
+`docs/superpowers/plans/*` als Geschichte.
+
+**Zwei Nebenbefunde beim Umstellen:**
+
+* `rebuild_city.py` hatte eine VORGABE fuer `WB_TARGET_MAP` (Alkis4). Ein
+  vergessenes Env haette damit die gespielte Stadt ueberschrieben. Jetzt ohne
+  Vorgabe: fehlt die Zielkarte, bricht der Lauf mit klarer Meldung ab.
+* Eine `.lnk`-Verknuepfung kann nichts "lesen" - sie speichert eine feste
+  Befehlszeile. Das Beste ist, dass ihr ERZEUGER die Quelle liest: seitdem
+  genuegt nach einem Bake `powershell -File Tools/make_play_shortcut.ps1`
+  ohne Argument.
+
+**Die Wache haelt es sauber:** `python Tools/pruefe_kartenname.py` (0 = sauber,
+1 = Fundstellen mit Datei und Zeile). Das Muster trifft nur KONKRETE Namen -
+Platzhalter wie `WiesbadenCity_AlkisNN` in Beispielen bleiben erlaubt.
+

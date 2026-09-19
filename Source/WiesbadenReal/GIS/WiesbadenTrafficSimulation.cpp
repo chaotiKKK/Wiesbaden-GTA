@@ -668,6 +668,24 @@ void FWiesbadenTrafficSimulation::StepBicycleModel(
 	InOutBodyXY.Y += Step * FMath::Sin(static_cast<double>(InOutYawRad));
 }
 
+double FWiesbadenTrafficSimulation::BodyDeviationLimitCm(
+	const FWiesbadenTrafficSettings& InSettings, double SpeedCmS, bool bChangingLane)
+{
+	const double Voll = FMath::Max(InSettings.MaxBodyDeviationCm, 1.0);
+
+	// Waehrend des Herueberziehens gilt die grosse Grenze - dafuer ist sie da.
+	if (bChangingLane)
+	{
+		return Voll;
+	}
+
+	const double Stand = FMath::Clamp(InSettings.StandingBodyDeviationCm, 0.0, Voll);
+	const double Fahrt = FMath::Clamp(InSettings.DrivingBodyDeviationCm, Stand, Voll);
+	const double VollAb = FMath::Max(InSettings.BodyDeviationFullSpeedCmS, 1.0);
+	const double Anteil = FMath::Clamp(FMath::Max(SpeedCmS, 0.0) / VollAb, 0.0, 1.0);
+	return FMath::Lerp(Stand, Fahrt, Anteil);
+}
+
 void FWiesbadenTrafficSimulation::UpdateBodyPose(FTrafficVehicle& Vehicle, double Dt) const
 {
 	// Beim Einsetzen steht die Karosserie exakt auf der Bahn - erst ab dem
@@ -711,7 +729,13 @@ void FWiesbadenTrafficSimulation::UpdateBodyPose(FTrafficVehicle& Vehicle, doubl
 	// abgebaut: ein harter Schnitt auf die Grenze saehe aus wie ein Teleport.
 	const FVector2D PathXY(Vehicle.Location.X, Vehicle.Location.Y);
 	const double Deviation = FVector2D::Distance(BodyXY, PathXY);
-	const double MaxDeviation = FMath::Max(Settings.MaxBodyDeviationCm, 1.0);
+
+	// Die Grenze haengt am TEMPO. Im Stand bewegt das Einspurmodell die
+	// Karosserie gar nicht mehr (Step = Tempo * Dt) - wer mit Versatz zum
+	// Stehen kommt, bliebe fuer immer neben seiner Spur stehen. Genau daraus
+	// entstanden die ineinander steckenden Kolonnen im Stau.
+	const double MaxDeviation = BodyDeviationLimitCm(
+		Settings, Vehicle.SpeedCmS, Vehicle.LaneChangeCooldown > 0.0f);
 	if (Deviation > MaxDeviation)
 	{
 		const double Excess = Deviation - MaxDeviation;
@@ -1208,9 +1232,27 @@ void FWiesbadenTrafficSimulation::BuildConnectionConflicts()
 		Network->Connections.Num(), ConnectionsByNode.Num(), ConflictPairs);
 }
 
+double FWiesbadenTrafficSimulation::ApproachSpeedForBlockedJunctionCmS(
+	double CurrentSpeedCmS, double DistanceToLineCm,
+	double StopBufferCm, double DecelerationCmS2)
+{
+	if (DecelerationCmS2 <= 0.0)
+	{
+		return CurrentSpeedCmS;
+	}
+
+	// Freie Strecke bis zum Halteort. Am Halteort selbst ist sie null, und
+	// damit auch das zulaessige Tempo - dort steht das Fahrzeug.
+	const double Frei = FMath::Max(0.0, DistanceToLineCm - FMath::Max(StopBufferCm, 0.0));
+	const double Moeglich = FMath::Sqrt(2.0 * DecelerationCmS2 * Frei);
+
+	// NUR begrenzen, nie beschleunigen: wer ohnehin langsamer faehrt, bleibt es.
+	return FMath::Min(FMath::Max(CurrentSpeedCmS, 0.0), Moeglich);
+}
+
 void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 {
-	if (!Network || ConnectionConflicts.Num() == 0)
+	if (!Network || ConnectionConflicts.Num() == 0 || !Settings.bJunctionConflicts)
 	{
 		return;
 	}
@@ -1238,8 +1280,11 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 	// blockiert alles, was noch kommt.
 	//
 	// Das eigene Heck zaehlt mit: der Konfliktpunkt ist erst frei, wenn das
-	// ganze Fahrzeug darueber hinaus ist.
-	const double TailCm = FMath::Max(Settings.VehicleHalfLengthCm, 0.0) * 2.0;
+	// ganze Fahrzeug darueber hinaus ist. Die Bogenlaenge misst die MITTE des
+	// Fahrzeugs - hinter ihr liegt eine halbe Laenge, nicht eine ganze. Eine
+	// ganze Laenge anzusetzen haelt den Weg zwei Meter laenger besetzt, als er
+	// es ist.
+	const double TailCm = FMath::Max(Settings.VehicleHalfLengthCm, 0.0);
 
 	const auto IsConflictBlocked = [&RearmostOnConnection, TailCm]
 		(const FConnectionConflict& Conflict)
@@ -1254,10 +1299,19 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 		int32 VehicleIndex = INDEX_NONE;
 		int32 ConnectionIndex = INDEX_NONE;
 		double DistanceToLineCm = 0.0;
+
+		/** An der Haltelinie - nur diese belegen den Weg fuer sich. */
+		bool bAtLine = false;
+
 		int32 VehicleId = INDEX_NONE;
 	};
 
 	const double StopDistance = FMath::Max(Settings.MinGapCm * 0.5, 100.0);
+
+	// Komfortable Verzoegerung fuer das Anfahren einer belegten Kreuzung -
+	// dieselbe Groessenordnung wie bei der Ruecksicht auf den Spieler. Deutlich
+	// spuerbar, aber kein Notbremsen.
+	const double ComfortDeceleration = 400.0;
 
 	TArray<FEntryCandidate> Candidates;
 	for (int32 i = 0; i < Vehicles.Num(); ++i)
@@ -1268,20 +1322,35 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 			continue;
 		}
 		const double LaneLength = Network->Lanes[Vehicle.LaneId].LengthCm;
-		if (LaneLength <= 0.0 || Vehicle.DistanceCm < LaneLength - StopDistance)
+		if (LaneLength <= 0.0)
 		{
 			continue;
 		}
+
+		// Das Fenster reicht so weit, wie das Fahrzeug zum Bremsen braucht -
+		// nicht nur bis zur Haltelinie. Wer erst 3,5 m davor erfaehrt, dass der
+		// Weg belegt ist, kann nur noch stehenbleiben; das kostet jedes Mal
+		// Anfahren und zwingt die ganze Kolonne dahinter in dieselbe Bremsung.
+		const double Bremsweg = (Vehicle.SpeedCmS * Vehicle.SpeedCmS)
+			/ (2.0 * FMath::Max(ComfortDeceleration, 1.0));
+		const double BisZurLinie = LaneLength - Vehicle.DistanceCm;
+		if (BisZurLinie > StopDistance + Bremsweg)
+		{
+			continue;
+		}
+
 		const int32 Next = PickSuccessorConnection(Vehicle);
 		if (Next == INDEX_NONE || !ConnectionConflicts.Contains(Next))
 		{
 			continue;   // freie Fahrt: dieser Weg kreuzt keinen anderen
 		}
 
+
 		FEntryCandidate Candidate;
 		Candidate.VehicleIndex = i;
 		Candidate.ConnectionIndex = Next;
-		Candidate.DistanceToLineCm = LaneLength - Vehicle.DistanceCm;
+		Candidate.DistanceToLineCm = BisZurLinie;
+		Candidate.bAtLine = (BisZurLinie <= StopDistance);
 		Candidate.VehicleId = Vehicle.VehicleId;
 		Candidates.Add(Candidate);
 	}
@@ -1385,9 +1454,10 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 			const int32 ToLane = Network->Connections[Candidate.ConnectionIndex].ToLaneId;
 			if (const double* RearmostAhead = RearmostOnLane.Find(ToLane))
 			{
-				if (*RearmostAhead < Settings.MinGapCm)
+				if (*RearmostAhead < FMath::Max(Settings.JunctionExitSpaceCm, 0.0))
 				{
 					bBlocked = true;
+					++LastBlockedNoRoomAhead;
 				}
 			}
 		}
@@ -1397,11 +1467,25 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 		{
 			for (const FConnectionConflict& Conflict : *Conflicts)
 			{
+				// Trennt das Signalprogramm die beiden schon? Dann nicht noch
+				// einmal sperren. Zwei Verbindungen verschiedener
+				// Richtungsgruppen derselben Ampel sind nie zugleich frei -
+				// eine zweite Absicherung kostet dort nur Fluss. Bei GLEICHER
+				// Gruppe (Einfaedeln in dieselbe Spur, sich schneidende
+				// Abbieger) schuetzt das Programm nichts, dort bleibt die
+				// Regel scharf.
+				if (TrafficLights && !TrafficLights->CanBeGreenTogether(
+					Candidate.ConnectionIndex, Conflict.OtherConnection))
+				{
+					continue;
+				}
+
 				// Jemand steht im Konfliktpunkt: da faehrt niemand hinein,
 				// egal wer Vorfahrt hat.
 				if (IsConflictBlocked(Conflict))
 				{
 					bBlocked = true;
+					++LastBlockedConflictBusy;
 					break;
 				}
 
@@ -1413,6 +1497,7 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 					&& TimeToLineSeconds(Conflict.OtherConnection) < Settings.JunctionYieldSeconds)
 				{
 					bBlocked = true;
+					++LastBlockedYielding;
 					break;
 				}
 			}
@@ -1420,12 +1505,37 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 
 		if (bBlocked)
 		{
-			Vehicles[Candidate.VehicleIndex].SpeedCmS = 0.0;
+			// FRUEHER BREMSEN STATT HART HALTEN. Wer noch weit weg ist, nimmt
+			// nur Tempo heraus und kommt oft an, wenn der Weg wieder frei ist;
+			// erst an der Haltelinie wird daraus ein Stillstand. Ein harter
+			// Halt an der Linie zwang dagegen jedes Mal die ganze Kolonne
+			// dahinter in dieselbe Vollbremsung.
+			FTrafficVehicle& Wartender = Vehicles[Candidate.VehicleIndex];
+			if (Network->Connections.IsValidIndex(Candidate.ConnectionIndex))
+			{
+				const ETurnType Abbiegen =
+					Network->Connections[Candidate.ConnectionIndex].TurnType;
+				if (Abbiegen == ETurnType::Left || Abbiegen == ETurnType::UTurn)
+				{
+					++LastBlockedLeftTurners;
+				}
+			}
+			Wartender.SpeedCmS = ApproachSpeedForBlockedJunctionCmS(
+				Wartender.SpeedCmS, Candidate.DistanceToLineCm,
+				StopDistance, ComfortDeceleration);
 			++LastVehiclesHeldAtJunction;
 			continue;
 		}
 
-		// Freigegeben: das Fahrzeug steht ab sofort am Anfang seiner Verbindung
+		// Freigegeben - aber belegen darf den Weg nur, wer auch wirklich an der
+		// Linie steht. Ein Fahrzeug 40 m davor wuerde sonst die Kreuzung fuer
+		// sich reservieren, waehrend es noch anrollt.
+		if (!Candidate.bAtLine)
+		{
+			continue;
+		}
+
+		// Das Fahrzeug steht ab sofort am Anfang seiner Verbindung
 		// (Bogenlaenge 0) und besetzt damit deren Konfliktpunkte. Sonst faehrt
 		// im selben Tick ein zweites in denselben Konflikt.
 		double& Rearmost = RearmostOnConnection.FindOrAdd(
@@ -1483,18 +1593,58 @@ void FWiesbadenTrafficSimulation::CountVehicleOverlaps(FOverlapReport& Out) cons
 		{
 			const FTrafficVehicle& B = Vehicles[j];
 
+			// Geprueft wird, was der Spieler SIEHT: die Karosserie. Die
+			// Sollposition auf der Bahn ist exakt, die Karosserie laeuft ihr
+			// mit Lenkeinschlag und Wendekreis nach - und genau die steht im
+			// Bild. Frueher mass diese Diagnose die Bahn und haette ein
+			// ausschwingendes Nachlaufmodell nie gesehen.
+			const FVector PosA = A.bBodyInitialized ? A.BodyLocation : A.Location;
+			const FVector PosB = B.bBodyInitialized ? B.BodyLocation : B.Location;
+			const FVector DirA = A.bBodyInitialized
+				? FVector(FMath::Cos(A.BodyYawRad), FMath::Sin(A.BodyYawRad), 0.0) : A.Forward;
+			const FVector DirB = B.bBodyInitialized
+				? FVector(FMath::Cos(B.BodyYawRad), FMath::Sin(B.BodyYawRad), 0.0) : B.Forward;
+
 			// Grobfilter zuerst: der genaue Test lohnt nur in Reichweite.
-			const double Dx = B.Location.X - A.Location.X;
-			const double Dy = B.Location.Y - A.Location.Y;
+			const double Dx = PosB.X - PosA.X;
+			const double Dy = PosB.Y - PosA.Y;
 			if ((Dx * Dx + Dy * Dy) > FMath::Square(2.0 * Settings.VehicleHalfLengthCm))
 			{
 				continue;
 			}
 
-			if (!AreVehiclesOverlapping(A.Location, A.Forward, B.Location, B.Forward,
+			if (!AreVehiclesOverlapping(PosA, DirA, PosB, DirB,
 				Settings.VehicleHalfLengthCm, Settings.VehicleHalfWidthCm))
 			{
 				continue;
+			}
+
+			// Liegen schon die SOLLPOSITIONEN ineinander? Das trennt "Spur zu
+			// schmal" von "Karosserie schwingt zu weit aus".
+			if (!AreVehiclesOverlapping(A.Location, A.Forward, B.Location, B.Forward,
+				Settings.VehicleHalfLengthCm, Settings.VehicleHalfWidthCm))
+			{
+				++Out.OnlyBodies;
+			}
+
+			// Beteiligte Spurbreiten und Seitenversatz mitschreiben - ohne sie
+			// bleibt "zu eng" eine Behauptung.
+			for (const FTrafficVehicle* V : { &A, &B })
+			{
+				if (V->bOnLane && Network && Network->Lanes.IsValidIndex(V->LaneId))
+				{
+					const double Breite = Network->Lanes[V->LaneId].WidthCm;
+					if (Breite > 0.0
+						&& (Out.NarrowestLaneCm <= 0.0 || Breite < Out.NarrowestLaneCm))
+					{
+						Out.NarrowestLaneCm = Breite;
+					}
+				}
+				if (V->bBodyInitialized)
+				{
+					const double Versatz = FVector::Dist2D(V->BodyLocation, V->Location);
+					Out.MaxBodyOffsetCm = FMath::Max(Out.MaxBodyOffsetCm, Versatz);
+				}
 			}
 
 			++Out.Pairs;
@@ -1503,8 +1653,39 @@ void FWiesbadenTrafficSimulation::CountVehicleOverlaps(FOverlapReport& Out) cons
 
 			if (A.bOnLane && B.bOnLane)
 			{
-				if (A.LaneId == B.LaneId) { ++Out.SameEdge; }
-				else { ++Out.Other; }
+				if (A.LaneId == B.LaneId)
+				{
+					++Out.SameEdge;
+				}
+				else
+				{
+					++Out.Other;
+
+					// Derselbe Abschnitt hiesse: die Spuraufteilung legt die
+					// Bahnen zu eng. Verschiedene Abschnitte hiessen: zwei
+					// Strassen des Netzes liegen zu dicht beieinander. Ohne
+					// diese Trennung raet man beim Beheben.
+					if (Network && Network->Lanes.IsValidIndex(A.LaneId)
+						&& Network->Lanes.IsValidIndex(B.LaneId))
+					{
+						if (Network->Lanes[A.LaneId].SegmentId
+							== Network->Lanes[B.LaneId].SegmentId)
+						{
+							++Out.SameSegmentLanes;
+						}
+						else
+						{
+							++Out.CrossSegmentLanes;
+						}
+					}
+
+					const double RailAbstand = FVector::Dist2D(A.Location, B.Location);
+					if (Out.MinLaneRailDistanceCm <= 0.0
+						|| RailAbstand < Out.MinLaneRailDistanceCm)
+					{
+						Out.MinLaneRailDistanceCm = RailAbstand;
+					}
+				}
 			}
 			else if (!A.bOnLane && !B.bOnLane)
 			{
@@ -2066,6 +2247,10 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 	// Geschwindigkeit aus der Kopf-zu-Schwanz-Berechnung.
 	LastVehiclesHeldAtRed = 0;
 	LastVehiclesHeldAtJunction = 0;
+	LastBlockedNoRoomAhead = 0;
+	LastBlockedConflictBusy = 0;
+	LastBlockedYielding = 0;
+	LastBlockedLeftTurners = 0;
 
 	if (TrafficLights && Network)
 	{

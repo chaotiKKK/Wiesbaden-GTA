@@ -208,6 +208,37 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	bool bKeepJunctionsClear = true;
 
 	/**
+	 * Kreuzungskonflikte ueberhaupt beachten.
+	 *
+	 * Abschaltbar, damit die Wirkung der Regel MESSBAR bleibt - so wie die
+	 * gruene Welle abschaltbar ist. Ohne diesen Schalter liesse sich nur gegen
+	 * einen alten Messlauf vergleichen, in dem auch alles andere anders war
+	 * (andere Karte, andere Signalprogramme), und die Zuordnung der Wirkung
+	 * waere Behauptung statt Messung.
+	 *
+	 * AUS heisst: Fahrzeuge fahren wieder durcheinander - kein Spielzustand,
+	 * nur ein Messwerkzeug.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	bool bJunctionConflicts = true;
+
+	/**
+	 * Platz, den es hinter der Kreuzung geben muss, in cm.
+	 *
+	 * Gemessen war dies der teuerste Posten der ganzen Kreuzungsregel: 27 bis
+	 * 32 der rund 55 wartenden Fahrzeuge standen NICHT wegen eines belegten
+	 * Weges, sondern weil hinter der Kreuzung angeblich kein Platz war.
+	 *
+	 * Verlangt wurde der volle Folgeabstand (700 cm). Der ist fuer die Luecke
+	 * zwischen zwei FAHRENDEN Fahrzeugen gedacht; zum Einfaedeln braucht es
+	 * nur den Platz, den das Fahrzeug einnimmt - 414 cm Laenge plus etwas
+	 * Luft. Alles darueber haelt Fahrzeuge vor einer Kreuzung fest, hinter der
+	 * sie problemlos Platz faenden, und genau das staut sich zurueck.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "100.0"))
+	double JunctionExitSpaceCm = 480.0;
+
+	/**
 	 * Halbe Laenge und halbe Breite eines Verkehrsfahrzeugs in cm.
 	 *
 	 * Beschreibt DASSELBE Auto wie die Kollisionsbox des Spawners
@@ -446,6 +477,50 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrphysik", meta = (ClampMin = "20.0"))
 	double MaxBodyDeviationCm = 400.0;
+
+	/**
+	 * Groesster geduldeter Abstand IM STAND in cm.
+	 *
+	 * Die grosszuegigen 400 cm oben sind mit dem Spurwechsel begruendet - und
+	 * der passiert im FAHREN. Ein stehendes Fahrzeug hat keinen Grund, vier
+	 * Meter neben seiner Spur zu stehen, und genau das war im Probespiel zu
+	 * sehen: gemessen 23 von 27 ineinander steckenden Paaren betrafen
+	 * ausschliesslich die Karosserien, bei Seitenversaetzen bis 5 m, waehrend
+	 * die Sollpositionen sauber auseinander lagen.
+	 *
+	 * Dass es im Stand nie von allein besser wird, liegt am Modell: die
+	 * Karosserie bewegt sich mit `Step = Tempo * Dt` - bei Tempo null bewegt
+	 * sie sich gar nicht. Wer mit Versatz zum Stehen kommt, bleibt dort.
+	 *
+	 * 60 cm ist kein gegriffener Wert: die schmalste Spur im Netz misst
+	 * 275 cm, ein Fahrzeug 154 cm - es bleiben (275 - 154) / 2 = 60 cm Spiel
+	 * je Seite. Damit steht das Auto im Stand immer noch in SEINER Spur.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrphysik", meta = (ClampMin = "0.0"))
+	double StandingBodyDeviationCm = 60.0;
+
+	/**
+	 * Tempo in cm/s, ab dem die volle Abweichung erlaubt ist.
+	 *
+	 * Dazwischen wird linear geblendet. 500 cm/s sind 18 km/h - darunter
+	 * wechselt in dichtem Verkehr kaum jemand die Spur, darueber soll das
+	 * Herueberziehen ungestoert aussehen.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrphysik", meta = (ClampMin = "1.0"))
+	double BodyDeviationFullSpeedCmS = 500.0;
+
+	/**
+	 * Groesster geduldeter Abstand im normalen Fahren in cm.
+	 *
+	 * Die 400 cm oben gelten NUR fuer das Herueberziehen nach einem
+	 * Spurwechsel - dafuer sind sie begruendet. Wer geradeaus faehrt, hat
+	 * dafuer keinen Anlass: in engen Kurven schneidet oder weitet das
+	 * Einspurmodell um Dezimeter, nicht um Meter. 120 cm laesst dieses Leben
+	 * zu und haelt das Auto trotzdem in seiner Spur - bei 325 cm Spurbreite
+	 * und 154 cm Fahrzeugbreite reicht es gerade bis an die Nachbarspur.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrphysik", meta = (ClampMin = "0.0"))
+	double DrivingBodyDeviationCm = 120.0;
 };
 
 /** Momentaufnahme der Simulation (pro Tick, fuer HUD/Blueprint). */
@@ -676,6 +751,24 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	int32 GetVehiclesHeldAtJunction() const { return LastVehiclesHeldAtJunction; }
 
 	/**
+	 * WARUM sie warten - aufgeschluesselt nach den drei Sperren.
+	 *
+	 * Die blosse Zahl der Wartenden sagt nicht, welche Regel den Fluss kostet.
+	 * Ohne die Aufschluesselung aendert man auf Verdacht: frueheres Bremsen
+	 * statt Vollhalt brachte gemessen NICHTS, weil die Ursache woanders lag.
+	 */
+	void GetJunctionBlockReasons(int32& OutNoRoomAhead, int32& OutConflictBusy,
+		int32& OutYielding) const
+	{
+		OutNoRoomAhead = LastBlockedNoRoomAhead;
+		OutConflictBusy = LastBlockedConflictBusy;
+		OutYielding = LastBlockedYielding;
+	}
+
+	/** Wie viele der Wartenden wollen LINKS abbiegen? */
+	int32 GetBlockedLeftTurners() const { return LastBlockedLeftTurners; }
+
+	/**
 	 * Fahrzeuge, die INEINANDER stecken - aufgeschluesselt nach Bahn-Beziehung.
 	 *
 	 * Die Abstandsregeln arbeiten je Bahn (Spur bzw. Verbindung). Wo zwei
@@ -700,6 +793,38 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 
 		/** Davon: alles Uebrige (verschiedene Spuren, verschiedene Knoten). */
 		int32 Other = 0;
+
+		/**
+		 * Davon: nur die KAROSSERIEN ueberlappen, die Sollpositionen auf den
+		 * Bahnen nicht.
+		 *
+		 * Das trennt die beiden moeglichen Ursachen: liegen schon die Bahnen
+		 * ineinander, ist die Spur zu schmal; liegen nur die Karosserien
+		 * ineinander, schwingt das Nachlaufmodell zu weit aus
+		 * (MaxBodyDeviationCm).
+		 */
+		int32 OnlyBodies = 0;
+
+		/** Schmalste Spur, die an einer Ueberlappung beteiligt war (cm). */
+		double NarrowestLaneCm = 0.0;
+
+		/**
+		 * Verschiedene Spuren DESSELBEN Strassenabschnitts (Parallel- oder
+		 * Gegenspur) - hier waere die Spuraufteilung schuld.
+		 */
+		int32 SameSegmentLanes = 0;
+
+		/**
+		 * Verschiedene Spuren VERSCHIEDENER Abschnitte - hier liegen zwei
+		 * Strassen im Netz zu dicht nebeneinander.
+		 */
+		int32 CrossSegmentLanes = 0;
+
+		/** Kleinster Abstand zweier Sollpositionen auf verschiedenen Spuren (cm). */
+		double MinLaneRailDistanceCm = 0.0;
+
+		/** Groesster Seitenversatz Karosserie gegen Sollposition (cm). */
+		double MaxBodyOffsetCm = 0.0;
 
 		/** Fahrzeuge, die an mindestens einem Paar beteiligt sind. */
 		int32 VehiclesInvolved = 0;
@@ -744,6 +869,16 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	static bool FindConnectionConflict(const FLaneConnection& A, const FLaneConnection& B,
 		double& OutClearOnA, double& OutClearOnB);
 
+	/**
+	 * Geduldeter Abstand der Karosserie zur Sollbahn bei diesem Tempo (cm).
+	 *
+	 * Datenrein: die grosszuegige Grenze gilt dem Spurwechsel, und der
+	 * passiert im Fahren. Im Stand zaehlt nur noch, dass das Auto in seiner
+	 * Spur steht.
+	 */
+	static double BodyDeviationLimitCm(const FWiesbadenTrafficSettings& InSettings,
+		double SpeedCmS, bool bChangingLane);
+
 	/** Schneiden sich zwei Strecken in der Ebene? (Hoehe bleibt aussen vor.) */
 	static bool SegmentsIntersect2D(const FVector& A0, const FVector& A1,
 		const FVector& B0, const FVector& B1);
@@ -764,6 +899,23 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	 *    Wege liegen parallel nebeneinander.
 	 */
 	static bool DoConnectionsConflict(const FLaneConnection& A, const FLaneConnection& B);
+
+	/**
+	 * Zulaessiges Tempo beim Anfahren einer BELEGTEN Kreuzung.
+	 *
+	 * Bremswegmodell v = sqrt(2*a*s), dieselbe Formel wie bei der
+	 * Hindernisregel und aus demselben Grund: die belegte Kreuzung ist ein
+	 * STEHENDES Hindernis. Vorher wurde erst an der Haltelinie hart auf null
+	 * gesetzt - jedes Anfahren danach kostet Zeit, und die Kolonne dahinter
+	 * muss mitbremsen. Genau daraus entstehen die Stop-and-Go-Wellen, die den
+	 * Fluss fressen.
+	 *
+	 * @param DistanceToLineCm Reststrecke bis zur Haltelinie.
+	 * @param StopBufferCm     Abstand VOR der Linie, an dem gestanden wird.
+	 */
+	static double ApproachSpeedForBlockedJunctionCmS(
+		double CurrentSpeedCmS, double DistanceToLineCm,
+		double StopBufferCm, double DecelerationCmS2);
 
 	/** Ehrliches, verkehrsUNABHAENGIGES Signal: war seit Initialize je eine von
 	 *  einer Ampel kontrollierte Verbindung rot? False heisst bei geladener Stadt:
@@ -1120,6 +1272,14 @@ private:
 
 	/** Fahrzeuge, die dieser Tick vor einem belegten Kreuzungsweg gehalten hat. */
 	int32 LastVehiclesHeldAtJunction = 0;
+
+	/** Davon: kein Platz hinter der Kreuzung / Konfliktpunkt belegt / Vorfahrt. */
+	int32 LastBlockedNoRoomAhead = 0;
+	int32 LastBlockedConflictBusy = 0;
+	int32 LastBlockedYielding = 0;
+
+	/** Davon: Linksabbieger (zeigt, ob Abbiegespuren etwas braechten). */
+	int32 LastBlockedLeftTurners = 0;
 
 	/** Seit Initialize aufsummierte Kennzahlen fuer die ehrliche Ampel-Diagnose. */
 	int32 LifetimeVehiclesHeldAtRed = 0;

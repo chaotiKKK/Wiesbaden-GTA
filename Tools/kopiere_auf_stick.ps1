@@ -18,6 +18,9 @@
 param(
     [string]$Ziel = 'E:\',
     [switch]$OhneAlkis3,
+    # Rueckfallkarte ausdruecklich benennen (Vorgabe: keine). Ein fester
+    # Name stand hier zwei Bakes lang falsch.
+    [string]$Rueckfall = "",
     [switch]$MitEngine,
     [switch]$NurPruefen
 )
@@ -136,17 +139,18 @@ Zeige "`n[2/5] Gebackene Stadt"
 $actorsQuelle = Join-Path $Projekt 'Content\__ExternalActors__\Maps'
 $actorsZiel = 'WiesbadenReal\Content\__ExternalActors__\Maps'
 
-# Alkis4: der aktuelle Stand mit der Gelaendereparatur (ZScale) und der
-# versetzten Strassenausstattung.
-Kopiere (Join-Path $actorsQuelle 'WiesbadenCity_Alkis4') `
-        (Join-Path $actorsZiel 'WiesbadenCity_Alkis4')
+# Die AKTUELLE Stadt - welche das ist, sagt Config\DefaultEngine.ini. Ein
+# fester Name hier kopierte nach zwei Bakes die vorletzte Stadt auf den Stick.
+$aktuelleKarte = & (Join-Path $PSScriptRoot 'karte.ps1')
+Kopiere (Join-Path $actorsQuelle $aktuelleKarte) `
+        (Join-Path $actorsZiel $aktuelleKarte)
 
-# Alkis3: der bisher gespielte Stand. Kommt mit, solange Alkis4 nicht im
-# Spiel bestaetigt ist - eine Rueckfallkarte auf dem Stick ist billiger als
-# ein Neubau auf einem Rechner, der die Rohdaten vielleicht noch nicht hat.
-if (-not $OhneAlkis3) {
-    Kopiere (Join-Path $actorsQuelle 'WiesbadenCity_Alkis3') `
-            (Join-Path $actorsZiel 'WiesbadenCity_Alkis3')
+# Rueckfallkarte: ausdruecklich benennen (-Rueckfall <Karte>). Ein fester
+# Name stand hier zwei Bakes lang falsch - eine Rueckfallkarte, die niemand
+# mehr spielt, ist kein Rueckfall.
+if (-not $OhneAlkis3 -and $Rueckfall) {
+    Kopiere (Join-Path $actorsQuelle $Rueckfall) `
+            (Join-Path $actorsZiel $Rueckfall)
 } else {
     Zeige "  Alkis3 auf Wunsch ausgelassen."
 }

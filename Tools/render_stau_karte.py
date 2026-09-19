@@ -108,7 +108,120 @@ def schriften():
         return f, f, f
 
 
+# ---------------------------------------------------------------------------
+#  Differenzkarte: WO hat eine Aenderung gewirkt?
+# ---------------------------------------------------------------------------
+#
+# Zwei Karten nebeneinander zu legen beantwortet die Frage nicht - das Auge
+# findet zwischen 1.400 Punkten keinen Unterschied. Gezeichnet wird deshalb der
+# UNTERSCHIED je Messpunkt: Farbe = Vorzeichen und Staerke, Punktgroesse =
+# Messwerte (ein Ausschlag aus 500 Werten ist Zufall, einer aus 1,3 Mio. ein
+# Befund).
+
+DELTA_STUFEN = [
+    (0.15, (70, 200, 110), "deutlich schneller (> +15 Punkte)"),
+    (0.05, (150, 200, 120), "schneller (+5 bis +15)"),
+    (-0.05, (120, 124, 132), "unveraendert (-5 bis +5)"),
+    (-0.15, (240, 165, 55), "langsamer (-5 bis -15)"),
+    (-1.00, (215, 45, 60), "deutlich langsamer (< -15 Punkte)"),
+]
+
+
+def delta_farbe(d):
+    for schwelle, rgb, _ in DELTA_STUFEN:
+        if d >= schwelle:
+            return rgb
+    return DELTA_STUFEN[-1][1]
+
+
+def zeichne_differenz(vorher_pfad, nachher_pfad, ausgabe, min_werte=200):
+    """Zeichnet die Veraenderung des Tempo-Anteils je Messpunkt."""
+    from PIL import Image, ImageDraw
+
+    netz_v, stau_v = lade(vorher_pfad)
+    netz_n, stau_n = lade(nachher_pfad)
+
+    # Die Spuren liegen in beiden Laeufen gleich - zusammengefuehrt wird ueber
+    # die Koordinate (auf den Meter gerundet, das genuegt und faengt
+    # Rundungsrauschen ab).
+    def schluessel(p):
+        return (round(p["x"] / 100.0), round(p["y"] / 100.0))
+
+    vorher = {schluessel(p): p for p in stau_v}
+
+    punkte = []
+    for p in stau_n:
+        q = vorher.get(schluessel(p))
+        if not q or p["limit"] <= 0 or q["limit"] <= 0:
+            continue
+        if min(p["n"], q["n"]) < min_werte:
+            continue
+        punkte.append({
+            "x": p["x"], "y": p["y"],
+            "delta": (p["kmh"] / p["limit"]) - (q["kmh"] / q["limit"]),
+            "n": min(p["n"], q["n"]),
+            "name": p["name"],
+        })
+
+    if not punkte:
+        print("Differenzkarte: keine gemeinsamen Messpunkte.")
+        return
+
+    # Ausschnitt aus den MESSWERTEN, nicht aus dem Netz - gemessen wird nur um
+    # den Spieler herum.
+    xs = [p["x"] for p in punkte]
+    ys = [p["y"] for p in punkte]
+    minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+    spanne_x = max(maxx - minx, 1.0)
+    spanne_y = max(maxy - miny, 1.0)
+    skala = (WIDTH - 2 * MARGIN) / spanne_x
+    hoehe = int(spanne_y * skala) + 2 * MARGIN + LEGEND_H
+
+    bild = Image.new("RGB", (WIDTH, hoehe), BACKGROUND)
+    zeichner = ImageDraw.Draw(bild)
+
+    def auf_bild(x, y):
+        # Norden nach oben: UE-X zeigt nach Norden, das Bild waechst nach unten.
+        return (MARGIN + (x - minx) * skala,
+                MARGIN + (maxy - y) * skala)
+
+    for (x1, y1, x2, y2) in netz_n:
+        if max(x1, x2) < minx or min(x1, x2) > maxx:
+            continue
+        if max(y1, y2) < miny or min(y1, y2) > maxy:
+            continue
+        zeichner.line([auf_bild(x1, y1), auf_bild(x2, y2)], fill=NETWORK, width=1)
+
+    grosse = max(p["n"] for p in punkte)
+    for p in sorted(punkte, key=lambda q: abs(q["delta"])):
+        px, py = auf_bild(p["x"], p["y"])
+        r = 2.0 + 7.0 * (p["n"] / grosse) ** 0.4
+        zeichner.ellipse([px - r, py - r, px + r, py + r], fill=delta_farbe(p["delta"]))
+
+    fett, normal, klein = schriften()
+    zeichner.text((MARGIN, 22), "Was die Kreuzungsregel geaendert hat", fill=TEXT, font=fett)
+    zeichner.text((MARGIN, hoehe - LEGEND_H + 10),
+                  f"{len(punkte)} gemeinsame Messpunkte, Punktgroesse = Messwerte",
+                  fill=DIM, font=klein)
+    y = hoehe - LEGEND_H + 36
+    for _, rgb, text in DELTA_STUFEN:
+        zeichner.ellipse([MARGIN, y, MARGIN + 14, y + 14], fill=rgb)
+        zeichner.text((MARGIN + 24, y - 2), text, fill=TEXT, font=klein)
+        y += 22
+
+    bild.save(ausgabe)
+    print(f"Differenzkarte: {ausgabe} ({len(punkte)} Punkte)")
+
+
 def main():
+    # Zwei Eingaben heissen: Differenzkarte statt Momentaufnahme.
+    #   python Tools/render_stau_karte.py --diff <vorher> <nachher> [ausgabe]
+    if len(sys.argv) > 3 and sys.argv[1] == "--diff":
+        ausgabe = sys.argv[4] if len(sys.argv) > 4 else (
+            PROJECT + "/Saved/Diagnose/staukarte_differenz.png")
+        zeichne_differenz(sys.argv[2], sys.argv[3], ausgabe)
+        return 0
+
     ein = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_IN
     aus = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_OUT
 

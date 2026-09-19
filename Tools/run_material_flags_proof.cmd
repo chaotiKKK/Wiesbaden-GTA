@@ -9,7 +9,10 @@ REM Aufruf: Tools\run_material_flags_proof.cmd [Karte] [Sekunden]
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\materialflags_proof.log
 set MAP=%~1
-if "%MAP%"=="" set MAP=WiesbadenCity_Alkis15
+REM  Karte NICHT fest verdrahten - sie kommt aus
+REM  Config\DefaultEngine.ini (siehe Tools\karte.cmd).
+call "%~dp0karte.cmd"
+if "%MAP%"=="" set MAP=%WB_MAP%
 set QUIT=%~2
 if "%QUIT%"=="" set QUIT=120
 "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/%MAP% -game -WbBusLog -WbQuitAfter=%QUIT% -windowed -ResX=1280 -ResY=720 -stdout -unattended -nop4 > "%LOG%" 2>&1

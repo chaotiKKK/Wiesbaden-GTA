@@ -129,5 +129,72 @@ bool FTrafficPlayerAwarenessTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Ohne Fahrtrichtung: unveraendert"), NoForward, Speed);
 	}
 
+
+	// -- 10. Wie weit darf die KAROSSERIE von ihrer Bahn abweichen? ---------
+	//
+	// Im Probespiel standen Fahrzeuge sichtbar ineinander, ohne dass ihre
+	// Sollpositionen einander nahe kamen: gemessen 23 von 27 Paaren betrafen
+	// ausschliesslich die Karosserien, bei Seitenversaetzen bis 5 m. Die
+	// grosszuegige Grenze war mit dem Spurwechsel begruendet - der passiert
+	// aber im FAHREN, und im Stand bewegt das Einspurmodell die Karosserie
+	// gar nicht mehr (Step = Tempo * Dt): wer mit Versatz zum Stehen kommt,
+	// bleibt fuer immer neben seiner Spur stehen.
+	{
+		using FSim = FWiesbadenTrafficSimulation;
+		FWiesbadenTrafficSettings S;
+		S.MaxBodyDeviationCm = 400.0;
+		S.DrivingBodyDeviationCm = 120.0;
+		S.StandingBodyDeviationCm = 60.0;
+		S.BodyDeviationFullSpeedCmS = 500.0;
+
+		// DER FEHLERFALL: im Stand darf das Auto nicht neben seiner Spur stehen.
+		TestTrue(FString::Printf(TEXT("Im Stand hoechstens %.0f cm (%.0f)"),
+			S.StandingBodyDeviationCm,
+			FSim::BodyDeviationLimitCm(S, 0.0, /*bChangingLane=*/false)),
+			FMath::IsNearlyEqual(FSim::BodyDeviationLimitCm(S, 0.0, false),
+				S.StandingBodyDeviationCm, 0.01));
+
+		// Und das ist die Zahl, auf die es ankommt: die schmalste Spur im Netz
+		// misst 275 cm, ein Fahrzeug 154 cm - es bleiben 60 cm Spiel je Seite.
+		// Mehr, und das stehende Auto ragt in die Nachbarspur.
+		TestTrue(TEXT("Im Stand bleibt das Auto in seiner Spur"),
+			FSim::BodyDeviationLimitCm(S, 0.0, false) <= (275.0 - 154.0) * 0.5 + 0.01);
+
+		// Im Fahren mehr Spiel - aber nicht die volle Spurwechsel-Grenze.
+		const double Fahrt = FSim::BodyDeviationLimitCm(S, 2000.0, false);
+		TestTrue(FString::Printf(TEXT("Im Fahren %.0f cm"), Fahrt),
+			FMath::IsNearlyEqual(Fahrt, S.DrivingBodyDeviationCm, 0.01));
+		TestTrue(TEXT("Im Fahren deutlich unter der Spurwechsel-Grenze"),
+			Fahrt < S.MaxBodyDeviationCm * 0.5);
+
+		// BEIM SPURWECHSEL gilt die grosse Grenze - dafuer ist sie da. Ohne
+		// diesen Zweig haengt die Karosserie waehrend des Herueberziehens am
+		// Sicherheitsnetz, und der Wechsel sieht aus wie ein Ruck.
+		TestTrue(TEXT("Beim Spurwechsel gilt die volle Grenze"),
+			FMath::IsNearlyEqual(FSim::BodyDeviationLimitCm(S, 2000.0, true),
+				S.MaxBodyDeviationCm, 0.01));
+		TestTrue(TEXT("Spurwechsel-Grenze traegt einen ganzen Spurversatz"),
+			FSim::BodyDeviationLimitCm(S, 2000.0, true) > 325.0);
+
+		// Dazwischen monoton: schneller heisst nie weniger Spiel.
+		double Vorher = -1.0;
+		bool bMonoton = true;
+		for (double Tempo = 0.0; Tempo <= 3000.0; Tempo += 50.0)
+		{
+			const double Grenze = FSim::BodyDeviationLimitCm(S, Tempo, false);
+			bMonoton = bMonoton && (Grenze >= Vorher - 0.001);
+			Vorher = Grenze;
+		}
+		TestTrue(TEXT("Schneller heisst nie weniger Spiel"), bMonoton);
+
+		// Unsinnige Einstellungen duerfen die Regel nicht umdrehen: steht die
+		// Stand-Grenze ueber der Fahr-Grenze, gewinnt die Stand-Grenze als
+		// Untergrenze - nie weniger als im Stand.
+		FWiesbadenTrafficSettings Verdreht = S;
+		Verdreht.DrivingBodyDeviationCm = 10.0;
+		TestTrue(TEXT("Verdrehte Einstellung faellt nie unter die Stand-Grenze"),
+			FSim::BodyDeviationLimitCm(Verdreht, 2000.0, false)
+				>= Verdreht.StandingBodyDeviationCm - 0.01);
+	}
 	return true;
 }

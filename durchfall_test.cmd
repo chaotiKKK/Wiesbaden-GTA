@@ -12,5 +12,8 @@ REM noch nicht gestreamt (ein Wagen fiele dort ins Leere). Ergebnis:
 REM   Saved\Diagnose\Durchfall.txt
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\durchfall_test.log
-"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis3 -game -windowed -ResX=1280 -ResY=720 -WbAutoDrive=140 -WbAutoDriveStart=260 -WbQuitAfter=355 -stdout -unattended -nop4 > "%LOG%" 2>&1
+REM  Karte NICHT fest verdrahten - sie kommt aus
+REM  Config\DefaultEngine.ini (siehe Tools\karte.cmd).
+call "%~dp0Tools\karte.cmd"
+"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" %WB_MAP_PFAD% -game -windowed -ResX=1280 -ResY=720 -WbAutoDrive=140 -WbAutoDriveStart=260 -WbQuitAfter=355 -stdout -unattended -nop4 > "%LOG%" 2>&1
 exit /b %ERRORLEVEL%

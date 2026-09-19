@@ -15,9 +15,9 @@ und nicht versehentlich eine andere - Quelldateien, Zellgroesse,
 Gelaendeaufloesung.
 
 Umgebungsvariablen:
-    WB_TARGET_MAP   Zielpfad (Vorgabe /Game/Maps/WiesbadenCity_Alkis3)
+    WB_TARGET_MAP   Zielpfad (Vorgabe: die Default-Karte der Ini)
     WB_SOURCE_MAP   Karte, aus der die Einstellungen kommen
-                    (Vorgabe /Game/Maps/WiesbadenCity_Alkis)
+                    (Vorgabe: die Default-Karte der Ini)
 
 Aufruf:
   UnrealEditor-Cmd.exe WiesbadenReal.uproject -run=pythonscript
@@ -25,11 +25,16 @@ Aufruf:
 """
 
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from karte import standard_karte_pfad   # EINE Quelle: Config/DefaultEngine.ini
+
+import os
 
 import unreal
 
-TARGET = os.environ.get("WB_TARGET_MAP", "/Game/Maps/WiesbadenCity_Alkis3")
-SOURCE = os.environ.get("WB_SOURCE_MAP", "/Game/Maps/WiesbadenCity_Alkis3")
+TARGET = os.environ.get("WB_TARGET_MAP", standard_karte_pfad())
+SOURCE = os.environ.get("WB_SOURCE_MAP", standard_karte_pfad())
 
 LES = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 EAS = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)

@@ -295,6 +295,21 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSystem
 	void GetProgramStatistics(int32& OutWithLeftPhase, double& OutMeanCycleSeconds,
 		double& OutMinCycleSeconds, double& OutMaxCycleSeconds) const;
 
+	/**
+	 * Koennen zwei Verbindungen GLEICHZEITIG gruen sein?
+	 *
+	 * Das Signalprogramm gibt je Phase genau eine Richtungsgruppe frei. Zwei
+	 * Verbindungen verschiedener Gruppen DERSELBEN Ampel treffen sich deshalb
+	 * nie - dort braucht es keine zweite Absicherung durch die
+	 * Kreuzungskonflikt-Regel, und eine zweite Absicherung kostet dort nur
+	 * Fluss.
+	 *
+	 * True (also "koennte zusammentreffen") liefert die Funktion bewusst auch
+	 * im Zweifel: ohne Ampel, bei verschiedenen Ampeln oder wenn einer
+	 * Verbindung die Gruppe fehlt (die gilt als dauerhaft gruen).
+	 */
+	bool CanBeGreenTogether(int32 ConnectionA, int32 ConnectionB) const;
+
 	/** Anzahl der Ampeln (TrafficSignals-Kreuzungen). */
 	int32 GetTrafficLightCount() const { return Lights.Num(); }
 

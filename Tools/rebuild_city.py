@@ -19,11 +19,22 @@ gescheitert):
 """
 
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from karte import standard_karte_pfad   # EINE Quelle: Config/DefaultEngine.ini
+
+import os
 
 import unreal
 
-SOURCE = os.environ.get("WB_SOURCE_MAP", "/Game/Maps/WiesbadenCity_Alkis3")
-TARGET = os.environ.get("WB_TARGET_MAP", "/Game/Maps/WiesbadenCity_Alkis4")
+SOURCE = os.environ.get("WB_SOURCE_MAP", standard_karte_pfad())
+# KEINE Vorgabe: ein Bake schreibt eine NEUE Karte. Eine Vorgabe hier hiesse,
+# bei einem vergessenen WB_TARGET_MAP die gespielte Stadt zu ueberschreiben.
+TARGET = os.environ.get("WB_TARGET_MAP", "")
+if not TARGET:
+    raise SystemExit(
+        "WB_TARGET_MAP fehlt: Zielkarte des Bakes ausdruecklich angeben "
+        "(z. B. /Game/Maps/WiesbadenCity_AlkisNN).")
 SCRATCH_BASE = "/Game/Maps/__StadtNeubau"
 
 LES = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)

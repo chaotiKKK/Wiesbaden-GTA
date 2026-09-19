@@ -9,7 +9,7 @@ rem aussteigen, damit das Bild aus Augenhoehe kommt (Kamerahoehe des Autos
 rem verdeckt die Kufen).
 rem
 rem Aufruf: shot_heli_paar.cmd [Karte] [Bild bei s] [Ende bei s] [Pose...]
-rem   %1 Karte (Standard WiesbadenCity_Alkis15 = neuerster Vollbau)
+rem   %1 Karte (Standard: die Default-Karte aus Config, siehe Tools-karte.cmd)
 rem   %2 -WbShot=<s>      Bildzeitpunkt
 rem   %3 -WbQuitAfter=<s> Ende des Laufs
 rem   %4.. zusaetzliche Schalter, z. B. eine feste Kamera:
@@ -24,7 +24,10 @@ rem (dort die beiden Absetz-Zeilen mit Abstand und Rotorkreisen).
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\shot_heli_paar.log
 set MAP=%~1
-if "%MAP%"=="" set MAP=WiesbadenCity_Alkis15
+REM  Karte NICHT fest verdrahten - sie kommt aus
+REM  Config\DefaultEngine.ini (siehe Tools\karte.cmd).
+call "%~dp0Tools\karte.cmd"
+if "%MAP%"=="" set MAP=%WB_MAP%
 set SHOT=%~2
 if "%SHOT%"=="" set SHOT=20
 set QUIT=%~3

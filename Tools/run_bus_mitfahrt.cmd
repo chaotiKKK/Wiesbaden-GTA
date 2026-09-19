@@ -21,7 +21,10 @@ set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\shot_mitfahrt2.log
 set WAGON=%~1
 if "%WAGON%"=="" set WAGON=601
 set MAP=%~2
-if "%MAP%"=="" set MAP=WiesbadenCity_Alkis15
+REM  Karte NICHT fest verdrahten - sie kommt aus
+REM  Config\DefaultEngine.ini (siehe Tools\karte.cmd).
+call "%~dp0karte.cmd"
+if "%MAP%"=="" set MAP=%WB_MAP%
 set QUIT=%~3
 if "%QUIT%"=="" set QUIT=260
 set SHOT=%~4
