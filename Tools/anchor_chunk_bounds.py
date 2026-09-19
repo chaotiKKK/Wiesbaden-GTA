@@ -21,10 +21,15 @@ Karte ueber Umgebungsvariable WB_MAP umstellbar (Default: die aktuelle).
 """
 
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from karte import standard_karte_pfad   # EINE Quelle: Config/DefaultEngine.ini
+
+import os
 
 import unreal
 
-MAP = os.environ.get("WB_MAP", "/Game/Maps/WiesbadenCity_Alkis4")
+MAP = os.environ.get("WB_MAP", standard_karte_pfad())
 
 EAL = unreal.EditorAssetLibrary
 LES = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)

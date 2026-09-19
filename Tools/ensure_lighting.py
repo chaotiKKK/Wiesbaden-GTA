@@ -11,19 +11,24 @@ Aufruf:
       -script="Tools/ensure_lighting.py" -unattended -nosplash
 """
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from karte import standard_karte_pfad   # EINE Quelle: Config/DefaultEngine.ini
+
+import os
 
 import unreal
 
 # Kartenpfad zentral.
 #
-# Die Karte heisst seit dem Neubau vom 31.08. WiesbadenCity_Alkis3; die alte wurde
+# Welche Karte gemeint ist, sagt Config/DefaultEngine.ini (Tools/karte.py); die alte wurde
 # entfernt. Werkzeuge, die noch auf sie zeigten, luden ins Leere UND
 # meldeten es nicht - build_materials.py schrieb daraufhin
 # "Landscape-Material neu verknuepft: 0 Actor(en)" statt 1.
 #
 # Ueber die Umgebungsvariable WB_MAP umstellbar, damit der naechste
 # Kartenwechsel nicht wieder vier Dateien anfassen muss.
-MAP = os.environ.get("WB_MAP", "/Game/Maps/WiesbadenCity_Alkis3")
+MAP = os.environ.get("WB_MAP", standard_karte_pfad())
 
 
 def log(msg):

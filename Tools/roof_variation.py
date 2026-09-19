@@ -1,7 +1,7 @@
 # Baut M_WbBuildingRoof neu: Daecher variieren je WELTPOSITIONS-REGION zwischen
 # Schiefer (RoofClay) und terrakotta Ziegel (RoofTile) - so wird die Skyline nicht
 # mehr uniform. M_WbBuildingRoof ist laut Dependency-Dump das von den GEBACKENEN
-# Chunks (WiesbadenCity_Alkis4) real referenzierte Dachmaterial.
+# Chunks der Default-Karte real referenzierte Dachmaterial.
 #
 # Drei Fallen, die hier zusammenkamen (alle per Screenshot-Zerlegung bewiesen):
 #  1) Die gebackenen Dach-Mesh-Abschnitte haben KEINE brauchbaren UVs -> jeder

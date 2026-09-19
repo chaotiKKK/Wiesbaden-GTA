@@ -1,8 +1,9 @@
 # Legt die Desktop-Verknuepfung "Wiesbaden aktuell (<Karte>)" auf eine gebackene
-# Stadtkarte. Nach jedem Neubau (Alkis16, Alkis17, ...) ist das ein Aufruf:
+# Stadtkarte. OHNE -Map nimmt sie die Default-Karte aus Config\DefaultEngine.ini
+# (Tools\karte.ps1) - nach einem Neubau genuegt also ein Aufruf ohne Argument:
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File Tools/make_play_shortcut.ps1
-#   powershell ... -File Tools/make_play_shortcut.ps1 -Map WiesbadenCity_Alkis16
+#   powershell ... -File Tools/make_play_shortcut.ps1 -Map <andere Karte>
 #
 # CmdletBinding: ein Tippfehler im -Map-Argument wird abgewiesen statt STILL
 # ignoriert (sonst zeigt die Verknuepfung wieder auf die alte Karte - dieselbe
@@ -20,7 +21,9 @@
 
 [CmdletBinding()]
 param(
-    [string]$Map = "WiesbadenCity_Alkis15",
+    # Vorgabe ist die Default-Karte - eine feste Zahl hier zeigte nach jedem
+    # Bake auf die vorletzte Stadt.
+    [string]$Map = (& "$PSScriptRoot\karte.ps1"),
     [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
     [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8",
     [int]$ResX = 1920,

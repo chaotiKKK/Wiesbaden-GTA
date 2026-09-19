@@ -1,5 +1,5 @@
 # Flugpruefung WiesbadenReal: startet eine ECHTE Spielsitzung der Stadt
-# (Default-Map WiesbadenCity_Alkis15), setzt den Ka-52 per Dev-Befehl in die
+# (Default-Map aus Config\DefaultEngine.ini), setzt den Ka-52 per Dev-Befehl in die
 # Luft und schreibt die In-Flight-Telemetrie ins Log:
 #   Rotor-Drehzahl (Physik vs. tatsaechliche Nabendrehung),
 #   Mastachse (Naben- und Blatt-Drehpunkte, Stangen-/Blattachsneigung),

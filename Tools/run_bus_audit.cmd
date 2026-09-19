@@ -11,7 +11,10 @@ rem
 rem Aufruf: Tools\run_bus_audit.cmd [Karte] [Spielsekunden] [Logdatei]
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set MAP=%~1
-if "%MAP%"=="" set MAP=WiesbadenCity_Alkis15
+REM  Karte NICHT fest verdrahten - sie kommt aus
+REM  Config\DefaultEngine.ini (siehe Tools\karte.cmd).
+call "%~dp0karte.cmd"
+if "%MAP%"=="" set MAP=%WB_MAP%
 set QUIT=%~2
 if "%QUIT%"=="" set QUIT=2400
 set LOG=%~3

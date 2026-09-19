@@ -10,9 +10,14 @@
 # bester Kompromiss aus Tiefe UND Tageslicht-Helligkeit gewaehlt (pitch=-18 war zu
 # daemmrig-golden, -32/-40 wurden wieder flach; sky<1.3 kippt Richtung schwarz).
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from karte import standard_karte_pfad   # EINE Quelle: Config/DefaultEngine.ini
+
+import os
 import unreal
 
-MAP = "/Game/Maps/WiesbadenCity_Alkis4"
+MAP = os.environ.get("WB_MAP", standard_karte_pfad())
 # Feinjustierbar per Umgebungsvariablen (fuer die Vorher/Nachher-Iteration):
 #   WB_SUN_PITCH (Grad, negativ = Sonne ueber Horizont), WB_SKY_INTENSITY, WB_SUN_YAW.
 SUN_PITCH = float(os.environ.get("WB_SUN_PITCH", -24.0))

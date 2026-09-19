@@ -8,7 +8,7 @@ rem Innenraum waehrend der Fahrt - der Beleg dafuer, dass der Fahrgast NICHT meh
 rem in der geschlossenen Aussenhaut sitzt.
 rem
 rem Aufruf: shot_busmitfahrt.cmd [Karte] [Park-Halt] [Bild bei s] [Einsteigen bei s] [Ende bei s]
-rem   %1 Karte (Standard WiesbadenCity_Alkis15 = neuester Vollbau)
+rem   %1 Karte (Standard: die Default-Karte aus Config, siehe Tools-karte.cmd)
 rem   %2 -WbBusParkStop (>= 0: Busse stehen fest an dieser Halte, -1 = Fahrplan)
 rem   %3 -WbShot=<s>         Bildzeitpunkt
 rem   %4 -WbBusRide=<s>     Einsteigen; -1 schaltet die Automatik ab
@@ -23,7 +23,10 @@ rem wiederholt einen LEEREN Log und kein Bild (siehe AGENTS.md, "-WbShot").
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\shot_busmitfahrt.log
 set MAP=%~1
-if "%MAP%"=="" set MAP=WiesbadenCity_Alkis15
+REM  Karte NICHT fest verdrahten - sie kommt aus
+REM  Config\DefaultEngine.ini (siehe Tools\karte.cmd).
+call "%~dp0Tools\karte.cmd"
+if "%MAP%"=="" set MAP=%WB_MAP%
 set PARK=%~2
 if "%PARK%"=="" set PARK=-1
 set SHOT=%~3

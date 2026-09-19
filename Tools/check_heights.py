@@ -18,10 +18,15 @@ Aufruf (VOLLER Editor - der Landscape-Zugriff braucht ihn):
 """
 
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from karte import standard_karte_pfad   # EINE Quelle: Config/DefaultEngine.ini
+
+import os
 
 import unreal
 
-SOURCE = os.environ.get("WB_SOURCE_MAP", "/Game/Maps/WiesbadenCity_Alkis3")
+SOURCE = os.environ.get("WB_SOURCE_MAP", standard_karte_pfad())
 SCRATCH_BASE = "/Game/Maps/__HoehenPruefung"
 
 LES = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)

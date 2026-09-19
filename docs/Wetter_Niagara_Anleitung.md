@@ -240,7 +240,7 @@ Pruefung macht das Spiel.
 ### Im Spiel - das ist der eigentliche Beweis
 
 ```
-UnrealEditor-Cmd.exe WiesbadenReal.uproject /Game/Maps/WiesbadenCity_Alkis16 ^
+UnrealEditor-Cmd.exe WiesbadenReal.uproject <Default-Karte aus DefaultEngine.ini> ^
   -game -WbWeather=Rain -WbGoto=Kaiser-Friedrich-Ring -WbScreenshot
 ```
 

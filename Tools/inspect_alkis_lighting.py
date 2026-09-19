@@ -1,9 +1,14 @@
 # Liest die Beleuchtungs-Actors der gebackenen Alkis4-Karte aus (Sonne + SkyLight),
 # damit der Vorher-Zustand dokumentiert ist, bevor Sonnenstand/Ambient geaendert
 # werden. Aendert nichts.
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from karte import standard_karte_pfad   # EINE Quelle: Config/DefaultEngine.ini
+
 import unreal
 
-MAP = "/Game/Maps/WiesbadenCity_Alkis4"
+MAP = os.environ.get("WB_MAP", standard_karte_pfad())
 les = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 les.load_level(MAP)
 eas = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)

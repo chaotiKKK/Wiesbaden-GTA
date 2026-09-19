@@ -16,14 +16,14 @@
 
   Beispiele:
     powershell -File durchfall_regression.ps1
-    powershell -File durchfall_regression.ps1 -Map WiesbadenCity_Alkis5
-    powershell -File durchfall_regression.ps1 -Bake -TargetMap WiesbadenCity_Alkis6
+    powershell -File durchfall_regression.ps1 -Map <andere Karte>
+    powershell -File durchfall_regression.ps1 -Bake -TargetMap <neue Karte>
 #>
 param(
-  [string]$Map        = "WiesbadenCity_Alkis4",   # Karte fuer den Check (ohne -Bake)
+  [string]$Map        = (& "$PSScriptRoot\Tools\karte.ps1"),   # Pruefkarte: die Default-Karte
   [switch]$Bake,                                   # vorher neu backen
-  [string]$SourceMap  = "WiesbadenCity_Alkis3",    # Bake-Quelle
-  [string]$TargetMap  = "WiesbadenCity_Alkis4",    # Bake-Ziel (auch Check-Karte)
+  [string]$SourceMap  = (& "$PSScriptRoot\Tools\karte.ps1"),   # Bake-Quelle: die aktuelle Stadt
+  [string]$TargetMap  = "",                        # Bake-Ziel: MUSS angegeben werden (neue Karte)
   [int]$Speed         = 140,                        # km/h der Pruef-Fahrt
   [int]$DriveStart    = 40,                         # s bis Fahrtbeginn (Karte laden)
   [int]$QuitAfter     = 200,                        # s bis Lauf-Ende
