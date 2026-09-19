@@ -41,6 +41,7 @@
 #include "World/WiesbadenBusStopMonitor.h"
 #include "World/WiesbadenWeatherFX.h"
 #include "World/WiesbadenParkFeatures.h"
+#include "NPC/WiesbadenSylvia.h"
 
 AWiesbadenGameMode::AWiesbadenGameMode()
 {
@@ -208,6 +209,13 @@ void AWiesbadenGameMode::BeginPlay()
 		// lange Wasserbecken + Fontaenen, ebenfalls selbstsetzend zur Laufzeit.
 		LandmarkWorld->SpawnActor<AWiesbadenParkFeatures>(
 			AWiesbadenParkFeatures::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
+
+		// Sylvia steht als reine Runtime-Szene vor Platter Strasse 144. Der
+		// Actor loest die Adresse und den Boden selbst auf; die gebackene
+		// Alkis-Karte und ihre External-Actor-Pakete bleiben unberuehrt.
+		LandmarkWorld->SpawnActor<AWiesbadenSylvia>(
+			AWiesbadenSylvia::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
 	}
 

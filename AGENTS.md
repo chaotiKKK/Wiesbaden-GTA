@@ -3104,3 +3104,14 @@ Entscheidung: zwei geprueft gleichwertige Staende genuegen als Rueckfall.
 **Merksatz fuers naechste Mal:** Die Zahl der Karten waechst mit jedem Bake um
 1,4 bis 13 GB. Wer nach einem Bake nicht aufraeumt, hat nach zehn Bakes ein
 halbes Terabyte - und Skripte, die auf sechs verschiedene Staende zeigen.
+
+## Sylvia-GLB: Import, Pose und Runtime-Smoke (19.09.2026)
+
+- **Importstruktur:** `sylvia.glb` wird in UE 5.8 als 15 einzelne SkeletalMeshes unter `/Game/Assets/People/Sylvia/sylvia/SkeletalMeshes/tripo_part_0..14` importiert, mit einem gemeinsamen Skeleton und `animations=0`. Runtime und Asset-Test muessen alle 15 Teile abdecken; `/Game/Assets/People/Sylvia/SK_Sylvia` ist nur ein altes Duplikat.
+- **Knochennamen:** Interchange normalisiert `mixamorig:*` zu `mixamorig_*`; die Colon-Namen liefern bei `SetBoneRotationByName` keinen Treffer. In UE 5.8 ist `EBoneSpaces::LocalSpace` auskommentiert, daher sind ComponentSpace-Rotationen absolut - vor Pose-Aenderungen echte Bone-Namen und ein Bild pruefen.
+- **Finder in Schleifen:** `ConstructorHelpers::FObjectFinder` fuer die 15 Teile darf nicht `static` im Loop sein; sonst cached der Finder den ersten Mesh und alle Komponenten sehen still dasselbe Asset.
+- **World-Space-Widget:** Eine `UWidgetComponent` spannt die lokale Y/Z-Ebene auf; grosse `DrawSize`-Werte brauchen eine bewusste Komponentenskalierung. Schwarzer/gespiegelter Text trotz laufendem `NativePaint` bedeutet meist Rueckseite/Facing, nicht fehlenden Widget-Inhalt.
+- **Importskript:** `-ExecCmds="py Tools/import_sylvia.py"` wird aus dem Engine-CWD als Python-Name fehlinterpretiert. Funktionierend ist `py exec(open(unreal.Paths.project_dir() + 'Tools/import_sylvia.py').read())`; das Skript beendet den Editor selbst, kein zusaetzliches `Quit` anhaengen.
+- **Runtime-Smoke:** UE startet mit Engine-CWD, daher `-WbShotPoseFile` immer absolut angeben. Deterministischer Lauf: installierte UE 5.8 mit absolutem `.uproject`, `-WbTime=13 -WbWeather=Clear -WbShotWhenReady -WbShotPoseFile=<absolut>`, danach `Saved/Diagnose/WbSeries_000.png` pruefen; PowerShell `Start-Process -Wait` verhindert den irrefuehrenden leeren Ruecklauf von direktem `&`.
+- **Sylvia-Gate:** `cmd /c Tools\build_gate1.cmd` baut den Modulstand; der fokussierte Cmd-Test ist `Automation RunTests WiesbadenReal.NPC.Sylvia.SceneAssets; Quit`. Als gruen zaehlt der Success-Marker im Log, nicht die fruehen allgemeinen Engine-Condition-Warnungen.
+- **Validierungsgrenze:** `WiesbadenReal.NPC.Sylvia.SceneAssets` prueft Pfade, Teile, Niagara, Text und Koordinaten, aber keine Pose. Der letzte visuelle Lauf belegte Spane und Gedankenblase, nicht eine koharente stehende GLB-Figur; absolute Beinrotationen zerlegten das Modell und sind keine Loesung.
