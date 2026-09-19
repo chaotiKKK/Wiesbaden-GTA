@@ -50,10 +50,50 @@ namespace WiesbadenSignAssets
 			Result = Result.Mid(3);
 			Result.TrimStartAndEndInline();
 		}
+		else if (Result.Len() > 2 && Result.StartsWith(TEXT("DE"), ESearchCase::IgnoreCase)
+			&& FChar::IsDigit(Result[2]))
+		{
+			Result = Result.Mid(2);
+			Result.TrimStartAndEndInline();
+		}
 		int32 Bracket = INDEX_NONE;
 		if (Result.FindChar('[', Bracket))
 		{
 			Result = Result.Left(Bracket).TrimEnd();
+		}
+
+		// Gleiche kanonische Aufloesung wie der OSM-Katalog: die Zahl hinter
+		// 1001-30 ist ein variabler Aufdruck, die beiden anderen Formen sind
+		// alte/parametrisierte Schreibweisen vorhandener Grafiken.
+		if (Result.StartsWith(TEXT("1001-30-")))
+		{
+			const FString Value = Result.Mid(8);
+			if (Value.IsNumeric())
+			{
+				Result = TEXT("1001-30");
+			}
+		}
+		else if (Result.Equals(TEXT("1036-37"), ESearchCase::IgnoreCase))
+		{
+			Result = TEXT("1026-37");
+		}
+		else if (Result.Equals(TEXT("260-30"), ESearchCase::IgnoreCase))
+		{
+			Result = TEXT("260");
+		}
+
+		// Aeltere gebackene Daten koennen den OSM-Werttrenner fuer ein
+		// Tempolimit bis in den Asset-Lookup tragen.
+		int32 Colon = INDEX_NONE;
+		if (Result.FindLastChar(TEXT(':'), Colon))
+		{
+			const FString Value = Result.Mid(Colon + 1);
+			const FString Base = Result.Left(Colon);
+			if (Value.IsNumeric() && (Base == TEXT("274") || Base == TEXT("274.1")
+				|| Base == TEXT("278") || Base == TEXT("278.1")))
+			{
+				Result = FString::Printf(TEXT("%s-%s"), *Base.Left(3), *Value);
+			}
 		}
 		return Result;
 	}

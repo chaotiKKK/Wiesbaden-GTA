@@ -508,6 +508,15 @@ void FWiesbadenTrafficSignCatalog::ParseOsmTag(const FString& OsmTag, TArray<FWi
 			continue;
 		}
 
+		// Bei Zusatzzeichen 1001-30 ist der Zahlenwert der variable Aufdruck
+		// (z. B. 1001-30-200), nicht eine eigene Grafik-Id.
+		if (Value > 0 && Base == TEXT("1001-30")
+			&& FindByIdInCatalog(Catalog, Base, Sign))
+		{
+			Out.Add(Sign);
+			continue;
+		}
+
 		// 2) Exakte Katalog-Id (z. B. "103-10", "350-10", "1000-32", "325.1").
 		if (FindByIdInCatalog(Catalog, Bare, Sign))
 		{

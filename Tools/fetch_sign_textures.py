@@ -45,6 +45,12 @@ USER_AGENT = "WiesbadenReal/1.0 (lokales Unreal-Projekt; Zeichen-Grafiken aus Wi
 BREITE = 960
 PLATZHALTER = {"none", "no", "false", "kein", "nothing", "-", "\\", ""}
 JAHRE = [1992, 2017, 2013, 2009, 2006, 2010, 1971, 1970, 1988, 1985]
+LEGACY_ID_ALIASES = {
+    # In the Wiesbaden extract these are parameterized/old spellings of
+    # canonical assets, not three additional graphics.
+    "1036-37": "1026-37",
+    "260-30": "260",
+}
 
 
 def api(params, versuche=4):
@@ -82,18 +88,27 @@ def token_normalisieren(token):
     basis = t.split("[")[0].strip()
     if not basis or basis.lower() in PLATZHALTER:
         return None
-    # "274.1:30" o. Ae. ist kein Zeichen.
-    if re.search(r"[:]", basis):
-        return None
-    # Tempolimit 274.1[30] -> 274-30
-    m = re.match(r"^(27[48])\.1$", basis)
+    # Tempolimit mit OSM-Werttrenner: 274.1:30 / 274:30 -> 274-30.
+    m = re.fullmatch(r"^(27[48])(?:\.1)?:(\d+)$", basis)
+    if m:
+        return "%s-%s" % m.groups()
+
+    # Tempolimit 274[30] bzw. 274.1[30] -> 274-30. Ohne Wert bleibt 274
+    # eine reine Katalog-Basis ohne eigene Grafik; 274.1 dagegen hat eine
+    # eigene Beginn-einer-Zone-Grafik.
+    m = re.fullmatch(r"^(27[48])(?:\.1)?$", basis)
     if m:
         wert = re.search(r"\[([0-9]+)\]", t)
         if wert:
             return "%s-%s" % (m.group(1), wert.group(1))
-    if re.match(r"^27[48][.\-]?$", basis):
-        return None                       # Basis ohne Wert: kein Einzelbild
-    return basis
+        if basis in ("274", "278"):
+            return None
+
+    # 1001-30[200] und die im Rohbestand vorkommende Kurzform 1001-30-200
+    # zeigen dieselbe Tafel; die Zahl ist der variable Aufdruck.
+    if re.fullmatch(r"1001-30-\d+", basis):
+        return "1001-30"
+    return LEGACY_ID_ALIASES.get(basis, basis)
 
 
 def osm_tokens(wert):
@@ -117,7 +132,8 @@ def katalog_ids():
     """Ids und Aliase des Projekt-Katalogs in Asset-Namensform."""
     if not os.path.exists(KATALOG):
         return set(), {}
-    daten = json.load(open(KATALOG, encoding="utf-8"))
+    with open(KATALOG, encoding="utf-8") as fh:
+        daten = json.load(fh)
     eintraege = daten["signs"] if isinstance(daten, dict) else daten
     ids, alias = set(), {}
     for e in eintraege:
@@ -133,7 +149,8 @@ def fehlende_ids(nur=None):
         return [s.strip() for s in nur.split(",") if s.strip()]
     vorhanden = {f[5:-4] for f in os.listdir(ZIEL) if f.endswith(".png")}
     ids, alias = katalog_ids()
-    raw = open(OSM, encoding="utf-8", errors="replace").read()
+    with open(OSM, encoding="utf-8", errors="replace") as fh:
+        raw = fh.read()
     tokens = []
     for wert in re.findall(r'"traffic_sign"\s*:\s*"([^"]*)"', raw):
         tokens += osm_tokens(wert)

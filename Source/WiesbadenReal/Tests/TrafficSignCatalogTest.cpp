@@ -214,7 +214,22 @@ bool FTrafficSignParseTest::RunTest(const FString& Parameters)
 		{
 			TestEqual(TEXT("Id 274-30"), Signs[0].Id, TEXT("274-30"));
 			TestEqual(TEXT("Limit 30"), Signs[0].SpeedLimitKmh, 30);
-			TestEqual(TEXT("Zusatzzeichen 1001-30-200"), Signs[1].Id, TEXT("1001-30-200"));
+			TestEqual(TEXT("Zusatzzeichen 1001-30-200 -> Basis"), Signs[1].Id, TEXT("1001-30"));
+		}
+	}
+	{
+		// Echte Wiesbadener Randwerte: OSM nutzt bei 1001-30 einen numerischen
+		// Parameter, 1036-37 ist ein alter Tippfehler fuer 1026-37, und 260-30
+		// ist die parametrisierte Schreibweise des vorhandenen Basiszeichens.
+		TArray<FWiesbadenTrafficSign> Signs;
+		FWiesbadenTrafficSignCatalog::ParseOsmTag(
+			TEXT("DE:1001-30-200;DE:1036-37;DE:260-30"), Signs);
+		TestEqual(TEXT("Drei echte Randwerte bleiben drei Zeichen"), Signs.Num(), 3);
+		if (Signs.Num() == 3)
+		{
+			TestEqual(TEXT("1001-30-200 -> Basisgrafik 1001-30"), Signs[0].Id, TEXT("1001-30"));
+			TestEqual(TEXT("1036-37 -> 1026-37"), Signs[1].Id, TEXT("1026-37"));
+			TestEqual(TEXT("260-30 -> 260"), Signs[2].Id, TEXT("260"));
 		}
 	}
 	{
@@ -372,6 +387,14 @@ bool FTrafficSignTextureValidationTest::RunTest(const FString& Parameters)
 		WiesbadenSignAssets::NormalizeSignId(TEXT("1042-31[Mo-Sa 08:00-19:00]")), TEXT("1042-31"));
 	TestEqual(TEXT("Normalize 'DE:274-30'"),
 		WiesbadenSignAssets::NormalizeSignId(TEXT("DE:274-30")), TEXT("274-30"));
+	TestEqual(TEXT("Normalize 'DE240'"),
+		WiesbadenSignAssets::NormalizeSignId(TEXT("DE240")), TEXT("240"));
+	TestEqual(TEXT("Normalize 'DE:1001-30-200'"),
+		WiesbadenSignAssets::NormalizeSignId(TEXT("DE:1001-30-200")), TEXT("1001-30"));
+	TestEqual(TEXT("Normalize 'DE:1036-37'"),
+		WiesbadenSignAssets::NormalizeSignId(TEXT("DE:1036-37")), TEXT("1026-37"));
+	TestEqual(TEXT("Normalize 'DE:260-30'"),
+		WiesbadenSignAssets::NormalizeSignId(TEXT("DE:260-30")), TEXT("260"));
 	TestEqual(TEXT("Normalize laesst gueltige Id in Ruhe"),
 		WiesbadenSignAssets::NormalizeSignId(TEXT("325.1")), TEXT("325.1"));
 
