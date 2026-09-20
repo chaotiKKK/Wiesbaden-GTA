@@ -1345,7 +1345,23 @@ void URoadFurnitureGenerator::PlaceStreetFurniture(
 		// (Feldweg, Fussweg), ein halber Meter neben der Kante.
 		const bool bMayStandOnWay = (Kind == EStreetFurnitureKind::Bollard);
 		const double EdgeCm = Way.HalfWidthCm;
-		const double PavedCm = Way.HalfWidthCm + Way.SidewalkWidthCm;
+
+		// Wege OHNE Gehweg bekommen ein BANKETT als Ersatzbreite.
+		//
+		// RoadTypeLibrary gibt footway, path und track die Gehwegbreite 0,0 -
+		// dort richtig, hier folgenschwer: der "befestigte Streifen" ist dann
+		// nur so breit wie der Weg, bei 1,80 m Fussweg also 0,90 m ab Achse.
+		// Eine Bank einen Meter daneben lag damit ausserhalb. 78 Prozent der
+		// 1464 verworfenen Knoten hingen genau daran.
+		const double BelagCm = Way.SidewalkWidthCm > KINDA_SMALL_NUMBER
+			? Way.SidewalkWidthCm
+			: FMath::Max(0.0, Settings.FurnitureVergeCm);
+		const double PavedCm = Way.HalfWidthCm + BelagCm;
+
+		// Das ZIELBAND bleibt schmal: wer herangezogen werden MUSS, landet auf
+		// dem Gehweg bzw. einen halben Meter neben der Wegkante - nicht
+		// mitten im Bankett. Das Bankett erweitert nur, was noch als "am Weg"
+		// gilt; wer darin liegt, bleibt ohnehin stehen, wo er kartiert ist.
 		const double TargetCm = Way.SidewalkWidthCm > KINDA_SMALL_NUMBER
 			? Way.HalfWidthCm + Way.SidewalkWidthCm * 0.5
 			: Way.HalfWidthCm + 50.0;

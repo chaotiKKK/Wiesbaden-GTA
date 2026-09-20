@@ -3526,3 +3526,51 @@ Zaehlwege gegeneinander):
 `preview.html` bleibt versioniert (die Vorschau zeigt sie ueber `htmlPath`),
 ist aber ein ERZEUGNIS: wer sie von Hand aendert, verliert es beim naechsten
 Lauf. Selbsttest: `Tools/test_uebersicht.py`, 14 Pruefungen.
+
+
+## Moebel-Kalibrierung: Bankett neben Wegen ohne Gehweg (20.09.2026)
+
+**Befund vorher:** 2012 von 3607 OSM-Moebelknoten kamen in die Stadt (55,8 %),
+1464 wurden "ohne befestigten Rand" verworfen. 78 Prozent dieser Verwuerfe
+liegen an `footway`, `path` und `track` - Wegtypen, denen `RoadTypeLibrary`
+die Gehwegbreite 0,0 gibt. Dort ist das RICHTIG (ein Fussweg hat keinen
+Gehweg), fuer die Moebel aber folgenschwer: der "befestigte Streifen" war nur
+so breit wie der Weg selbst. Bei 1,80 m Fussweg endete er 0,90 m von der
+Achse, und eine Bank einen Meter daneben lag schon ausserhalb.
+
+**Die Kalibrierung sind zwei Zahlen in `FRoadFurnitureSettings`:**
+
+    FurnitureVergeCm        = 250   (neu)   Ersatzbreite, wenn Gehweg = 0
+    FurnitureDockingRangeCm = 250   (150)   Reichweite zum Heranziehen
+
+Am 1,80-m-Fussweg heisst das: angenommen wird bis 5,90 m statt bis 2,40 m,
+und alles innerhalb 3,40 m bleibt, WO OSM ES VERORTET HAT. Das Zielband
+bleibt schmal (halbe Wegbreite + 50 cm) - das Bankett erweitert nur, was noch
+als "am Weg" gilt.
+
+**GEMESSEN am echten Bestand** (Laufzeit-Stadtbau auf `__AaaRuntimeShot` mit
+`wiesbaden.osm.moebel.json`, je ein Lauf vor und nach der Aenderung):
+
+| | vorher | nachher |
+|---|---|---|
+| uebernommen | 2012 (55,8 %) | **2986 (82,8 %)** |
+| angedockt | 1357 | 1028 |
+| im Gebaeude verworfen | 131 | 131 |
+| ohne Rand verworfen | 1464 | **490** |
+
+974 Moebel mehr, die Verwuerfe fallen um 67 Prozent - und 329 Objekte werden
+nicht mehr von ihrer kartierten Stelle weggezogen. Die Gebaeude-Regel bleibt
+unveraendert (131), wie sie soll.
+
+Die Vorhersage aus der Untersuchung lautete "59 % -> 85 %". Der ZUWACHS
+stimmte (+26 vorhergesagt, +27 gemessen), die Grundlinie lag drei Punkte zu
+hoch.
+
+**WICHTIG - die gespielte Stadt hat das noch nicht.** Die Platzierung laeuft
+im BAKE; Alkis16 traegt weiter die alten 2012 Moebel. Gemessen wurde am
+Laufzeit-Stadtbau. Damit es im Spiel ankommt, braucht es einen Re-Bake.
+
+Test: `WiesbadenReal.GIS.RoadFurniture.BankettOhneGehweg` - eigener Fussweg
+ohne Gehweg, vier Faelle (im Bankett bleibt es stehen, dahinter wird
+herangezogen, weit weg bleibt verworfen), und die Zahl der Andockungen als
+Mass dafuer, wie sehr die Regel die Kartierung noch verbiegt.

@@ -270,3 +270,118 @@ bool FStreetFurniturePlacementTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+/**
+ * Bankett neben Wegen OHNE Gehweg - die Kalibrierung vom 20.09.2026.
+ *
+ * Eigene Strasse, weil die oben 2,5 m Gehweg hat: ein 1,80-m-Fussweg
+ * (`footway`) bekommt von RoadTypeLibrary die Gehwegbreite 0,0. Dort richtig,
+ * fuer die Moebel aber folgenschwer - der "befestigte Streifen" endete
+ * 0,90 m von der Achse, und eine Bank einen Meter daneben lag ausserhalb.
+ * 78 Prozent der 1464 verworfenen Knoten hingen genau daran.
+ */
+namespace
+{
+	/** Fussweg 1,80 m, kein Gehweg - der Fall, um den es geht. */
+	FRoadSegment MakeFootway()
+	{
+		FRoadSegment Segment;
+		Segment.SegmentId = 0;
+		Segment.StartNodeId = 1;
+		Segment.EndNodeId = 2;
+		Segment.Centerline = { FVector(-20000.0, 0.0, 0.0), FVector(20000.0, 0.0, 0.0) };
+		Segment.TrimmedCenterline = Segment.Centerline;
+		Segment.HighwayType = EOSMHighwayType::Footway;
+		Segment.CarriagewayWidthCm = 180.0;      // halbe Breite 90 cm
+		Segment.SidewalkWidthCm = 0.0;           // genau das ist der Punkt
+		Segment.MaxSpeedKmh = 0.0;
+		Segment.LengthCm = 40000.0;
+		return Segment;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStreetFurnitureVergeTest,
+	"WiesbadenReal.GIS.RoadFurniture.BankettOhneGehweg",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FStreetFurnitureVergeTest::RunTest(const FString& Parameters)
+{
+	FRoadNetwork Network;
+	Network.Segments.Add(MakeFootway());
+
+	UGeoCoordinateConverter* Converter = NewObject<UGeoCoordinateConverter>();
+	TestTrue(TEXT("Georeferenz steht"), Converter->InitializeWithWiesbadenOrigin());
+
+	FOSMDataSet DataSet;
+	// Innerhalb des Banketts (bis 90 + 250 = 340 cm): bleibt, wo OSM es sagt.
+	AddFurnitureNode(DataSet, *Converter, 20, FVector2D(0.0, 200.0), TEXT("bench"));
+	AddFurnitureNode(DataSet, *Converter, 21, FVector2D(1000.0, 300.0), TEXT("waste_basket"));
+	// Jenseits des Banketts, aber in Reichweite (bis 340 + 250 = 590 cm):
+	// wird herangezogen - vorher war hier schon Schluss.
+	AddFurnitureNode(DataSet, *Converter, 22, FVector2D(2000.0, 450.0), TEXT("bench"));
+	// Ausserhalb der Reichweite: bleibt verworfen. Die Kalibrierung weitet
+	// die Regel, sie schafft sie nicht ab.
+	AddFurnitureNode(DataSet, *Converter, 23, FVector2D(3000.0, 900.0), TEXT("bench"));
+
+	TArray<FGeneratedBuilding> Buildings;
+	FRoadFurnitureSettings Settings;
+	Settings.bPlaceSigns = false;
+	Settings.bPlaceDelineators = false;
+	Settings.bPlaceMarkings = false;
+	Settings.bPlaceStreetLamps = false;
+
+	FRoadFurnitureLayout Layout;
+	URoadFurnitureGenerator* Generator = NewObject<URoadFurnitureGenerator>();
+	const FRoadFurnitureReport Report = Generator->Generate(
+		Network, &DataSet, Converter, nullptr, Settings, Layout, &Buildings);
+	TestTrue(TEXT("Pass erfolgreich"), Report.bSuccess);
+
+	// -- Die Kalibrierung steht in den Einstellungen, nicht im Code ---------
+	TestEqual(TEXT("Bankett 2,5 m"), Settings.FurnitureVergeCm, 250.0, 0.1);
+	TestEqual(TEXT("Reichweite 2,5 m"), Settings.FurnitureDockingRangeCm, 250.0, 0.1);
+
+	// -- Innerhalb des Banketts: UNVERAENDERT --------------------------------
+	//
+	// Das ist die zweite Haelfte der Kalibrierung. Vorher wurde alles
+	// jenseits von 90 cm herangezogen; die Objekte rueckten im Median 2,08 m
+	// von ihrer kartierten Stelle weg. Eine Bank, die im Bild einen Meter
+	// neben dem Weg steht, IST dort richtig.
+	{
+		const FFurnitureInstance* Bank = FindByNode(Layout, 20);
+		if (TestNotNull(TEXT("Bank im Bankett ist uebernommen"), Bank))
+		{
+			TestEqual(TEXT("... und steht unveraendert bei 2,00 m"),
+				Bank->Location.Y, 200.0, 1.0);
+		}
+		const FFurnitureInstance* Korb = FindByNode(Layout, 21);
+		if (TestNotNull(TEXT("Korb im Bankett ist uebernommen"), Korb))
+		{
+			TestEqual(TEXT("... und steht unveraendert bei 3,00 m"),
+				Korb->Location.Y, 300.0, 1.0);
+		}
+	}
+
+	// -- Jenseits des Banketts, in Reichweite: herangezogen ------------------
+	{
+		const FFurnitureInstance* Bank = FindByNode(Layout, 22);
+		if (TestNotNull(TEXT("Bank bei 4,50 m wird herangezogen (vorher verworfen)"), Bank))
+		{
+			// Zielband bleibt schmal: halbe Wegbreite plus 50 cm.
+			TestEqual(TEXT("... auf 1,40 m neben der Achse"), Bank->Location.Y, 140.0, 1.0);
+		}
+	}
+
+	// -- Ausserhalb: weiterhin verworfen -------------------------------------
+	TestNull(TEXT("Bank bei 9,00 m bleibt verworfen"), FindByNode(Layout, 23));
+	TestEqual(TEXT("Genau eine ohne befestigten Rand"), Report.FurnitureWithoutEdgeCount, 1);
+	TestEqual(TEXT("Drei von vier uebernommen"), Report.FurnitureCount, 3);
+
+	// -- Nur EINE musste angedockt werden -----------------------------------
+	//
+	// Vorher waeren es drei gewesen (alles jenseits 90 cm) und eine
+	// verworfen. Die Zahl ist das Mass dafuer, wie sehr die Regel die
+	// Kartierung noch verbiegt.
+	TestEqual(TEXT("Nur die weit entfernte wurde versetzt"), Report.FurnitureDockedCount, 1);
+
+	return true;
+}

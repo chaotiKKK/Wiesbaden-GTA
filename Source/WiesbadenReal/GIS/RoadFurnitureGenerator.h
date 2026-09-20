@@ -261,7 +261,31 @@ struct WIESBADENREAL_API FRoadFurnitureSettings
 	 * weit ab vom befestigten Rand steht, ist ein Datenfehler und kein Ort.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture", meta = (ClampMin = "0.0"))
-	double FurnitureDockingRangeCm = 150.0;
+	double FurnitureDockingRangeCm = 250.0;
+
+	/**
+	 * Bankett neben Wegen OHNE Gehweg (cm) - die eigentliche Kalibrierung.
+	 *
+	 * GEMESSEN am 20.09.2026: von 3607 Moebelknoten fanden 1464 keinen
+	 * befestigten Rand in Reichweite. 78 Prozent davon liegen an
+	 * `footway`, `path` und `track` - Wegtypen, denen RoadTypeLibrary die
+	 * Gehwegbreite 0,0 gibt. Das ist dort RICHTIG (ein Fussweg hat keinen
+	 * Gehweg), macht den "befestigten Streifen" aber nur so breit wie der Weg
+	 * selbst: bei 1,80 m Fussweg endet er 0,90 m von der Achse, und eine Bank
+	 * einen Meter daneben liegt schon ausserhalb.
+	 *
+	 * In Wirklichkeit steht neben einem Fussweg ein begehbarer Streifen -
+	 * Bankett, Rasenkante, wassergebundene Decke. Genau dort stehen Baenke,
+	 * Koerbe und Papierkoerbe. Dieses Mass gilt ERSATZWEISE als
+	 * Gehwegbreite, wenn der Wegtyp keine hat.
+	 *
+	 * NEBENWIRKUNG, und zwar die erwuenschte: was innerhalb dieses Streifens
+	 * liegt, wird NICHT mehr herangezogen, sondern bleibt, wo OSM es verortet
+	 * hat. Vorher rueckten solche Objekte im Median 2,08 m von ihrer
+	 * kartierten Stelle weg.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture", meta = (ClampMin = "0.0"))
+	double FurnitureVergeCm = 250.0;
 
 	/**
 	 * Fehlende Strassenlaternen entlang befahrbarer Strassen ergaenzen.
