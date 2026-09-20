@@ -1,0 +1,88 @@
+# Zeilenenden - ein fuer alle Mal
+#
+# WARUM DIESE DATEI EXISTIERT: ohne sie legt Git die Bytes roh ab
+# (core.autocrlf=false). Schreibt dann irgendein Werkzeug eine Datei mit
+# anderen Zeilenenden neu - ein Python-Skript mit newline='\n', ein Editor,
+# ein Agent -, ist JEDE Zeile geaendert. So wurde AGENTS.md einmal als
+# 3078-Zeilen-Diff committet, obwohl sich der Inhalt nicht geaendert hatte.
+# Der echte Inhalt verschwindet in solchen Diffs, und eine Zusammenfuehrung
+# kollidiert in jeder Zeile.
+#
+# Mit "text" normalisiert Git beim Einchecken auf LF: die Zeilenenden auf der
+# Platte sind dann egal, der Blob ist derselbe. Damit ist der Churn nicht
+# reparierbar gemacht, sondern unmoeglich.
+#
+# "eol=lf" legt zusaetzlich die Platte fest. Ohne das richtet sich der
+# Arbeitsbaum nach core.eol (Vorgabe "native", auf Windows also CRLF) - dann
+# haette jeder Rechner andere Bytes und die Werkzeuge muessten es wieder
+# wissen. Der Baum ist heute schon ueberwiegend LF (110 von 111 .cmd, 152 von
+# 184 .cpp), LF ist hier also der Bestand, nicht die Umstellung.
+
+* text=auto eol=lf
+
+# --- Windows-Stapeldateien --------------------------------------------------
+#
+# cmd.exe springt bei "goto" ueber Byte-Versaetze und kann bei reinen
+# LF-Dateien mitten in einer Zeile landen. Im Baum nutzt genau EINE der 111
+# .cmd-Dateien Sprungmarken (shot_heli_paar.cmd); die anderen 110 laufen seit
+# jeher als LF. Trotzdem CRLF, weil das fuer Windows-Stapeldateien das
+# richtige Format ist und der Index davon unberuehrt bleibt.
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+
+# --- Unreal-Inhalte: NIEMALS anfassen ---------------------------------------
+#
+# Eine .uasset, in der Git "\r\n" zu "\n" macht, ist zerstoert und faellt erst
+# auf, wenn der Editor sie nicht mehr laedt. Git erkennt sie zwar an ihren
+# Null-Bytes selbst als binaer (geprueft: alle 920 verfolgten Binaerdateien
+# haben Null-Bytes in den ersten 8000), aber das darf nicht von einer
+# Heuristik abhaengen.
+*.uasset  binary
+*.umap    binary
+*.ubulk   binary
+*.uexp    binary
+*.upk     binary
+
+# --- Modelle, Bilder, Ton ---------------------------------------------------
+*.fbx binary
+*.obj binary
+*.glb binary
+*.gltf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tga binary
+*.bmp binary
+*.exr binary
+*.hdr binary
+*.dds binary
+*.wav binary
+*.ogg binary
+*.mp3 binary
+*.mp4 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.7z  binary
+*.pdf binary
+*.pyc binary
+
+# --- Quelltext ausdruecklich als Text ---------------------------------------
+#
+# Steht hier nur, damit die Absicht lesbar ist - "text=auto" oben erfasst sie
+# bereits. Die Doppelung kostet nichts und macht die Datei zum Nachschlagen
+# tauglich.
+*.cpp text
+*.h   text
+*.cs  text
+*.py  text
+*.md  text
+*.json text
+*.ini text
+*.html text
+*.mjs text
+*.js  text
+*.ps1 text
+*.sh  text eol=lf
+*.uproject text
+*.uplugin  text
