@@ -3,8 +3,16 @@ REM Durchfall-Test: Laedt der World-Partition-Stream die Strassenzellen schnell
 REM genug, damit ein Wagen bei Tempo nicht durch eine noch ungeladene Zelle
 REM faellt?
 REM
-REM Ungebackene Karte Alkis3 -> erzwingt den Laufzeit-Stadtbuild (~3 min). Erst
-REM danach (WbAutoDriveStart=260) rollt der Pawn gleichmaessig mit 140 km/h nach
+REM ACHTUNG, die Grundlage hat sich geaendert: hier stand "Ungebackene Karte
+REM Alkis3 -> erzwingt den Laufzeit-Stadtbuild (~3 min)". Alkis3 ist geloescht,
+REM und das Skript liest die Karte inzwischen aus Tools\karte.cmd - also die
+REM GEBACKENE Vorgabekarte. Damit faellt der Laufzeit-Stadtbuild weg und mit ihm
+REM der Grund fuer die lange Anlaufzeit unten. Der Messwert ist weiter gueltig,
+REM misst aber das Nachladen einer gebackenen Stadt, nicht mehr den Aufbau.
+REM Wer den urspruenglichen Fall braucht, gibt eine ungebackene Karte per
+REM WB_MAP ausdruecklich vor.
+REM
+REM Nach der Anlaufzeit (WbAutoDriveStart=260) rollt der Pawn gleichmaessig mit 140 km/h nach
 REM Osten; die Streaming-Quelle folgt ihm, es entsteht dieselbe Nachladelast wie
 REM beim Fahren. Der Durchfall-Waechter im CitySubsystem traced pro Bild senkrecht
 REM nach unten: fehlt ueber die ganze Spalte geladene Kollision, ist die Zelle

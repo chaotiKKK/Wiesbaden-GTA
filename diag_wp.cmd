@@ -1,7 +1,8 @@
 @echo off
 rem Streaming-Diagnose auf der gebackenen Karte.
 rem
-rem Karte Alkis (seit dem Neubau entfernt) -> Alkis4. Ohne
+rem Die Karte kommt aus Tools\karte.cmd - hier stand frueher Alkis4, das ist
+rem seit dem Karten-Aufraeumen ebenfalls geloescht. Ohne
 rem LoadingRange-Override: Der Messwert "jenseits 2 km" ist nur gegen den
 rem Vorgabe-Radius von 2000 m aussagekraeftig (AGENTS.md-Kriterium: 602 -> ~0);
 rem mit einem hoeheren Override laden Chunks bei 2-4 km Abstand legitim und

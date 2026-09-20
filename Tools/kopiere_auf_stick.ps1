@@ -11,13 +11,13 @@
 #
 # Aufruf:
 #   powershell -ExecutionPolicy Bypass -File Tools\kopiere_auf_stick.ps1 -Ziel E:\
-#   powershell ... -Ziel E:\ -OhneAlkis3      (Rueckfallkarte weglassen)
+#   powershell ... -Ziel E:\ -OhneRueckfall   (Rueckfallkarte weglassen)
 #   powershell ... -Ziel D:\ -MitEngine       (UE 5.8 mitkopieren, 29,9 GB)
 #   powershell ... -Ziel E:\ -NurPruefen      (nur rechnen, nichts kopieren)
 
 param(
     [string]$Ziel = 'E:\',
-    [switch]$OhneAlkis3,
+    [switch]$OhneRueckfall,
     # Rueckfallkarte ausdruecklich benennen (Vorgabe: keine). Ein fester
     # Name stand hier zwei Bakes lang falsch.
     [string]$Rueckfall = "",
@@ -148,11 +148,11 @@ Kopiere (Join-Path $actorsQuelle $aktuelleKarte) `
 # Rueckfallkarte: ausdruecklich benennen (-Rueckfall <Karte>). Ein fester
 # Name stand hier zwei Bakes lang falsch - eine Rueckfallkarte, die niemand
 # mehr spielt, ist kein Rueckfall.
-if (-not $OhneAlkis3 -and $Rueckfall) {
+if (-not $OhneRueckfall -and $Rueckfall) {
     Kopiere (Join-Path $actorsQuelle $Rueckfall) `
             (Join-Path $actorsZiel $Rueckfall)
 } else {
-    Zeige "  Alkis3 auf Wunsch ausgelassen."
+    Zeige "  Rueckfallkarte auf Wunsch ausgelassen."
 }
 
 # -- 3) Blender-Arbeitsdateien ----------------------------------------------

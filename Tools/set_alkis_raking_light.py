@@ -1,4 +1,5 @@
-# Setzt die Beleuchtung der gebackenen Alkis4-Karte auf mehr TIEFE:
+# Setzt die Beleuchtung der gebackenen Karte auf mehr TIEFE
+# (Karte aus Tools/karte.py - hier stand Alkis4, die ist geloescht):
 #  - Sonne von fast senkrecht (pitch=-88, Zenit -> flach) auf ein tiefes,
 #    RAKENDES Streiflicht -> lange Schatten, plastische Fassaden.
 #  - SkyLight-Ambient reduziert -> Schatten werden nicht mehr flach aufgefuellt.

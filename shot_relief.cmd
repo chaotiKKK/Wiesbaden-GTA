@@ -1,5 +1,7 @@
 @echo off
-REM Verifikations-Shot der Relief-Fassaden auf der gebackenen Alkis4-Karte.
+REM Verifikations-Shot der Relief-Fassaden auf der jeweils gebackenen Karte.
+REM (Hier stand Alkis4 - die Karte ist geloescht, das Skript liest die
+REM aktuelle laengst aus Tools\karte.cmd.)
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\shot_relief.log
 REM  Karte NICHT fest verdrahten - sie kommt aus
