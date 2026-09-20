@@ -3487,3 +3487,42 @@ BUEHNE sichtbar (Aufbau da, kein Bild):
 
 Die erzeugten Dateien liegen unter `Saved/` und sind damit nicht versioniert;
 versioniert ist nur das Werkzeug.
+
+
+## Die Projektuebersicht zieht ihre Zahlen selbst (20.09.2026)
+
+`preview.html` wurde von Hand gepflegt und lag entsprechend daneben: sie
+meldete "Phase 1 (GIS-Pipeline) fertig" und "Noch offen: Phasen 2-12
+(Fahrzeuge, Traffic-KI, Pedestrians, Player, Wanted-Level, UI, Audio, Wetter,
+Optimierung)", waehrend genau das alles lief. Auch die Pfade waren die des
+alten Rechners.
+
+Jetzt erzeugt `Tools/uebersicht.py` die Seite:
+
+    python Tools/uebersicht.py            # preview.html neu schreiben
+    python Tools/uebersicht.py --zeigen   # nur die Zahlen
+
+**Vier Regeln**, die sie von der alten unterscheiden: jede Zahl wird GEMESSEN
+(Dateien und Zeilen ueber `git ls-files`, Testmakros gezaehlt, die INI
+gelesen, git gefragt); jede Zahl nennt IHRE QUELLE in der Zeile daneben;
+Laufzeit-Zahlen tragen den ZEITPUNKT ihres Laufs ("Gemessen im Spiel am
+20.09.2026 um 21:26 - der Stand JENES Laufs, nicht der Gegenwart"); und was
+sich nicht messen laesst, steht nicht drin - "Modul X ist fertig" ist keine
+Messung.
+
+**ZWEI ZAEHLFEHLER, die erst die Gegenprobe zeigte** (ein Test haelt zwei
+Zaehlwege gegeneinander):
+
+* Ein Testname in einem KOMMENTAR sieht aus wie eine Registrierung. Die erste
+  Fassung las die ganze Datei und kam auf 249 Gebiets-Eintraege bei 247
+  Makros; die zwei Extras waren Zeilen wie
+  `// "WiesbadenReal.Vehicles.CarLights" war ...`. Gezaehlt wird jetzt der
+  MAKROAUFRUF, nicht der Dateitext.
+* `([^.]*)\.` schnitt die Signalprogramm-Zeile bei "Spanne 20" ab, weil die
+  Spanne "20..180 s" heisst und Punkte enthaelt. Auf der Seite stand danach
+  eine Zahl, die es nicht gibt - und sie sah so verbindlich aus wie jede
+  andere. Gefangen wird jetzt bis Zeilenende, der Schlusspunkt faellt weg.
+
+`preview.html` bleibt versioniert (die Vorschau zeigt sie ueber `htmlPath`),
+ist aber ein ERZEUGNIS: wer sie von Hand aendert, verliert es beim naechsten
+Lauf. Selbsttest: `Tools/test_uebersicht.py`, 14 Pruefungen.
