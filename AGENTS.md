@@ -3348,3 +3348,57 @@ geloescht (sondern der Befehl ausgegeben); die gespielte Karte aus
   Python den `.pyc` des VORIGEN Stands weiterverwenden - eine Gegenprobe
   ("faellt der Test, wenn ich die Sicherung aushebele?") misst dann den
   falschen Stand. Vor jeder solchen Messung `Tools/__pycache__` loeschen.
+
+
+## Sebbo-Hauptsitz: die Treppe war nicht begehbar (20.09.2026)
+
+Der Auftrag lautete, mit einem Bild zu belegen, dass man die Treppe
+hinauflaeuft. Beim Nachrechnen stellte sich heraus, dass man es NICHT konnte.
+
+**Der Defekt:** Das Podest jedes Geschosses deckte den GANZEN Grundriss der
+Treppenhaus-Haelfte und lag damit als Decke ueber dem Lauf, der von unten
+genau dorthin steigt. Kopffreiheit ueber der achten Stufe 155 cm, ueber der
+fuenfzehnten 5 cm, die sechzehnte lag IM Podest. Man kam 220 von 400 cm hoch.
+
+Die bestehenden Tests sagten gruen: Stufenhoehe 25 cm, lueckenlos, je Geschoss
+ein Podest. **Kopffreiheit hatte keiner geprueft** - und ohne sie ist eine
+Treppe eine Skulptur. Jetzt liegen Lauf und Podest NEBENeinander (der Lauf in
+der aeusseren Y-Haelfte, das Podest in der inneren), wie im echten Bau die
+Treppenoeffnung im Podest bleibt. Ueber jeder Stufe stehen 380 cm.
+
+**Nachweis im Spiel, nicht auf dem Papier:** `-WbTreppenProbe` laesst eine
+Kapsel (Radius 40, Halbhoehe 90) mit der Schrittregel des Fussgaengers
+(anheben, vorwaerts, absetzen, hoechstens 40 cm) die Treppe hochsteigen -
+gegen die ECHTE Kollision. Ergebnis: 157 Schritte, 57,7 m gestiegen, Hoehe
+61,35 m, Dach erreicht. Ablage: `Saved/Diagnose/treppenprobe.json`.
+
+**DREI FALLEN, die die Sonde erst blind gemacht haben:**
+
+1. **`AddIgnoredActor(this)` aus der Bodensuche uebernommen.** Der Turm IST
+   das, wogegen getastet wird - die Sonde ignorierte das ganze Gebaeude und
+   traf nur das Landscape. Sie meldete ueberall "nichts unter den Fuessen",
+   was wie eine kaputte Treppe aussah.
+2. **`GetActorLocation()` ist NICHT der Bauort.** Der Actor wird im Ursprung
+   gespawnt und nie bewegt; gesetzt werden nur seine Komponenten. Die Sonde
+   sondierte bei (0,0,0) ins Leere. Der Bauort wird jetzt in `BuiltBase`
+   gemerkt.
+3. **Eine Kapsel, die die Trittflaeche genau beruehrt**, meldet beim Sweep
+   sofort einen Treffer (`bStartPenetrating`). Als Wand gewertet kam die
+   Sonde keinen Schritt weit. Sie startet jetzt 2 cm hoeher und wertet
+   `bStartPenetrating` nicht als Hindernis.
+
+**ZWEI WEITERE DEFEKTE, gefunden und gemessen, NICHT behoben:**
+
+* Das Gelaende steht an der Treppenhausecke **250 cm ueber dem Fusspunkt** des
+  Turms: der Turm setzt sich auf den Bodenpunkt seiner MITTE und hat keine
+  Einschnitt- oder Sockelloesung, also liegt das Erdgeschoss am Hang im
+  Erdreich. Die Sonde beginnt darum auf der ersten Stufe ueber dem Gelaende.
+* **Ein Baum waechst mitten durch das Treppenhaus** (im Bild deutlich zu
+  sehen). Dieselbe Ursache wie beim Nerobergbahn-Wagen: die Freihalteflaechen
+  der Bewuchs-Streuung kennen nur Strassen, keine Bauwerke.
+
+**Bildaufnahme im Turm - zwei Stolpersteine:** `-WbShotDelay` steuert
+`-WbShotWhenReady`, NICHT `-WbScreenshot` (falsch gepaart entsteht gar kein
+Bild). Und `-WbTeleportTo` nimmt das FAHRZEUG mit, wenn der Spieler darin
+sitzt - dann fuellt das Armaturenbrett das Bild. Mit `-WbZuFuss=<Sekunden>`
+vorher aussteigen.

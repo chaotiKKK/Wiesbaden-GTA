@@ -164,7 +164,25 @@ void SebboHq::BuildVerticalCore(const FSebboHqDimensions& D, TArray<FHqPart>& Ou
 
 	// Mitte der beiden Kammern in Y.
 	const double SchachtMitteY = (Trennung + Innen) * 0.5;
-	const double TreppeMitteY = -SchachtMitteY;
+
+	// DAS TREPPENHAUS WIRD IN DER QUERE NOCHMALS GETEILT.
+	//
+	// Vorher deckte das Podest jedes Geschosses den GANZEN Grundriss der
+	// -Y-Haelfte - und lag damit als Decke ueber dem Lauf, der von unten
+	// genau dorthin steigt. Nachgerechnet blieben ueber der achten Stufe
+	// 155 cm, ueber der fuenfzehnten 5 cm, und die sechzehnte lag IM Podest.
+	// Man kam 220 von 400 cm hoch und stand mit dem Kopf an der Decke. Die
+	// Stufenhoehe stimmte, die Lueckenfreiheit auch - nur begehbar war es
+	// nicht.
+	//
+	// Jetzt liegt der LAUF in der aeusseren Haelfte (-Y) und das PODEST in
+	// der inneren; sie ueberdecken sich nicht mehr. Ueber jeder Stufe steht
+	// damit der Lauf des naechsten Geschosses, und der ist 380 cm hoeher.
+	// Das ist auch die uebliche Bauweise: im Podest bleibt die Treppenoeffnung.
+	const double TreppeY0 = -Innen;                        // Aussenkante
+	const double TreppeY1 = -Trennung;                     // Mittelwand
+	const double TrennY = (TreppeY0 + TreppeY1) * 0.5;     // Lauf | Podest
+	const double PodestMitteY = (TrennY + TreppeY1) * 0.5; // dorthin die Tuer
 
 	OutParts.Reserve(OutParts.Num() + D.FloorCount * 30 + 8);
 
@@ -187,8 +205,10 @@ void SebboHq::BuildVerticalCore(const FSebboHqDimensions& D, TArray<FHqPart>& Ou
 		// der Sturz darueber. Die Luecke dazwischen IST die Tuer.
 		const double TuerSchachtY0 = SchachtMitteY - TuerBreite * 0.5;
 		const double TuerSchachtY1 = SchachtMitteY + TuerBreite * 0.5;
-		const double TuerTreppeY0 = TreppeMitteY - TuerBreite * 0.5;
-		const double TuerTreppeY1 = TreppeMitteY + TuerBreite * 0.5;
+		// Die Tuer fuehrt auf das PODEST, nicht auf den Lauf - sonst traete
+		// man aus dem Buerogeschoss mitten in die Treppe.
+		const double TuerTreppeY0 = PodestMitteY - TuerBreite * 0.5;
+		const double TuerTreppeY1 = PodestMitteY + TuerBreite * 0.5;
 
 		const double Sturz = Z0 + PodestDicke + TuerHoehe;
 		// Wandstuecke zwischen den Oeffnungen, ueber die volle Geschosshoehe.
@@ -203,7 +223,7 @@ void SebboHq::BuildVerticalCore(const FSebboHqDimensions& D, TArray<FHqPart>& Ou
 		// Das Podest ist der Boden des Geschosses; der Lauf fuehrt von hier zum
 		// naechsten. Der Schacht bekommt bewusst KEINEN Boden.
 		AddBetween(OutParts, EHqMaterial::Concrete,
-			-Innen, Innen, -Innen, -Trennung, Z0, Z0 + PodestDicke, Floor);
+			-Innen, Innen, TrennY, TreppeY1, Z0, Z0 + PodestDicke, Floor);
 
 		{
 			// Gerader Lauf laengs X ueber die Treppenhaus-Haelfte. Die Stufen
@@ -217,7 +237,7 @@ void SebboHq::BuildVerticalCore(const FSebboHqDimensions& D, TArray<FHqPart>& Ou
 				const double StufeX0 = -Innen + 20.0 + Stufe * Auftritt;
 				const double StufeZ = Z0 + PodestDicke + (Stufe + 1) * (D.FloorHeightCm / Stufen);
 				AddBetween(OutParts, EHqMaterial::Concrete,
-					StufeX0, StufeX0 + Auftritt, -Innen + 20.0, -Trennung - 20.0,
+					StufeX0, StufeX0 + Auftritt, TreppeY0 + 20.0, TrennY - 5.0,
 					StufeZ - PodestDicke, StufeZ, Floor);
 			}
 		}

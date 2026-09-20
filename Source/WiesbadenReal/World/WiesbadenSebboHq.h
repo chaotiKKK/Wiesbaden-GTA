@@ -66,6 +66,25 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Sebbo HQ")
 	FSebboHqDimensions Dimensions;
 
+	/**
+	 * Steigt die Treppe mit der Kapsel der Spielfigur ab - gegen die ECHTE
+	 * Kollision des gebauten Turms, nicht gegen die Formbeschreibung.
+	 *
+	 * WOZU: Ein Test auf den Bauteilen kann nur sagen, ob die Zahlen stimmen.
+	 * Ob ein Mensch hinaufkommt, entscheidet die Kollision im laufenden Spiel -
+	 * und die erste Fassung der Treppe war rechnerisch tadellos (25-cm-Stufen,
+	 * lueckenlos) und trotzdem unbegehbar, weil das Podest des naechsten
+	 * Geschosses als Decke darueber lag.
+	 *
+	 * Die Sonde benutzt dieselbe Kapsel (Radius 40, Halbhoehe 90) und dieselbe
+	 * Schrittregel (anheben, vorwaerts, absetzen; hoechstens 40 cm) wie
+	 * AWiesbadenFootPawn. Eine eigene, aehnliche Regel waere kein Nachweis.
+	 *
+	 * Startschalter: -WbTreppenProbe. Ergebnis im Log und in
+	 * Saved/Diagnose/treppenprobe.json.
+	 */
+	void ProbeStaircase() const;
+
 private:
 	/** Bodenhoehe am Standort; false, solange die Zelle nicht gestreamt ist. */
 	bool ResolveGround(const FVector& WorldXY, double& OutZ) const;
@@ -90,5 +109,30 @@ private:
 	UPROPERTY(Transient)
 	const UGeoCoordinateConverter* Converter = nullptr;
 
+	/**
+	 * Fusspunkt des Turms in der Welt.
+	 *
+	 * NICHT GetActorLocation(): der Actor wird im Ursprung gespawnt und nie
+	 * bewegt, gesetzt werden nur seine Komponenten. Die Treppenprobe fragte
+	 * zuerst den Actor und sondierte darum bei (0,0,0) ins Leere - sie
+	 * meldete "nichts unter den Fuessen" und das sah aus wie eine kaputte
+	 * Treppe.
+	 */
+	FVector BuiltBase = FVector::ZeroVector;
+
 	bool bBuilt = false;
+
+	/**
+	 * Sekunden seit dem Bau; -1 = keine Treppenprobe angefordert.
+	 *
+	 * Die Sonde muss warten. Im Bild des Bauens sind die Komponenten zwar
+	 * registriert, ihre Kollisionskoerper stehen aber noch nicht in der
+	 * Physikszene: die erste Fassung scheiterte am ERSTEN Schritt und meldete
+	 * "nichts unter den Fuessen" - sie fiel durch einen Turm, den es
+	 * physikalisch noch nicht gab. Zwei Sekunden sind reichlich.
+	 */
+	float SecondsSinceBuild = -1.0f;
+
+	/** Treppenprobe schon gelaufen? Sie gilt genau einmal. */
+	bool bProbed = false;
 };

@@ -291,3 +291,102 @@ bool FSebboHqVerticalCoreTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqStairHeadroomTest,
+	"WiesbadenReal.World.SebboHq.TreppeBegehbar",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqStairHeadroomTest::RunTest(const FString& Parameters)
+{
+	// KOPFFREIHEIT - der Punkt, an dem die erste Fassung scheiterte.
+	//
+	// Die Stufen waren 25 cm hoch und lueckenlos, und der Test sagte gruen.
+	// Begehbar waren sie trotzdem nicht: das Podest des naechsten Geschosses
+	// deckte den GANZEN Treppenhaus-Grundriss und lag damit als Decke ueber
+	// dem Lauf. Nachgerechnet blieben ueber der achten Stufe noch 155 cm, ueber
+	// der fuenfzehnten 5 cm, und die sechzehnte lag IM Podest. Man kam 220 von
+	// 400 cm hoch und stand dann mit dem Kopf an der Decke.
+	//
+	// Eine Treppe ist erst begehbar, wenn ueber JEDER Trittflaeche Platz fuer
+	// einen Menschen ist.
+	const FSebboHqDimensions D;
+	TArray<FHqPart> Kern;
+	SebboHq::BuildVerticalCore(D, Kern);
+
+	// Die Spielfigur: Kapselhoehe 180 cm (2 x 90 cm Halbhoehe, wie der
+	// Einstiegsversatz beim Nerobergbahn-Wagen).
+	const double Stehhoehe = 180.0;
+
+	// Trittflaechen des ERSTEN Geschosses: waagerecht, duenn, im Treppenhaus
+	// (-Y), und schmal in X - das unterscheidet die Stufe vom Podest.
+	TArray<FHqPart> Stufen;
+	for (const FHqPart& Teil : Kern)
+	{
+		if (Teil.Floor == 0 && Teil.SizeCm.Z <= 40.0 && Teil.CenterCm.Y < 0.0
+			&& Teil.SizeCm.X < 100.0 && Teil.SizeCm.Y > 100.0)
+		{
+			Stufen.Add(Teil);
+		}
+	}
+	if (!TestTrue(TEXT("Es gibt Stufen im ersten Geschoss"), Stufen.Num() >= 8))
+	{
+		return false;
+	}
+
+	// Ueber jeder Stufe: das tiefste Bauteil, das ihre Grundflaeche ueberdeckt.
+	int32 ZuNiedrig = 0;
+	double Schlimmste = TNumericLimits<double>::Max();
+	int32 SchlimmsteNummer = INDEX_NONE;
+	for (int32 i = 0; i < Stufen.Num(); ++i)
+	{
+		const FHqPart& Stufe = Stufen[i];
+		const double TrittZ = Stufe.CenterCm.Z + Stufe.SizeCm.Z * 0.5;
+		// Ein Punkt kurz VOR der Stufenkante, in ihrer Mitte - dort steht der
+		// Fuss, wenn man die Stufe betritt.
+		const FVector2D Fuss(Stufe.CenterCm.X, Stufe.CenterCm.Y);
+
+		double Decke = TNumericLimits<double>::Max();
+		for (const FHqPart& Anderes : Kern)
+		{
+			const double Unten = Anderes.CenterCm.Z - Anderes.SizeCm.Z * 0.5;
+			if (Unten <= TrittZ + 1.0)
+			{
+				continue;     // liegt nicht darueber
+			}
+			const bool bUeberX = FMath::Abs(Anderes.CenterCm.X - Fuss.X) < Anderes.SizeCm.X * 0.5;
+			const bool bUeberY = FMath::Abs(Anderes.CenterCm.Y - Fuss.Y) < Anderes.SizeCm.Y * 0.5;
+			if (bUeberX && bUeberY)
+			{
+				Decke = FMath::Min(Decke, Unten);
+			}
+		}
+		const double Frei = Decke - TrittZ;
+		if (Frei < Stehhoehe)
+		{
+			++ZuNiedrig;
+			if (Frei < Schlimmste)
+			{
+				Schlimmste = Frei;
+				SchlimmsteNummer = i;
+			}
+		}
+	}
+
+	TestEqual(*FString::Printf(
+		TEXT("Jede der %d Stufen hat %.0f cm Kopffreiheit (schlimmste: Stufe %d mit %.0f cm)"),
+		Stufen.Num(), Stehhoehe, SchlimmsteNummer,
+		SchlimmsteNummer == INDEX_NONE ? 0.0 : Schlimmste),
+		ZuNiedrig, 0);
+
+	// Und der Lauf muss das naechste Geschoss WIRKLICH erreichen: die oberste
+	// Trittflaeche liegt auf der Hoehe des naechsten Podests.
+	double Oberste = 0.0;
+	for (const FHqPart& Stufe : Stufen)
+	{
+		Oberste = FMath::Max(Oberste, Stufe.CenterCm.Z + Stufe.SizeCm.Z * 0.5);
+	}
+	TestEqual(TEXT("Die oberste Stufe endet auf dem naechsten Geschossboden"),
+		Oberste, D.FloorHeightCm + 20.0, 1.0);
+
+	return true;
+}
