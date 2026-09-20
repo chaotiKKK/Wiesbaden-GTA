@@ -3115,3 +3115,28 @@ halbes Terabyte - und Skripte, die auf sechs verschiedene Staende zeigen.
 - **Runtime-Smoke:** UE startet mit Engine-CWD, daher `-WbShotPoseFile` immer absolut angeben. Deterministischer Lauf: installierte UE 5.8 mit absolutem `.uproject`, `-WbTime=13 -WbWeather=Clear -WbShotWhenReady -WbShotPoseFile=<absolut>`, danach `Saved/Diagnose/WbSeries_000.png` pruefen; PowerShell `Start-Process -Wait` verhindert den irrefuehrenden leeren Ruecklauf von direktem `&`.
 - **Sylvia-Gate:** `cmd /c Tools\build_gate1.cmd` baut den Modulstand; der fokussierte Cmd-Test ist `Automation RunTests WiesbadenReal.NPC.Sylvia.SceneAssets; Quit`. Als gruen zaehlt der Success-Marker im Log, nicht die fruehen allgemeinen Engine-Condition-Warnungen.
 - **Validierungsgrenze:** `WiesbadenReal.NPC.Sylvia.SceneAssets` prueft Pfade, Teile, Niagara, Text und Koordinaten, aber keine Pose. Der letzte visuelle Lauf belegte Spane und Gedankenblase, nicht eine koharente stehende GLB-Figur; absolute Beinrotationen zerlegten das Modell und sind keine Loesung.
+
+## Strassenmoebel: zwei Annahmen, die der Test widerlegt hat (20.09.2026)
+
+**Die OSM-Datei enthielt die Daten nicht.** Das Spec ging davon aus, die acht
+Moebel-Kategorien stuenden in `wiesbaden.osm.forest.json`. Tatsaechlich: 1.761
+Baenke - und sonst so gut wie nichts (117 Poller, 6 Hydranten, je EINER
+waste_basket/recycling/vending_machine/picnic_table, KEIN Briefkasten). Die
+Overpass-Abfrage in `OSMDataParser.cpp` holt Strassen, Gebaeude und Ampeln; alles
+andere war nie dabei. Vor jedem "wir werten Tag X aus" also im JSON zaehlen -
+und dabei aufpassen: die Datei ist EINE Zeile, `grep -c` liefert darum immer 1.
+Richtig ist `grep -o '"bench"' datei | wc -l`. Nachgezogen wird wie beim Wald
+(`Tools/fetch_street_furniture.py` -> `wiesbaden.osm.moebel.json`, Original
+bleibt); beim Mischen vorhandene Knoten ERGAENZEN, nie ein zweites Mal
+anhaengen - der C++-Parser haelt Knoten in einer TMap, der zweite Eintrag
+ueberschreibt den ersten und verbeult jeden Way, der ihn benutzt.
+
+**`FWiesbadenRoadClearance` taugt nicht fuer Geometrie.** Es beantwortet
+"blockiert ja/nein". Wer daraus die Richtung zur Strasse abtastet (16
+Richtungen, wachsender Radius), liegt systematisch daneben: gemessen 27 Grad
+bei einer Bank, die der Strasse den Ruecken kehren soll, und ein Objekt mitten
+auf der Fahrbahn findet in 1,5 m keinen Gehweg und faellt weg. Fuer Richtung,
+Abstand und Breite den Lotfusspunkt auf die Segmente rechnen (Gitter wie in
+`FNearestWayIndex`, RoadFurnitureGenerator.cpp) - eine Antwort, die Abstand,
+Fahrbahnbreite, Gehwegbreite, Laengsrichtung und Normale traegt.
+
