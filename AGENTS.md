@@ -3195,3 +3195,46 @@ fehlgeschlagener Filter. `git update-index --refresh` half nicht, ein
 erneuert; dass `git diff --cached` danach leer blieb, ist zugleich der Beweis,
 dass wirklich keine Datei inhaltlich abwich. Nicht in Panik `git reset --hard`
 hinterherwerfen.
+
+
+## Ausliefern bei fremder Arbeit im Baum: Tools/ausliefern.py (20.09.2026)
+
+In diesem Baum arbeiten mehrere Agenten und der Nutzer gleichzeitig. `git add -A`
+ist deshalb verboten, und `git add <pfade>` hat eine Falle, die an diesem Tag
+zugeschnappt ist.
+
+**Die Falle, nachgemessen:** `git add` mit mehreren Pfaden ist ALLES-ODER-NICHTS.
+Trifft EIN Pfad auf nichts, bricht es mit `fatal: pathspec ... did not match any
+files` ab (Exitcode 128) und staged auch die ANDEREN Pfade nicht. Zwei Faelle,
+nur einer ist gefaehrlich:
+
+- Datei nur im ARBEITSBAUM geloescht, im Index noch da: `git add` geht durch und
+  nimmt die Loeschung mit. Harmlos.
+- Pfad in Index UND Arbeitsbaum weg (nach `git rm`): Abbruch, nichts gestaged.
+
+Am 20.09. war es der zweite Fall: nach `git rm Tools/enable_nanite_chunks.py`
+scheiterte `git add` auf genau diesem Pfad, und der folgende Commit enthielt
+nur die Loeschung - acht Aenderungen fehlten. Nichts hat gewarnt; der Commit
+sah erfolgreich aus. Aufgefallen ist es nur, weil hinterher jemand
+`git show --stat` gelesen hat.
+
+**Die Abhilfe:**
+
+    python Tools/ausliefern.py zeigen  <pfade...>   # was geht mit, was bleibt
+    python Tools/ausliefern.py commit -F nachricht.txt <pfade...>
+    python Tools/ausliefern.py pruefen
+    python Tools/ausliefern.py push
+
+Es committet mit `git commit --only -- <pfade>` (nimmt Loeschungen mit, geht am
+Index fremder Dateien vorbei) und vergleicht danach die Dateiliste des Commits
+mit der gewollten. Weicht sie ab, bricht es ab, statt einen halben Commit
+stehen zu lassen. Die gewollten Pfade landen im Merkbuch
+`.git/ausliefern-journal.json`; `push` prueft damit JEDEN unveroeffentlichten
+Commit und verweigert, wenn Fremdes darin liegt (`--trotzdem` hebt das auf).
+
+Nach `--amend` oder einem Rebase stimmen die Commit-Nummern nicht mehr - solche
+Commits gelten als UNGEPRUEFT und werden gemeldet, nicht durchgewunken.
+
+Selbsttest: `python -m unittest discover -s Tools -p "test_ausliefern.py"`
+(15 Tests, jeder auf einem echten Wegwerf-Repo; einer haelt das Verhalten von
+`git add` selbst fest - faellt er, hat git sich geaendert).
