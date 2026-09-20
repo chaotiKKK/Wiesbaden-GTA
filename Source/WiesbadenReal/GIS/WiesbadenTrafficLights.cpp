@@ -2,6 +2,12 @@
 
 #include "GIS/WiesbadenTrafficLights.h"
 
+// Die Konfliktpruefung der Verkehrs-Simulation wird hier MITBENUTZT, statt
+// eine zweite zu schreiben: sie kennt beide Faelle (sich schneidende Wege
+// und gemeinsame Zielspur), und zwei Rechnungen fuer dieselbe Frage laufen
+// frueher oder spaeter auseinander.
+#include "GIS/WiesbadenTrafficSimulation.h"
+
 namespace
 {
 	// Schutz vor degenerierten Einstellungen.
@@ -57,7 +63,24 @@ int32 FWiesbadenTrafficLightSystem::AxisForBearing(double BearingDeg)
 	{
 		Normalized += 360.0;
 	}
-	return (Normalized < 180.0) ? 0 : 1;
+
+	// STRASSENACHSE, nicht Fahrtrichtung: erst modulo 180.
+	//
+	// Vorher stand hier "Normalized < 180.0 ? 0 : 1" - eine Teilung nach
+	// FAHRTRICHTUNG. Die Peilung kommt aus Atan2(dY, dX), also 0 Grad fuer
+	// Ostfahrt und 90 Grad fuer Nordfahrt. Beide lagen damit unter 180 und
+	// damit in DERSELBEN Gruppe: an jeder signalisierten Kreuzung bekamen
+	// zwei zueinander senkrechte Richtungen gleichzeitig Gruen und kreuzten
+	// sich mitten im Knoten. Zugleich landeten die beiden Richtungen
+	// DERSELBEN Strasse (0 und 180 Grad) in verschiedenen Gruppen und
+	// bekamen nie zusammen Gruen - der Knoten verschenkte die Haelfte seiner
+	// Leistungsfaehigkeit.
+	//
+	// Modulo 180 dreht beides um: Ost und West teilen sich eine Achse, Nord
+	// und Sued die andere. Das ist auch die Achse, die ein Verkehrsplaner
+	// meint, wenn er von den zwei Achsen einer Kreuzung spricht.
+	const double Achse = FMath::Fmod(Normalized, 180.0);
+	return (Achse < 90.0) ? 0 : 1;
 }
 
 bool FWiesbadenTrafficLightSystem::IsLeftTurn(ETurnType Turn)
@@ -69,6 +92,92 @@ bool FWiesbadenTrafficLightSystem::IsLeftTurn(ETurnType Turn)
 int32 FWiesbadenTrafficLightSystem::GroupForApproach(int32 Axis, bool bLeftTurn)
 {
 	return FMath::Clamp(Axis, 0, 1) * 2 + (bLeftTurn ? 1 : 0);
+}
+
+int32 FWiesbadenTrafficLightSystem::MakeGroupsConflictFree(
+	const FRoadNetwork& InNetwork, TMap<int32, int32>& InOutGroups)
+{
+	if (InOutGroups.Num() == 0)
+	{
+		return 0;
+	}
+
+	// AUFSTEIGEND, nicht in Map-Reihenfolge: eine TMap laeuft in
+	// Hash-Reihenfolge, und die haengt an Einfuegereihenfolge und
+	// Kapazitaet. Dieselbe Stadt bekaeme sonst je nach Lauf andere
+	// Signalprogramme - und damit waere kein Messergebnis vergleichbar.
+	TArray<int32> Reihenfolge;
+	Reihenfolge.Reserve(InOutGroups.Num());
+	for (const TPair<int32, int32>& Paar : InOutGroups)
+	{
+		Reihenfolge.Add(Paar.Key);
+	}
+	Reihenfolge.Sort();
+
+	// Gruppe -> die Verbindungen, die schon darin liegen.
+	TMap<int32, TArray<int32>> Belegung;
+
+	const auto Passt = [&InNetwork, &Belegung](int32 Gruppe, int32 Kandidat)
+	{
+		const TArray<int32>* Drin = Belegung.Find(Gruppe);
+		if (!Drin)
+		{
+			return true;      // leere Gruppe nimmt jeden
+		}
+		for (const int32 Anderer : *Drin)
+		{
+			if (FWiesbadenTrafficSimulation::DoConnectionsConflict(
+				InNetwork.Connections[Kandidat], InNetwork.Connections[Anderer]))
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+
+	int32 Hoechste = 0;
+	for (const int32 Index : Reihenfolge)
+	{
+		if (!InNetwork.Connections.IsValidIndex(Index))
+		{
+			continue;
+		}
+		const int32 Wunsch = FMath::Max(0, InOutGroups[Index]);
+
+		// Reihenfolge der Kandidaten: erst die Wunschgruppe (damit die
+		// Regelkreuzung ihre vier behaelt), dann aufsteigend alle anderen,
+		// zuletzt eine neue.
+		int32 Gewaehlt = INDEX_NONE;
+		if (Passt(Wunsch, Index))
+		{
+			Gewaehlt = Wunsch;
+		}
+		else
+		{
+			for (int32 Gruppe = 0; Gruppe <= Hoechste + 1; ++Gruppe)
+			{
+				if (Gruppe != Wunsch && Passt(Gruppe, Index))
+				{
+					Gewaehlt = Gruppe;
+					break;
+				}
+			}
+		}
+		// Eine neue Gruppe ist immer leer, die Schleife oben findet sie also
+		// spaetestens bei Hoechste + 1. Der Rueckfall steht hier nur, damit
+		// die Funktion keine ungueltige Gruppe zurueckgibt, falls sich das
+		// einmal aendert.
+		if (Gewaehlt == INDEX_NONE)
+		{
+			Gewaehlt = Hoechste + 1;
+		}
+
+		InOutGroups[Index] = Gewaehlt;
+		Belegung.FindOrAdd(Gewaehlt).Add(Index);
+		Hoechste = FMath::Max(Hoechste, Gewaehlt);
+	}
+
+	return Hoechste + 1;
 }
 
 int32 FWiesbadenTrafficLightSystem::ComputeGroupIndex(
@@ -94,6 +203,9 @@ void FWiesbadenTrafficLightSystem::Initialize(
 	Settings = InSettings;
 	Lights.Reset();
 	ConnectionToLight.Reset();
+	ConflictMovedConnections = 0;
+	ConflictExtraGroups = 0;
+	MaxGroupsAtOneLight = 0;
 	ElapsedSeconds = 0.0;
 
 	// Connections einmal nach Kreuzungsknoten buendeln. Vorher suchte jede
@@ -125,7 +237,7 @@ void FWiesbadenTrafficLightSystem::Initialize(
 		FWiesbadenTrafficLight Light;
 		Light.NodeId = Intersection.NodeId;
 		Light.Location = Intersection.Location;
-		Light.GroupCount = 4;   // zwei Achsen mal geradeaus/links
+		Light.GroupCount = 4;   // Faustregel; unten durch die echte Zahl ersetzt
 
 		// Connections dieser Kreuzung einer Richtungsgruppe zuordnen.
 		if (const TArray<int32>* NodeConnections = ConnectionsByNode.Find(Intersection.NodeId))
@@ -143,6 +255,21 @@ void FWiesbadenTrafficLightSystem::Initialize(
 				Light.ConnectionGroups.Add(ConnectionIndex, Group);
 				ConnectionToLight.Add(ConnectionIndex, LightIndex);
 			}
+		}
+
+		// Aus der Faustregel eine KONFLIKTFREIE Einteilung machen. Erst danach
+		// darf das Signalprogramm gebaut werden - es richtet sich nach den
+		// tatsaechlich benutzten Gruppen.
+		if (Settings.bConflictFreeGroups)
+		{
+			TMap<int32, int32> Vorher = Light.ConnectionGroups;
+			Light.GroupCount = MakeGroupsConflictFree(InNetwork, Light.ConnectionGroups);
+			for (const TPair<int32, int32>& Paar : Light.ConnectionGroups)
+			{
+				ConflictMovedConnections += (Vorher[Paar.Key] != Paar.Value) ? 1 : 0;
+			}
+			ConflictExtraGroups += FMath::Max(0, Light.GroupCount - 4);
+			MaxGroupsAtOneLight = FMath::Max(MaxGroupsAtOneLight, Light.GroupCount);
 		}
 
 		BuildSignalProgram(Light, Intersection);
@@ -278,17 +405,40 @@ void FWiesbadenTrafficLightSystem::BuildSignalProgram(FWiesbadenTrafficLight& Li
 {
 	Light.Phases.Reset();
 
-	// Gibt es auf dieser Achse ueberhaupt Linksabbieger? Eine Abbiegephase fuer
-	// eine Bewegung, die es an dieser Kreuzung nicht gibt, verschenkt nur
-	// Umlaufzeit - und davon haengt ab, wie lange alle anderen warten.
-	bool bHasLeft[2] = { false, false };
-	for (const TPair<int32, int32>& Pair : Light.ConnectionGroups)
+	// JE BENUTZTER GRUPPE eine Phase - nicht je Achse.
+	//
+	// Vorher baute diese Funktion genau zwei Geradeaus-Phasen (Achse 0 und 1)
+	// plus optionale Abbiegephasen. Seit die Gruppen konfliktfrei gefaerbt
+	// werden, kann eine schiefe oder funfarmige Kreuzung eine fuenfte Gruppe
+	// haben - und eine Gruppe OHNE Phase ist in GetGroupAspect dauerhaft ROT.
+	// Die Phasen muessen der Einteilung also folgen, nicht umgekehrt.
+	//
+	// Nebenbei behebt das einen alten Fall: mit bProtectedLeftTurns = false
+	// bekamen die Linksabbieger-Gruppen gar keine Phase und standen damit fuer
+	// immer auf Rot.
+	TArray<int32> UsedGroups;
+	TSet<int32> LeftOnlyGroups;
 	{
-		const int32 Group = Pair.Value;
-		if ((Group % 2) == 1)
+		TMap<int32, bool> HasNonLeft;
+		for (const TPair<int32, int32>& Pair : Light.ConnectionGroups)
 		{
-			bHasLeft[FMath::Clamp(Group / 2, 0, 1)] = true;
+			bool& NichtNurLinks = HasNonLeft.FindOrAdd(Pair.Value, false);
+			// Ungerade Gruppen unter 4 sind die Linksgruppen der Faustregel;
+			// alles darueber ist eine Konfliktgruppe und gilt als vollwertig.
+			const bool bLinks = (Pair.Value < 4) && ((Pair.Value % 2) == 1);
+			NichtNurLinks = NichtNurLinks || !bLinks;
 		}
+		for (const TPair<int32, bool>& Paar : HasNonLeft)
+		{
+			UsedGroups.Add(Paar.Key);
+			if (!Paar.Value)
+			{
+				LeftOnlyGroups.Add(Paar.Key);
+			}
+		}
+		// Aufsteigend: die Reihenfolge der Phasen ist Teil des Programms und
+		// darf nicht von der Hash-Reihenfolge einer TMap abhaengen.
+		UsedGroups.Sort();
 	}
 
 	// -- Die Groesse der Kreuzung bestimmt die Zeiten. ----------------------
@@ -315,17 +465,36 @@ void FWiesbadenTrafficLightSystem::BuildSignalProgram(FWiesbadenTrafficLight& Li
 	const double ThroughGreen = GreenSecondsFor(Settings, Light.SizeScore);
 	const double LeftGreen = LeftGreenSecondsFor(Settings, Light.SizeScore);
 
+	// Eine Linksgruppe bekommt die kurze Gruenzeit - es sind wenige Fahrzeuge.
+	// Sind geschuetzte Linksphasen abgeschaltet, bekommt sie trotzdem eine
+	// Phase (sonst stuende sie fuer immer auf Rot), dann aber die volle.
+	const auto IstKurz = [&LeftOnlyGroups, bLeftPhases](int32 Gruppe)
+	{
+		return bLeftPhases && LeftOnlyGroups.Contains(Gruppe);
+	};
+
 	int32 ThroughPhases = 0;
 	int32 LeftPhases = 0;
-	for (int32 Axis = 0; Axis < 2; ++Axis)
+	for (const int32 Gruppe : UsedGroups)
 	{
-		++ThroughPhases;
-		if (bLeftPhases && bHasLeft[Axis])
-		{
-			++LeftPhases;
-		}
+		if (IstKurz(Gruppe)) { ++LeftPhases; } else { ++ThroughPhases; }
+	}
+	// Ampel OHNE Verbindungen: die beiden Phasen der Faustregel behalten.
+	//
+	// Ohne eine einzige Phase liefe GetGroupAspect in den Gruen-Rueckfall und
+	// die Kreuzung waere ungeregelt. Warum ZWEI und nicht eine: der Umlauf ist
+	// ihre Summe, und er geht in den Versatz der gruenen Welle ein
+	// (Fmod(Fahrzeit, Umlauf)). Mit nur einer Phase halbierte sich der Umlauf
+	// und damit sprang der Versatz - im Test sichtbar als 1,6 s statt 21,6 s,
+	// weil 21,6 mod 10 eben 1,6 ist. Im echten Netz hat jede Ampel
+	// Verbindungen; dieser Zweig haelt nur den Sonderfall stabil.
+	if (UsedGroups.Num() == 0)
+	{
+		ThroughPhases = 2;
 	}
 
+	// Wunschumlauf: was die Kreuzung braeuchte, wenn sie frei waehlen duerfte.
+	// Die Rasterung darunter macht daraus den gemeinsamen Takt der Achse.
 	const double DesiredCycle = ThroughPhases * (ThroughGreen + Fixed)
 		+ LeftPhases * (LeftGreen + Fixed);
 
@@ -358,21 +527,28 @@ void FWiesbadenTrafficLightSystem::BuildSignalProgram(FWiesbadenTrafficLight& Li
 	const double ThroughSlot = AdjustedThroughGreen + Fixed;
 	const double LeftSlot = LeftGreen + Fixed;
 
-	for (int32 Axis = 0; Axis < 2; ++Axis)
+	// Die Reihenfolge ist die der Gruppennummern, und die Linksgruppe einer
+	// Achse traegt die ungerade Nummer direkt hinter ihrer Geradeaus-Gruppe.
+	// Damit bleibt die Abbiegephase NACHLAUFEND: erst raeumt der
+	// Geradeausverkehr derselben Achse, dann biegen die Wartenden ab.
+	for (const int32 Gruppe : UsedGroups)
 	{
-		FWiesbadenSignalPhase Through;
-		Through.Group = GroupForApproach(Axis, false);
-		Through.DurationSeconds = static_cast<float>(ThroughSlot);
-		Light.Phases.Add(Through);
+		FWiesbadenSignalPhase Phase;
+		Phase.Group = Gruppe;
+		Phase.DurationSeconds = static_cast<float>(IstKurz(Gruppe) ? LeftSlot : ThroughSlot);
+		Light.Phases.Add(Phase);
+	}
 
-		if (bLeftPhases && bHasLeft[Axis])
+	// Sonderfall Ampel ohne Verbindungen (siehe oben): zwei leere Phasen,
+	// damit der Umlauf derselbe bleibt wie vor der konfliktfreien Einteilung.
+	if (UsedGroups.Num() == 0)
+	{
+		for (int32 Achse = 0; Achse < 2; ++Achse)
 		{
-			// NACHLAUFEND, nicht vorlaufend: erst raeumt der Geradeausverkehr
-			// derselben Achse, dann biegen die Wartenden ab.
-			FWiesbadenSignalPhase Left;
-			Left.Group = GroupForApproach(Axis, true);
-			Left.DurationSeconds = static_cast<float>(LeftSlot);
-			Light.Phases.Add(Left);
+			FWiesbadenSignalPhase Phase;
+			Phase.Group = GroupForApproach(Achse, false);
+			Phase.DurationSeconds = static_cast<float>(ThroughSlot);
+			Light.Phases.Add(Phase);
 		}
 	}
 
@@ -460,6 +636,9 @@ void FWiesbadenTrafficLightSystem::Reset()
 	Network = nullptr;
 	Lights.Reset();
 	ConnectionToLight.Reset();
+	ConflictMovedConnections = 0;
+	ConflictExtraGroups = 0;
+	MaxGroupsAtOneLight = 0;
 	ElapsedSeconds = 0.0;
 	Settings = FWiesbadenTrafficLightSettings();
 }
@@ -502,6 +681,14 @@ void FWiesbadenTrafficLightSystem::GetProgramStatistics(
 		}
 	}
 	OutMeanCycleSeconds = CycleSum / Lights.Num();
+}
+
+void FWiesbadenTrafficLightSystem::GetConflictStatistics(
+	int32& OutMovedConnections, int32& OutExtraGroups, int32& OutMaxGroupsAtOneLight) const
+{
+	OutMovedConnections = ConflictMovedConnections;
+	OutExtraGroups = ConflictExtraGroups;
+	OutMaxGroupsAtOneLight = MaxGroupsAtOneLight;
 }
 
 bool FWiesbadenTrafficLightSystem::HasTrafficLightAt(int64 NodeId) const

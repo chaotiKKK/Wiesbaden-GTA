@@ -3238,3 +3238,71 @@ Commits gelten als UNGEPRUEFT und werden gemeldet, nicht durchgewunken.
 Selbsttest: `python -m unittest discover -s Tools -p "test_ausliefern.py"`
 (15 Tests, jeder auf einem echten Wegwerf-Repo; einer haelt das Verhalten von
 `git add` selbst fest - faellt er, hat git sich geaendert).
+
+
+## Ampel-Freigabegruppen: der Achsenfehler und sein Preis (20.09.2026)
+
+**Der Fehler:** `AxisForBearing` teilte nach FAHRTRICHTUNG (`Peilung < 180`).
+Die Peilung kommt aber aus `Atan2(dY, dX)` - 0 Grad ist Ostfahrt, 90 Grad
+Nordfahrt. Beide lagen unter 180 und damit in DERSELBEN Freigabegruppe: an
+jeder der 1073 signalisierten Kreuzungen bekamen zwei zueinander senkrechte
+Richtungen gleichzeitig Gruen. Zugleich lagen die beiden Richtungen DERSELBEN
+Strasse (0 und 180 Grad) in verschiedenen Gruppen und bekamen nie zusammen
+Gruen. Ein Test hielt das fest ("Peilung 90 -> Achse 0") und hat den Fehler
+damit festgeschrieben, statt ihn zu finden. Richtig ist `Fmod(Peilung, 180)`.
+
+**Konfliktfreiheit kommt nicht aus der Faustregel.** Achse x Abbiegeart trifft
+die Regelkreuzung, aber nicht den funfarmigen Knoten, die schiefe Einmuendung
+oder zwei Zufahrten, die in dieselbe Spur einfaedeln.
+`MakeGroupsConflictFree` faerbt die Gruppen darum gierig nach, geprueft mit
+`FWiesbadenTrafficSimulation::DoConnectionsConflict` - DERSELBEN Rechnung, mit
+der die Simulation ihre Kreuzungsregel baut (sie kennt beide Faelle:
+schneidende Wege UND gemeinsame Zielspur). Zwei Rechnungen fuer dieselbe Frage
+laufen auseinander.
+
+**Eine Gruppe ohne Phase ist DAUERHAFT ROT** (`GetGroupAspect` faellt nicht auf
+Gruen zurueck, es prueft `Phase.Group != Group`). Solange die Phasen je ACHSE
+gebaut wurden, konnte das passieren: mit `bProtectedLeftTurns = false` bekamen
+die Linksabbieger-Gruppen keine Phase. Die Phasen folgen jetzt den tatsaechlich
+BENUTZTEN Gruppen. Nebenwirkung: die Einstellung steuert nur noch die
+Gruenzeit, nicht mehr das Ob - ein Linksabbieger kreuzt den Gegenverkehr, die
+Faerbung trennt ihn also ohnehin.
+
+**DER PREIS, gemessen - er ist hoch.** A/B auf derselben Karte, im selben
+Build, Spieler 250 m daneben geparkt, je 300 s, Bahnhofsplatz (66 Spuren,
+rund 1,6 Mio. Messwerte je Lauf):
+
+| | Faustregel | konfliktfrei |
+|---|---|---|
+| Mitteltempo | 7,8 km/h | **4,9 km/h** |
+| Anteil am Limit | 18,0 % | **11,2 %** |
+| Steh-Anteil | 68,7 % | **81,2 %** |
+| Umlauf im Mittel | 36 s | 51 s |
+| Spanne | 20..70 s | **20..180 s** |
+
+Also 37 Prozent weniger Tempo. 6357 Verbindungen mussten ihre Wunschgruppe
+verlassen, 466 Gruppen kamen ueber die vier der Faustregel hinaus, groesste
+Gruppenzahl an einer Kreuzung 10 - macht dort 10 Phasen und 180 s Umlauf.
+
+Der Grund liegt im Verfahren: eine gierige FAERBUNG gibt jeder konfliktbehafteten
+Bewegung eine eigene Phase. Ein Verkehrsplaner macht das Gegenteil und fasst
+moeglichst viele VERTRAEGLICHE Bewegungen in einer Freigabe zusammen (Clique
+statt Farbe). Wer hier weiterarbeitet, faengt dort an.
+
+Zweiter Verdacht, NICHT gemessen: `DoConnectionsConflict` meldet auch
+gemeinsame ZIELSPUR als Konflikt. Das ist fuer die Laufzeitregel richtig (ein
+Fahrzeug wartet, bis der andere durch ist), fuer eine Freigabegruppe aber
+womoeglich zu streng - zwei einfaedelnde Stroeme werden real gemeinsam
+freigegeben und sortieren sich ueber Luecken. Wieviel der 6357 Verschiebungen
+darauf entfaellt, ist offen.
+
+**MESSFALLE, die zweimal Zeit gekostet hat:** `-WbGoto=<Ort>` parkt den
+Spieler MITTEN INS MOTIV, und sein Fahrzeug blockiert dort eine Spur. Am
+Bahnhofsplatz gemessen: 5,8 km/h mit dem Spieler auf dem Platz gegen 12,0 km/h
+ohne ihn - der Aufbau halbiert das Ergebnis. Fuer Flussmessungen den Spieler
+per Koordinate danebensetzen (`-WbGoto=22230,145934` ist 250 m noerdlich des
+Bahnhofsplatzes, innerhalb der Spawn-Reichweite).
+
+**Vergleichsschalter:** `-WbOhneKonfliktgruppen` laesst die Gruppen bei der
+Faustregel stehen - dasselbe Muster wie `-WbOhneKreuzungsregel`, damit sich
+beide Zustaende auf derselben Karte und im selben Build messen lassen.
