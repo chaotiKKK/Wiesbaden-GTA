@@ -3306,3 +3306,45 @@ Bahnhofsplatzes, innerhalb der Spawn-Reichweite).
 **Vergleichsschalter:** `-WbOhneKonfliktgruppen` laesst die Gruppen bei der
 Faustregel stehen - dasselbe Muster wie `-WbOhneKreuzungsregel`, damit sich
 beide Zustaende auf derselben Karte und im selben Build messen lassen.
+
+
+## Karten aufraeumen: der Bake schlaegt vor, geloescht wird gefragt (20.09.2026)
+
+Jeder Bake legt eine neue Stadtkarte an und laesst die alte stehen - richtig
+so, aber JE Karte 1,9 GB externe Actors. `Tools/karten_aufraeumen.py` behaelt
+genau zwei: die neue und ihre Vorgaengerin (der Rueckweg, wenn sich die neue
+erst im Spiel als schlecht erweist).
+
+    python Tools/karten_aufraeumen.py                 # nur zeigen
+    python Tools/karten_aufraeumen.py --loeschen      # fragt nach
+    python Tools/karten_aufraeumen.py --loeschen --ja # ohne Rueckfrage
+
+**Warum der Bake NICHT selbst aufraeumt:** `rebuild_city.py` laeuft im Editor
+mit `-unattended`, und dort gibt es niemanden, den man fragen koennte - ein
+`input()` haette in einem abgesetzten Bake stundenlang gewartet, ohne dass es
+jemand sieht. Der Bake legt darum nur
+`Saved/Diagnose/bake_vorschlag.json` ab (neue Karte + Vorgaengerin) und nennt
+im Log die naechsten Schritte. Zweiter Grund: "FERTIG" ist kein Beleg -
+Alkis10 und Alkis11 meldeten Erfolg und waren im Spiel nur Gras.
+
+**Vier Sicherungen, jede mit Gegenprobe im Test:** ohne Terminal wird nicht
+geloescht (sondern der Befehl ausgegeben); die gespielte Karte aus
+`GameDefaultMap` ist auch mit `--ja` unantastbar; wiegt die NEUE Karte unter
+1,7 GB externe Actors, gilt sie als Leerbake und es wird nichts geloescht
+(die Grenze stammt aus `bake_abnahme.py`: volle Stadt 1,8-1,9 GB, Leerbake
+1,4 GB); und die Rueckfrage nimmt nur das ausgeschriebene "ja" - "j", "y",
+"yes" und die blosse Eingabetaste loeschen nichts.
+
+**ZWEI TESTFALLEN, die hier Zeit gekostet haben:**
+
+* **`sys.stdin.isatty()` ist in dieser Umgebung NICHT verlaesslich.** Stand in
+  derselben Aufrufkette vorher ein Here-Dokument (`python - <<'PY'`), ist
+  stdin verbraucht und `isatty()` liefert False - sonst True. Ein Test, der
+  den einen oder anderen Zustand VORFINDEN will, ist mal gruen und mal rot,
+  ohne dass sich eine Zeile geaendert hat. Beide Zustaende gehoeren
+  hergestellt (stdin durch eine Attrappe ersetzen), nie vorausgesetzt.
+* **Der Bytecode-Zwischenspeicher taeuscht bei schnellen Umschreibungen.**
+  Wird eine .py-Datei zweimal innerhalb derselben Sekunde geschrieben, kann
+  Python den `.pyc` des VORIGEN Stands weiterverwenden - eine Gegenprobe
+  ("faellt der Test, wenn ich die Sicherung aushebele?") misst dann den
+  falschen Stand. Vor jeder solchen Messung `Tools/__pycache__` loeschen.

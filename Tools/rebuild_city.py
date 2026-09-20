@@ -270,5 +270,31 @@ if not unreal.EditorAssetLibrary.does_asset_exist(TARGET):
     log("ABBRUCH: Karte %s wurde NICHT geschrieben." % TARGET)
     finish(1)
 
+# -- 5) Aufraeum-Vorschlag ablegen - NICHT selbst aufraeumen ---------------
+#
+# Warum kein Loeschen an dieser Stelle: dieses Skript laeuft im Editor mit
+# -unattended, und dort gibt es niemanden, den man fragen koennte. Ein
+# input() haette in einem abgesetzten Bake stundenlang gewartet, ohne dass es
+# jemand sieht. Zweiter Grund: "FERTIG" ist KEIN Beleg - Alkis10 und Alkis11
+# meldeten einen erfolgreichen Bake und waren im Spiel nur Gras. Was hier
+# entsteht, ist darum ein Vorschlag; geloescht wird erst nach der Abnahme und
+# nach ausdruecklicher Rueckfrage durch Tools/karten_aufraeumen.py.
+try:
+    import json
+    vorschlag = os.path.join(
+        unreal.Paths.project_saved_dir(), "Diagnose", "bake_vorschlag.json")
+    vorschlag = os.path.abspath(vorschlag)
+    os.makedirs(os.path.dirname(vorschlag), exist_ok=True)
+    with open(vorschlag, "w", encoding="utf-8") as f:
+        json.dump({"neu": TARGET, "vorgaenger": SOURCE}, f, indent=1, ensure_ascii=False)
+    log("Aufraeum-Vorschlag abgelegt: %s" % vorschlag)
+except Exception as exc:
+    # Ein fehlgeschlagener Vorschlag darf den Bake nicht entwerten.
+    log("Aufraeum-Vorschlag konnte nicht abgelegt werden: %s" % exc)
+
 log("FERTIG - Karte %s liegt vor." % TARGET)
+log("Naechste Schritte: erst abnehmen, dann aufraeumen -")
+log("  python Tools/bake_abnahme.py --neu %s" % TARGET.split("/")[-1])
+log("  python Tools/karten_aufraeumen.py            (zeigt, was wegkaeme)")
+log("  python Tools/karten_aufraeumen.py --loeschen (fragt nach)")
 finish(0)
