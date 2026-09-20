@@ -3140,3 +3140,58 @@ Abstand und Breite den Lotfusspunkt auf die Segmente rechnen (Gitter wie in
 `FNearestWayIndex`, RoadFurnitureGenerator.cpp) - eine Antwort, die Abstand,
 Fahrbahnbreite, Gehwegbreite, Laengsrichtung und Normale traegt.
 
+
+
+## Zeilenenden: erledigt durch .gitattributes (20.09.2026)
+
+**Die Warnungen weiter oben sind GEGENSTANDSLOS** - die Abschnitte
+"Werkzeug-Fallstricke: Zeilenenden bei Skript-Edits" (11.09.), "Hartcodiertes
+CRLF in einem Python-Patch" und "Der Editor schreibt DefaultEngine.ini als
+CRLF" (18.09.). Sie beschreiben Handarbeit gegen ein Problem, das es nicht mehr
+gibt. Wer sie liest, soll hier weiterlesen statt dort anzufangen.
+
+Das Repo hat jetzt eine `.gitattributes` mit `* text=auto eol=lf`. Git
+normalisiert beim EINCHECKEN auf LF, also ist gleichgueltig, was ein Werkzeug
+auf die Platte schreibt: derselbe Text ergibt denselben Blob. Damit ist der
+Churn nicht leichter zu reparieren, sondern unmoeglich.
+
+Konkret heisst das fuer die Arbeit an dieser Datei:
+
+- `write_text()`, `newline='
+'`, ein Editor, ein fremder Agent - alles egal.
+  Nachgewiesen: AGENTS.md einmal komplett auf LF und einmal komplett auf CRLF
+  umgeschrieben, `git diff` blieb beide Male LEER.
+- Die alte Regel "nur binaer ANHAENGEN, nie neu schreiben" ist damit hinfaellig.
+- Was NICHT weggeht: eine Datei kann in sich gemischt sein, wenn ein Werkzeug
+  einzelne Zeilen anders schreibt als den Rest. Das ist kein Git-Problem mehr,
+  aber unschoen - `Tools/test_zeilenenden.py` meldet es.
+
+**Ausnahmen in der Regel, beide mit Grund:**
+
+- `*.cmd` / `*.bat` liegen auf der Platte als CRLF. cmd.exe springt bei `goto`
+  ueber Byte-Versaetze und kann in reinen LF-Dateien mitten in einer Zeile
+  landen. Im Baum nutzt genau eine der 111 .cmd-Dateien Sprungmarken
+  (`shot_heli_paar.cmd`), aber CRLF ist fuer Windows-Stapeldateien ohnehin das
+  richtige Format. Der Index bleibt auch dort LF.
+- `*.uasset`, `*.umap`, Bilder, Modelle, Ton sind ausdruecklich `binary`. Git
+  erkennt sie an ihren Null-Bytes auch selbst - aber eine zerstoerte .uasset
+  faellt erst auf, wenn der Editor sie nicht mehr laedt. Das darf nicht an
+  einer Heuristik haengen. **Wer eine neue Binaer-Endung einbringt, traegt sie
+  ein**; `Tools/test_zeilenenden.py` faellt sonst.
+
+**Die Einmal-Normalisierung** (Commit-Nachricht hat die Zahlen): 87 Dateien im
+Index, davon mit `--ignore-cr-at-eol` nur `.gitattributes` selbst uebrig -
+die anderen 86 waren reine Zeilenenden, 0 Binaerdateien betroffen. Der Baum war
+vorher uneinheitlich (31 .cpp CRLF gegen 152 LF) und SIEBEN Dateien waren in
+sich gemischt, AGENTS.md mit 3078 CRLF plus 64 blanken LF die schlimmste.
+
+**Eine Falle beim Umstellen, fuer den naechsten, der so etwas macht:** nachdem
+193 Dateien in einer Sekunde neu geschrieben waren, meldete `git status` alle
+193 als geaendert, waehrend `git diff` leer war und `git hash-object` denselben
+Hash lieferte wie der Index. Das ist der Stat-Cache (Racy-Git: Datei-mtime
+nicht aelter als der Index, Groesse durch CRLF anders), NICHT ein
+fehlgeschlagener Filter. `git update-index --refresh` half nicht, ein
+`git add` der Pfade schon - Inhalt identisch, nur die Stat-Information wird
+erneuert; dass `git diff --cached` danach leer blieb, ist zugleich der Beweis,
+dass wirklich keine Datei inhaltlich abwich. Nicht in Panik `git reset --hard`
+hinterherwerfen.
