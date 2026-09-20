@@ -228,6 +228,18 @@ builder.set_editor_property("generate_city_chunks", True)
 builder.set_editor_property("map_asset_path", TARGET)
 builder.set_editor_property("auto_save_city_as_map", True)
 
+# -- 3a) Live schalten? NUR auf ausdrueckliche Ansage ----------------------
+#
+# Frueher verdrahtete SaveCityAsMap die neue Karte bedingungslos als
+# GameDefaultMap. Ein PROBE-Bake - und die meisten sind Proben - stellte damit
+# still die gespielte Stadt um, und zurueckgenommen wurde es jedes Mal von
+# Hand in Config/DefaultEngine.ini. Der Schalter steht jetzt auf AUS; wer die
+# neue Karte sofort spielen will, sagt es: WB_LIVE_SCHALTEN=1.
+LIVE = os.environ.get("WB_LIVE_SCHALTEN") == "1"
+builder.set_editor_property("make_new_map_default", LIVE)
+log("Default-Karte umstellen: %s" % ("JA (WB_LIVE_SCHALTEN=1)" if LIVE
+                                     else "nein - die gespielte Karte bleibt"))
+
 # -- 3b) Optionale Overrides fuer koordinierte Re-Bakes (env-gesteuert) -----
 # Halten das Skript generisch; die konkreten Werte stehen im jeweiligen
 # rebake_*.cmd. So laesst sich ein Bake gezielt anders parametrisieren, ohne den
@@ -293,6 +305,11 @@ except Exception as exc:
     log("Aufraeum-Vorschlag konnte nicht abgelegt werden: %s" % exc)
 
 log("FERTIG - Karte %s liegt vor." % TARGET)
+if not LIVE:
+    log("Die gespielte Karte ist UNVERAENDERT. Zum Umstellen den Bake mit")
+    log("  WB_LIVE_SCHALTEN=1 wiederholen - oder in Config/DefaultEngine.ini")
+    log("  GameDefaultMap und EditorStartupMap von Hand auf %s setzen." % TARGET)
+
 log("Naechste Schritte: erst abnehmen, dann aufraeumen -")
 log("  python Tools/bake_abnahme.py --neu %s" % TARGET.split("/")[-1])
 log("  python Tools/karten_aufraeumen.py            (zeigt, was wegkaeme)")

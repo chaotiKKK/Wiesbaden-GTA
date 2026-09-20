@@ -618,7 +618,31 @@ void AWiesbadenWorldBuilder::SaveCityAsMap()
 		return;
 	}
 
-	// Als Default-Map verdrahten, damit Play/Standalone direkt die Stadt laden.
+	// Als Default-Map verdrahten - NUR wenn ausdruecklich gewollt.
+	//
+	// Frueher geschah das bedingungslos. Ein PROBE-Bake - und die meisten sind
+	// Proben - stellte damit still die gespielte Stadt um; gemerkt hat man es
+	// erst an `git status Config/`, und zurueckgenommen wurde es jedes Mal von
+	// Hand. Schlimmer noch bei einem Bake, der sich spaeter als untauglich
+	// erwies (Alkis10 und Alkis11 meldeten FERTIG und waren im Spiel nur Gras):
+	// der hatte die funktionierende Karte da schon verdraengt.
+	const FString MapName = FPackageName::GetShortName(AssetPath);
+	const FString MapRef = AssetPath + TEXT(".") + MapName;
+
+	if (!bMakeNewMapDefault)
+	{
+		// LAUT sagen, was NICHT passiert ist. Eine stille Unterlassung waere
+		// genauso schlecht wie die stille Umstellung: wer die neue Karte
+		// spielen will, soll wissen, wie.
+		UE_LOG(LogWbCore, Warning,
+			TEXT("SaveCityAsMap: Karte %s gespeichert, aber NICHT als Default verdrahtet ")
+			TEXT("(bMakeNewMapDefault = false). Die gespielte Karte bleibt unveraendert. ")
+			TEXT("Zum Umstellen: bMakeNewMapDefault im Details-Panel setzen oder den Bake ")
+			TEXT("mit WB_LIVE_SCHALTEN=1 laufen lassen."),
+			*MapRef);
+	}
+	else
+	{
 	// WICHTIG (UE 5.8, im Editor verifiziert): GConfig->SetString + Flush(
 	// GEngineIni) kann STILL nichts schreiben - Flush ueberspringt die Datei,
 	// wenn FindBranch den Branch unter dem vollen Pfad nicht findet, und
@@ -627,8 +651,6 @@ void AWiesbadenWorldBuilder::SaveCityAsMap()
 	// datenreinen Helfer geschrieben und danach gegen die Platte verifiziert;
 	// GConfig bleibt zusaetzlich im Speicher aktuell (harmlos, falls ein
 	// spaeterer Flush den Branch doch findet).
-	const FString MapName = FPackageName::GetShortName(AssetPath);
-	const FString MapRef = AssetPath + TEXT(".") + MapName;
 	const FString DefaultMapSection = TEXT("/Script/EngineSettings.GameMapsSettings");
 	GConfig->SetString(*DefaultMapSection, TEXT("GameDefaultMap"), *MapRef, GEngineIni);
 	GConfig->SetString(*DefaultMapSection, TEXT("EditorStartupMap"), *MapRef, GEngineIni);
@@ -684,6 +706,11 @@ void AWiesbadenWorldBuilder::SaveCityAsMap()
 			UE_LOG(LogWbCore, Error, TEXT("SaveCityAsMap: %s"), *LastError);
 			return;
 		}
+	}
+
+	UE_LOG(LogWbCore, Log,
+		TEXT("SaveCityAsMap: %s ist jetzt die Default-Karte (bMakeNewMapDefault war gesetzt)."),
+		*MapRef);
 	}
 
 	GConfig->Flush(false, GEngineIni);

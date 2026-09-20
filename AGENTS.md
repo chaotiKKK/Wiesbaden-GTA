@@ -3402,3 +3402,39 @@ gegen die ECHTE Kollision. Ergebnis: 157 Schritte, 57,7 m gestiegen, Hoehe
 Bild). Und `-WbTeleportTo` nimmt das FAHRZEUG mit, wenn der Spieler darin
 sitzt - dann fuellt das Armaturenbrett das Bild. Mit `-WbZuFuss=<Sekunden>`
 vorher aussteigen.
+
+
+## Die Default-Karte stellt kein Bake mehr um (20.09.2026)
+
+**Vorher:** `AWiesbadenWorldBuilder::SaveCityAsMap` schrieb `GameDefaultMap`
+und `EditorStartupMap` BEDINGUNGSLOS in `Config/DefaultEngine.ini`. Ein
+PROBE-Bake - und die meisten sind Proben - stellte damit still die gespielte
+Stadt um. Gemerkt hat man es erst, wenn `git status Config/` eine Aenderung
+zeigte, die niemand gewollt hatte, und zurueckgenommen wurde sie jedes Mal von
+Hand. Bei Alkis10 und Alkis11 war es schlimmer: die meldeten FERTIG, waren im
+Spiel nur Gras - und hatten die funktionierende Karte da schon verdraengt.
+
+**Jetzt:** `bMakeNewMapDefault` (UPROPERTY am WorldBuilder) steht auf **false**.
+Ohne ausdrueckliche Ansage bleibt die gespielte Karte, wie sie ist; der Bake
+sagt im Log als WARNUNG, was er nicht getan hat und wie man es tut. Der
+geprueften Schreibpfad selbst (mit allem Wissen ueber den stillen
+GConfig-Flush-No-Op) ist unveraendert - er laeuft nur noch auf Ansage.
+
+    # Probe-Bake (Regelfall): gespielte Karte bleibt
+    rebake_alkisNN.cmd
+
+    # Live schalten, ausdruecklich:
+    set WB_LIVE_SCHALTEN=1
+    rebake_alkisNN.cmd
+
+Im Editor: `bMakeNewMapDefault` im Details-Panel des WorldBuilders.
+
+**Wache:** `WiesbadenReal.GIS.MapBake.DefaultKarteNurAufAnsage` prueft die
+Vorgabe am CDO. Gegengeprueft - mit `= true` faellt sie. Sie prueft ausserdem,
+dass der Schreibpfad selbst noch funktioniert, damit die Abschaltung ihn nicht
+heimlich beschaedigt.
+
+**Reihenfolge, die sich daraus ergibt:** backen -> abnehmen
+(`bake_abnahme.py`) -> live schalten -> aufraeumen
+(`karten_aufraeumen.py`). Jeder Schritt ist eine eigene Entscheidung; keiner
+passiert als Nebenwirkung des vorigen.

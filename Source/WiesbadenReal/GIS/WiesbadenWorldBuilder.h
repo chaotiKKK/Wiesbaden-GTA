@@ -242,11 +242,33 @@ public:
 	/**
 	 * Auto-Save nach erfolgreichem Build: Wenn aktiviert, ruft BuildCity am
 	 * Ende direkt SaveCityAsMap() auf (speichert die Stadt als Map unter
-	 * MapAssetPath inkl. World-Partition-Aktivierung und verdrahtet sie als
-	 * Default-Map). Default false - der Build schreibt ohne Opt-in keine Dateien.
+	 * MapAssetPath inkl. World-Partition-Aktivierung).
+	 * Default false - der Build schreibt ohne Opt-in keine Dateien.
 	 */
 	UPROPERTY(EditAnywhere, Category = "GIS|Ausgabe")
 	bool bAutoSaveCityAsMap = false;
+
+	/**
+	 * Die neue Karte als GAMEDEFAULTMAP verdrahten - AUS per Vorgabe.
+	 *
+	 * WARUM AUS: Welche Karte gespielt wird, ist eine Entscheidung des
+	 * Nutzers, keine Nebenwirkung eines Bakes. Frueher schrieb SaveCityAsMap
+	 * `GameDefaultMap` und `EditorStartupMap` bedingungslos um. Ein
+	 * PROBE-Bake - und die meisten sind Proben - stellte damit still die
+	 * gespielte Stadt um; gemerkt hat man es erst, wenn `git status Config/`
+	 * eine Aenderung zeigte, die niemand gewollt hatte, und sie wurde jedes
+	 * Mal von Hand zurueckgenommen.
+	 *
+	 * Schlimmer: ein Bake, der spaeter als untauglich auffiel (Alkis10 und
+	 * Alkis11 meldeten FERTIG und waren im Spiel nur Gras), hatte die
+	 * funktionierende Karte da schon als Default verdraengt.
+	 *
+	 * Einschalten heisst ausdruecklich entscheiden: im Details-Panel, oder
+	 * beim Skript-Bake ueber `WB_LIVE_SCHALTEN=1` (siehe
+	 * Tools/rebuild_city.py). Der Bake sagt im Log, was er NICHT getan hat.
+	 */
+	UPROPERTY(EditAnywhere, Category = "GIS|Ausgabe")
+	bool bMakeNewMapDefault = false;
 
 	/**
 	 * Erzeugte Chunk-Actors - ZWINGEND Transient.

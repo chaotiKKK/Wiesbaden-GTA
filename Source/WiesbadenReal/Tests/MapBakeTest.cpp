@@ -188,3 +188,43 @@ bool FMapBakeTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMapDefaultOptInTest,
+	"WiesbadenReal.GIS.MapBake.DefaultKarteNurAufAnsage",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FMapDefaultOptInTest::RunTest(const FString& Parameters)
+{
+	// WELCHE KARTE GESPIELT WIRD, IST EINE ENTSCHEIDUNG, KEINE NEBENWIRKUNG.
+	//
+	// SaveCityAsMap schrieb GameDefaultMap und EditorStartupMap frueher
+	// bedingungslos um. Ein Probe-Bake stellte damit still die gespielte Stadt
+	// um; zurueckgenommen wurde es jedes Mal von Hand in
+	// Config/DefaultEngine.ini. Bei Alkis10 und Alkis11 war es schlimmer: die
+	// meldeten FERTIG und waren im Spiel nur Gras - und hatten die
+	// funktionierende Karte da schon als Default verdraengt.
+	//
+	// Faellt dieser Test, hat jemand die Vorgabe zurueckgedreht.
+	const AWiesbadenWorldBuilder* Vorgabe =
+		GetDefault<AWiesbadenWorldBuilder>();
+	if (!TestNotNull(TEXT("Es gibt einen WorldBuilder-Vorgabestand"), Vorgabe))
+	{
+		return false;
+	}
+
+	TestFalse(TEXT("bMakeNewMapDefault ist AUS - ein Bake stellt die gespielte "
+		"Karte nicht von selbst um"), Vorgabe->bMakeNewMapDefault);
+
+	// Und der Schreibvorgang selbst bleibt fehlerfrei, wenn er denn gewollt
+	// ist - die Schaltung darf den geprueften Pfad nicht beschaedigt haben.
+	{
+		const FString MapRef = TEXT("/Game/Maps/Probe.Probe");
+		const FString Leer;
+		const FString Ergebnis = ApplyDefaultMapToIniText(Leer, MapRef);
+		TestTrue(TEXT("Die Verdrahtung selbst funktioniert weiterhin"),
+			Ergebnis.Contains(TEXT("GameDefaultMap=") + MapRef)
+			&& Ergebnis.Contains(TEXT("EditorStartupMap=") + MapRef));
+	}
+
+	return true;
+}
