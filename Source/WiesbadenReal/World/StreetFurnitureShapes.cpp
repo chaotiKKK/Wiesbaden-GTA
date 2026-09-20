@@ -233,3 +233,31 @@ void WiesbadenStreetFurniture::BuildParts(
 		break;
 	}
 }
+
+FString WiesbadenStreetFurniture::GetMeshPath(EStreetFurnitureKind Kind, int32 Variant)
+{
+	// Namen wie in Tools/Blender/make_street_furniture.py (BAUPLAN).
+	const TCHAR* Name = TEXT("");
+	switch (Kind)
+	{
+	case EStreetFurnitureKind::Bench:          Name = TEXT("Bench");          break;
+	case EStreetFurnitureKind::Bollard:        Name = TEXT("Bollard");        break;
+	case EStreetFurnitureKind::WasteBasket:    Name = TEXT("WasteBasket");    break;
+	case EStreetFurnitureKind::VendingMachine: Name = TEXT("VendingMachine"); break;
+	case EStreetFurnitureKind::Recycling:      Name = TEXT("Recycling");      break;
+	case EStreetFurnitureKind::FireHydrant:    Name = TEXT("FireHydrant");    break;
+	case EStreetFurnitureKind::PostBox:        Name = TEXT("PostBox");        break;
+	case EStreetFurnitureKind::PicnicTable:    Name = TEXT("PicnicTable");    break;
+	default:                                   return FString();
+	}
+
+	// Nur Bank und Poller haben eine zweite Variante (mit/ohne Lehne, mit/ohne
+	// Reflektorring) - fuer alle anderen gibt es genau ein Mesh, und eine
+	// hoehere Variantennummer zeigt auf dasselbe.
+	const bool bZweiteVariante = Variant > 0
+		&& (Kind == EStreetFurnitureKind::Bench || Kind == EStreetFurnitureKind::Bollard);
+
+	return FString::Printf(TEXT("/Game/Assets/Furniture/SM_WbFurn_%s%s.SM_WbFurn_%s%s"),
+		Name, bZweiteVariante ? TEXT("_v1") : TEXT(""),
+		Name, bZweiteVariante ? TEXT("_v1") : TEXT(""));
+}

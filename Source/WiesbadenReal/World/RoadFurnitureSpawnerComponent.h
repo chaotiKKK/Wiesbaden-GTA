@@ -269,6 +269,21 @@ private:
 		UStaticMesh* CubeMesh,
 		UStaticMesh* CylinderMesh);
 
+	/**
+	 * Laedt das gebaute Mesh einer Art/Variante - oder nullptr.
+	 *
+	 * Fehlt es (frischer Klon: die .uassets sind gitignored), faellt
+	 * SpawnStreetFurniture auf die Primitivteile zurueck. Das Ergebnis wird
+	 * gemerkt, damit nicht je Moebel ein LoadObject auf ein fehlendes Asset
+	 * laeuft - bei 2.000 Moebeln ist das der Unterschied zwischen einem
+	 * Fehlversuch und zweitausend.
+	 */
+	UStaticMesh* ResolveFurnitureMesh(EStreetFurnitureKind Kind, int32 Variant);
+
+	/** Eine Protokollzeile je Lauf - je Art, damit eine leere Kategorie auffaellt. */
+	void ProtokolliereMoebel(const TArray<FFurnitureInstance>& Furniture,
+		int32 TeilInstanzen, int32 Zeichengruppen);
+
 	/** Liefert (und erzeugt bei Bedarf) den HISM einer Mesh/Werkstoff-Paarung. */
 	UHierarchicalInstancedStaticMeshComponent* GetFurnitureInstances(
 		EFurnitureMeshKind Mesh,
@@ -313,6 +328,20 @@ private:
 	// + Werkstoff; leere Paarungen bleiben nullptr und kosten nichts.
 	UPROPERTY(Transient)
 	TArray<UHierarchicalInstancedStaticMeshComponent*> FurnitureInstances;
+
+	// Gebaute Moebel-Meshes: ein ISM je Art/Variante, eine Instanz je Moebel.
+	// Der Index ist Art * 2 + (Variante > 0).
+	UPROPERTY(Transient)
+	TArray<UHierarchicalInstancedStaticMeshComponent*> FurnitureMeshInstances;
+
+	// Gemerkte Mesh-Suche (nullptr-Eintrag = gesucht und nicht gefunden).
+	UPROPERTY(Transient)
+	TArray<UStaticMesh*> FurnitureMeshCache;
+	TArray<bool> FurnitureMeshSearched;
+
+	/** Wie viele Moebel der gebauten Meshes statt der Primitive bekamen. */
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Wiesbaden")
+	int32 LastFurnitureWithMeshCount = 0;
 
 	// Echte Punktlichter, auf MaxActiveLampLights begrenzt.
 	UPROPERTY(Transient)

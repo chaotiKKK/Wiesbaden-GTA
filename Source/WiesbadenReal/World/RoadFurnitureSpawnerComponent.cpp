@@ -72,6 +72,16 @@ void URoadFurnitureSpawnerComponent::ClearFurniture()
 	}
 	FurnitureInstances.Reset();
 
+	for (UHierarchicalInstancedStaticMeshComponent* Group : FurnitureMeshInstances)
+	{
+		if (Group)
+		{
+			Group->DestroyComponent();
+		}
+	}
+	FurnitureMeshInstances.Reset();
+	FurnitureMeshCache.Reset();
+
 	for (UPointLightComponent* Light : LampLights)
 	{
 		if (Light)
@@ -89,6 +99,7 @@ void URoadFurnitureSpawnerComponent::ClearFurniture()
 	LastSpawnedLampCount = 0;
 	LastSpawnedFurnitureCount = 0;
 	LastSpawnedFurniturePartCount = 0;
+	LastFurnitureWithMeshCount = 0;
 }
 
 void URoadFurnitureSpawnerComponent::SpawnFurniture(const FRoadFurnitureLayout& Layout)
@@ -688,8 +699,67 @@ void URoadFurnitureSpawnerComponent::SpawnStreetFurniture(
 {
 	LastSpawnedFurnitureCount = 0;
 	LastSpawnedFurniturePartCount = 0;
+	LastFurnitureWithMeshCount = 0;
 	if (Furniture.Num() == 0)
 	{
+		return;
+	}
+
+	// Gebaute Meshes bevorzugen: EINE Instanz je Moebel statt zwei bis sieben
+	// Primitivteilen, und das Holz sieht aus wie Holz. Was fehlt, faellt
+	// unten auf die Primitive zurueck - ein frischer Klon hat die .uassets
+	// nicht, und eine leere Stadt waere die schlechtere Antwort.
+	const int32 MeshSlots = static_cast<int32>(EStreetFurnitureKind::MAX) * 2;
+	TArray<TArray<FTransform>> ProMesh;
+	ProMesh.SetNum(MeshSlots);
+
+	TArray<FFurnitureInstance> OhneMesh;
+	for (const FFurnitureInstance& Instance : Furniture)
+	{
+		const int32 Slot = static_cast<int32>(Instance.Kind) * 2 + (Instance.Variant > 0 ? 1 : 0);
+		if (ResolveFurnitureMesh(Instance.Kind, Instance.Variant) != nullptr)
+		{
+			ProMesh[Slot].Add(FTransform(Instance.Rotation, Instance.Location));
+		}
+		else
+		{
+			OhneMesh.Add(Instance);
+		}
+	}
+
+	for (int32 Slot = 0; Slot < MeshSlots; ++Slot)
+	{
+		if (ProMesh[Slot].Num() == 0)
+		{
+			continue;
+		}
+		const EStreetFurnitureKind Kind = static_cast<EStreetFurnitureKind>(Slot / 2);
+		UStaticMesh* Mesh = ResolveFurnitureMesh(Kind, Slot % 2);
+		if (FurnitureMeshInstances.Num() <= Slot)
+		{
+			FurnitureMeshInstances.SetNumZeroed(MeshSlots);
+		}
+		UHierarchicalInstancedStaticMeshComponent* Group = FurnitureMeshInstances[Slot];
+		if (!Group)
+		{
+			Group = NewObject<UHierarchicalInstancedStaticMeshComponent>(this);
+			Group->SetupAttachment(this);
+			Group->RegisterComponent();
+			Group->SetStaticMesh(Mesh);
+			Group->SetCollisionEnabled(bCreateCollision
+				? ECollisionEnabled::QueryAndPhysics
+				: ECollisionEnabled::NoCollision);
+			Group->SetCullDistances(0, FurnitureCullDistanceCm);
+			FurnitureMeshInstances[Slot] = Group;
+		}
+		Group->AddInstances(ProMesh[Slot], /*bShouldReturnIndices=*/false, /*bWorldSpace=*/true);
+		LastFurnitureWithMeshCount += ProMesh[Slot].Num();
+	}
+
+	if (OhneMesh.Num() == 0)
+	{
+		LastSpawnedFurnitureCount = Furniture.Num();
+		ProtokolliereMoebel(Furniture, 0, 0);
 		return;
 	}
 
@@ -700,14 +770,14 @@ void URoadFurnitureSpawnerComponent::SpawnStreetFurniture(
 	// nimmt den ganzen Schwung auf einmal. Die Reserve verhindert zusaetzlich
 	// das Umkopieren waehrend des Sammelns.
 	int32 ErwarteteTeile = 0;
-	for (const FFurnitureInstance& Instance : Furniture)
+	for (const FFurnitureInstance& Instance : OhneMesh)
 	{
 		ErwarteteTeile += WiesbadenStreetFurniture::GetPartCount(Instance.Kind, Instance.Variant);
 	}
 
 	TArray<FFurniturePart> Teile;
 	Teile.Reserve(ErwarteteTeile);
-	for (const FFurnitureInstance& Instance : Furniture)
+	for (const FFurnitureInstance& Instance : OhneMesh)
 	{
 		WiesbadenStreetFurniture::BuildParts(Instance, FurnitureDimensions, Teile);
 	}
@@ -740,30 +810,55 @@ void URoadFurnitureSpawnerComponent::SpawnStreetFurniture(
 	LastSpawnedFurnitureCount = Furniture.Num();
 	LastSpawnedFurniturePartCount = Teile.Num();
 
+	int32 BelegteGruppen = 0;
+	for (const TArray<FTransform>& Gruppe : ProGruppe)
+	{
+		BelegteGruppen += Gruppe.Num() > 0 ? 1 : 0;
+	}
+	ProtokolliereMoebel(Furniture, Teile.Num(), BelegteGruppen);
+}
+
+UStaticMesh* URoadFurnitureSpawnerComponent::ResolveFurnitureMesh(
+	EStreetFurnitureKind Kind, int32 Variant)
+{
+	const int32 Slot = static_cast<int32>(Kind) * 2 + (Variant > 0 ? 1 : 0);
+	const int32 SlotCount = static_cast<int32>(EStreetFurnitureKind::MAX) * 2;
+	if (FurnitureMeshCache.Num() != SlotCount)
+	{
+		FurnitureMeshCache.SetNumZeroed(SlotCount);
+		FurnitureMeshSearched.Init(false, SlotCount);
+	}
+	if (!FurnitureMeshSearched[Slot])
+	{
+		// EINMAL je Art suchen. Ohne das Merken liefe bei 2.000 Moebeln ohne
+		// Assets zweitausendmal ein LoadObject auf denselben fehlenden Pfad.
+		FurnitureMeshSearched[Slot] = true;
+		const FString Pfad = WiesbadenStreetFurniture::GetMeshPath(Kind, Variant);
+		FurnitureMeshCache[Slot] = Pfad.IsEmpty()
+			? nullptr
+			: LoadObject<UStaticMesh>(nullptr, *Pfad);
+	}
+	return FurnitureMeshCache[Slot];
+}
+
+void URoadFurnitureSpawnerComponent::ProtokolliereMoebel(
+	const TArray<FFurnitureInstance>& Furniture, int32 TeilInstanzen, int32 Zeichengruppen)
+{
 	// Je Art zaehlen: "3.412 Moebel" sagt nichts darueber, ob die Baenke
 	// fehlen. Die Zeile ist die einzige Stelle, an der ohne Bild auffaellt,
 	// dass eine ganze Kategorie leer geblieben ist.
 	int32 ProArt[static_cast<int32>(EStreetFurnitureKind::MAX)] = {};
 	for (const FFurnitureInstance& Instance : Furniture)
 	{
-		const int32 ArtIndex = static_cast<int32>(Instance.Kind);
-		if (ProArt[ArtIndex] < TNumericLimits<int32>::Max())
-		{
-			++ProArt[ArtIndex];
-		}
-	}
-
-	int32 BelegteGruppen = 0;
-	for (const TArray<FTransform>& Gruppe : ProGruppe)
-	{
-		BelegteGruppen += Gruppe.Num() > 0 ? 1 : 0;
+		++ProArt[static_cast<int32>(Instance.Kind)];
 	}
 
 	UE_LOG(LogWbCore, Log,
-		TEXT("Strassenmoebel gestellt: %d Moebel, %d Teil-Instanzen in %d Zeichengruppen ")
-		TEXT("(Baenke %d, Poller %d, Koerbe %d, Automaten %d, Recycling %d, Hydranten %d, ")
-		TEXT("Briefkaesten %d, Picknick %d), Sichtweite %.0f m."),
-		LastSpawnedFurnitureCount, LastSpawnedFurniturePartCount, BelegteGruppen,
+		TEXT("Strassenmoebel gestellt: %d Moebel (%d mit gebautem Mesh, %d Teil-Instanzen ")
+		TEXT("in %d Zeichengruppen als Rueckfall) - Baenke %d, Poller %d, Koerbe %d, ")
+		TEXT("Automaten %d, Recycling %d, Hydranten %d, Briefkaesten %d, Picknick %d; ")
+		TEXT("Sichtweite %.0f m."),
+		Furniture.Num(), LastFurnitureWithMeshCount, TeilInstanzen, Zeichengruppen,
 		ProArt[static_cast<int32>(EStreetFurnitureKind::Bench)],
 		ProArt[static_cast<int32>(EStreetFurnitureKind::Bollard)],
 		ProArt[static_cast<int32>(EStreetFurnitureKind::WasteBasket)],

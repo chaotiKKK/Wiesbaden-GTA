@@ -171,4 +171,16 @@ namespace WiesbadenStreetFurniture
 
 	/** Teilezahl einer Art/Variante - fuer Reserve und Pruefungen. */
 	WIESBADENREAL_API int32 GetPartCount(EStreetFurnitureKind Kind, int32 Variant);
+
+	/**
+	 * Asset-Pfad des gebauten Meshes einer Art/Variante.
+	 *
+	 * Die Meshes entstehen in Blender (`Tools/Blender/make_street_furniture.py`)
+	 * und werden per `Tools/import_street_furniture.cmd` importiert. Die
+	 * .uassets sind mitgetrackt (zusammen 848 kB), ein frischer Klon hat sie
+	 * also. Fehlt das Asset trotzdem - geloescht, oder ein Import ist
+	 * gescheitert -, faellt der Spawner auf die Primitivteile aus BuildParts
+	 * zurueck; die Stadt bleibt moebliert, nur eckiger.
+	 */
+	WIESBADENREAL_API FString GetMeshPath(EStreetFurnitureKind Kind, int32 Variant);
 }

@@ -169,5 +169,50 @@ bool FStreetFurnitureShapesTest::RunTest(const FString& Parameters)
 			PartsBounds(Hoch).Max.Z > PartsBounds(Normal).Max.Z * 1.5);
 	}
 
+	// --- Mesh-Pfade: jede Art hat einen, Varianten nur wo sie gebaut sind ---
+	//
+	// Der Spawner sucht danach; ein Tippfehler faellt sonst erst im Spiel auf,
+	// wo das Moebel still auf die Primitive zurueckfaellt.
+	for (int32 KindIndex = 0; KindIndex < static_cast<int32>(EStreetFurnitureKind::MAX); ++KindIndex)
+	{
+		const EStreetFurnitureKind Kind = static_cast<EStreetFurnitureKind>(KindIndex);
+		const FString Pfad = WiesbadenStreetFurniture::GetMeshPath(Kind, 0);
+		TestTrue(*FString::Printf(TEXT("Art %d hat einen Mesh-Pfad"), KindIndex), !Pfad.IsEmpty());
+		TestTrue(TEXT("Pfad zeigt in den Moebel-Ordner"),
+			Pfad.StartsWith(TEXT("/Game/Assets/Furniture/SM_WbFurn_")));
+		// Unreal-Objektpfad: Paket.Objekt, beide Teile gleich benannt.
+		FString Paket, Objekt;
+		TestTrue(TEXT("Pfad traegt den Objektnamen"), Pfad.Split(TEXT("."), &Paket, &Objekt));
+		TestTrue(TEXT("Paket endet auf den Objektnamen"), Paket.EndsWith(Objekt));
+	}
+
+	{
+		// Nur Bank und Poller haben ein zweites Mesh.
+		TestNotEqual(TEXT("Bank Variante 1 ist ein eigenes Mesh"),
+			WiesbadenStreetFurniture::GetMeshPath(EStreetFurnitureKind::Bench, 1),
+			WiesbadenStreetFurniture::GetMeshPath(EStreetFurnitureKind::Bench, 0));
+		TestNotEqual(TEXT("Poller Variante 1 ist ein eigenes Mesh"),
+			WiesbadenStreetFurniture::GetMeshPath(EStreetFurnitureKind::Bollard, 1),
+			WiesbadenStreetFurniture::GetMeshPath(EStreetFurnitureKind::Bollard, 0));
+		TestEqual(TEXT("Briefkasten hat nur ein Mesh"),
+			WiesbadenStreetFurniture::GetMeshPath(EStreetFurnitureKind::PostBox, 1),
+			WiesbadenStreetFurniture::GetMeshPath(EStreetFurnitureKind::PostBox, 0));
+	}
+
+	{
+		// Die Variantenzahl des Bake-Passes und die Zahl der gebauten Meshes
+		// muessen zusammenpassen - sonst zeigt eine Variante ins Leere.
+		for (int32 KindIndex = 0; KindIndex < static_cast<int32>(EStreetFurnitureKind::MAX); ++KindIndex)
+		{
+			const EStreetFurnitureKind Kind = static_cast<EStreetFurnitureKind>(KindIndex);
+			const int32 Varianten = URoadFurnitureGenerator::GetFurnitureVariantCount(Kind);
+			const bool bEigenesZweites =
+				WiesbadenStreetFurniture::GetMeshPath(Kind, 1)
+				!= WiesbadenStreetFurniture::GetMeshPath(Kind, 0);
+			TestEqual(*FString::Printf(TEXT("Art %d: Variantenzahl passt zum Mesh-Bestand"), KindIndex),
+				Varianten > 1, bEigenesZweites);
+		}
+	}
+
 	return true;
 }

@@ -96,3 +96,4 @@ Tools/__pycache__/
 Tools/*_log.txt
 *.result.txt
 *_report.*.json
+*_result.txt
