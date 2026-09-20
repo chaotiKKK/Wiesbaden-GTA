@@ -27,11 +27,6 @@ const TCHAR* AWiesbadenSylvia::GetSylviaMeshPath()
 
 FString AWiesbadenSylvia::GetSylviaMeshPartPath(int32 PartIndex)
 {
-	if (PartIndex == 0)
-	{
-		return FString(GetSylviaMeshPath());
-	}
-
 	return FString::Printf(
 		TEXT("/Game/Assets/People/Sylvia/sylvia/SkeletalMeshes/tripo_part_%d.tripo_part_%d"),
 		PartIndex,
@@ -79,12 +74,7 @@ AWiesbadenSylvia::AWiesbadenSylvia()
 		ConstructorHelpers::FObjectFinder<USkeletalMesh> FigureFinder(*MeshPath);
 		if (FigureFinder.Succeeded())
 		{
-			SylviaMeshAssets.Add(FigureFinder.Object);
 			FigurePart->SetSkinnedAssetAndUpdate(FigureFinder.Object);
-		}
-		else
-		{
-			SylviaMeshAssets.Add(nullptr);
 		}
 	}
 
@@ -239,7 +229,6 @@ bool AWiesbadenSylvia::TryBuildAtPlatterStrasse144()
 	const FVector SylviaLocation(CandidateXY.X, CandidateXY.Y, GroundZ);
 	const FRotator FaceBuilding = (-ToRoad).Rotation();
 	SetActorLocationAndRotation(SylviaLocation, FRotator(0.0f, FaceBuilding.Yaw, 0.0f));
-	ConfigureComponents();
 
 	bool bAllFigurePartsLoaded = FigureParts.Num() == GetFigurePartCount();
 	for (const TObjectPtr<UPoseableMeshComponent>& FigurePart : FigureParts)
@@ -292,7 +281,7 @@ bool AWiesbadenSylvia::TryBuildAtPlatterStrasse144()
 			for (int32 BoneIndex = 0; BoneIndex < FMath::Min(8, FigureParts[0]->GetNumBones()); ++BoneIndex)
 			{
 				UE_LOG(LogWbSylvia, Log, TEXT("Sylvia part 0 bone[%d] %s"),
-					BoneIndex, *FigureParts[0]->GetBoneName(BoneIndex).ToString());
+				BoneIndex, *FigureParts[0]->GetBoneName(BoneIndex).ToString());
 			}
 			for (const FName BoneName : {FName(TEXT("mixamorig_Hips")), FName(TEXT("mixamorig_LeftUpLeg")), FName(TEXT("mixamorig_LeftLeg")), FName(TEXT("mixamorig_LeftFoot")), FName(TEXT("mixamorig_RightUpLeg")), FName(TEXT("mixamorig_RightLeg")), FName(TEXT("mixamorig_RightFoot")), FName(TEXT("mixamorig_Head"))})
 			{
@@ -305,7 +294,6 @@ bool AWiesbadenSylvia::TryBuildAtPlatterStrasse144()
 		UE_LOG(LogWbSylvia, Log,
 			TEXT("Sylvia vor Platter Strasse 144 auf Spur %d bei (%.0f, %.0f, %.0f); Hobelspane aktiv."),
 			LaneId, SylviaLocation.X, SylviaLocation.Y, SylviaLocation.Z);
-		SetActorTickEnabled(true);
 	}
 	return bSceneBuilt;
 }

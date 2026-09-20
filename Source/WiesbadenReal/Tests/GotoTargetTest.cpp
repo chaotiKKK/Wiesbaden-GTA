@@ -111,6 +111,16 @@ bool FWbGotoTargetTest::RunTest(const FString& Parameters)
 	}
 
 	{
+		FVector2D Found = FVector2D::ZeroVector;
+		double LengthCm = 0.0;
+		TestTrue(TEXT("Strasse findet Strasse mit Eszett"),
+			UWiesbadenCitySubsystem::FindStreetLocation(
+				Network, TEXT("Rheinstrasse"), Found, LengthCm));
+		TestTrue(TEXT("Normalisierte Suche trifft denselben Punkt"),
+			Found.Equals(FVector2D(120000.0, 0.0), 1.0));
+	}
+
+	{
 		// Teilnamen sollen reichen - "Kaiser" statt des ganzen Bindestrich-Namens.
 		FVector2D Found = FVector2D::ZeroVector;
 		double LengthCm = 0.0;

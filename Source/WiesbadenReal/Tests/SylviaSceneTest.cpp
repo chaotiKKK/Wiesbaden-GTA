@@ -5,39 +5,43 @@
 #include "Misc/AutomationTest.h"
 #include "NiagaraSystem.h"
 #include "NPC/WiesbadenSylvia.h"
+#include "UObject/UObjectGlobals.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSylviaSceneAssetsTest,
 	"WiesbadenReal.NPC.Sylvia.SceneAssets",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
-bool FSylviaSceneAssetsTest::RunTest(const FString& Parameters)
+bool FSylviaSceneAssetsTest::RunTest(const FString& /*Parameters*/)
 {
-	const FString ExpectedMeshPath(
-		TEXT("/Game/Assets/People/Sylvia/sylvia/SkeletalMeshes/tripo_part_0.tripo_part_0"));
-	const FString ExpectedShavingsPath(
-		TEXT("/Game/Niagara/NS_SylviaWoodShavings.NS_SylviaWoodShavings"));
-
-	TestEqual(TEXT("Sylvia mesh path is the cooked scene contract"),
-		FString(AWiesbadenSylvia::GetSylviaMeshPath()), ExpectedMeshPath);
-	TestEqual(TEXT("Wood shavings path is the cooked scene contract"),
-		FString(AWiesbadenSylvia::GetWoodShavingsSystemPath()), ExpectedShavingsPath);
-
-	// These are the two runtime boundaries: the imported figure and the
-	// looping shavings effect must both resolve from cooked project content.
-	USkeletalMesh* SylviaMesh = LoadObject<USkeletalMesh>(nullptr, *ExpectedMeshPath);
-	TestNotNull(TEXT("Sylvia skeletal mesh is imported at the runtime path"), SylviaMesh);
-	TestEqual(TEXT("Sylvia exposes all imported GLB figure parts"),
-		AWiesbadenSylvia::GetFigurePartCount(), 15);
-	for (int32 PartIndex = 1; PartIndex < AWiesbadenSylvia::GetFigurePartCount(); ++PartIndex)
+	struct FAssetContract
 	{
-		const FString PartPath = AWiesbadenSylvia::GetSylviaMeshPartPath(PartIndex) + TEXT(".") +
-			FString::Printf(TEXT("tripo_part_%d"), PartIndex);
-		TestNotNull(*FString::Printf(TEXT("Sylvia GLB part %d is present"), PartIndex),
-			LoadObject<USkeletalMesh>(nullptr, *PartPath));
+		const TCHAR* Label;
+		const TCHAR* Path;
+		UClass* Type;
+	};
+
+	// These are the runtime boundaries: every referenced asset must resolve
+	// from cooked content, not merely match a copied path literal.
+	const FAssetContract AssetContracts[] = {
+		{TEXT("Sylvia skeletal mesh"), AWiesbadenSylvia::GetSylviaMeshPath(), USkeletalMesh::StaticClass()},
+		{TEXT("Sylvia wood shavings"), AWiesbadenSylvia::GetWoodShavingsSystemPath(), UNiagaraSystem::StaticClass()},
+	};
+	for (const FAssetContract& Contract : AssetContracts)
+	{
+		TestNotNull(*FString::Printf(TEXT("%s resolves from cooked content"), Contract.Label),
+			StaticLoadObject(Contract.Type, nullptr, Contract.Path));
 	}
 
-	UNiagaraSystem* Shavings = LoadObject<UNiagaraSystem>(nullptr, *ExpectedShavingsPath);
-	TestNotNull(TEXT("Sylvia wood shavings Niagara system is present"), Shavings);
+	TestEqual(TEXT("Part zero aliases the root mesh path"),
+		AWiesbadenSylvia::GetSylviaMeshPartPath(0), FString(AWiesbadenSylvia::GetSylviaMeshPath()));
+
+	const int32 FigurePartCount = AWiesbadenSylvia::GetFigurePartCount();
+	TestEqual(TEXT("Imported GLB figure part count"), FigurePartCount, 15);
+	for (int32 PartIndex = 1; PartIndex < FigurePartCount; ++PartIndex)
+	{
+		TestNotNull(*FString::Printf(TEXT("Sylvia GLB part %d resolves"), PartIndex),
+			LoadObject<USkeletalMesh>(nullptr, *AWiesbadenSylvia::GetSylviaMeshPartPath(PartIndex)));
+	}
 
 	// Keep the player-facing string stable at the scene boundary; a missing
 	// heart or a different spelling makes the world-space bubble fail its job.

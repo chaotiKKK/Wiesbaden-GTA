@@ -16,7 +16,10 @@ SRC = os.environ.get(
 DEST = "/Game/Assets/People/Sylvia"
 MESH_PATH = DEST + "/sylvia/SkeletalMeshes/tripo_part_0"
 NIAGARA_DEST = "/Game/Niagara/NS_SylviaWoodShavings"
-NIAGARA_TEMPLATE = "/Niagara/DefaultAssets/Templates/Systems/FountainLightweight"
+# FountainLightweight is a Stateless Niagara template. UE 5.8 can cook it but
+# the packaged runtime crashes while serializing its emitter, so use the
+# classic Standard-emitter system for a distributable build.
+NIAGARA_TEMPLATE = "/Niagara/DefaultAssets/Templates/Systems/RadialBurst"
 EXPECTED_SKELETAL_PARTS = 15
 EAL = unreal.EditorAssetLibrary
 
@@ -75,6 +78,7 @@ log("Skelett: %s" % skeletal.get_editor_property("skeleton"))
 
 if EAL.does_asset_exist(NIAGARA_DEST):
     EAL.delete_asset(NIAGARA_DEST)
+unreal.AssetRegistryHelpers.get_asset_registry().scan_paths_synchronous(["/Niagara"], True)
 effect = EAL.duplicate_asset(NIAGARA_TEMPLATE, NIAGARA_DEST)
 if effect is None:
     log("ABBRUCH: Niagara-Vorlage konnte nicht kopiert werden")

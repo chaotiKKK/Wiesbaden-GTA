@@ -3165,6 +3165,8 @@ void UWiesbadenCitySubsystem::LogHeightStackNearPlayer() const
 
 				FHitResult Hit;
 				FCollisionQueryParams TraceParams(SCENE_QUERY_STAT(WbBuildingCollision), true);
+				FCollisionObjectQueryParams StaticObjects;
+				StaticObjects.AddObjectTypesToQuery(ECC_WorldStatic);
 				// Nur den Helikopter ignorieren (NICHT den CityActor - an ihm haengen
 				// die Gebaeude-Boxen, die der Strahl ja treffen SOLL). Am Spawn
 				// (Platter 142) stand der Heli genau auf der Linie; seine CollisionSphere
@@ -3174,7 +3176,8 @@ void UWiesbadenCitySubsystem::LogHeightStackNearPlayer() const
 				{
 					TraceParams.AddIgnoredActor(*HeliIt);
 				}
-				const bool bHit = World->LineTraceSingleByChannel(Hit, From, To, ECC_WorldStatic, TraceParams);
+				const bool bHit = World->LineTraceSingleByObjectType(
+					Hit, From, To, StaticObjects, TraceParams);
 
 				// Z-Beleg der Box-Platzierung: Die Box-Hoehe stammt aus
 				// Building.Bounds.Z, zur GENERIERUNGSZEIT per Terrain-Trace bestimmt.
@@ -3199,8 +3202,9 @@ void UWiesbadenCitySubsystem::LogHeightStackNearPlayer() const
 					}
 					const FVector GStart(NB.Centroid.X, NB.Centroid.Y, BoxZc + BoxZe + 5000.0);
 					FHitResult GroundHit;
-					const bool bGround = World->LineTraceSingleByChannel(
-						GroundHit, GStart, GStart - FVector(0.0, 0.0, 20000.0), ECC_WorldStatic, GParams);
+					const bool bGround = World->LineTraceSingleByObjectType(
+						GroundHit, GStart, GStart - FVector(0.0, 0.0, 20000.0),
+						StaticObjects, GParams);
 					const double GroundZ = bGround ? GroundHit.Location.Z : NB.Centroid.Z;
 					const bool bBandGedeckt = (BoxZc - BoxZe) <= (GroundZ + 185.0)
 						&& (BoxZc + BoxZe) >= (GroundZ + 35.0);
@@ -3570,12 +3574,16 @@ bool UWiesbadenCitySubsystem::FindStreetLocation(const FRoadNetwork& Network,
 		return false;
 	}
 
-	const FString Needle = Name.ToLower();
+	auto NormalizeStreetName = [](FString Value)
+	{
+		return Value.ToLower().Replace(TEXT("ß"), TEXT("ss"));
+	};
+	const FString Needle = NormalizeStreetName(Name);
 	bool bFound = false;
 
 	for (const FRoadSegment& Segment : Network.Segments)
 	{
-		if (!Segment.StreetName.ToLower().Contains(Needle))
+		if (!NormalizeStreetName(Segment.StreetName).Contains(Needle))
 		{
 			continue;
 		}

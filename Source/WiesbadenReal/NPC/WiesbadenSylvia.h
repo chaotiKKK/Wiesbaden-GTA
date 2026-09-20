@@ -13,7 +13,6 @@ class UNiagaraComponent;
 class UNiagaraSystem;
 class UMaterialInterface;
 class UPoseableMeshComponent;
-class USkeletalMesh;
 class UStaticMesh;
 class UStaticMeshComponent;
 class UWidgetComponent;
@@ -58,9 +57,6 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Sylvia|Gedankenblase")
 	TObjectPtr<UWidgetComponent> ThoughtBubble = nullptr;
-
-	UPROPERTY(EditDefaultsOnly, Category = "Sylvia|Assets")
-	TArray<TObjectPtr<USkeletalMesh>> SylviaMeshAssets;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Sylvia|Assets")
 	TObjectPtr<UStaticMesh> PrimitiveCube = nullptr;
