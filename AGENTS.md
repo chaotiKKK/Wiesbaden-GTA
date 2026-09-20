@@ -3438,3 +3438,52 @@ heimlich beschaedigt.
 (`bake_abnahme.py`) -> live schalten -> aufraeumen
 (`karten_aufraeumen.py`). Jeder Schritt ist eine eigene Entscheidung; keiner
 passiert als Nebenwirkung des vorigen.
+
+
+## Galerie der Stadtansichten: Tools/galerie.py (20.09.2026)
+
+Unter `Saved/Diagnose` liegen 270 Bilder und 1,9 GB. `Tools/galerie.py` sucht
+daraus die echten SPIELANSICHTEN, verkleinert sie und schreibt
+`Saved/Diagnose/galerie/index.html` - durchblaetterbar mit Pfeiltasten, nach
+Datum gruppiert.
+
+    python Tools/galerie.py --zeigen   # nur die Auswahl, mit Begruendung
+    python Tools/galerie.py            # bauen (191 Bilder, 37 MB, ~25 s)
+
+**Die Auswahl ist das Eigentliche.** Erkannt wird ein Spielbild am
+Seitenverhaeltnis (1.50 bis 1.95) und an der Mindestbreite - ein Kontaktbogen
+(4320 x 574) oder ein Hochformat faellt damit von selbst heraus. Dazu eine
+kurze Namensliste fuer das, was im Format passt, aber keine Stadt zeigt:
+Stau-Karten, Kartenausschnitte, UI-Aufnahmen. Was weggelassen wurde, gibt das
+Werkzeug MIT GRUND aus.
+
+**Nach Datum gruppiert, neueste zuerst** - und das ist keine Kosmetik: 85 der
+191 Bilder stammen vom 04.09.2026, seither sind Strassenmoebel,
+Signalprogramme, Fahrzeuge und der Sebbo-Hauptsitz dazugekommen. Eine Galerie,
+die ein Bild von damals ohne Datum neben eines von heute haengt, behauptet
+etwas Falsches.
+
+**FUER DIE VORSCHAU BRAUCHT SIE EINEN DATEISERVER.** Der `htmlPath`-Modus von
+`register_preview` serviert NUR die eine HTML-Datei - die Bilder daneben
+laufen auf 404, und im Browser steht der Aufbau ohne ein einziges Bild da
+(genau so gesehen). Richtig:
+
+    cd Saved/Diagnose/galerie
+    python -m http.server 8790 --bind 127.0.0.1
+
+dann URL samt Prozessnummer registrieren. Als lokale Datei (file://) geht es
+ohne Server.
+
+**Zwei Fallen beim Erzeugen der Seite**, beide im Browser erst als SCHWARZE
+BUEHNE sichtbar (Aufbau da, kein Bild):
+
+* `%`-Formatierung und HTML/JS vertragen sich nicht: `max-width:100%` und das
+  JS-Modulo werden als Formatzeichen gelesen ("unsupported format
+  character"). Die Seite benutzt darum Platzhalter `@@NAME@@` und
+  `str.replace`.
+* Beim Umstellen blieb ein `%%` aus der alten Formatierung im JavaScript
+  stehen - im Browser ein SyntaxError, der das ganze Skript kippt. Ein Test
+  haelt beides fest (`test_galerie.py`, 16 Pruefungen).
+
+Die erzeugten Dateien liegen unter `Saved/` und sind damit nicht versioniert;
+versioniert ist nur das Werkzeug.
