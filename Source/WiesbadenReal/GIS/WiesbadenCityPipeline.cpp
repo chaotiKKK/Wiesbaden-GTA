@@ -483,9 +483,11 @@ namespace WiesbadenCityPipeline
 		if (Input.bGenerateFurniture && Input.bGenerateRoads && Tools.FurnitureGenerator)
 		{
 			Report(92, EBuildStage::Furniture);
+			// Die Gebaeude sind hier fertig (Stufe 68) - ihre Grundriss-Boxen
+			// fangen im Moebel-Pass die OSM-Knoten ab, die im Haus liegen.
 			OutData.FurnitureReport = Tools.FurnitureGenerator->Generate(
 				OutData.RoadNetwork, &OutData.OSMData, Tools.Converter, HeightSampler,
-				Input.FurnitureSettings, OutData.FurnitureLayout);
+				Input.FurnitureSettings, OutData.FurnitureLayout, &OutData.Buildings);
 
 			if (!OutData.FurnitureReport.bSuccess)
 			{

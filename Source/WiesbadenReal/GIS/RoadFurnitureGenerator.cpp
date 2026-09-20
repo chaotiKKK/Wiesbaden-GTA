@@ -4,6 +4,7 @@
 
 #include "WiesbadenReal.h"
 
+#include "GIS/BuildingGenerator.h"
 #include "GIS/GeoCoordinateConverter.h"
 #include "GIS/PolygonUtils.h"
 #include "GIS/WiesbadenRoadClearance.h"
@@ -76,6 +77,329 @@ namespace
 	{
 		return Sampler ? Sampler->SampleHeightCm(FVector2D(P.X, P.Y)) + SurfaceOffsetCm : 0.0;
 	}
+
+	/** Das Tag, das der Nachzug (Tools/fetch_street_furniture.py) schreibt. */
+	const FName FurnitureKindTagName(TEXT("wb:furniture"));
+
+	/** Tagwert -> Art. Dieselben acht Namen wie im Python-Nachzug. */
+	struct FFurnitureKindName
+	{
+		const TCHAR* Value;
+		EStreetFurnitureKind Kind;
+	};
+
+	const FFurnitureKindName FurnitureKindNames[] = {
+		{ TEXT("bench"),           EStreetFurnitureKind::Bench },
+		{ TEXT("bollard"),         EStreetFurnitureKind::Bollard },
+		{ TEXT("waste_basket"),    EStreetFurnitureKind::WasteBasket },
+		{ TEXT("vending_machine"), EStreetFurnitureKind::VendingMachine },
+		{ TEXT("recycling"),       EStreetFurnitureKind::Recycling },
+		{ TEXT("fire_hydrant"),    EStreetFurnitureKind::FireHydrant },
+		{ TEXT("post_box"),        EStreetFurnitureKind::PostBox },
+		{ TEXT("picnic_table"),    EStreetFurnitureKind::PicnicTable },
+	};
+
+	/**
+	 * Rohe OSM-Tags als Rueckfall.
+	 *
+	 * Wird eine OSM-Datei OHNE den Nachzug gebacken, fehlt `wb:furniture`.
+	 * Die paar Knoten, die das Original schon enthaelt, sollen trotzdem
+	 * ankommen - sonst haengt das Ergebnis eines Bakes still davon ab, welche
+	 * Datei jemand gerade gesetzt hat.
+	 */
+	struct FFurnitureRawTag
+	{
+		const TCHAR* Key;
+		const TCHAR* Value;
+		EStreetFurnitureKind Kind;
+	};
+
+	const FFurnitureRawTag FurnitureRawTags[] = {
+		{ TEXT("amenity"),   TEXT("bench"),           EStreetFurnitureKind::Bench },
+		{ TEXT("barrier"),   TEXT("bollard"),         EStreetFurnitureKind::Bollard },
+		{ TEXT("amenity"),   TEXT("waste_basket"),    EStreetFurnitureKind::WasteBasket },
+		{ TEXT("amenity"),   TEXT("vending_machine"), EStreetFurnitureKind::VendingMachine },
+		{ TEXT("amenity"),   TEXT("recycling"),       EStreetFurnitureKind::Recycling },
+		{ TEXT("emergency"), TEXT("fire_hydrant"),    EStreetFurnitureKind::FireHydrant },
+		{ TEXT("amenity"),   TEXT("post_box"),        EStreetFurnitureKind::PostBox },
+		{ TEXT("leisure"),   TEXT("picnic_table"),    EStreetFurnitureKind::PicnicTable },
+	};
+
+	/** Was der Moebel-Pass ueber den naechsten Weg wissen muss. */
+	struct FNearestWay
+	{
+		/** Waagerechter Abstand zur Wegachse (cm). */
+		double DistanceCm = 0.0;
+		/** Halbe Breite des befahrenen/begangenen Wegs (cm). */
+		double HalfWidthCm = 0.0;
+		/** Breite des Gehwegstreifens daneben (cm). */
+		double SidewalkWidthCm = 0.0;
+		/** Einheitsvektor vom Weg WEG, zum Moebel hin. */
+		FVector2D AwayDirection = FVector2D(0.0, 1.0);
+		/** Einheitsvektor laengs der Wegachse. */
+		FVector2D AxisDirection = FVector2D(1.0, 0.0);
+	};
+
+	/**
+	 * Naechster Weg zu einem Punkt - ueber ein Gitter, nicht ueber alle Segmente.
+	 *
+	 * WARUM NICHT DER FAHRBAHN-INDEX: FWiesbadenRoadClearance beantwortet nur
+	 * "blockiert ja/nein". Aus einer Ja/Nein-Antwort laesst sich die Richtung
+	 * zur Strasse nur abtasten, und ein Abtasten in 16 Richtungen liegt bis zu
+	 * 11 Grad daneben - gemessen kam eine Bank, die der Strasse den Ruecken
+	 * kehren soll, 27 Grad schief heraus. Hier wird stattdessen der Lotfusspunkt
+	 * auf den naechsten Abschnitt gerechnet: exakt, und dieselbe Antwort traegt
+	 * zugleich Abstand, Breite und Laengsrichtung.
+	 */
+	struct FNearestWayIndex
+	{
+		static constexpr double CellSizeCm = 5000.0;
+		/** Ueber 200 m von jedem Weg entfernt ist kein Strassenrand mehr. */
+		static constexpr int32 MaxRings = 4;
+
+		struct FSpan
+		{
+			FVector2D Start = FVector2D::ZeroVector;
+			FVector2D End = FVector2D::ZeroVector;
+			double HalfWidthCm = 0.0;
+			double SidewalkWidthCm = 0.0;
+		};
+
+		TArray<FSpan> Spans;
+		TMap<FIntPoint, TArray<int32>> Cells;
+
+		static FIntPoint CellOf(const FVector2D& P)
+		{
+			return FIntPoint(FMath::FloorToInt(P.X / CellSizeCm), FMath::FloorToInt(P.Y / CellSizeCm));
+		}
+
+		void Build(const FRoadNetwork& Network)
+		{
+			for (const FRoadSegment& Segment : Network.Segments)
+			{
+				const TArray<FVector>& Line = Segment.TrimmedCenterline.Num() >= 2
+					? Segment.TrimmedCenterline
+					: Segment.Centerline;
+				if (Line.Num() < 2)
+				{
+					continue;
+				}
+
+				for (int32 i = 0; i + 1 < Line.Num(); ++i)
+				{
+					FSpan Span;
+					Span.Start = FVector2D(Line[i].X, Line[i].Y);
+					Span.End = FVector2D(Line[i + 1].X, Line[i + 1].Y);
+					Span.HalfWidthCm = Segment.CarriagewayWidthCm * 0.5;
+					Span.SidewalkWidthCm = FMath::Max(0.0, Segment.SidewalkWidthCm);
+
+					const int32 Index = Spans.Add(Span);
+					const FIntPoint MinCell = CellOf(FVector2D(
+						FMath::Min(Span.Start.X, Span.End.X), FMath::Min(Span.Start.Y, Span.End.Y)));
+					const FIntPoint MaxCell = CellOf(FVector2D(
+						FMath::Max(Span.Start.X, Span.End.X), FMath::Max(Span.Start.Y, Span.End.Y)));
+
+					// Deckel wie im Fahrbahn-Index: ein entartetes Segment darf
+					// nicht Millionen Zellen fuellen.
+					const int64 Wide = static_cast<int64>(MaxCell.X - MinCell.X) + 1;
+					const int64 High = static_cast<int64>(MaxCell.Y - MinCell.Y) + 1;
+					if (Wide * High > 400)
+					{
+						Spans.Pop();
+						continue;
+					}
+
+					for (int32 Cx = MinCell.X; Cx <= MaxCell.X; ++Cx)
+					{
+						for (int32 Cy = MinCell.Y; Cy <= MaxCell.Y; ++Cy)
+						{
+							Cells.FindOrAdd(FIntPoint(Cx, Cy)).Add(Index);
+						}
+					}
+				}
+			}
+		}
+
+		bool Find(const FVector2D& Point, FNearestWay& OutWay) const
+		{
+			const FIntPoint Center = CellOf(Point);
+			int32 BestIndex = INDEX_NONE;
+			double BestDistSq = TNumericLimits<double>::Max();
+			FVector2D BestFoot = FVector2D::ZeroVector;
+
+			for (int32 Ring = 0; Ring <= MaxRings; ++Ring)
+			{
+				// Gefunden UND der naechste Ring kann nichts Naeheres mehr
+				// liefern? Dann ist die Antwort sicher.
+				if (BestIndex != INDEX_NONE)
+				{
+					const double RingReach = (Ring - 1) * CellSizeCm;
+					if (RingReach > 0.0 && RingReach * RingReach >= BestDistSq)
+					{
+						break;
+					}
+				}
+
+				for (int32 Cx = Center.X - Ring; Cx <= Center.X + Ring; ++Cx)
+				{
+					for (int32 Cy = Center.Y - Ring; Cy <= Center.Y + Ring; ++Cy)
+					{
+						// Nur der Rand des Rings ist neu.
+						const bool bOnRingBorder = Ring == 0
+							|| FMath::Abs(Cx - Center.X) == Ring
+							|| FMath::Abs(Cy - Center.Y) == Ring;
+						if (!bOnRingBorder)
+						{
+							continue;
+						}
+
+						const TArray<int32>* Indices = Cells.Find(FIntPoint(Cx, Cy));
+						if (!Indices)
+						{
+							continue;
+						}
+
+						for (const int32 Index : *Indices)
+						{
+							const FSpan& Span = Spans[Index];
+							const FVector2D Axis = Span.End - Span.Start;
+							const double LengthSq = Axis.SizeSquared();
+							const double T = LengthSq > KINDA_SMALL_NUMBER
+								? FMath::Clamp(FVector2D::DotProduct(Point - Span.Start, Axis) / LengthSq, 0.0, 1.0)
+								: 0.0;
+							const FVector2D Foot = Span.Start + Axis * T;
+							const double DistSq = FVector2D::DistSquared(Point, Foot);
+							if (DistSq < BestDistSq)
+							{
+								BestDistSq = DistSq;
+								BestIndex = Index;
+								BestFoot = Foot;
+							}
+						}
+					}
+				}
+			}
+
+			if (BestIndex == INDEX_NONE)
+			{
+				return false;
+			}
+
+			const FSpan& Span = Spans[BestIndex];
+			OutWay.DistanceCm = FMath::Sqrt(BestDistSq);
+			OutWay.HalfWidthCm = Span.HalfWidthCm;
+			OutWay.SidewalkWidthCm = Span.SidewalkWidthCm;
+			OutWay.AxisDirection = (Span.End - Span.Start).GetSafeNormal();
+			OutWay.AwayDirection = (Point - BestFoot).GetSafeNormal();
+			if (OutWay.AwayDirection.IsNearlyZero())
+			{
+				// Genau auf der Achse: quer zur Fahrtrichtung ausweichen.
+				OutWay.AwayDirection = FVector2D(-OutWay.AxisDirection.Y, OutWay.AxisDirection.X);
+			}
+			return true;
+		}
+	};
+
+	/**
+	 * Punkt im gedrehten Grundriss eines Gebaeudes?
+	 *
+	 * FGeneratedBuilding traegt die flaechenminimale GEDREHTE Box - die
+	 * achsparallele `Bounds` deckt bei schraegen Haeusern im Mittel das
+	 * 2,1-fache ab und wuerde die halbe Strasse als "im Gebaeude" melden.
+	 */
+	bool IsInsideFootprint(const FGeneratedBuilding& Building, const FVector2D& Point)
+	{
+		if (Building.FootprintExtentCm.IsNearlyZero())
+		{
+			return false;
+		}
+
+		const FVector2D Delta = Point - Building.FootprintCenterCm;
+		const double Yaw = FMath::DegreesToRadians(static_cast<double>(-Building.FootprintYawDegrees));
+		const double CosYaw = FMath::Cos(Yaw);
+		const double SinYaw = FMath::Sin(Yaw);
+		const FVector2D Local(
+			Delta.X * CosYaw - Delta.Y * SinYaw,
+			Delta.X * SinYaw + Delta.Y * CosYaw);
+
+		return FMath::Abs(Local.X) <= Building.FootprintExtentCm.X
+			&& FMath::Abs(Local.Y) <= Building.FootprintExtentCm.Y;
+	}
+
+	/**
+	 * Gitter ueber die Gebaeude-Grundrisse (50-m-Zellen).
+	 *
+	 * Ohne das waeren es 3.600 Moebel x 104.458 Gebaeude = 376 Millionen
+	 * Boxentests je Bake - fuer eine Frage, die je Moebel nur die Haeuser im
+	 * eigenen Block angeht.
+	 */
+	struct FBuildingFootprintGrid
+	{
+		static constexpr double CellSizeCm = 5000.0;
+
+		TMap<FIntPoint, TArray<int32>> Cells;
+		const TArray<FGeneratedBuilding>* Buildings = nullptr;
+
+		static FIntPoint CellOf(const FVector2D& P)
+		{
+			return FIntPoint(FMath::FloorToInt(P.X / CellSizeCm), FMath::FloorToInt(P.Y / CellSizeCm));
+		}
+
+		void Build(const TArray<FGeneratedBuilding>& InBuildings)
+		{
+			Buildings = &InBuildings;
+			for (int32 Index = 0; Index < InBuildings.Num(); ++Index)
+			{
+				const FGeneratedBuilding& Building = InBuildings[Index];
+				const FVector2D Extent = Building.FootprintExtentCm;
+				if (Extent.IsNearlyZero())
+				{
+					continue;
+				}
+
+				// Umkreis der gedrehten Box - drehungsunabhaengig und billig.
+				const double Radius = Extent.Size();
+				const FIntPoint MinCell = CellOf(Building.FootprintCenterCm - FVector2D(Radius, Radius));
+				const FIntPoint MaxCell = CellOf(Building.FootprintCenterCm + FVector2D(Radius, Radius));
+
+				// Deckel wie beim Fahrbahn-Index: ein entartetes Gebaeude darf
+				// nicht Millionen Zellen fuellen.
+				const int64 Wide = static_cast<int64>(MaxCell.X - MinCell.X) + 1;
+				const int64 High = static_cast<int64>(MaxCell.Y - MinCell.Y) + 1;
+				if (Wide * High > 400)
+				{
+					continue;
+				}
+
+				for (int32 Cx = MinCell.X; Cx <= MaxCell.X; ++Cx)
+				{
+					for (int32 Cy = MinCell.Y; Cy <= MaxCell.Y; ++Cy)
+					{
+						Cells.FindOrAdd(FIntPoint(Cx, Cy)).Add(Index);
+					}
+				}
+			}
+		}
+
+		bool Contains(const FVector2D& Point) const
+		{
+			if (!Buildings)
+			{
+				return false;
+			}
+			if (const TArray<int32>* Indices = Cells.Find(CellOf(Point)))
+			{
+				for (const int32 Index : *Indices)
+				{
+					if (IsInsideFootprint((*Buildings)[Index], Point))
+					{
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+	};
 }
 
 FRoadFurnitureReport URoadFurnitureGenerator::Generate(
@@ -84,7 +408,8 @@ FRoadFurnitureReport URoadFurnitureGenerator::Generate(
 	const UGeoCoordinateConverter* Converter,
 	const IHeightSampler* HeightSampler,
 	const FRoadFurnitureSettings& Settings,
-	FRoadFurnitureLayout& OutLayout)
+	FRoadFurnitureLayout& OutLayout,
+	const TArray<FGeneratedBuilding>* Buildings)
 {
 	FRoadFurnitureReport Report;
 	const double StartSeconds = FPlatformTime::Seconds();
@@ -121,6 +446,11 @@ FRoadFurnitureReport URoadFurnitureGenerator::Generate(
 			SynthesiseStreetLamps(Network, HeightSampler, Settings, OutLayout);
 			Report.SynthesisedStreetLampCount = OutLayout.StreetLamps.Num() - MappedLamps;
 		}
+	}
+	if (Settings.bPlaceStreetFurniture)
+	{
+		PlaceStreetFurniture(Network, DataSet, Converter, HeightSampler, Buildings,
+			Settings, OutLayout, Report);
 	}
 
 	// Fahrbahn freiraeumen - EIN Durchgang fuer alles.
@@ -228,6 +558,9 @@ int32 URoadFurnitureGenerator::RemoveFurnitureOnCarriageway(
 	Sweep(Layout.Signs);
 	Sweep(Layout.Delineators);
 	Sweep(Layout.StreetLamps);
+	// Die Strassenmoebel bleiben ausdruecklich DRAUSSEN: ihr eigener Pass hat
+	// sie bereits exakt an den Gehweg gerechnet, und der Poller steht mit
+	// Absicht auf der Fahrbahnkante - dieser Sweep wuerde ihn wegschieben.
 
 	UE_LOG(LogWbRoads, Log,
 		TEXT("Ausstattung: %d Objekte von der Fahrbahn an den Rand versetzt, "
@@ -887,4 +1220,231 @@ void URoadFurnitureGenerator::SynthesiseStreetLamps(
 			TEXT("insgesamt %d."),
 			Added, Spacing / 100.0, OutLayout.StreetLamps.Num());
 	}
+}
+
+int32 URoadFurnitureGenerator::GetFurnitureVariantCount(EStreetFurnitureKind Kind)
+{
+	// Die Variantenzahlen des Specs. Eine Kategorie mit einer Variante ist
+	// kein Mangel: ein Briefkasten sieht in ganz Wiesbaden gleich aus.
+	switch (Kind)
+	{
+	case EStreetFurnitureKind::Bench:          return 2;   // mit/ohne Armlehne
+	case EStreetFurnitureKind::Bollard:        return 2;
+	case EStreetFurnitureKind::WasteBasket:    return 2;
+	case EStreetFurnitureKind::VendingMachine: return 2;
+	case EStreetFurnitureKind::Recycling:      return 3;   // Glas/Papier/Textil
+	case EStreetFurnitureKind::FireHydrant:    return 2;
+	case EStreetFurnitureKind::PostBox:        return 1;
+	case EStreetFurnitureKind::PicnicTable:    return 1;
+	default:                                   return 1;
+	}
+}
+
+bool URoadFurnitureGenerator::TryParseFurnitureKind(const FString& Tag, EStreetFurnitureKind& OutKind)
+{
+	for (const FFurnitureKindName& Entry : FurnitureKindNames)
+	{
+		if (Tag.Equals(Entry.Value, ESearchCase::IgnoreCase))
+		{
+			OutKind = Entry.Kind;
+			return true;
+		}
+	}
+	return false;
+}
+
+void URoadFurnitureGenerator::PlaceStreetFurniture(
+	const FRoadNetwork& Network,
+	const FOSMDataSet* DataSet,
+	const UGeoCoordinateConverter* Converter,
+	const IHeightSampler* HeightSampler,
+	const TArray<FGeneratedBuilding>* Buildings,
+	const FRoadFurnitureSettings& Settings,
+	FRoadFurnitureLayout& OutLayout,
+	FRoadFurnitureReport& OutReport) const
+{
+	if (!DataSet || !Converter || !Converter->IsInitialized())
+	{
+		return;
+	}
+
+	// Deterministische Reihenfolge ueber die sortierten Knoten-Ids: zwei Bakes
+	// derselben Daten muessen dieselbe Liste ergeben (TMap-Reihenfolge ist es
+	// nicht).
+	TArray<FOSMId> NodeIds;
+	TMap<FOSMId, EStreetFurnitureKind> KindByNode;
+	for (const TPair<FOSMId, FOSMNode>& Pair : DataSet->Nodes)
+	{
+		EStreetFurnitureKind Kind = EStreetFurnitureKind::Bench;
+		const FString KindTag = Pair.Value.GetTag(FurnitureKindTagName);
+		bool bFound = !KindTag.IsEmpty() && TryParseFurnitureKind(KindTag, Kind);
+		if (!bFound)
+		{
+			for (const FFurnitureRawTag& Raw : FurnitureRawTags)
+			{
+				if (Pair.Value.HasTagValue(Raw.Key, Raw.Value))
+				{
+					Kind = Raw.Kind;
+					bFound = true;
+					break;
+				}
+			}
+		}
+
+		if (bFound)
+		{
+			NodeIds.Add(Pair.Key);
+			KindByNode.Add(Pair.Key, Kind);
+		}
+	}
+
+	if (NodeIds.Num() == 0)
+	{
+		return;
+	}
+	NodeIds.Sort();
+
+	FNearestWayIndex Ways;
+	Ways.Build(Network);
+
+	FBuildingFootprintGrid BuildingGrid;
+	if (Buildings && Buildings->Num() > 0)
+	{
+		BuildingGrid.Build(*Buildings);
+	}
+
+	const double DockingRange = FMath::Max(0.0, Settings.FurnitureDockingRangeCm);
+	int32 InBuilding = 0;
+	int32 Docked = 0;
+	int32 WithoutEdge = 0;
+
+	OutLayout.Furniture.Reserve(OutLayout.Furniture.Num() + NodeIds.Num());
+
+	for (const FOSMId NodeId : NodeIds)
+	{
+		const FOSMNode* Node = DataSet->Nodes.Find(NodeId);
+		if (!Node)
+		{
+			continue;
+		}
+
+		const EStreetFurnitureKind Kind = KindByNode[NodeId];
+		const FVector World = Converter->GeoToUnrealGround(Node->Location);
+		FVector2D Position(World.X, World.Y);
+
+		// Regel 2: im Gebaeude = Verortungsfehler.
+		if (BuildingGrid.Contains(Position))
+		{
+			++InBuilding;
+			continue;
+		}
+
+		FNearestWay Way;
+		if (!Ways.Find(Position, Way))
+		{
+			// Weit und breit kein Weg - das ist kein Strassenrand mehr.
+			++WithoutEdge;
+			continue;
+		}
+
+		// Regel 3 + 4: vom Fahrweg herunter und an den befestigten Rand.
+		// Der Poller ist die Ausnahme - er steht dort mit Absicht.
+		//
+		// Zielband ist die MITTE des Gehwegs; hat der Weg keinen Gehweg
+		// (Feldweg, Fussweg), ein halber Meter neben der Kante.
+		const bool bMayStandOnWay = (Kind == EStreetFurnitureKind::Bollard);
+		const double EdgeCm = Way.HalfWidthCm;
+		const double PavedCm = Way.HalfWidthCm + Way.SidewalkWidthCm;
+		const double TargetCm = Way.SidewalkWidthCm > KINDA_SMALL_NUMBER
+			? Way.HalfWidthCm + Way.SidewalkWidthCm * 0.5
+			: Way.HalfWidthCm + 50.0;
+
+		if (Way.DistanceCm < EdgeCm && !bMayStandOnWay)
+		{
+			// Auf dem Fahrweg: hinausschieben. Die Strecke ist hoechstens eine
+			// halbe Fahrbahnbreite und damit sicher erlaubt - ein Moebel, das
+			// auf der Fahrbahn STEHT, ist immer ein Fehler, und Versetzen ist
+			// besser als Loeschen (dieselbe Entscheidung wie bei den Schildern).
+			Position = Position + Way.AwayDirection * (TargetCm - Way.DistanceCm);
+			++Docked;
+		}
+		else if (Way.DistanceCm > PavedCm)
+		{
+			// Neben dem befestigten Streifen: heranziehen, wenn der RAND in
+			// Reichweite liegt - sonst verwerfen (die "in der Wiese
+			// schwebende Bank").
+			//
+			// Gemessen wird bis zur KANTE des befestigten Streifens, nicht bis
+			// zum Zielband in seiner Mitte: sonst fraesse die halbe Gehwegbreite
+			// die 1,5 m Reichweite auf, und auf einem breiten Gehweg bliebe
+			// von der Regel nichts uebrig.
+			if (Way.DistanceCm - PavedCm > DockingRange)
+			{
+				++WithoutEdge;
+				continue;
+			}
+			Position = Position - Way.AwayDirection * (Way.DistanceCm - TargetCm);
+			++Docked;
+		}
+
+		FFurnitureInstance Instance;
+		Instance.Kind = Kind;
+		Instance.NodeId = NodeId;
+
+		// Moebel stehen auf dem Gehweg: Terrain + Fahrbahn-Offset + Bordstein.
+		const double GroundZ = HeightSampler && HeightSampler->HasValidData()
+			? HeightSampler->SampleHeightCm(Position) + Settings.RoadSurfaceOffsetCm + Settings.KerbHeightCm
+			: World.Z;
+		Instance.Location = FVector(Position.X, Position.Y, GroundZ);
+
+		// Variante und der kleine Ausrichtungs-Versatz kommen aus der Knoten-Id:
+		// gestreut, aber bei jedem Bake dieselbe Streuung.
+		const uint32 Hash = GetTypeHash(NodeId);
+		Instance.Variant = static_cast<int32>(Hash % static_cast<uint32>(
+			FMath::Max(1, GetFurnitureVariantCount(Kind))));
+
+		{
+			// Blickrichtung ZUR Fahrbahn = Gegenrichtung von "weg vom Weg".
+			const FVector2D ToWay = -Way.AwayDirection;
+			const double YawToWay = FMath::RadiansToDegrees(FMath::Atan2(ToWay.Y, ToWay.X));
+
+			// Regel 5, die Ausrichtungen:
+			//  - Bank und Picknick-Tisch: Ruecken zur Strasse, Blick ins Gruene.
+			//  - Korb, Automat, Briefkasten, Recycling: werden vom Gehweg aus
+			//    benutzt, zeigen also ebenfalls von der Fahrbahn weg.
+			//  - Hydrant: die Feuerwehr kuppelt von der Strasse her an - er
+			//    zeigt als einziger ZUR Fahrbahn.
+			//  - Poller: steht laengs der Kante, quer zur Blickrichtung.
+			double Yaw = YawToWay + 180.0;
+			if (Kind == EStreetFurnitureKind::FireHydrant)
+			{
+				Yaw = YawToWay;
+			}
+			else if (Kind == EStreetFurnitureKind::Bollard)
+			{
+				// Laengs der Kante heisst: die Achse des Wegs selbst - nicht
+				// "quer zur Blickrichtung", denn bei einem Poller AUF dem Weg
+				// zeigt die Blickrichtung irgendwohin.
+				Yaw = FMath::RadiansToDegrees(
+					FMath::Atan2(Way.AxisDirection.Y, Way.AxisDirection.X));
+			}
+
+			// +-5 Grad Streuung: eine Reihe exakt gleich gedrehter Baenke sieht
+			// gestempelt aus, und im Vorbild steht keine genau parallel.
+			const double Jitter = (static_cast<double>(Hash % 1001u) / 1000.0 - 0.5) * 10.0;
+			Instance.Rotation = FRotator(0.0, Yaw + Jitter, 0.0);
+		}
+
+		OutLayout.Furniture.Add(Instance);
+	}
+
+	OutReport.FurnitureCount = OutLayout.Furniture.Num();
+	OutReport.FurnitureInBuildingCount = InBuilding;
+	OutReport.FurnitureDockedCount = Docked;
+	OutReport.FurnitureWithoutEdgeCount = WithoutEdge;
+
+	UE_LOG(LogWbRoads, Log,
+		TEXT("Strassenmoebel: %d von %d OSM-Knoten uebernommen (%d angedockt, ")
+		TEXT("%d im Gebaeude verworfen, %d ohne befestigten Rand verworfen)."),
+		OutLayout.Furniture.Num(), NodeIds.Num(), Docked, InBuilding, WithoutEdge);
 }

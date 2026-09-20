@@ -181,3 +181,47 @@ die Tags ergaenzt.
 **Naechster Schritt:** Bake-Pass (`RoadFurnitureGenerator`) mit den
 Platzierungsregeln, dann Meshes und ISM-Slots.
 
+## Umsetzungsnotiz (2026-09-20, Bake-Pass steht)
+
+`URoadFurnitureGenerator::PlaceStreetFurniture` uebernimmt die `wb:furniture`-
+Knoten (Rueckfall: die rohen OSM-Tags, damit ein Bake ohne den Nachzug nicht
+still anders ausgeht) und schreibt `FFurnitureInstance` (Art, Ort, Drehung,
+Variante, Knoten-Id) in `FRoadFurnitureLayout::Furniture`. Umgesetzt sind
+Regel 1 (Gehweghoehe), 2 (Gebaeude-Grundriss), 3 (Fahrweg), 4 (Andocken),
+5 (Ausrichtung je Art) und 6 (Statistik im Bericht und im Log).
+
+**Die Geometrie kommt NICHT aus dem Fahrbahn-Index.** `FWiesbadenRoadClearance`
+beantwortet nur "blockiert ja/nein". Der erste Entwurf hat daraus die Richtung
+zur Strasse abgetastet (16 Richtungen) - der Test hat es sofort gemeldet: eine
+Bank, die der Strasse den Ruecken kehren soll, stand 27 Grad schief, und ein
+Abfallkorb mitten auf der Fahrbahn fand innerhalb von 1,5 m keinen Gehweg und
+fiel weg. Jetzt rechnet ein eigenes Gitter (`FNearestWayIndex`) den
+Lotfusspunkt auf den naechsten Abschnitt: dieselbe Antwort liefert Abstand,
+Fahrbahnbreite, Gehwegbreite, Laengsrichtung und die Normale - exakt statt
+abgetastet.
+
+Zwei Regel-Feinheiten, die erst beim Bauen sichtbar wurden:
+
+* **Auf dem Fahrweg wird immer versetzt, nicht verworfen.** Die Strecke ist
+  hoechstens eine halbe Fahrbahnbreite; das ist dieselbe Entscheidung, die bei
+  den Schildern schon getroffen wurde ("ein Stoppschild, das verschwindet, ist
+  schlimmer als eines, das einen Meter zu weit rechts steht"). Die 1,5 m
+  Reichweite gelten nur fuer den umgekehrten Fall - Moebel NEBEN dem
+  befestigten Streifen.
+* **Gemessen wird bis zur Kante des befestigten Streifens**, gestellt wird in
+  seine Mitte. Wuerde man die Reichweite bis zur Mitte messen, fraesse die halbe
+  Gehwegbreite sie auf, und auf breiten Gehwegen bliebe von der Regel nichts.
+
+Die Moebel bleiben ausdruecklich aus `RemoveFurnitureOnCarriageway` heraus:
+ihr eigener Pass hat sie schon exakt gestellt, und der Poller steht mit Absicht
+auf der Fahrbahnkante.
+
+**Test:** `WiesbadenReal.GIS.RoadFurniture.StreetFurniture` - eine synthetische
+Strasse, acht Faelle (Gehweg unveraendert, Fahrbahn versetzt, Poller bleibt,
+Wiese verworfen, Gebaeude verworfen, unbekannte Art ignoriert, Ausrichtung je
+Art, Determinismus zweier Laeufe, Rueckfall auf rohe Tags, Abschalter).
+
+**Offen bis zur sichtbaren Stadt:** Meshes (Schritt 2), ISM-Slots im
+`RoadFurnitureSpawnerComponent` und das Backen der Instanzen in die
+Chunk-Pakete (Schritt 3, zweite Haelfte), dann Abnahme und Voll-Re-Bake.
+

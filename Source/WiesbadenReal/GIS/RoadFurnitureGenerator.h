@@ -10,6 +10,7 @@
 #include "RoadFurnitureGenerator.generated.h"
 
 class UGeoCoordinateConverter;
+struct FGeneratedBuilding;
 
 /** Art einer Fahrbahnmarkierung, die dieser Pass platziert. */
 UENUM(BlueprintType)
@@ -124,6 +125,54 @@ struct WIESBADENREAL_API FStreetLampInstance
 	int64 NodeId = 0;
 };
 
+/**
+ * Art eines Strassenmoebels aus OSM.
+ *
+ * Die acht Kategorien des Specs "Strassenrand-Schmuck" - genau die, die in
+ * Wiesbaden mit mehr als hundert Knoten erfasst sind. Die Zuordnung
+ * Tag -> Art trifft der Nachzug `Tools/fetch_street_furniture.py`; er schreibt
+ * sie als EIN Tag `wb:furniture` in die OSM-Kopie, damit hier keine acht
+ * Tag-Kombinationen nachgebaut werden muessen.
+ */
+UENUM(BlueprintType)
+enum class EStreetFurnitureKind : uint8
+{
+	Bench          UMETA(DisplayName = "Bank"),
+	Bollard        UMETA(DisplayName = "Poller"),
+	WasteBasket    UMETA(DisplayName = "Abfallkorb"),
+	VendingMachine UMETA(DisplayName = "Automat"),
+	Recycling      UMETA(DisplayName = "Recycling-Container"),
+	FireHydrant    UMETA(DisplayName = "Hydrant"),
+	PostBox        UMETA(DisplayName = "Briefkasten"),
+	PicnicTable    UMETA(DisplayName = "Picknick-Tisch"),
+	MAX            UMETA(Hidden)
+};
+
+/** Ein platziertes Strassenmoebel (Bank, Poller, Korb, ...). */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FFurnitureInstance
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
+	EStreetFurnitureKind Kind = EStreetFurnitureKind::Bench;
+
+	/** Standflaeche in Weltkoordinaten (cm) - Unterkante des Objekts. */
+	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
+	FVector Location = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
+	FRotator Rotation = FRotator::ZeroRotator;
+
+	/** Mesh-Variante der Art (0-basiert), deterministisch aus der Knoten-Id. */
+	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
+	int32 Variant = 0;
+
+	/** Quell-OSM-Node - jedes Moebel steht an einem echten kartierten Ort. */
+	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
+	int64 NodeId = 0;
+};
+
 /** Vollstaendiges Ergebnis des Strassenausstattungs-Passes. */
 USTRUCT(BlueprintType)
 struct WIESBADENREAL_API FRoadFurnitureLayout
@@ -142,18 +191,23 @@ struct WIESBADENREAL_API FRoadFurnitureLayout
 	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
 	TArray<FStreetLampInstance> StreetLamps;
 
+	/** Strassenmoebel aus OSM (Baenke, Poller, Koerbe, ...). */
+	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
+	TArray<FFurnitureInstance> Furniture;
+
 	void Reset()
 	{
 		Signs.Reset();
 		Delineators.Reset();
 		Markings.Reset();
 		StreetLamps.Reset();
+		Furniture.Reset();
 	}
 
 	FString GetStatisticsString() const
 	{
-		return FString::Printf(TEXT("%d Schilder, %d Leitpfosten, %d Markierungen"),
-			Signs.Num(), Delineators.Num(), Markings.Num());
+		return FString::Printf(TEXT("%d Schilder, %d Leitpfosten, %d Markierungen, %d Moebel"),
+			Signs.Num(), Delineators.Num(), Markings.Num(), Furniture.Num());
 	}
 };
 
@@ -175,6 +229,21 @@ struct WIESBADENREAL_API FRoadFurnitureSettings
 	/** Strassenlaternen aus highway=street_lamp uebernehmen. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture")
 	bool bPlaceStreetLamps = true;
+
+	/** Strassenmoebel (Baenke, Poller, Koerbe, ...) aus OSM uebernehmen. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture")
+	bool bPlaceStreetFurniture = true;
+
+	/**
+	 * Wie weit ein Moebel hoechstens an den befestigten Rand rueckt (cm).
+	 *
+	 * OSM verortet Baenke und Koerbe oft einen Meter daneben - auf der Wiese
+	 * oder halb im Strassenkoerper. Bis zu diesem Abstand wird das Objekt auf
+	 * den naechsten Gehweg gezogen, darueber hinaus verworfen: ein Moebel, das
+	 * weit ab vom befestigten Rand steht, ist ein Datenfehler und kein Ort.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture", meta = (ClampMin = "0.0"))
+	double FurnitureDockingRangeCm = 150.0;
 
 	/**
 	 * Fehlende Strassenlaternen entlang befahrbarer Strassen ergaenzen.
@@ -276,6 +345,22 @@ struct WIESBADENREAL_API FRoadFurnitureReport
 	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
 	int32 SynthesisedStreetLampCount = 0;
 
+	/** Uebernommene Strassenmoebel. */
+	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
+	int32 FurnitureCount = 0;
+
+	/** Moebel, die im Grundriss eines Gebaeudes lagen (OSM-Verortungsfehler). */
+	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
+	int32 FurnitureInBuildingCount = 0;
+
+	/** Moebel, die auf den befestigten Rand gerueckt wurden. */
+	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
+	int32 FurnitureDockedCount = 0;
+
+	/** Moebel ohne befestigten Rand in Reichweite - verworfen. */
+	UPROPERTY(BlueprintReadOnly, Category = "Furniture")
+	int32 FurnitureWithoutEdgeCount = 0;
+
 	/**
 	 * Objekte, die auf einer Fahrbahn standen und entfernt wurden.
 	 *
@@ -336,13 +421,41 @@ public:
 		const FRoadFurnitureSettings& Settings,
 		FRoadFurnitureLayout& OutLayout) const;
 
+	/**
+	 * Uebernimmt die OSM-Strassenmoebel (wb:furniture-Knoten).
+	 *
+	 * Oeffentlich aus demselben Grund wie SynthesiseStreetLamps: der Pass ist
+	 * datenrein pruefbar. Der Test GIS.RoadFurniture.StreetFurniture haelt die
+	 * Platzierungsregeln fest (Gebaeude, Fahrbahn, Andocken, Ausrichtung,
+	 * Determinismus).
+	 *
+	 * @param Buildings Gebaeude des Builds (optional): deren Grundriss-Boxen
+	 *                  fangen die typischen OSM-Verortungsfehler ab.
+	 */
+	void PlaceStreetFurniture(
+		const FRoadNetwork& Network,
+		const FOSMDataSet* DataSet,
+		const UGeoCoordinateConverter* Converter,
+		const IHeightSampler* HeightSampler,
+		const TArray<FGeneratedBuilding>* Buildings,
+		const FRoadFurnitureSettings& Settings,
+		FRoadFurnitureLayout& OutLayout,
+		FRoadFurnitureReport& OutReport) const;
+
+	/** Zahl der Mesh-Varianten einer Art (Variantenwahl im Bake). */
+	static int32 GetFurnitureVariantCount(EStreetFurnitureKind Kind);
+
+	/** Wandelt das `wb:furniture`-Tag in eine Art. False, wenn unbekannt. */
+	static bool TryParseFurnitureKind(const FString& Tag, EStreetFurnitureKind& OutKind);
+
 	FRoadFurnitureReport Generate(
 		const FRoadNetwork& Network,
 		const FOSMDataSet* DataSet,
 		const UGeoCoordinateConverter* Converter,
 		const IHeightSampler* HeightSampler,
 		const FRoadFurnitureSettings& Settings,
-		FRoadFurnitureLayout& OutLayout);
+		FRoadFurnitureLayout& OutLayout,
+		const TArray<FGeneratedBuilding>* Buildings = nullptr);
 
 	/**
 	 * Entfernt Schilder, Leitpfosten und Laternen, die auf einer Fahrbahn
