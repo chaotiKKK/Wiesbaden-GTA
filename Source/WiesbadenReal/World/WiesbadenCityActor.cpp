@@ -239,11 +239,14 @@ void AWiesbadenCityActor::ApplyCityData(const FWiesbadenCityData& Data, bool bCr
 		BuildTerrainPreview(Data.TerrainTile, TerrainPreviewGridSize);
 	}
 
-	// -- Strassenausstattung (Schilder, Leitpfosten, Markierungen) ----------
-	if (FurnitureSpawner
-		&& (Data.FurnitureLayout.Signs.Num() > 0
-			|| Data.FurnitureLayout.Delineators.Num() > 0
-			|| Data.FurnitureLayout.Markings.Num() > 0))
+	// -- Strassenausstattung (Schilder, Leitpfosten, Markierungen, Laternen,
+	//    Strassenmoebel) ---------------------------------------------------
+	//
+	// Die Bedingung fragt das Layout, statt seine Kanaele aufzuzaehlen: die
+	// alte Fassung nannte Schilder, Leitpfosten und Markierungen und hatte
+	// Laternen und Moebel nie nachgetragen. Eine Stadt mit ausschliesslich
+	// Moebeln haette ihren Spawner damit nie gerufen.
+	if (FurnitureSpawner && !Data.FurnitureLayout.IsEmpty())
 	{
 		FurnitureSpawner->SignTextureFolder = SignTextureFolder;
 		FurnitureSpawner->SignMaterial = SignMaterial;

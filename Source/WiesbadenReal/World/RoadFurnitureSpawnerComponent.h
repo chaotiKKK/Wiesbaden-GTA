@@ -6,6 +6,7 @@
 #include "Components/SceneComponent.h"
 
 #include "GIS/RoadFurnitureGenerator.h"
+#include "World/StreetFurnitureShapes.h"
 
 #include "RoadFurnitureSpawnerComponent.generated.h"
 
@@ -195,6 +196,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Sichtweite", meta = (ClampMin = "0.0"))
 	float LampPostCullDistanceCm = 40000.0f;
 
+	/**
+	 * Sichtweite der Strassenmoebel in cm.
+	 *
+	 * Kuerzer als bei Schildern und Masten: eine Bank ist kein Wegweiser,
+	 * sondern Beiwerk des Gehwegs, auf dem man steht. Auf 100 m traegt sie
+	 * nichts mehr zum Bild bei und kostet nur Instanzen.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Sichtweite", meta = (ClampMin = "0.0"))
+	float FurnitureCullDistanceCm = 10000.0f;
+
 	// -- Kollision -----------------------------------------------------------
 
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden")
@@ -214,11 +225,56 @@ public:
 	UPROPERTY(VisibleAnywhere, Transient, Category = "Wiesbaden")
 	int32 LastSpawnedLampCount = 0;
 
+	/** Moebel (Baenke, Poller, ...), nicht deren Einzelteile. */
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Wiesbaden")
+	int32 LastSpawnedFurnitureCount = 0;
+
+	/** Erzeugte Teil-Instanzen - die Zahl, die das Rendering kostet. */
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Wiesbaden")
+	int32 LastSpawnedFurniturePartCount = 0;
+
+	// -- Strassenmoebel ------------------------------------------------------
+
+	/** Masse der Moebel (Gestaltung, kein Code). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Moebel")
+	FStreetFurnitureDimensions FurnitureDimensions;
+
+	/** Material der Metallteile (leer = UE-Default-Material). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Moebel")
+	UMaterialInterface* FurnitureMetalMaterial = nullptr;
+
+	/** Material der Holzteile (Sitzlatten, Tischplatten). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Moebel")
+	UMaterialInterface* FurnitureWoodMaterial = nullptr;
+
+	/** Material der farbigen Teile (Briefkasten, Hydrant, Automatenfront). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Moebel")
+	UMaterialInterface* FurnitureSignalMaterial = nullptr;
+
 private:
 	void SpawnSigns(const TArray<FSignInstance>& Signs, UStaticMesh* PanelMesh, UStaticMesh* PoleMesh);
 	void SpawnDelineators(const TArray<FDelineatorInstance>& Delineators, UStaticMesh* CylinderMesh, UStaticMesh* CubeMesh);
 	void SpawnMarkings(const TArray<FMarkingInstance>& Markings, UStaticMesh* PlaneMesh);
 	void SpawnStreetLamps(const TArray<FStreetLampInstance>& Lamps, UStaticMesh* CylinderMesh);
+
+	/**
+	 * Setzt die Strassenmoebel als Instanzen.
+	 *
+	 * Ein HISM je Kombination aus Basismesh und Werkstoff (hoechstens sechs);
+	 * alle Baenke der Stadt teilen sich damit einen Draw-Call fuer ihre
+	 * Holzteile und einen fuer die Wangen.
+	 */
+	void SpawnStreetFurniture(
+		const TArray<FFurnitureInstance>& Furniture,
+		UStaticMesh* CubeMesh,
+		UStaticMesh* CylinderMesh);
+
+	/** Liefert (und erzeugt bei Bedarf) den HISM einer Mesh/Werkstoff-Paarung. */
+	UHierarchicalInstancedStaticMeshComponent* GetFurnitureInstances(
+		EFurnitureMeshKind Mesh,
+		EFurnitureMaterialKind Material,
+		UStaticMesh* CubeMesh,
+		UStaticMesh* CylinderMesh);
 
 	/** Setzt die begrenzte Zahl echter Leuchten auf die Laternen um den Spieler. */
 	void UpdateLampLights(const FVector& Reference);
@@ -251,6 +307,12 @@ private:
 	// Laternenmasten -> ein ISM, ein Draw-Call.
 	UPROPERTY(Transient)
 	UHierarchicalInstancedStaticMeshComponent* LampPostInstances = nullptr;
+
+	// Moebelteile: ein ISM je Mesh/Werkstoff-Paarung, zur Laufzeit erzeugt
+	// (wie die Schild-Tafeln). Der Index ist Mesh * EFurnitureMaterialKind::MAX
+	// + Werkstoff; leere Paarungen bleiben nullptr und kosten nichts.
+	UPROPERTY(Transient)
+	TArray<UHierarchicalInstancedStaticMeshComponent*> FurnitureInstances;
 
 	// Echte Punktlichter, auf MaxActiveLampLights begrenzt.
 	UPROPERTY(Transient)

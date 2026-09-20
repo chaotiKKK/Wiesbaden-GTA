@@ -209,6 +209,24 @@ struct WIESBADENREAL_API FRoadFurnitureLayout
 		return FString::Printf(TEXT("%d Schilder, %d Leitpfosten, %d Markierungen, %d Moebel"),
 			Signs.Num(), Delineators.Num(), Markings.Num(), Furniture.Num());
 	}
+
+	/**
+	 * Enthaelt das Layout ueberhaupt etwas?
+	 *
+	 * Steht hier und nicht als Aufzaehlung an der Aufrufstelle: der Spawner
+	 * wurde dort mit "Schilder ODER Leitpfosten ODER Markierungen" bewacht.
+	 * Als die Laternen dazukamen und spaeter die Moebel, blieb die Bedingung
+	 * stehen - eine Stadt, die NUR Moebel hat, haette ihren Spawner nie
+	 * gerufen. Eine Stelle, die alle Kanaele kennt, kann das nicht passieren.
+	 */
+	bool IsEmpty() const
+	{
+		return Signs.Num() == 0
+			&& Delineators.Num() == 0
+			&& Markings.Num() == 0
+			&& StreetLamps.Num() == 0
+			&& Furniture.Num() == 0;
+	}
 };
 
 /** Parameter des Strassenausstattungs-Passes. */

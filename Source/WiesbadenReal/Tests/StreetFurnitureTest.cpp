@@ -219,6 +219,40 @@ bool FStreetFurniturePlacementTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// --- Der Waechter der Aufrufstelle kennt JEDEN Kanal --------------------
+	//
+	// AWiesbadenCityActor ruft den Spawner nur, wenn das Layout etwas
+	// enthaelt. Diese Frage zaehlte frueher die Kanaele einzeln auf und war
+	// bei Laternen und Moebeln nie nachgezogen worden: eine Stadt mit
+	// ausschliesslich Moebeln haette ihren Spawner nie gerufen.
+	{
+		FRoadFurnitureLayout Leer;
+		TestTrue(TEXT("Ein leeres Layout ist leer"), Leer.IsEmpty());
+
+		FRoadFurnitureLayout NurMoebel;
+		NurMoebel.Furniture.Add(FFurnitureInstance());
+		TestFalse(TEXT("Ein Layout mit NUR Moebeln ist nicht leer"), NurMoebel.IsEmpty());
+
+		FRoadFurnitureLayout NurLaternen;
+		NurLaternen.StreetLamps.Add(FStreetLampInstance());
+		TestFalse(TEXT("Ein Layout mit NUR Laternen ist nicht leer"), NurLaternen.IsEmpty());
+
+		FRoadFurnitureLayout NurSchilder;
+		NurSchilder.Signs.Add(FSignInstance());
+		TestFalse(TEXT("Ein Layout mit NUR Schildern ist nicht leer"), NurSchilder.IsEmpty());
+
+		FRoadFurnitureLayout NurLeitpfosten;
+		NurLeitpfosten.Delineators.Add(FDelineatorInstance());
+		TestFalse(TEXT("Ein Layout mit NUR Leitpfosten ist nicht leer"), NurLeitpfosten.IsEmpty());
+
+		FRoadFurnitureLayout NurMarkierungen;
+		NurMarkierungen.Markings.Add(FMarkingInstance());
+		TestFalse(TEXT("Ein Layout mit NUR Markierungen ist nicht leer"), NurMarkierungen.IsEmpty());
+
+		NurMoebel.Reset();
+		TestTrue(TEXT("Nach Reset ist es wieder leer"), NurMoebel.IsEmpty());
+	}
+
 	// --- Der Schalter schaltet wirklich ab ---
 	{
 		FRoadFurnitureSettings Off = Settings;

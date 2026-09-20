@@ -5,6 +5,7 @@
 #include "WiesbadenReal.h"
 
 #include "GIS/WiesbadenSignAssets.h"
+#include "World/StreetFurnitureShapes.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Engine/StaticMesh.h"
@@ -62,6 +63,15 @@ void URoadFurnitureSpawnerComponent::ClearFurniture()
 
 	if (LampPostInstances) { LampPostInstances->ClearInstances(); }
 
+	for (UHierarchicalInstancedStaticMeshComponent* Group : FurnitureInstances)
+	{
+		if (Group)
+		{
+			Group->DestroyComponent();
+		}
+	}
+	FurnitureInstances.Reset();
+
 	for (UPointLightComponent* Light : LampLights)
 	{
 		if (Light)
@@ -77,6 +87,8 @@ void URoadFurnitureSpawnerComponent::ClearFurniture()
 	LastSpawnedDelineatorCount = 0;
 	LastSpawnedMarkingCount = 0;
 	LastSpawnedLampCount = 0;
+	LastSpawnedFurnitureCount = 0;
+	LastSpawnedFurniturePartCount = 0;
 }
 
 void URoadFurnitureSpawnerComponent::SpawnFurniture(const FRoadFurnitureLayout& Layout)
@@ -98,6 +110,7 @@ void URoadFurnitureSpawnerComponent::SpawnFurniture(const FRoadFurnitureLayout& 
 	SpawnDelineators(Layout.Delineators, CylinderMesh, CubeMesh);
 	SpawnMarkings(Layout.Markings, PlaneMesh);
 	SpawnStreetLamps(Layout.StreetLamps, CylinderMesh);
+	SpawnStreetFurniture(Layout.Furniture, CubeMesh, CylinderMesh);
 
 	const ECollisionEnabled::Type Collision = bCreateCollision
 		? ECollisionEnabled::QueryAndPhysics
@@ -619,4 +632,145 @@ void URoadFurnitureSpawnerComponent::TickComponent(
 	}
 
 	UpdateLampLights(ViewLocation);
+}
+
+UHierarchicalInstancedStaticMeshComponent* URoadFurnitureSpawnerComponent::GetFurnitureInstances(
+	EFurnitureMeshKind Mesh,
+	EFurnitureMaterialKind Material,
+	UStaticMesh* CubeMesh,
+	UStaticMesh* CylinderMesh)
+{
+	const int32 MaterialCount = static_cast<int32>(EFurnitureMaterialKind::MAX);
+	const int32 Index = static_cast<int32>(Mesh) * MaterialCount + static_cast<int32>(Material);
+
+	if (FurnitureInstances.Num() <= Index)
+	{
+		FurnitureInstances.SetNumZeroed(static_cast<int32>(EFurnitureMeshKind::MAX) * MaterialCount);
+	}
+	if (FurnitureInstances[Index])
+	{
+		return FurnitureInstances[Index];
+	}
+
+	// Erst beim ersten Teil dieser Paarung anlegen - eine Stadt ohne
+	// Picknick-Tische soll keinen leeren Holz-ISM mitschleppen. Dasselbe
+	// Muster wie bei den Schild-Tafeln (ein ISM je Zeichen).
+	UHierarchicalInstancedStaticMeshComponent* Group =
+		NewObject<UHierarchicalInstancedStaticMeshComponent>(this);
+	Group->SetupAttachment(this);
+	Group->RegisterComponent();
+	Group->SetStaticMesh(Mesh == EFurnitureMeshKind::Cylinder ? CylinderMesh : CubeMesh);
+	Group->SetCollisionEnabled(bCreateCollision
+		? ECollisionEnabled::QueryAndPhysics
+		: ECollisionEnabled::NoCollision);
+	Group->SetCullDistances(0, FurnitureCullDistanceCm);
+
+	UMaterialInterface* WerkStoff = nullptr;
+	switch (Material)
+	{
+	case EFurnitureMaterialKind::Wood:   WerkStoff = FurnitureWoodMaterial;   break;
+	case EFurnitureMaterialKind::Signal: WerkStoff = FurnitureSignalMaterial; break;
+	default:                             WerkStoff = FurnitureMetalMaterial;  break;
+	}
+	if (WerkStoff)
+	{
+		Group->SetMaterial(0, WerkStoff);
+	}
+
+	FurnitureInstances[Index] = Group;
+	return Group;
+}
+
+void URoadFurnitureSpawnerComponent::SpawnStreetFurniture(
+	const TArray<FFurnitureInstance>& Furniture,
+	UStaticMesh* CubeMesh,
+	UStaticMesh* CylinderMesh)
+{
+	LastSpawnedFurnitureCount = 0;
+	LastSpawnedFurniturePartCount = 0;
+	if (Furniture.Num() == 0)
+	{
+		return;
+	}
+
+	// Alle Teile EINMAL sammeln und dann je Paarung am Stueck eintragen.
+	//
+	// AddInstance je Teil einzeln aufzurufen kostet bei rund zehntausend
+	// Teilen jedes Mal eine Aktualisierung des Instanzpuffers; AddInstances
+	// nimmt den ganzen Schwung auf einmal. Die Reserve verhindert zusaetzlich
+	// das Umkopieren waehrend des Sammelns.
+	int32 ErwarteteTeile = 0;
+	for (const FFurnitureInstance& Instance : Furniture)
+	{
+		ErwarteteTeile += WiesbadenStreetFurniture::GetPartCount(Instance.Kind, Instance.Variant);
+	}
+
+	TArray<FFurniturePart> Teile;
+	Teile.Reserve(ErwarteteTeile);
+	for (const FFurnitureInstance& Instance : Furniture)
+	{
+		WiesbadenStreetFurniture::BuildParts(Instance, FurnitureDimensions, Teile);
+	}
+
+	const int32 MaterialCount = static_cast<int32>(EFurnitureMaterialKind::MAX);
+	const int32 GroupCount = static_cast<int32>(EFurnitureMeshKind::MAX) * MaterialCount;
+	TArray<TArray<FTransform>> ProGruppe;
+	ProGruppe.SetNum(GroupCount);
+	for (const FFurniturePart& Teil : Teile)
+	{
+		const int32 Index = static_cast<int32>(Teil.Mesh) * MaterialCount
+			+ static_cast<int32>(Teil.Material);
+		ProGruppe[Index].Add(Teil.Transform);
+	}
+
+	for (int32 Index = 0; Index < GroupCount; ++Index)
+	{
+		if (ProGruppe[Index].Num() == 0)
+		{
+			continue;
+		}
+		const EFurnitureMeshKind Mesh = static_cast<EFurnitureMeshKind>(Index / MaterialCount);
+		const EFurnitureMaterialKind Material =
+			static_cast<EFurnitureMaterialKind>(Index % MaterialCount);
+		UHierarchicalInstancedStaticMeshComponent* Group =
+			GetFurnitureInstances(Mesh, Material, CubeMesh, CylinderMesh);
+		Group->AddInstances(ProGruppe[Index], /*bShouldReturnIndices=*/false, /*bWorldSpace=*/true);
+	}
+
+	LastSpawnedFurnitureCount = Furniture.Num();
+	LastSpawnedFurniturePartCount = Teile.Num();
+
+	// Je Art zaehlen: "3.412 Moebel" sagt nichts darueber, ob die Baenke
+	// fehlen. Die Zeile ist die einzige Stelle, an der ohne Bild auffaellt,
+	// dass eine ganze Kategorie leer geblieben ist.
+	int32 ProArt[static_cast<int32>(EStreetFurnitureKind::MAX)] = {};
+	for (const FFurnitureInstance& Instance : Furniture)
+	{
+		const int32 ArtIndex = static_cast<int32>(Instance.Kind);
+		if (ProArt[ArtIndex] < TNumericLimits<int32>::Max())
+		{
+			++ProArt[ArtIndex];
+		}
+	}
+
+	int32 BelegteGruppen = 0;
+	for (const TArray<FTransform>& Gruppe : ProGruppe)
+	{
+		BelegteGruppen += Gruppe.Num() > 0 ? 1 : 0;
+	}
+
+	UE_LOG(LogWbCore, Log,
+		TEXT("Strassenmoebel gestellt: %d Moebel, %d Teil-Instanzen in %d Zeichengruppen ")
+		TEXT("(Baenke %d, Poller %d, Koerbe %d, Automaten %d, Recycling %d, Hydranten %d, ")
+		TEXT("Briefkaesten %d, Picknick %d), Sichtweite %.0f m."),
+		LastSpawnedFurnitureCount, LastSpawnedFurniturePartCount, BelegteGruppen,
+		ProArt[static_cast<int32>(EStreetFurnitureKind::Bench)],
+		ProArt[static_cast<int32>(EStreetFurnitureKind::Bollard)],
+		ProArt[static_cast<int32>(EStreetFurnitureKind::WasteBasket)],
+		ProArt[static_cast<int32>(EStreetFurnitureKind::VendingMachine)],
+		ProArt[static_cast<int32>(EStreetFurnitureKind::Recycling)],
+		ProArt[static_cast<int32>(EStreetFurnitureKind::FireHydrant)],
+		ProArt[static_cast<int32>(EStreetFurnitureKind::PostBox)],
+		ProArt[static_cast<int32>(EStreetFurnitureKind::PicnicTable)],
+		FurnitureCullDistanceCm / 100.0f);
 }
