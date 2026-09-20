@@ -145,3 +145,39 @@ Bake-Statistik zeigt die tatsächlichen Zahlen beim ersten Lauf.
   sinnvoll ist — entscheidet die Sichten-Abnahme.
 - Recycling-Cluster-Erkennung: Schwelle für „zusammenziehen" (Abstand in m) wird
   bei der Implementierung an der Bake-Statistik kalibriert.
+
+## Umsetzungsnotiz (2026-09-20, Schritt 1 erledigt)
+
+Zwei Annahmen des Specs haben der Wirklichkeit nicht standgehalten:
+
+1. **Der Importer ist nicht `Tools/alkis_extract.mjs`.** Das Skript wandelt
+   ALKIS-XML in OSM-aehnliches JSON fuer die GEBAEUDE. Die Strassenmoebel
+   kommen aus der OSM-Datei, die der C++-Parser (`OSMDataParser`) direkt liest -
+   es gibt kein dazwischenliegendes City-JSON mit einem Top-Level-Array
+   `furniture`. Der Nachzug gehoert darum auf dieselbe Ebene wie der
+   Wald-Nachzug: ein Python-Werkzeug, das die fehlenden Knoten per Overpass
+   holt und in eine KOPIE der OSM-Datei mischt.
+2. **Die Daten waren gar nicht da.** `wiesbaden.osm.forest.json` enthielt zwar
+   Baenke, aber praktisch keine der uebrigen sieben Kategorien (0 post_box,
+   je 1 waste_basket/recycling/vending_machine/picnic_table) - die
+   urspruengliche Overpass-Abfrage in `OSMDataParser.cpp` fragt sie nicht ab.
+   Ohne den Nachzug haette der Bake-Pass ins Leere gegriffen.
+
+**Umgesetzt:** `Tools/fetch_street_furniture.py` (+ Selbsttest
+`Tools/test_street_furniture.py`, 11 Faelle) holt die acht Kategorien im
+Stadtrechteck (~6 km um den Ursprung, dasselbe wie beim Wald) und mischt sie
+nach `Data/Raw/OSM/wiesbaden.osm.moebel.json`. Die Art steht an EINEM Tag
+`wb:furniture`, damit der C++-Pass nicht acht Tag-Kombinationen nachbauen muss.
+Vorhandene Knoten werden ERGAENZT, nicht dupliziert (ein zweiter Eintrag mit
+derselben Id ueberschriebe im Parser den ersten und verbeulte die Ways).
+
+**Gemessen (2026-09-20):** 3.607 Knoten statt der im Spec genannten 4.500 - die
+4.500 gelten fuer das ganze Stadtgebiet (admin_level=6), 3.607 fuer das
+Rechteck, das auch gebacken wird. Verteilung: 1.448 Baenke, 790 Poller, 438
+Abfallkoerbe, 285 Automaten, 220 Recycling, 180 Briefkaesten, 167 Hydranten,
+79 Picknick-Tische. Davon 3.219 neu in der Datei, 388 vorhandene Knoten nur um
+die Tags ergaenzt.
+
+**Naechster Schritt:** Bake-Pass (`RoadFurnitureGenerator`) mit den
+Platzierungsregeln, dann Meshes und ISM-Slots.
+
