@@ -6,7 +6,7 @@ untauglich (die "modellierten Blaetter" stehen als radiale Spikes, keine Krone).
 Material (M_WbPlant, zweiseitig) und LOD-Varianten aendern nur die Farbe, nicht
 die Form.
 
-Die Baeume sind bereits in Alkis4 gebacken und referenzieren das Asset
+Die Baeume sind in der gebackenen Karte gebacken und referenzieren das Asset
 SM_WbTree_07 ueber seinen Pfad. Wir ersetzen dieses Asset durch eine Kopie von
 SM_WbTree_01 (bewaehrter Blendswap-Baum) -> die ~1/7 "Birken"-Instanzen rendern
 sofort als gute Baeume, OHNE Re-Bake.

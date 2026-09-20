@@ -1,4 +1,5 @@
-# Liest die Beleuchtungs-Actors der gebackenen Alkis4-Karte aus (Sonne + SkyLight),
+# Liest die Beleuchtungs-Actors der gebackenen Karte aus (Sonne + SkyLight),
+# Karte aus Tools/karte.py - hier stand Alkis4, die ist geloescht.
 # damit der Vorher-Zustand dokumentiert ist, bevor Sonnenstand/Ambient geaendert
 # werden. Aendert nichts.
 import os
