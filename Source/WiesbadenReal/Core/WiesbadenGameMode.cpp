@@ -35,6 +35,7 @@
 #include "World/WiesbadenNerotalbahn.h"
 #include "World/WiesbadenNerotal48.h"
 #include "World/WiesbadenLandmarks.h"
+#include "World/WiesbadenSebboHq.h"
 #include "Audio/WiesbadenAudioSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "World/WiesbadenBusRoute.h"
@@ -166,6 +167,12 @@ void AWiesbadenGameMode::BeginPlay()
 			ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		LandmarkWorld->SpawnActor<AWiesbadenLandmarks>(
 			AWiesbadenLandmarks::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
+
+		// Sebbo-Hauptsitz an der Galileistrasse: setzt sich wie die Wahrzeichen
+		// selbst an seine Koordinaten und baut, sobald die Zelle gestreamt ist.
+		LandmarkWorld->SpawnActor<AWiesbadenSebboHq>(
+			AWiesbadenSebboHq::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
 
 			// OEPNV: die ESWE-Linien 6 und 3.
