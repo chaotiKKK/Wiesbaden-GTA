@@ -78,3 +78,21 @@ _run_tests_neuerpc.bat
 
 # === Experimentelle Scratch-Karten (__-Praefix, nicht die ausgelieferten Alkis-Karten) ===
 Content/Maps/__*.umap
+
+# === Roh-Quellkunst fuer Importe (gross, nicht aus Code ableitbar, aber auch
+# nicht noetig: die importierten .uassets liegen im Repo bzw. im Release-Paket) ===
+# Ka-52: glb/fbx + Texturen (130 MB), Quelle fuer Tools/import_ka52.cmd.
+Content/Data/Raw/
+
+# === Import-Nebenprodukte ===
+# SK_Sylvia entsteht bei jedem Lauf von Tools/import_sylvia.py neu und ist nur
+# ein Duplikat der 15 echten Teile unter Sylvia/sylvia/SkeletalMeshes.
+Content/Assets/People/Sylvia/SK_Sylvia.uasset
+# Vorgerenderte Halteansagen (SAPI); der Import legt daraus die .uassets an.
+Tools/announce_wav/
+Tools/__pycache__/
+
+# === Werkzeug-Protokolle und Ergebnisdateien (Ausgaben, keine Quellen) ===
+Tools/*_log.txt
+*.result.txt
+*_report.*.json
