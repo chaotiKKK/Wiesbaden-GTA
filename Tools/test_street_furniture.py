@@ -48,7 +48,10 @@ class ArtBestimmungTest(unittest.TestCase):
 
 
 class MoebelKnotenTest(unittest.TestCase):
-    def test_schema_und_zusatztags(self):
+    def test_schema_traegt_nur_die_art(self):
+        # Material, Farbe und Bauart wanderten frueher mit in die 145-MB-Datei,
+        # fuer eine Variantenwahl, die es nicht gibt. Was kein Leser anfasst,
+        # gehoert nicht in die Datei.
         gefiltert, zaehler, verworfen = moebel.moebel_knoten([
             knoten(7, {"amenity": "bench", "material": "wood", "operator": "Stadt"}),
         ])
@@ -56,7 +59,7 @@ class MoebelKnotenTest(unittest.TestCase):
         self.assertEqual(zaehler, {"bench": 1})
         self.assertEqual(gefiltert[0], {
             "type": "node", "id": 7, "lat": 50.08, "lon": 8.24,
-            "tags": {moebel.ART_TAG: "bench", "amenity": "bench", "material": "wood"},
+            "tags": {moebel.ART_TAG: "bench", "amenity": "bench"},
         })
 
     def test_unbekannte_arten_werden_verworfen_und_gezaehlt(self):

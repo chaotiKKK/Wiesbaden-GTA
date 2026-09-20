@@ -50,14 +50,6 @@ KATEGORIEN = (
     ("picnic_table",    "leisure",   "picnic_table"),
 )
 
-# Zusatz-Tags fuer die spaetere Variantenwahl (Material/Farbe/Bauart). Alles
-# andere wird verworfen: die Datei ist 144 MB gross, jedes ueberfluessige Tag
-# kostet Parse-Zeit im Bake.
-ZUSATZ_TAGS = (
-    "material", "colour", "backrest", "recycling_type", "fire_hydrant:type",
-    "vending", "bollard", "covered", "seats",
-)
-
 # Unter diesem Schluessel steht die Art im Ergebnis - EINE Stelle, die der
 # C++-Pass auswerten muss, statt acht Tag-Kombinationen nachzubauen.
 ART_TAG = "wb:furniture"
@@ -93,14 +85,13 @@ def moebel_knoten(elemente):
             verworfen += 1
             continue
         # Das artgebende Tag bleibt zusaetzlich im Original stehen, damit die
-        # Datei auch ohne dieses Skript lesbar bleibt.
+        # Datei auch ohne dieses Skript lesbar bleibt. Sonst NICHTS: Material,
+        # Farbe und Bauart waren fuer eine spaetere Variantenwahl gedacht, die
+        # es nicht gibt - neun Tags an 3.607 Knoten, die kein Leser anfasst.
         tags = {ART_TAG: art}
         for _, schluessel, wert in KATEGORIEN:
             if quelle.get(schluessel) == wert:
                 tags[schluessel] = wert
-        for schluessel in ZUSATZ_TAGS:
-            if schluessel in quelle:
-                tags[schluessel] = quelle[schluessel]
         knoten[int(el["id"])] = {
             "type": "node",
             "id": int(el["id"]),

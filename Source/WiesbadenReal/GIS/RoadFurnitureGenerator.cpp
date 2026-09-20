@@ -100,29 +100,68 @@ namespace
 	};
 
 	/**
-	 * Rohe OSM-Tags als Rueckfall.
+	 * Zellgitter ueber die Stadtflaeche (50-m-Zellen).
 	 *
-	 * Wird eine OSM-Datei OHNE den Nachzug gebacken, fehlt `wb:furniture`.
-	 * Die paar Knoten, die das Original schon enthaelt, sollen trotzdem
-	 * ankommen - sonst haengt das Ergebnis eines Bakes still davon ab, welche
-	 * Datei jemand gerade gesetzt hat.
+	 * Der Moebel-Pass stellt zwei Umkreisfragen - "welcher Weg liegt am
+	 * naechsten" und "steckt der Punkt in einem Gebaeude" -, und beide
+	 * brauchen dieselbe Buchhaltung: Zelle zu einem Punkt, Eintrag in alle
+	 * Zellen eines Kastens, Deckel gegen entartete Kaesten. Die steht deshalb
+	 * EINMAL hier, statt in jedem der beiden Indizes noch einmal.
+	 *
+	 * Warum nicht FWiesbadenRoadClearance: das beantwortet ausschliesslich
+	 * "blockiert ja/nein" (Build/BuildAround/IsBlocked) und kennt weder
+	 * Abstand noch Breite noch Laengsrichtung - und es kennt ueberhaupt nur
+	 * Strassen, keine Gebaeude. Es wird ausserdem von Regionen-Streuung,
+	 * WorldBuilder und GameMode benutzt; es fuer diesen Pass umzubauen hiesse,
+	 * den Baum-Streuer mit anzufassen.
 	 */
-	struct FFurnitureRawTag
+	struct FCellGrid
 	{
-		const TCHAR* Key;
-		const TCHAR* Value;
-		EStreetFurnitureKind Kind;
-	};
+		static constexpr double CellSizeCm = 5000.0;
 
-	const FFurnitureRawTag FurnitureRawTags[] = {
-		{ TEXT("amenity"),   TEXT("bench"),           EStreetFurnitureKind::Bench },
-		{ TEXT("barrier"),   TEXT("bollard"),         EStreetFurnitureKind::Bollard },
-		{ TEXT("amenity"),   TEXT("waste_basket"),    EStreetFurnitureKind::WasteBasket },
-		{ TEXT("amenity"),   TEXT("vending_machine"), EStreetFurnitureKind::VendingMachine },
-		{ TEXT("amenity"),   TEXT("recycling"),       EStreetFurnitureKind::Recycling },
-		{ TEXT("emergency"), TEXT("fire_hydrant"),    EStreetFurnitureKind::FireHydrant },
-		{ TEXT("amenity"),   TEXT("post_box"),        EStreetFurnitureKind::PostBox },
-		{ TEXT("leisure"),   TEXT("picnic_table"),    EStreetFurnitureKind::PicnicTable },
+		/**
+		 * Deckel gegen entartete Kaesten: 400 Zellen sind 20 x 20 bei 50 m
+		 * Kantenlaenge, also ein Quadratkilometer. Ein einzelnes Segment oder
+		 * Gebaeude mit unsinnigen Koordinaten - und die kommen in OSM-Daten
+		 * vor - trueg sich sonst in Millionen Zellen ein.
+		 */
+		static constexpr int64 MaxCellsPerEntry = 400;
+
+		TMap<FIntPoint, TArray<int32>> Cells;
+
+		static FIntPoint CellOf(const FVector2D& Point)
+		{
+			return FIntPoint(
+				FMath::FloorToInt(Point.X / CellSizeCm),
+				FMath::FloorToInt(Point.Y / CellSizeCm));
+		}
+
+		/** Traegt Index in alle Zellen des Kastens ein. False = verworfen. */
+		bool Insert(const FVector2D& Min, const FVector2D& Max, int32 Index)
+		{
+			const FIntPoint MinCell = CellOf(Min);
+			const FIntPoint MaxCell = CellOf(Max);
+			const int64 Wide = static_cast<int64>(MaxCell.X - MinCell.X) + 1;
+			const int64 High = static_cast<int64>(MaxCell.Y - MinCell.Y) + 1;
+			if (Wide * High > MaxCellsPerEntry)
+			{
+				return false;
+			}
+
+			for (int32 Cx = MinCell.X; Cx <= MaxCell.X; ++Cx)
+			{
+				for (int32 Cy = MinCell.Y; Cy <= MaxCell.Y; ++Cy)
+				{
+					Cells.FindOrAdd(FIntPoint(Cx, Cy)).Add(Index);
+				}
+			}
+			return true;
+		}
+
+		const TArray<int32>* Find(const FIntPoint& Cell) const
+		{
+			return Cells.Find(Cell);
+		}
 	};
 
 	/** Was der Moebel-Pass ueber den naechsten Weg wissen muss. */
@@ -153,7 +192,6 @@ namespace
 	 */
 	struct FNearestWayIndex
 	{
-		static constexpr double CellSizeCm = 5000.0;
 		/** Ueber 200 m von jedem Weg entfernt ist kein Strassenrand mehr. */
 		static constexpr int32 MaxRings = 4;
 
@@ -166,12 +204,7 @@ namespace
 		};
 
 		TArray<FSpan> Spans;
-		TMap<FIntPoint, TArray<int32>> Cells;
-
-		static FIntPoint CellOf(const FVector2D& P)
-		{
-			return FIntPoint(FMath::FloorToInt(P.X / CellSizeCm), FMath::FloorToInt(P.Y / CellSizeCm));
-		}
+		FCellGrid Grid;
 
 		void Build(const FRoadNetwork& Network)
 		{
@@ -194,27 +227,13 @@ namespace
 					Span.SidewalkWidthCm = FMath::Max(0.0, Segment.SidewalkWidthCm);
 
 					const int32 Index = Spans.Add(Span);
-					const FIntPoint MinCell = CellOf(FVector2D(
-						FMath::Min(Span.Start.X, Span.End.X), FMath::Min(Span.Start.Y, Span.End.Y)));
-					const FIntPoint MaxCell = CellOf(FVector2D(
-						FMath::Max(Span.Start.X, Span.End.X), FMath::Max(Span.Start.Y, Span.End.Y)));
-
-					// Deckel wie im Fahrbahn-Index: ein entartetes Segment darf
-					// nicht Millionen Zellen fuellen.
-					const int64 Wide = static_cast<int64>(MaxCell.X - MinCell.X) + 1;
-					const int64 High = static_cast<int64>(MaxCell.Y - MinCell.Y) + 1;
-					if (Wide * High > 400)
+					const FVector2D Min(
+						FMath::Min(Span.Start.X, Span.End.X), FMath::Min(Span.Start.Y, Span.End.Y));
+					const FVector2D Max(
+						FMath::Max(Span.Start.X, Span.End.X), FMath::Max(Span.Start.Y, Span.End.Y));
+					if (!Grid.Insert(Min, Max, Index))
 					{
 						Spans.Pop();
-						continue;
-					}
-
-					for (int32 Cx = MinCell.X; Cx <= MaxCell.X; ++Cx)
-					{
-						for (int32 Cy = MinCell.Y; Cy <= MaxCell.Y; ++Cy)
-						{
-							Cells.FindOrAdd(FIntPoint(Cx, Cy)).Add(Index);
-						}
 					}
 				}
 			}
@@ -222,7 +241,7 @@ namespace
 
 		bool Find(const FVector2D& Point, FNearestWay& OutWay) const
 		{
-			const FIntPoint Center = CellOf(Point);
+			const FIntPoint Center = FCellGrid::CellOf(Point);
 			int32 BestIndex = INDEX_NONE;
 			double BestDistSq = TNumericLimits<double>::Max();
 			FVector2D BestFoot = FVector2D::ZeroVector;
@@ -233,7 +252,7 @@ namespace
 				// liefern? Dann ist die Antwort sicher.
 				if (BestIndex != INDEX_NONE)
 				{
-					const double RingReach = (Ring - 1) * CellSizeCm;
+					const double RingReach = (Ring - 1) * FCellGrid::CellSizeCm;
 					if (RingReach > 0.0 && RingReach * RingReach >= BestDistSq)
 					{
 						break;
@@ -253,7 +272,7 @@ namespace
 							continue;
 						}
 
-						const TArray<int32>* Indices = Cells.Find(FIntPoint(Cx, Cy));
+						const TArray<int32>* Indices = Grid.Find(FIntPoint(Cx, Cy));
 						if (!Indices)
 						{
 							continue;
@@ -335,15 +354,8 @@ namespace
 	 */
 	struct FBuildingFootprintGrid
 	{
-		static constexpr double CellSizeCm = 5000.0;
-
-		TMap<FIntPoint, TArray<int32>> Cells;
+		FCellGrid Grid;
 		const TArray<FGeneratedBuilding>* Buildings = nullptr;
-
-		static FIntPoint CellOf(const FVector2D& P)
-		{
-			return FIntPoint(FMath::FloorToInt(P.X / CellSizeCm), FMath::FloorToInt(P.Y / CellSizeCm));
-		}
 
 		void Build(const TArray<FGeneratedBuilding>& InBuildings)
 		{
@@ -358,26 +370,9 @@ namespace
 				}
 
 				// Umkreis der gedrehten Box - drehungsunabhaengig und billig.
-				const double Radius = Extent.Size();
-				const FIntPoint MinCell = CellOf(Building.FootprintCenterCm - FVector2D(Radius, Radius));
-				const FIntPoint MaxCell = CellOf(Building.FootprintCenterCm + FVector2D(Radius, Radius));
-
-				// Deckel wie beim Fahrbahn-Index: ein entartetes Gebaeude darf
-				// nicht Millionen Zellen fuellen.
-				const int64 Wide = static_cast<int64>(MaxCell.X - MinCell.X) + 1;
-				const int64 High = static_cast<int64>(MaxCell.Y - MinCell.Y) + 1;
-				if (Wide * High > 400)
-				{
-					continue;
-				}
-
-				for (int32 Cx = MinCell.X; Cx <= MaxCell.X; ++Cx)
-				{
-					for (int32 Cy = MinCell.Y; Cy <= MaxCell.Y; ++Cy)
-					{
-						Cells.FindOrAdd(FIntPoint(Cx, Cy)).Add(Index);
-					}
-				}
+				const FVector2D Radius(Extent.Size(), Extent.Size());
+				Grid.Insert(Building.FootprintCenterCm - Radius,
+					Building.FootprintCenterCm + Radius, Index);
 			}
 		}
 
@@ -387,7 +382,7 @@ namespace
 			{
 				return false;
 			}
-			if (const TArray<int32>* Indices = Cells.Find(CellOf(Point)))
+			if (const TArray<int32>* Indices = Grid.Find(FCellGrid::CellOf(Point)))
 			{
 				for (const int32 Index : *Indices)
 				{
@@ -1224,19 +1219,17 @@ void URoadFurnitureGenerator::SynthesiseStreetLamps(
 
 int32 URoadFurnitureGenerator::GetFurnitureVariantCount(EStreetFurnitureKind Kind)
 {
-	// Die Variantenzahlen des Specs. Eine Kategorie mit einer Variante ist
-	// kein Mangel: ein Briefkasten sieht in ganz Wiesbaden gleich aus.
+	// Genau die Varianten, die der Renderer auch BAUT (StreetFurnitureShapes):
+	// die Bank mit und ohne Lehne, der Poller mit und ohne Reflektorring. Das
+	// Spec nennt mehr - Glas/Papier/Textil beim Recycling etwa -, aber solange
+	// die Formen sie nicht unterscheiden, waere eine groessere Zahl hier ein
+	// Versprechen auf Vielfalt, das niemand einloest: die Instanzen truegen
+	// eine Variantennummer, und jede saehe gleich aus.
 	switch (Kind)
 	{
-	case EStreetFurnitureKind::Bench:          return 2;   // mit/ohne Armlehne
-	case EStreetFurnitureKind::Bollard:        return 2;
-	case EStreetFurnitureKind::WasteBasket:    return 2;
-	case EStreetFurnitureKind::VendingMachine: return 2;
-	case EStreetFurnitureKind::Recycling:      return 3;   // Glas/Papier/Textil
-	case EStreetFurnitureKind::FireHydrant:    return 2;
-	case EStreetFurnitureKind::PostBox:        return 1;
-	case EStreetFurnitureKind::PicnicTable:    return 1;
-	default:                                   return 1;
+	case EStreetFurnitureKind::Bench:   return 2;   // mit/ohne Lehne
+	case EStreetFurnitureKind::Bollard: return 2;   // mit/ohne Reflektorring
+	default:                            return 1;
 	}
 }
 
@@ -1275,23 +1268,15 @@ void URoadFurnitureGenerator::PlaceStreetFurniture(
 	TMap<FOSMId, EStreetFurnitureKind> KindByNode;
 	for (const TPair<FOSMId, FOSMNode>& Pair : DataSet->Nodes)
 	{
+		// Nur das Tag des Nachzugs. Die rohen OSM-Tags (amenity=bench und so
+		// fort) werden bewusst NICHT mehr ausgewertet: die Quelldatei ohne
+		// Nachzug traegt sie fast nirgends (kein einziger Briefkasten, je ein
+		// Korb/Recycling/Automat/Picknicktisch), und ein Zehntel Bestand aus
+		// der falschen Datei waere schlimmer als gar keiner - letzterer faellt
+		// wenigstens auf.
 		EStreetFurnitureKind Kind = EStreetFurnitureKind::Bench;
 		const FString KindTag = Pair.Value.GetTag(FurnitureKindTagName);
-		bool bFound = !KindTag.IsEmpty() && TryParseFurnitureKind(KindTag, Kind);
-		if (!bFound)
-		{
-			for (const FFurnitureRawTag& Raw : FurnitureRawTags)
-			{
-				if (Pair.Value.HasTagValue(Raw.Key, Raw.Value))
-				{
-					Kind = Raw.Kind;
-					bFound = true;
-					break;
-				}
-			}
-		}
-
-		if (bFound)
+		if (!KindTag.IsEmpty() && TryParseFurnitureKind(KindTag, Kind))
 		{
 			NodeIds.Add(Pair.Key);
 			KindByNode.Add(Pair.Key, Kind);
@@ -1300,6 +1285,12 @@ void URoadFurnitureGenerator::PlaceStreetFurniture(
 
 	if (NodeIds.Num() == 0)
 	{
+		// Ohne diese Zeile bliebe ein Bake auf der Datei OHNE Nachzug still:
+		// keine Moebel, kein Hinweis - und ein fehlender Abfallkorb faellt im
+		// Spiel niemandem auf.
+		UE_LOG(LogWbRoads, Warning,
+			TEXT("Strassenmoebel: kein Knoten traegt wb:furniture - wurde ohne den ")
+			TEXT("Nachzug gebacken? (Tools/fetch_street_furniture.py)"));
 		return;
 	}
 	NodeIds.Sort();

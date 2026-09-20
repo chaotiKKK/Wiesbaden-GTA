@@ -202,7 +202,14 @@ bool FStreetFurniturePlacementTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	// --- Der Rueckfall auf die rohen OSM-Tags (Datei ohne Nachzug) ---
+	// --- Ohne wb:furniture wird NICHTS uebernommen ---------------------------
+	//
+	// Die rohen OSM-Tags wurden frueher als Rueckfall ausgewertet. Das half
+	// niemandem: die Quelldatei ohne Nachzug traegt zwar Baenke, aber keinen
+	// einzigen Briefkasten und je einen Korb, Automaten und Picknicktisch. Ein
+	// Zehntel Bestand aus der falschen Datei sieht im Spiel aus wie ein
+	// Platzierungsfehler; gar kein Bestand faellt auf und steht als Warnung im
+	// Log.
 	{
 		FOSMDataSet RawSet;
 		const FGeoCoordinate Geo = Converter->UnrealToGeo(FVector(0.0, 450.0, 0.0));
@@ -212,11 +219,8 @@ bool FStreetFurniturePlacementTest::RunTest(const FString& Parameters)
 
 		FRoadFurnitureLayout RawLayout;
 		Generator->Generate(Network, &RawSet, Converter, &Sampler, Settings, RawLayout, nullptr);
-		TestEqual(TEXT("Auch ohne wb:furniture kommt die Bank an"), RawLayout.Furniture.Num(), 1);
-		if (RawLayout.Furniture.Num() == 1)
-		{
-			TestEqual(TEXT("... als Bank"), RawLayout.Furniture[0].Kind, EStreetFurnitureKind::Bench);
-		}
+		TestEqual(TEXT("Ein roher amenity=bench-Knoten wird nicht uebernommen"),
+			RawLayout.Furniture.Num(), 0);
 	}
 
 	// --- Der Waechter der Aufrufstelle kennt JEDEN Kanal --------------------
