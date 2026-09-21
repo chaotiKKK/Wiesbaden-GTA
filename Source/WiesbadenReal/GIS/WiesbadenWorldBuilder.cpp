@@ -182,9 +182,12 @@ namespace
 		Pad.RoadAnchorCm = FVector2D(
 			Access.GarageEntranceWorldCm.X, Access.GarageEntranceWorldCm.Y);
 		Pad.RoadSearchRadiusCm = Access.SearchRadiusCm;
-		// Oberkante des privaten Bodens ueber dem Fusspunkt, wie in
-		// SebboHq::BuildArrivalFacilities: Deckenstaerke plus Belag.
-		Pad.AccessFloorCm = Dimensions.SlabCm + 15.0;
+		// Oberkante des privaten Bodens ueber dem Plateau - EIN Eigentuemer.
+		// Hier stand dieselbe Rechnung ein zweites Mal; der Turm liest sie
+		// laengst aus GetAccessFloorCm, und zwei Kopien derselben Beziehung
+		// sind genau die Bauart, an der dieses Grundstueck schon einmal
+		// auseinandergelaufen ist.
+		Pad.AccessFloorCm = SebboHq::GetAccessFloorCm(Dimensions);
 
 		Settings.SitePads.Add(Pad);
 	}
