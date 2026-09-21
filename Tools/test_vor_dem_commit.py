@@ -259,6 +259,129 @@ class StufenZuordnungTest(unittest.TestCase):
         self.assertNotIn("unittest", text)
 
 
+class PushBereichTest(unittest.TestCase):
+    """Die Push-Stufe muss den COMMIT-BEREICH beurteilen, nicht den Baum.
+
+    Der Defekt war fail-open und still: pre-push ruft den Laeufer ohne
+    Dateiliste, `git diff HEAD` ist nach einem Commit leer, also hielt
+    braucht_compiler([]) Gate 1 fuer ueberfluessig. Gemessen lagen in dem
+    Moment 20 C++-Dateien im Push-Bereich und null im Baum - das
+    Kompilier-Gate feuerte nie fuer den Code, der hinausging.
+
+    Geprueft wird gegen ein echtes Wegwerf-Repo MIT Upstream. Eine
+    Nachbildung wuerde genau die Verdrahtung uebersehen, an der es lag.
+    """
+
+    def setUp(self):
+        self.basis = Path(tempfile.mkdtemp(prefix="wb_push_"))
+        self.addCleanup(shutil.rmtree, self.basis, ignore_errors=True)
+        self.fern = self.basis / "fern.git"
+        self.repo = self.basis / "arbeit"
+        subprocess.run(["git", "init", "-q", "--bare", str(self.fern)],
+                       capture_output=True, env=vdc.saubere_umgebung())
+        self.repo.mkdir()
+        self.git("init", "-q", "-b", "haupt", ".")
+        self.git("config", "user.email", "t@t")
+        self.git("config", "user.name", "T")
+
+    def git(self, *args):
+        # OHNE GIT_* - sonst schreibt ein Wegwerf-Repo in den Index des
+        # laufenden Commits (gemessen am 21.09.2026).
+        return subprocess.run(["git", *args], cwd=self.repo,
+                              capture_output=True, text=True,
+                              env=vdc.saubere_umgebung())
+
+    def commit(self, pfad, inhalt="x"):
+        ziel = self.repo / pfad
+        ziel.parent.mkdir(parents=True, exist_ok=True)
+        ziel.write_text(inhalt, encoding="utf-8")
+        self.git("add", str(pfad))
+        self.git("commit", "-q", "--no-verify", "-m", "add %s" % pfad)
+
+    def mit_upstream(self):
+        self.git("remote", "add", "origin", str(self.fern))
+        self.git("push", "-q", "--no-verify", "-u", "origin", "haupt")
+
+    def test_der_bereich_sieht_den_commit_den_der_baum_nicht_zeigt(self):
+        """Der Kern: sauberer Baum, C++ im Bereich - Gate 1 muss feuern."""
+        self.commit("Tools/x.py")
+        self.mit_upstream()
+        self.commit("Source/Neu.cpp")
+
+        self.assertEqual(self.git("status", "--porcelain").stdout.strip(), "",
+                         "der Baum muss sauber sein, sonst misst der Test nichts")
+
+        bereich = vdc.zu_pushende_dateien(cwd=self.repo)
+        self.assertIn("Source/Neu.cpp", bereich)
+        self.assertTrue(vdc.braucht_compiler(bereich),
+                        "Gate 1 wuerde beim Push nicht feuern")
+
+        # GEGENPROBE gegen den kaputten Stand: genau das sah die alte Quelle.
+        baum = subprocess.run(["git", "diff", "HEAD", "--name-only"],
+                              cwd=self.repo, capture_output=True, text=True,
+                              env=vdc.saubere_umgebung()).stdout.split()
+        self.assertEqual(baum, [], "der Arbeitsbaum ist leer - genau das war das Problem")
+        self.assertFalse(vdc.braucht_compiler(baum),
+                         "der alte Weg haette Gate 1 uebersprungen")
+
+    def test_ohne_upstream_wird_nichts_uebersprungen(self):
+        """Unbestimmbarer Bereich darf nicht in Schweigen kippen."""
+        self.commit("Source/Neu.cpp")
+        self.assertIsNone(vdc.zu_pushende_dateien(cwd=self.repo))
+        self.assertTrue(vdc.braucht_compiler(None),
+                        "ohne Upstream muss im Zweifel kompiliert werden")
+
+    def test_nichts_zu_pushen_ergibt_einen_leeren_bereich(self):
+        """Ist alles schon draussen, gibt es auch nichts zu kompilieren."""
+        self.commit("Source/Neu.cpp")
+        self.mit_upstream()
+        self.assertEqual(vdc.zu_pushende_dateien(cwd=self.repo), [])
+
+    def test_nur_werkzeuge_im_bereich_kosten_keinen_compiler(self):
+        self.commit("Tools/x.py")
+        self.mit_upstream()
+        self.commit("Tools/y.py")
+        bereich = vdc.zu_pushende_dateien(cwd=self.repo)
+        self.assertEqual(bereich, ["Tools/y.py"])
+        self.assertFalse(vdc.braucht_compiler(bereich))
+
+
+class QuellenwahlTest(unittest.TestCase):
+    """WELCHE Quelle die Stufe benutzt - die Verdrahtung, an der es lag.
+
+    Die Funktionen einzeln zu pruefen genuegt nicht: der Defekt sass darin,
+    dass die volle Stufe die FALSCHE der drei Quellen fragte.
+    """
+
+    def wahl(self, argv):
+        gerufen = []
+        alt = (vdc.zu_pushende_dateien, vdc.geaenderte_dateien,
+               vdc.gestagte_dateien, vdc.gates_fahren)
+        vdc.zu_pushende_dateien = lambda *a, **k: (gerufen.append("push"), ["Source/X.cpp"])[1]
+        vdc.geaenderte_dateien = lambda *a, **k: (gerufen.append("baum"), [])[1]
+        vdc.gestagte_dateien = lambda *a, **k: (gerufen.append("index"), ["Tools/x.py"])[1]
+        vdc.gates_fahren = lambda stufe, dateien: 0
+        try:
+            vdc.hauptprogramm(argv)
+        finally:
+            (vdc.zu_pushende_dateien, vdc.geaenderte_dateien,
+             vdc.gestagte_dateien, vdc.gates_fahren) = alt
+        return gerufen
+
+    def test_voll_fragt_den_push_bereich(self):
+        gerufen = self.wahl(["--stufe", "voll"])
+        self.assertEqual(gerufen, ["push"],
+                         "die Push-Stufe fragt nicht den Commit-Bereich")
+        self.assertNotIn("baum", gerufen,
+                         "die Push-Stufe fragt wieder den Arbeitsbaum")
+
+    def test_der_hook_modus_fragt_den_index(self):
+        self.assertEqual(self.wahl(["--gestaged"]), ["index"])
+
+    def test_von_hand_ohne_stufe_bleibt_der_baum(self):
+        self.assertEqual(self.wahl([]), ["baum"])
+
+
 class EchterHookTest(unittest.TestCase):
     """Der Kern: haelt der Hook einen roten Commit WIRKLICH auf?
 

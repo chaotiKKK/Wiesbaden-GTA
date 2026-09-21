@@ -92,7 +92,47 @@ def geaenderte_dateien():
             for t in roh.stdout.split(b"\0") if t]
 
 
+def zu_pushende_dateien(cwd=WURZEL):
+    """Die Dateien des Commit-Bereichs, der wirklich hinausgeht.
+
+    GEMESSEN am 21.09.2026, und es war ein stiller Ausfall: die volle Stufe
+    fragte `git diff HEAD` - also den ARBEITSBAUM. Nach einem Commit ist der
+    leer, `braucht_compiler([])` war damit falsch, und Gate 1 wurde beim Push
+    UEBERSPRUNGEN. Auf diesem Zweig lagen in dem Moment 20 C++-Dateien im
+    Push-Bereich und null im Baum: das Kompilier-Gate feuerte nie fuer den
+    Code, der tatsaechlich hinausging.
+
+    Richtig ist der Bereich gegen den Upstream. DREI Punkte (`@{u}...HEAD`),
+    nicht zwei: gemessen wird ab dem Merge-Base, also genau das, was dieser
+    Zweig hinzufuegt - nicht zusaetzlich das, was der Upstream inzwischen
+    selbst bekommen hat.
+
+    Rueckgabe None = Bereich NICHT bestimmbar (kein Upstream, kaputtes Repo).
+    Dann darf nichts uebersprungen werden; siehe braucht_compiler.
+    """
+    zeiger = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        cwd=cwd, capture_output=True, text=True, env=saubere_umgebung())
+    if zeiger.returncode != 0 or not zeiger.stdout.strip():
+        return None
+
+    roh = subprocess.run(
+        ["git", "diff", "--name-only", "-z", "%s...HEAD" % zeiger.stdout.strip()],
+        cwd=cwd, capture_output=True, env=saubere_umgebung())
+    if roh.returncode != 0:
+        return None
+    return [t.decode("utf-8", "surrogateescape")
+            for t in roh.stdout.split(b"\0") if t]
+
+
 def braucht_compiler(dateien):
+    """None = unbestimmbarer Bereich -> im Zweifel kompilieren.
+
+    Die Richtung ist Absicht. Ein ueberfluessiger Compilerlauf kostet
+    Minuten; ein ausgelassener laesst ungebauten Code hinaus.
+    """
+    if dateien is None:
+        return True
     return any(d.lower().endswith(CPP_ENDUNGEN) for d in dateien)
 
 
@@ -208,10 +248,25 @@ def hauptprogramm(argv=None):
         print("WB_KEINE_GATES=1 - Gates uebersprungen.")
         return 0
 
-    dateien = gestagte_dateien() if a.gestaged else geaenderte_dateien()
-    if a.gestaged and not dateien:
-        print("Nichts vorgemerkt - nichts zu pruefen.")
-        return 0
+    # WELCHE Dateien beurteilt werden, haengt an der Stufe - nicht am Zufall
+    # des Arbeitsbaums.
+    #
+    # Die volle Stufe ist die PUSH-Stufe: dort geht ein Commit-BEREICH hinaus,
+    # und der Baum ist in dem Moment typischerweise sauber. Ihn zu fragen
+    # hiess, nichts zu finden und Gate 1 zu ueberspringen - gemessen mit 20
+    # C++-Dateien im Bereich und null im Baum.
+    if a.stufe == "voll":
+        dateien = zu_pushende_dateien()
+        if dateien is None:
+            print("Kein Upstream - der Push-Bereich ist unbestimmbar, "
+                  "es wird nichts uebersprungen.")
+    elif a.gestaged:
+        dateien = gestagte_dateien()
+        if not dateien:
+            print("Nichts vorgemerkt - nichts zu pruefen.")
+            return 0
+    else:
+        dateien = geaenderte_dateien()
 
     rot = gates_fahren(a.stufe, dateien)
     if rot:
