@@ -42,6 +42,9 @@ from engine import KANONISCH, pruefen  # noqa: E402
 
 WURZEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Plausibilitaets-Untergrenze fuer die Dateiliste (siehe verfolgte_dateien).
+MINDESTENS_DATEIEN = 100
+
 # Dateien, die ABSICHTLICH beide Engines nennen. Jede braucht einen Grund -
 # eine Ausnahmeliste ohne Begruendung waechst, bis sie nichts mehr prueft.
 AUSNAHMEN = {
@@ -122,7 +125,7 @@ def _norm(pfad):
     return p.rstrip("/").lower()
 
 
-def verfolgte_dateien():
+def verfolgte_dateien(zusaetzlich=None):
     """Verfolgte UND vorgemerkte Dateien.
 
     `git ls-files` allein sieht nur, was schon versioniert ist. Eine NEUE
@@ -132,8 +135,37 @@ def verfolgte_dateien():
     pruefen, was gleich hineinwandert.
     """
     namen = []
-    for args in (["ls-files", "-z"], ["diff", "--cached", "--name-only", "-z"]):
+
+    # VORGEMERKTE DATEIEN KOENNEN UEBERGEBEN WERDEN.
+    #
+    # Der Aufrufer weiss es oft besser als ein eigener git-Aufruf: laeuft
+    # dieser Waechter aus einem pre-commit-Hook, committet git gerade einen
+    # TEMPORAEREN Index (`git commit --only` legt einen an). Wer ihn sehen
+    # will, braucht GIT_INDEX_FILE - und genau das darf hier nicht geerbt
+    # werden, weil ein Unterprozess sonst in den laufenden Commit schreibt.
+    #
+    # Aufloesung: der Hook-Laeufer liest die Liste MIT der Umgebung und
+    # reicht sie hier ALS ARGUMENT herein. Die Abdichtung bleibt, die Liste
+    # stimmt trotzdem.
+    abfragen = [["ls-files", "-z"]]
+    if zusaetzlich is None:
+        abfragen.append(["diff", "--cached", "--name-only", "-z"])
+    else:
+        namen += list(zusaetzlich)
+
+    for args in abfragen:
         roh = subprocess.run(["git", *args], cwd=WURZEL, capture_output=True)
+        if roh.returncode != 0:
+            # NICHT still weitermachen. Schlaegt git fehl (nicht im PATH,
+            # kein Repo, exportierter Baum), waere die Dateiliste leer - und
+            # der Waechter meldete "alle Werkzeuge zeigen auf dieselbe
+            # Engine", weil er keine einzige angesehen hat. Genau davor
+            # warnt der Kopf dieser Datei dreimal; die Warnung galt bisher
+            # fuer das Muster, nicht fuer die Beschaffung.
+            raise RuntimeError(
+                "git %s fehlgeschlagen (Exit %d): %s"
+                % (" ".join(args), roh.returncode,
+                   roh.stderr.decode("utf-8", "replace").strip()[:200]))
         namen += [t.decode("utf-8", "surrogateescape")
                   for t in roh.stdout.split(bytes([0])) if t]
     # Reihenfolge stabil halten, Doppelte entfernen.
@@ -142,14 +174,23 @@ def verfolgte_dateien():
         if n not in gesehen:
             gesehen.add(n)
             eindeutig.append(n)
+
+    # UNTERGRENZE. Dieses Repo hat ueber 1500 verfolgte Dateien. Eine
+    # zweistellige Liste ist kein kleines Repo, sondern ein kaputter Aufruf -
+    # und ein Waechter, der zu wenig sieht, meldet trotzdem gruen.
+    if len(eindeutig) < MINDESTENS_DATEIEN:
+        raise RuntimeError(
+            "nur %d verfolgte Dateien gefunden (erwartet mindestens %d) - "
+            "der Aufruf stimmt nicht, nicht das Repo."
+            % (len(eindeutig), MINDESTENS_DATEIEN))
     return eindeutig
 
 
-def fundstellen(dateien=None):
+def fundstellen(dateien=None, zusaetzlich=None):
     """[(datei, zeilennr, gefundener_pfad, ist_abweichler)] ueber alle Dateien."""
     kanon = _norm(KANONISCH)
     treffer = []
-    for rel in (dateien if dateien is not None else verfolgte_dateien()):
+    for rel in (dateien if dateien is not None else verfolgte_dateien(zusaetzlich)):
         voll = os.path.join(WURZEL, rel)
         try:
             with open(voll, "rb") as f:
@@ -171,15 +212,17 @@ def fundstellen(dateien=None):
     return treffer
 
 
-def abweichler(dateien=None):
+def abweichler(dateien=None, zusaetzlich=None):
     """Nur die Abweichler, ohne die begruendeten Ausnahmen."""
-    return [t for t in fundstellen(dateien)
+    return [t for t in fundstellen(dateien, zusaetzlich)
             if t[3] and t[0] not in AUSNAHMEN]
 
 
 def hauptprogramm(argv=None):
     p = argparse.ArgumentParser(description="Engine-Pfade im Repo pruefen.")
     p.add_argument("--liste", action="store_true", help="jede Fundstelle zeigen")
+    p.add_argument("--dateien", nargs="*", metavar="PFAD",
+                   help="vorgemerkte Dateien vom Aufrufer, statt git zu fragen")
     a = p.parse_args(argv)
 
     ok, meldung = pruefen()
@@ -187,7 +230,7 @@ def hauptprogramm(argv=None):
     if not ok:
         return 1
 
-    alle = fundstellen()
+    alle = fundstellen(zusaetzlich=a.dateien)
     schlimm = [t for t in alle if t[3] and t[0] not in AUSNAHMEN]
 
     if a.liste:

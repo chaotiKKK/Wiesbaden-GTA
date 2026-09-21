@@ -18,6 +18,7 @@ bekannte Abweichung, und laesst er das Richtige in Ruhe.
 """
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -26,6 +27,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import engine            # noqa: E402
 import pruefe_engine as pe   # noqa: E402
+
+
+def _ohne_git():
+    """Wegwerf-Repos duerfen NICHT in einen geerbten Index schreiben."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 
 
 class MusterTest(unittest.TestCase):
@@ -140,6 +146,51 @@ class AbweichlerTest(unittest.TestCase):
                       '"C:/freebuff/WiesbadenReal_Sicherung/UE_5.8/Engine/x" y\n')
         treffer = pe.abweichler(["mehr.cmd"])
         self.assertEqual(treffer[0][1], 3)
+
+
+class UebergebeneDateienTest(unittest.TestCase):
+    """Der Waechter muss eine UEBERGEBENE Liste wirklich pruefen.
+
+    Sonst nuetzt das Durchreichen aus dem Hook nichts: er bekaeme die
+    vorgemerkten Dateien und saehe trotzdem nur die verfolgten.
+    """
+
+    def setUp(self):
+        self.wurzel = Path(tempfile.mkdtemp(prefix="wb_uebergeben_"))
+        self.addCleanup(shutil.rmtree, self.wurzel, ignore_errors=True)
+        self._alt = pe.WURZEL
+        pe.WURZEL = str(self.wurzel)
+        self.addCleanup(lambda: setattr(pe, "WURZEL", self._alt))
+        # Die Untergrenze von 100 Dateien ist fuer das ECHTE Repo richtig und
+        # hat ihren eigenen Test. Ein Wegwerf-Repo hat zwei Dateien; hier geht
+        # es um eine andere Eigenschaft, also wird sie ausdruecklich gesenkt
+        # statt stillschweigend umgangen.
+        self._altGrenze = pe.MINDESTENS_DATEIEN
+        pe.MINDESTENS_DATEIEN = 0
+        self.addCleanup(lambda: setattr(pe, "MINDESTENS_DATEIEN", self._altGrenze))
+        subprocess.run(["git", "init", "-q", "."], cwd=self.wurzel,
+                       capture_output=True, env=_ohne_git())
+        (self.wurzel / "egal.txt").write_text("nichts", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.wurzel,
+                       capture_output=True, env=_ohne_git())
+
+    def test_eine_uebergebene_datei_wird_geprueft(self):
+        name = "neu.cmd"
+        (self.wurzel / name).write_text(
+            chr(34) + "C:/freebuff/WiesbadenReal_Sicherung/UE_5.8/Engine/Build.bat"
+            + chr(34) + " bauen" + chr(10), encoding="utf-8")
+        treffer = pe.abweichler(zusaetzlich=[name])
+        self.assertEqual(len(treffer), 1,
+                         "die uebergebene Datei wurde nicht geprueft")
+        self.assertEqual(treffer[0][0], name)
+
+    def test_ohne_uebergabe_bleibt_sie_unsichtbar(self):
+        """Belegt den Defekt: git kennt die Datei noch nicht."""
+        name = "neu.cmd"
+        (self.wurzel / name).write_text(
+            chr(34) + "C:/freebuff/WiesbadenReal_Sicherung/UE_5.8/Engine/Build.bat"
+            + chr(34) + " bauen" + chr(10), encoding="utf-8")
+        self.assertEqual(pe.abweichler(), [])
 
 
 class KanonischTest(unittest.TestCase):

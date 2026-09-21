@@ -8,5 +8,5 @@ call "%~dp0engine.cmd" || exit /b 1
 "%WB_EDITOR_CMD%" ^
   "%~dp0..\WiesbadenReal.uproject" ^
   -run=pythonscript -script="%~dp0import_ka52.py" ^
-  -stdout -unattended -nopause -nosplash > Tools${name}_log.txt 2>&1
-echo DONE >> Tools${name}_log.txt
+  -stdout -unattended -nopause -nosplash > Tools\import_ka52_log.txt 2>&1
+echo DONE >> Tools\import_ka52_log.txt

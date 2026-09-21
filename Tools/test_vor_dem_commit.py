@@ -119,6 +119,61 @@ class SaubereUmgebungTest(unittest.TestCase):
                 os.environ["WB_PROBE"] = alt
 
 
+class HookModusTest(unittest.TestCase):
+    """Der Hook muss AUSFUEHRBAR im Index stehen, nicht nur auf der Platte.
+
+    Git fuer Windows ignoriert das x-Bit, darum faellt das hier nicht auf.
+    Auf einem POSIX-Klon UEBERSPRINGT git einen nicht ausfuehrbaren Hook -
+    mit einem Hinweis, und COMMITTET TROTZDEM. Der Auftrag "vor jedem
+    Commit" waere dort still nicht erfuellt, und zwar fail-open: genau die
+    Richtung, die ein Wachposten nicht haben darf.
+    """
+
+    def test_beide_hooks_stehen_ausfuehrbar_im_index(self):
+        fertig = subprocess.run(
+            ["git", "ls-files", "-s", "Tools/git-hooks/"],
+            cwd=WURZEL, capture_output=True, text=True,
+            env=vdc.saubere_umgebung())
+        self.assertEqual(fertig.returncode, 0, fertig.stderr)
+        zeilen = [z for z in fertig.stdout.splitlines() if z.strip()]
+        self.assertEqual(len(zeilen), 2, "erwartet werden zwei Hooks")
+        for z in zeilen:
+            modus, rest = z.split(None, 1)
+            self.assertEqual(modus, "100755",
+                             "%s steht mit Modus %s im Index" % (rest.split()[-1], modus))
+
+
+class Gate0BefehlTest(unittest.TestCase):
+    """Gate 0 muss die VORGEMERKTEN Dateien bekommen, nicht selbst suchen.
+
+    Gate 0 startet mit saubere_umgebung(), also ohne GIT_*. Das muss so
+    bleiben. Ohne GIT_INDEX_FILE sieht ein eigener `git diff --cached` aber
+    den ECHTEN Index - und der ist bei `git commit --only` leer, dem Weg,
+    den ausliefern.py benutzt. Neu vorgemerkte Dateien entgingen dem Gate.
+    """
+
+    def test_vorgemerkte_dateien_werden_uebergeben(self):
+        befehl = vdc.gate0_befehl(["Tools/neu.cmd", "Source/X.cpp"])
+        self.assertIn("--dateien", befehl,
+                      "Gate 0 bekommt die vorgemerkten Dateien nicht")
+        self.assertIn("Tools/neu.cmd", befehl)
+        self.assertIn("Source/X.cpp", befehl)
+        self.assertLess(befehl.index("--dateien"), befehl.index("Tools/neu.cmd"))
+
+    def test_ohne_vormerkung_keine_leeren_argumente(self):
+        self.assertNotIn("--dateien", vdc.gate0_befehl([]))
+
+    def test_die_abdichtung_bleibt_wirksam(self):
+        """Die Randbedingung: GIT_* darf NICHT durchgereicht werden."""
+        alt = dict(os.environ)
+        os.environ["GIT_INDEX_FILE"] = "irgendwo/next-index-4711.lock"
+        try:
+            self.assertNotIn("GIT_INDEX_FILE", vdc.saubere_umgebung())
+        finally:
+            os.environ.clear()
+            os.environ.update(alt)
+
+
 class EchterHookTest(unittest.TestCase):
     """Der Kern: haelt der Hook einen roten Commit WIRKLICH auf?
 

@@ -123,12 +123,33 @@ class Lauf:
         return len(rot)
 
 
+def gate0_befehl(dateien):
+    """Die Befehlszeile fuer Gate 0 - mit den vorgemerkten Dateien.
+
+    WARUM UEBERGEBEN STATT FRAGEN LASSEN: Gate 0 startet mit
+    saubere_umgebung(), also OHNE GIT_*. Das muss so bleiben - ein
+    Unterprozess wuerde sonst in den Index des laufenden Commits schreiben
+    (gemessen am 21.09.2026). Ohne GIT_INDEX_FILE sieht ein eigener
+    `git diff --cached` aber den ECHTEN Index, und der ist bei
+    `git commit --only` leer - genau der Weg, den ausliefern.py benutzt.
+    Neu vorgemerkte Dateien entgingen dem Gate damit vollstaendig.
+
+    gestagte_dateien() liest die Liste absichtlich MIT der Umgebung und ist
+    darum richtig. Sie wird hier als Argument weitergereicht: die
+    Abdichtung bleibt wirksam, die Liste stimmt trotzdem.
+    """
+    befehl = [sys.executable, os.path.join(TOOLS, "pruefe_engine.py")]
+    if dateien:
+        befehl.append("--dateien")
+        befehl.extend(dateien)
+    return befehl
+
+
 def gates_fahren(stufe, dateien):
     lauf = Lauf()
     print("Gates vor dem Commit (Stufe: %s)" % stufe)
 
-    lauf.fahre("Gate 0  Engine-Pfade",
-               [sys.executable, os.path.join(TOOLS, "pruefe_engine.py")])
+    lauf.fahre("Gate 0  Engine-Pfade", gate0_befehl(dateien))
     lauf.fahre("Python-Suiten",
                [sys.executable, "-m", "unittest", "discover",
                 "-s", "Tools", "-p", "test_*.py"])

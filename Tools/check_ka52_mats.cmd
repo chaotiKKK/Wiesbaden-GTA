@@ -8,5 +8,5 @@ call "%~dp0engine.cmd" || exit /b 1
 "%WB_EDITOR_CMD%" ^
   "%~dp0..\WiesbadenReal.uproject" ^
   -run=pythonscript -script="%~dp0check_ka52_mats.py" ^
-  -stdout -unattended -nopause -nosplash > Tools${name}_log.txt 2>&1
-echo DONE >> Tools${name}_log.txt
+  -stdout -unattended -nopause -nosplash > Tools\check_ka52_mats_log.txt 2>&1
+echo DONE >> Tools\check_ka52_mats_log.txt
