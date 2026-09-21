@@ -16,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -142,6 +143,85 @@ class PlanTest(Wegwerfbaum):
         self.assertIn("WiesbadenCity_Alkis17", behalten)
         self.assertEqual(self.namen_die_wegkommen(weg), ["WiesbadenCity_Alkis15"])
         self.assertTrue(any("juengste" in h for h in hinweise))
+
+
+class VeralteterVorschlagTest(Wegwerfbaum):
+    """Sicherung 5: ein Bake-Vorschlag aus einer frueheren Epoche.
+
+    Der gefaehrlichste Fall, den dieses Werkzeug hat. Der Vorschlag wird vom
+    Bake geschrieben und von nichts wieder ungueltig gemacht. Bleibt er
+    liegen, nennt er ein altes Paar - die Behalteliste wird
+    {alt_neu, alt_vorgaenger, live}, und die ECHTE Vorgaengerin der
+    gespielten Karte faellt weg: 1,9 GB und genau der Rueckweg, fuer den es
+    die Regel gibt.
+
+    An den anderen vier Sicherungen kommt das vorbei: Sicherung 2 schuetzt
+    nur die gespielte Karte, Sicherung 3 wiegt die ALTE neue Karte (eine
+    volle Stadt, besteht), und wer den plausibel aussehenden Bericht liest,
+    tippt "ja".
+    """
+
+    def karten_mit_alter(self, *namen):
+        """Karten anlegen und ihr Alter EINDEUTIG staffeln.
+
+        Ohne das ist der Test wackelig: faellt kein Vorschlag an, waehlt
+        plan() die Vorgaengerin als "juengste andere Stadtkarte" nach der
+        mtime der .umap - und vier in Millisekunden geschriebene Dateien
+        haben praktisch dieselbe. Dieser Test bestand allein und fiel im
+        Pre-Commit-Hook um; nicht der Waechter war schuld, sondern die
+        Annahme ueber die Reihenfolge.
+
+        Die Namen kommen von alt nach jung.
+        """
+        jetzt = time.time()
+        for i, name in enumerate(namen):
+            self.karte_anlegen(name, VOLL)
+            alter = jetzt - (len(namen) - i) * 3600.0
+            os.utime(ka.KARTEN / (name + ".umap"), (alter, alter))
+
+    def test_ein_veralteter_vorschlag_wird_verworfen(self):
+        # Gespielt wird Alkis17, der Vorschlag stammt aus der Alkis15-Epoche.
+        self._live = "WiesbadenCity_Alkis17"
+        self.karten_mit_alter("WiesbadenCity_Alkis14", "WiesbadenCity_Alkis15",
+                              "WiesbadenCity_Alkis16", "WiesbadenCity_Alkis17")
+        self.vorschlag_schreiben("WiesbadenCity_Alkis15", "WiesbadenCity_Alkis14")
+
+        behalten, weg, hinweise = ka.plan()
+
+        # Alkis16 ist die echte Vorgaengerin der gespielten Karte. Ohne die
+        # Sicherung waere die Behalteliste {15, 14, 17} - und Alkis16 weg.
+        self.assertIn("WiesbadenCity_Alkis16", behalten,
+                      "die echte Vorgaengerin der gespielten Karte wurde geopfert")
+        self.assertNotIn("WiesbadenCity_Alkis16", self.namen_die_wegkommen(weg))
+        self.assertTrue(any("VERALTETER" in h for h in hinweise),
+                        "der veraltete Vorschlag wurde nicht gemeldet")
+
+    def test_ein_aktueller_vorschlag_wird_benutzt(self):
+        """Gegenprobe: die Sicherung darf nicht jeden Vorschlag verwerfen."""
+        self._live = "WiesbadenCity_Alkis16"
+        self.karten_mit_alter("WiesbadenCity_Alkis15", "WiesbadenCity_Alkis16",
+                              "WiesbadenCity_Alkis17")
+        # Frisch gebacken: Alkis17 ist neu, die gespielte Alkis16 ihre
+        # Vorgaengerin - die gespielte Karte kommt also vor.
+        self.vorschlag_schreiben("WiesbadenCity_Alkis17", "WiesbadenCity_Alkis16")
+
+        behalten, weg, hinweise = ka.plan()
+        self.assertEqual(behalten,
+                         ["WiesbadenCity_Alkis16", "WiesbadenCity_Alkis17"])
+        self.assertIn("WiesbadenCity_Alkis15", self.namen_die_wegkommen(weg))
+        self.assertFalse(any("VERALTETER" in h for h in hinweise))
+
+    def test_auch_wenn_die_gespielte_karte_die_NEUE_ist(self):
+        """Nach dem Live-Schalten ist die gespielte Karte die neue."""
+        self._live = "WiesbadenCity_Alkis17"
+        self.karten_mit_alter("WiesbadenCity_Alkis15", "WiesbadenCity_Alkis16",
+                              "WiesbadenCity_Alkis17")
+        self.vorschlag_schreiben("WiesbadenCity_Alkis17", "WiesbadenCity_Alkis16")
+
+        behalten, _, hinweise = ka.plan()
+        self.assertEqual(behalten,
+                         ["WiesbadenCity_Alkis16", "WiesbadenCity_Alkis17"])
+        self.assertFalse(any("VERALTETER" in h for h in hinweise))
 
 
 class LeerbakeTest(Wegwerfbaum):

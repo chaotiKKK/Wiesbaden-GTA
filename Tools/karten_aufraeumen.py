@@ -137,13 +137,44 @@ def plan(neu=None, vorgaenger=None):
     live = kurzname(standard_karte())
 
     daten = vorschlag_lesen()
+
+    # SICHERUNG 5: ein VERALTETER Bake-Vorschlag darf nicht loeschen lassen.
+    #
+    # Der Vorschlag wird vom Bake geschrieben und von nichts wieder
+    # ungueltig gemacht. Bleibt er von einem frueheren Lauf liegen, nennt er
+    # ein altes Paar - und die Behalteliste wird {alt_neu, alt_vorgaenger,
+    # live}. Die ECHTE Vorgaengerin der gespielten Karte steht dann nicht
+    # darin und faellt weg: genau der Rueckweg, fuer den es diese Regel gibt.
+    #
+    # An den anderen vier Sicherungen kommt das vorbei: Sicherung 2 schuetzt
+    # nur die gespielte Karte, Sicherung 3 wiegt die ALTE neue Karte (eine
+    # volle Stadt, besteht), und wer den plausibel aussehenden Bericht liest,
+    # tippt "ja".
+    #
+    # Der Pruefstein: nach einem frischen Bake ist die gespielte Karte immer
+    # eine der beiden genannten - entweder die neue (wenn live geschaltet)
+    # oder deren Vorgaengerin. Taucht sie in keiner von beiden auf,
+    # beschreibt der Vorschlag eine andere Epoche.
+    if daten and neu is None:
+        genannt = {kurzname(daten.get("neu") or ""),
+                   kurzname(daten.get("vorgaenger") or "")}
+        if live and live not in genannt:
+            hinweise.append(
+                "VERALTETER Bake-Vorschlag: er nennt %s, gespielt wird aber %s. "
+                "Die gespielte Karte kommt darin nicht vor - der Vorschlag "
+                "stammt aus einer frueheren Epoche und wird NICHT benutzt."
+                % (" und ".join(sorted(n for n in genannt if n)) or "nichts", live))
+            daten = None
+
     if neu is None:
         neu = kurzname(daten["neu"]) if daten else live
         if daten:
             hinweise.append("Neue Karte aus dem Bake-Vorschlag: %s" % neu)
         else:
-            hinweise.append("Kein Bake-Vorschlag gefunden - die gespielte Karte "
-                            "gilt als die neue: %s" % neu)
+            hinweise.append("Kein verwendbarer Bake-Vorschlag - die gespielte "
+                            "Karte gilt als die neue: %s. Sicherung 3 (Leerbake) "
+                            "prueft damit eine Karte, die ohnehin gut ist; zum "
+                            "Loeschen bitte --neu ausdruecklich angeben." % neu)
     if vorgaenger is None and daten and daten.get("vorgaenger"):
         vorgaenger = kurzname(daten["vorgaenger"])
 
