@@ -6,6 +6,7 @@
 #include "GameFramework/Actor.h"
 
 #include "World/SebboHqShape.h"
+#include "World/SebboHqSite.h"
 
 #include "WiesbadenSebboHq.generated.h"
 
@@ -13,6 +14,19 @@ class UStaticMesh;
 class UStaticMeshComponent;
 class UMaterialInterface;
 class UGeoCoordinateConverter;
+class UBoxComponent;
+class UPointLightComponent;
+class UPrimitiveComponent;
+
+/** Die drei getrennten Wege schreiben nur diesen gemeinsamen Tower-Zielzustand. */
+UENUM(BlueprintType)
+enum class ESebboHqArrivalTarget : uint8
+{
+	None,
+	Garage,
+	Pedestrian,
+	Helipad
+};
 
 /**
  * Hauptsitz der Sebbo International Mega Company an der Galileistrasse.
@@ -47,11 +61,11 @@ public:
 
 	/** Breitengrad des Grundstuecks (Kandidat A der Standortkarte). */
 	UPROPERTY(EditAnywhere, Category = "Sebbo HQ")
-	double PlotLatitude = 50.093950;
+	double PlotLatitude = SebboHqSite::Latitude;
 
 	/** Laengengrad des Grundstuecks. */
 	UPROPERTY(EditAnywhere, Category = "Sebbo HQ")
-	double PlotLongitude = 8.224490;
+	double PlotLongitude = SebboHqSite::Longitude;
 
 	/**
 	 * Drehung des Turms (Grad).
@@ -61,7 +75,7 @@ public:
 	 * Galileistrasse.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Sebbo HQ")
-	double HeadingDegrees = 250.0;
+	double HeadingDegrees = SebboHqSite::HeadingDegrees;
 
 	UPROPERTY(EditAnywhere, Category = "Sebbo HQ")
 	FSebboHqDimensions Dimensions;
@@ -85,17 +99,75 @@ public:
 	 */
 	void ProbeStaircase() const;
 
+	/**
+	 * Die drei Ankunftswege einmal in der ECHTEN Welt abtasten.
+	 *
+	 * Der reine Test prueft die Masse, nicht die gebaute Stadt. Hier faehrt ein
+	 * Fahrzeugquader durch die Garagenoeffnung, laeuft eine Pawn-Kapsel durch
+	 * das Portal und faellt ein Lot auf den Landeplatz - gegen dieselbe
+	 * Kollision, die ein Spieler spuert. Gemessen wird ausserdem die Stufe von
+	 * der Platter Strasse auf den privaten Boden; ein zu hoher Bordstein ist
+	 * eine unbefahrbare Zufahrt, auch wenn die Oeffnung frei ist.
+	 *
+	 * Startschalter: -WbAnkunftProbe. Ergebnis im Log und in
+	 * Saved/Diagnose/ankunftsprobe.json.
+	 */
+	void ProbeArrival() const;
+
+	/** Zuletzt erreichte Tower-Ankunft; der Weg selbst bleibt ausserhalb des Towers. */
+	UFUNCTION(BlueprintPure, Category = "Sebbo HQ|Arrival")
+	ESebboHqArrivalTarget GetArrivalTarget() const { return ArrivalTarget; }
+
 private:
 	/** Bodenhoehe am Standort; false, solange die Zelle nicht gestreamt ist. */
 	bool ResolveGround(const FVector& WorldXY, double& OutZ) const;
 
 	void Build(const FVector& BaseWorld, const FRotator& BaseYaw);
 
+	void CreateArrivalVolume(UBoxComponent*& OutVolume, FName Name,
+		const FHqArrivalTarget& Target, const FVector& BaseWorld, const FRotator& BaseYaw);
+
+	void CreateGuidanceLight(UPointLightComponent*& OutLight, FName Name,
+		const FVector& LocalPosition, const FVector& BaseWorld, const FRotator& BaseYaw,
+		const FLinearColor& Color, float Intensity, float Radius);
+
+	bool HasCrossTraffic(const FVector& WorldPosition) const;
+
+	UFUNCTION()
+	void OnArrivalTargetOverlap(UPrimitiveComponent* OverlappedComponent,
+		AActor* OtherActor, UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex,
+		bool bFromSweep, const FHitResult& SweepResult);
+
 	UPROPERTY(Transient)
 	USceneComponent* Root = nullptr;
 
 	UPROPERTY(Transient)
 	TArray<UStaticMeshComponent*> Parts;
+
+	UPROPERTY(Transient)
+	UBoxComponent* GarageArrivalVolume = nullptr;
+
+	UPROPERTY(Transient)
+	UBoxComponent* PedestrianArrivalVolume = nullptr;
+
+	UPROPERTY(Transient)
+	UBoxComponent* HelipadArrivalVolume = nullptr;
+
+	/** Private Wartezone vor der Garage; setzt keinen Ankunftszustand. */
+	UPROPERTY(Transient)
+	UBoxComponent* GarageYieldVolume = nullptr;
+
+	UPROPERTY(Transient)
+	UPointLightComponent* GarageGuidanceLight = nullptr;
+
+	UPROPERTY(Transient)
+	UPointLightComponent* PortalGuidanceLight = nullptr;
+
+	UPROPERTY(Transient)
+	UPointLightComponent* HelipadGuidanceLight = nullptr;
+
+	UPROPERTY(VisibleInstanceOnly, Category = "Sebbo HQ|Arrival")
+	ESebboHqArrivalTarget ArrivalTarget = ESebboHqArrivalTarget::None;
 
 	UPROPERTY(Transient)
 	UStaticMesh* CubeMesh = nullptr;

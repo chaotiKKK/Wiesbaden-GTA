@@ -34,6 +34,52 @@ namespace
 			FVector((X0 + X1) * 0.5, (Y0 + Y1) * 0.5, (Z0 + Z1) * 0.5),
 			FVector(X1 - X0, Y1 - Y0, Z1 - Z0), Floor);
 	}
+
+	struct FArrivalOpenings
+	{
+		double GarageY0 = -1400.0;
+		double GarageY1 = -700.0;
+		double PortalY0 = 650.0;
+		double PortalY1 = 850.0;
+		double ClearHeightCm = 270.0;
+	};
+
+	FArrivalOpenings GroundFloorOpenings(const FSebboHqDimensions& D)
+	{
+		const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
+		FArrivalOpenings Openings;
+		Openings.GarageY0 = FMath::Max(-Half + 120.0, Openings.GarageY0);
+		Openings.GarageY1 = FMath::Min(Half - 120.0, Openings.GarageY1);
+		Openings.PortalY0 = FMath::Max(-Half + 120.0, Openings.PortalY0);
+		Openings.PortalY1 = FMath::Min(Half - 120.0, Openings.PortalY1);
+		Openings.ClearHeightCm = FMath::Min(Openings.ClearHeightCm, D.FloorHeightCm - D.SlabCm - 20.0);
+		return Openings;
+	}
+
+	void AddGroundFloorFacade(const FSebboHqDimensions& D, TArray<FHqPart>& Parts)
+	{
+		const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
+		const double Wall = 30.0;
+		const double Z0 = D.SlabCm;
+		const double Z1 = D.FloorHeightCm;
+		const FArrivalOpenings Openings = GroundFloorOpenings(D);
+
+		// Die +X-Fassade ist in Abschnitte geteilt: Garage und Portal sind echte
+		// Luecken, nicht vor eine Vollwand gestellte Attrappen.
+		AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half, -Half, Openings.GarageY0, Z0, Z1, 0);
+		AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half, Openings.GarageY1, Openings.PortalY0, Z0, Z1, 0);
+		AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half, Openings.PortalY1, Half, Z0, Z1, 0);
+		AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half, Openings.GarageY0, Openings.GarageY1,
+			Openings.ClearHeightCm, Z1, 0);
+		AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half, Openings.PortalY0, Openings.PortalY1,
+			Openings.ClearHeightCm, Z1, 0);
+
+		// Die drei anderen Fassaden halten die Erdgeschoss-Silhouette geschlossen,
+		// der Innenraum bleibt aber fuer die zwei Ankunftswege begehbar.
+		AddBetween(Parts, EHqMaterial::Glass, -Half, -Half + Wall, -Half, Half, Z0, Z1, 0);
+		AddBetween(Parts, EHqMaterial::Glass, -Half, Half, -Half, -Half + Wall, Z0, Z1, 0);
+		AddBetween(Parts, EHqMaterial::Glass, -Half, Half, Half - Wall, Half, Z0, Z1, 0);
+	}
 }
 
 double SebboHq::GetRoofHeightCm(const FSebboHqDimensions& D)
@@ -46,6 +92,21 @@ double SebboHq::GetHelipadHeightCm(const FSebboHqDimensions& D)
 	// Der Landeplatz liegt auf der Attika, nicht darueber: ein Deck, das ueber
 	// dem Dachrand schwebt, waere eine Rampe ins Nichts.
 	return D.TotalHeightCm() + 20.0;
+}
+
+double SebboHq::GetHelipadOffsetCm(const FSebboHqDimensions& D)
+{
+	// So weit nach +X, dass der Anflug frei von der Krone bleibt, und so weit
+	// nach innen, dass die Aufsetzflaeche ganz auf dem Dach liegt. Beide
+	// Grenzen sind eng: der Test HelipadApproach haelt sie fest.
+	return D.FootprintCm * 0.31;
+}
+
+double SebboHq::GetCrownHalfWidthCm(const FSebboHqDimensions& D)
+{
+	// Knapp ueber der Kernbreite - die Krone ist ein abgesetzter Aufsatz auf
+	// dem Kern, kein Deckel ueber dem halben Dach.
+	return D.FootprintCm * 0.16;
 }
 
 double SebboHq::GetCoreTopHeightCm(const FSebboHqDimensions& D)
@@ -75,9 +136,15 @@ void SebboHq::BuildShell(const FSebboHqDimensions& D, TArray<FHqPart>& OutParts)
 			FVector(0.0, 0.0, Unterkante + D.SlabCm * 0.5),
 			FVector(Seite + 20.0, Seite + 20.0, D.SlabCm), Floor);
 
-		// Glasband darueber bis zur naechsten Decke.
+		// Glasband darueber bis zur naechsten Decke. Das Erdgeschoss hat an
+		// der Platter-Strassen-Seite zwei reale Oeffnungen und wird deshalb als
+		// Fassade statt als massiver Glasklotz gebaut.
 		const double GlasHoehe = D.FloorHeightCm - D.SlabCm;
-		if (GlasHoehe > 0.0)
+		if (Floor == 0)
+		{
+			AddGroundFloorFacade(D, OutParts);
+		}
+		else if (GlasHoehe > 0.0)
 		{
 			Add(OutParts, EHqPrimitive::Box, EHqMaterial::Glass,
 				FVector(0.0, 0.0, Unterkante + D.SlabCm + GlasHoehe * 0.5),
@@ -101,7 +168,7 @@ void SebboHq::BuildShell(const FSebboHqDimensions& D, TArray<FHqPart>& OutParts)
 	// von einem Bueroblock unterscheidet.
 	if (D.CrownHeightCm > 0.0)
 	{
-		const double KroneSeite = D.FootprintCm * 0.55;
+		const double KroneSeite = GetCrownHalfWidthCm(D) * 2.0;
 		Add(OutParts, EHqPrimitive::Box, EHqMaterial::Metal,
 			FVector(0.0, 0.0, KernOberkante + D.CrownHeightCm * 0.5),
 			FVector(KroneSeite, KroneSeite, D.CrownHeightCm));
@@ -114,7 +181,7 @@ void SebboHq::BuildShell(const FSebboHqDimensions& D, TArray<FHqPart>& OutParts)
 	// Landeplatz auf dem Dach, quer zum Kern versetzt, damit der Ausstieg
 	// nicht in der Aufsetzflaeche liegt.
 	const double PadZ = GetHelipadHeightCm(D);
-	const double PadVersatz = D.FootprintCm * 0.22;
+	const double PadVersatz = GetHelipadOffsetCm(D);
 	Add(OutParts, EHqPrimitive::Cylinder, EHqMaterial::Concrete,
 		FVector(PadVersatz, 0.0, PadZ), FVector(D.HelipadDiameterCm, D.HelipadDiameterCm, 30.0));
 	// Aussenring als Rand - Hubschrauberlandeplaetze haben einen.
@@ -134,6 +201,59 @@ void SebboHq::BuildShell(const FSebboHqDimensions& D, TArray<FHqPart>& OutParts)
 	}
 	Add(OutParts, EHqPrimitive::Box, EHqMaterial::Marking,
 		FVector(PadVersatz, 0.0, PadZ + 18.0), FVector(Strich, HBreite, 6.0));
+}
+
+FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(const FSebboHqDimensions& D)
+{
+	FSebboHqArrivalLayout Layout;
+	const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
+	const FArrivalOpenings Openings = GroundFloorOpenings(D);
+	const double FloorZ = D.SlabCm + 15.0;
+
+	// Die Ziele liegen HINTER den Oeffnungen. Die Zufahrt bleibt auf der
+	// Strassenseite +X; eine spaetere Tiefgarage kann von dieser ebenerdigen
+	// Annahme aus weiter in den Bau gefuehrt werden.
+	Layout.GarageTarget.CenterCm = FVector(Half - 420.0,
+		(Openings.GarageY0 + Openings.GarageY1) * 0.5, 120.0);
+	Layout.GarageTarget.ExtentCm = FVector(350.0, (Openings.GarageY1 - Openings.GarageY0) * 0.5 - 30.0, 120.0);
+	Layout.PedestrianTarget.CenterCm = FVector(Half - 150.0,
+		(Openings.PortalY0 + Openings.PortalY1) * 0.5, 90.0);
+	Layout.PedestrianTarget.ExtentCm = FVector(110.0, (Openings.PortalY1 - Openings.PortalY0) * 0.5 - 10.0, 90.0);
+	Layout.HelicopterTarget.CenterCm = FVector(GetHelipadOffsetCm(D), 0.0, GetHelipadHeightCm(D));
+	Layout.HelicopterTarget.ExtentCm = FVector(D.HelipadDiameterCm * 0.35,
+		D.HelipadDiameterCm * 0.35, 200.0);
+
+	// Garage: Boden und eine kurze, private Einfassung. Kein zweites
+	// Strassenband; bis zur Fassadenlinie bleibt die Oeffentlichkeit Sache der
+	// RoadNetwork-Pipeline.
+	AddBetween(Layout.Parts, EHqMaterial::Concrete,
+		Half - 900.0, Half + 20.0, Openings.GarageY0, Openings.GarageY1,
+		D.SlabCm, FloorZ);
+	AddBetween(Layout.Parts, EHqMaterial::Concrete,
+		Half - 900.0, Half - 860.0, Openings.GarageY0, Openings.GarageY1,
+		FloorZ, Openings.ClearHeightCm);
+	AddBetween(Layout.Parts, EHqMaterial::Metal,
+		Half - 900.0, Half, Openings.GarageY0, Openings.GarageY0 + 25.0,
+		FloorZ, Openings.ClearHeightCm);
+	AddBetween(Layout.Parts, EHqMaterial::Metal,
+		Half - 900.0, Half, Openings.GarageY1 - 25.0, Openings.GarageY1,
+		FloorZ, Openings.ClearHeightCm);
+	// Haltstreifen vor der Platter Strasse: die Zufahrt bleibt privat, aber
+	// die Konfliktstelle mit dem durchlaufenden Verkehr ist sichtbar markiert.
+	Add(Layout.Parts, EHqPrimitive::Box, EHqMaterial::Marking,
+		FVector(Half - 110.0, (Openings.GarageY0 + Openings.GarageY1) * 0.5, FloorZ + 3.0),
+		FVector(12.0, Openings.GarageY1 - Openings.GarageY0 - 80.0, 6.0));
+
+	// Personeneingang: ebenerdiger Vorraum mit schlankem Sturz - die Oeffnung
+	// selbst bleibt frei fuer die reale Pawn-Kapsel.
+	AddBetween(Layout.Parts, EHqMaterial::Concrete,
+		Half - 260.0, Half + 20.0, Openings.PortalY0, Openings.PortalY1,
+		D.SlabCm, FloorZ);
+	AddBetween(Layout.Parts, EHqMaterial::Metal,
+		Half - 60.0, Half, Openings.PortalY0, Openings.PortalY1,
+		Openings.ClearHeightCm, D.FloorHeightCm - D.SlabCm);
+
+	return Layout;
 }
 
 void SebboHq::BuildVerticalCore(const FSebboHqDimensions& D, TArray<FHqPart>& OutParts)

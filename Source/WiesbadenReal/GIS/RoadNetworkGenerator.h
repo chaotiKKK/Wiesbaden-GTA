@@ -98,6 +98,82 @@ struct WIESBADENREAL_API FRoadMeshData
 	void Reset() { Sections.Reset(); }
 };
 
+/** Zwei private Ziele, die ueber einen lokalen, oeffentlichen Strassenzugang erreicht werden. */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FRoadAccessOverride
+{
+	GENERATED_BODY()
+
+	/** Schaltet den Modifier ein; ohne beide Ziele bleibt das Netz unveraendert. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access")
+	bool bEnabled = false;
+
+	/** Ziel direkt hinter der privaten Garageneinfahrt, in Weltkoordinaten. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access")
+	FVector GarageEntranceWorldCm = FVector::ZeroVector;
+
+	/** Ziel direkt hinter dem privaten Personeneingang, in Weltkoordinaten. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access")
+	FVector PedestrianEntranceWorldCm = FVector::ZeroVector;
+
+	/** Groesster Abstand des Ziels zur Fahrbahnachse; verhindert Fernzuordnung. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access", meta = (ClampMin = "100.0"))
+	double SearchRadiusCm = 5000.0;
+
+	/** Breite der abgesenkten Bordsteinstelle fuer Fahrzeuge. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access", meta = (ClampMin = "100.0"))
+	double GarageWidthCm = 700.0;
+
+	/** Breite der abgesenkten Bordsteinstelle fuer den Fussweg. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access", meta = (ClampMin = "100.0"))
+	double PedestrianWidthCm = 200.0;
+};
+
+/** Ein Ziel auf einen konkreten Strassenabschnitt und dessen Gehwegseite aufgeloest. */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FRoadAccessPoint
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Roads|Access")
+	int32 SegmentId = INDEX_NONE;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Roads|Access")
+	FVector RoadPointCm = FVector::ZeroVector;
+
+	/** Normierte Richtung des projizierten Fahrbahnabschnitts in XY. */
+	UPROPERTY(BlueprintReadOnly, Category = "Roads|Access")
+	FVector2D TangentXY = FVector2D::ZeroVector;
+
+	/** Vorzeichen der Gehwegseite relativ zur Abschnittsrichtung. */
+	UPROPERTY(BlueprintReadOnly, Category = "Roads|Access")
+	double SideSign = 0.0;
+
+	/** Breite der dazugehoerigen abgesenkten Stelle entlang der Fahrbahn. */
+	UPROPERTY(BlueprintReadOnly, Category = "Roads|Access")
+	double WidthCm = 0.0;
+
+	bool IsValid() const { return SegmentId != INDEX_NONE && !TangentXY.IsNearlyZero(); }
+};
+
+/** Aufgeloeste Garagen- und Fusszugangsstelle desselben Strassenabschnitts. */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FResolvedRoadAccess
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Roads|Access")
+	FRoadAccessPoint Garage;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Roads|Access")
+	FRoadAccessPoint Pedestrian;
+
+	bool IsValid() const
+	{
+		return Garage.IsValid() && Pedestrian.IsValid() && Garage.SegmentId == Pedestrian.SegmentId;
+	}
+};
+
 /** Parameter der Strassennetz-Erzeugung. */
 USTRUCT(BlueprintType)
 struct WIESBADENREAL_API FRoadGenerationSettings
@@ -227,6 +303,10 @@ struct WIESBADENREAL_API FRoadGenerationSettings
 	/** Breite einer Laengsmarkierung in cm. StVO-Regelbreite: 12 cm. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
 	double MarkingWidthCm = 12.0;
+
+	/** Lokaler Zugang: die Road-Pipeline behaelt Fahrbahn, Gehweg und Bordstein. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access")
+	FRoadAccessOverride AccessOverride;
 };
 
 /** Diagnose eines Generierungslaufs. */
@@ -366,6 +446,14 @@ public:
 	/** Wandelt turn:lanes-Werte in eine ETurnIndication-Bitmaske. */
 	static uint8 ParseTurnIndication(const FString& Value);
 
+	/** Ordnet beide privaten Ziele derselben naeheren Strasse zu. */
+	static FResolvedRoadAccess ResolveRoadAccess(
+		const FRoadNetwork& Network, const FRoadAccessOverride& Override);
+
+	/** Bordsteinhoehe an einem Meshpunkt; nur die konfigurierte Gehwegseite wird abgesenkt. */
+	static double GetRoadAccessKerbHeightCm(const FResolvedRoadAccess& Access,
+		int32 SegmentId, double SideSign, const FVector2D& KerbPointCm, double DefaultHeightCm);
+
 private:
 	// -- Schritt 2: Zerlegung ------------------------------------------------
 
@@ -429,6 +517,7 @@ private:
 		const URoadTypeLibrary& TypeLibrary,
 		const IHeightSampler* HeightSampler,
 		const FRoadGenerationSettings& Settings,
+		const FResolvedRoadAccess& Access,
 		FRoadMeshData& OutMeshData) const;
 
 	/**

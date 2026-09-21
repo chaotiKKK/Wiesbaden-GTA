@@ -232,6 +232,89 @@ uint8 URoadNetworkGenerator::ParseTurnIndication(const FString& Value)
 	return Flags;
 }
 
+FResolvedRoadAccess URoadNetworkGenerator::ResolveRoadAccess(
+	const FRoadNetwork& Network, const FRoadAccessOverride& Override)
+{
+	FResolvedRoadAccess Result;
+	if (!Override.bEnabled || Override.SearchRadiusCm <= 0.0)
+	{
+		return Result;
+	}
+
+	auto ResolvePoint = [&Network, &Override](const FVector& Entrance, double WidthCm) -> FRoadAccessPoint
+	{
+		FRoadAccessPoint Best;
+		double BestDistanceSquared = FMath::Square(Override.SearchRadiusCm);
+		const FVector2D Target(Entrance.X, Entrance.Y);
+
+		for (const FRoadSegment& Segment : Network.Segments)
+		{
+			if (Segment.bIsArea)
+			{
+				continue;
+			}
+			const TArray<FVector>& Line = Segment.TrimmedCenterline.Num() >= 2
+				? Segment.TrimmedCenterline : Segment.Centerline;
+			for (int32 Index = 0; Index + 1 < Line.Num(); ++Index)
+			{
+				const FVector2D A(Line[Index].X, Line[Index].Y);
+				const FVector2D B(Line[Index + 1].X, Line[Index + 1].Y);
+				const FVector2D Delta = B - A;
+				const double LengthSquared = Delta.SizeSquared();
+				if (LengthSquared <= KINDA_SMALL_NUMBER)
+				{
+					continue;
+				}
+
+				const double T = FMath::Clamp(FVector2D::DotProduct(Target - A, Delta) / LengthSquared, 0.0, 1.0);
+				const FVector2D Projected = A + Delta * T;
+				const double DistanceSquared = FVector2D::DistSquared(Target, Projected);
+				if (DistanceSquared >= BestDistanceSquared)
+				{
+					continue;
+				}
+
+				const FVector2D Tangent = Delta.GetSafeNormal();
+				BestDistanceSquared = DistanceSquared;
+				Best.SegmentId = Segment.SegmentId;
+				Best.RoadPointCm = FMath::Lerp(Line[Index], Line[Index + 1], T);
+				Best.TangentXY = Tangent;
+				Best.SideSign = Tangent.X * (Target.Y - Projected.Y)
+					- Tangent.Y * (Target.X - Projected.X);
+				Best.WidthCm = WidthCm;
+			}
+		}
+
+		return Best;
+	};
+
+	Result.Garage = ResolvePoint(Override.GarageEntranceWorldCm, Override.GarageWidthCm);
+	Result.Pedestrian = ResolvePoint(Override.PedestrianEntranceWorldCm, Override.PedestrianWidthCm);
+	return Result;
+}
+
+double URoadNetworkGenerator::GetRoadAccessKerbHeightCm(const FResolvedRoadAccess& Access,
+	int32 SegmentId, double SideSign, const FVector2D& KerbPointCm, double DefaultHeightCm)
+{
+	if (!Access.IsValid() || SegmentId != Access.Garage.SegmentId || FMath::IsNearlyZero(SideSign))
+	{
+		return DefaultHeightCm;
+	}
+
+	auto IsAt = [SegmentId, SideSign, &KerbPointCm](const FRoadAccessPoint& Point, double WidthCm)
+	{
+		if (Point.SegmentId != SegmentId || Point.SideSign * SideSign <= 0.0)
+		{
+			return false;
+		}
+		const FVector2D Delta = KerbPointCm - FVector2D(Point.RoadPointCm.X, Point.RoadPointCm.Y);
+		return FMath::Abs(FVector2D::DotProduct(Delta, Point.TangentXY)) <= WidthCm * 0.5;
+	};
+
+	return (IsAt(Access.Garage, Access.Garage.WidthCm) || IsAt(Access.Pedestrian, Access.Pedestrian.WidthCm))
+		? 0.0 : DefaultHeightCm;
+}
+
 void URoadNetworkGenerator::CountNodeReferences(const FOSMDataSet& DataSet, TMap<FOSMId, int32>& OutCounts) const
 {
 	OutCounts.Reset();
@@ -955,6 +1038,10 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 		GGateSnapSumCm = 0.0;
 		GGateSnapWorstCm = 0.0;
 		GGateSnapCount = 0;
+		// Der Zugang wird einmal gegen das fertige Netz aufgeloest. Die
+		// nachfolgende Mesh-Erzeugung fragt nur noch die lokale Bordsteinhoehe
+		// ab; weder pro Vertex noch pro Tick wird nach Strassen gesucht.
+		const FResolvedRoadAccess Access = ResolveRoadAccess(OutNetwork, Settings.AccessOverride);
 
 		for (const FRoadSegment& Segment : OutNetwork.Segments)
 		{
@@ -981,7 +1068,7 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 				}
 			}
 
-			BuildSegmentMesh(OutNetwork, Segment, *TypeLibrary, HeightSampler, Settings, *OutMeshData);
+			BuildSegmentMesh(OutNetwork, Segment, *TypeLibrary, HeightSampler, Settings, Access, *OutMeshData);
 
 			if (Settings.bGenerateLaneMarkings)
 			{
@@ -2210,6 +2297,7 @@ void URoadNetworkGenerator::BuildSegmentMesh(
 	const URoadTypeLibrary& TypeLibrary,
 	const IHeightSampler* HeightSampler,
 	const FRoadGenerationSettings& Settings,
+	const FResolvedRoadAccess& Access,
 	FRoadMeshData& OutMeshData) const
 {
 	// FLAECHEN statt Baender: Plaetze und Fussgaengerzonen.
@@ -2425,6 +2513,11 @@ void URoadNetworkGenerator::BuildSegmentMesh(
 		return (HeightSampler && HeightSampler->HasValidData())
 			? HeightSampler->SampleHeightCm(NearestOnLine(P)) : 0.0;
 	};
+	auto KerbHeightAt = [&](double SideSign, const FVector2D& Point) -> double
+	{
+		return GetRoadAccessKerbHeightCm(
+			Access, Segment.SegmentId, SideSign, Point, Segment.KerbHeightCm);
+	};
 
 	auto BuildSidewalk = [&](double SideSign)
 	{
@@ -2461,10 +2554,11 @@ void URoadNetworkGenerator::BuildSegmentMesh(
 			// position) -> Gehweg bleibt buendig auf Strassenniveau + Bordstein,
 			// schwebt nicht ueberm Gras und verspringt nicht gegen die Fahrbahn.
 			const double TerrainZ = SampleRoadZ(Point);
+			const double KerbHeight = KerbHeightAt(SideSign, Point);
 
 			Section.Vertices.Add(FVector(
 				Point.X, Point.Y,
-				TerrainZ + Settings.RoadSurfaceOffsetCm + Segment.KerbHeightCm
+				TerrainZ + Settings.RoadSurfaceOffsetCm + KerbHeight
 				+ Segment.Layer * Settings.LayerHeightCm));
 
 			Section.Normals.Add(FVector::UpVector);
@@ -2544,9 +2638,10 @@ void URoadNetworkGenerator::BuildSegmentMesh(
 			const double TerrainZ = SampleRoadZ(KerbLine[Index]);
 
 			const double BaseZ = TerrainZ + Settings.RoadSurfaceOffsetCm + Segment.Layer * Settings.LayerHeightCm;
+			const double KerbHeight = KerbHeightAt(SideSign, KerbLine[Index]);
 
 			KerbSection.Vertices.Add(FVector(KerbLine[Index].X, KerbLine[Index].Y, BaseZ));
-			KerbSection.Vertices.Add(FVector(KerbLine[Index].X, KerbLine[Index].Y, BaseZ + Segment.KerbHeightCm));
+			KerbSection.Vertices.Add(FVector(KerbLine[Index].X, KerbLine[Index].Y, BaseZ + KerbHeight));
 
 			// Normale zeigt zur Fahrbahn hin.
 			FVector2D Tangent2D = (Index > 0)

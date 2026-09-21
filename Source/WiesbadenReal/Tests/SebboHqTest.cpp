@@ -74,7 +74,16 @@ bool FSebboHqShellTest::RunTest(const FString& Parameters)
 			Glas += Teil.Material == EHqMaterial::Glass ? 1 : 0;
 		}
 		TestEqual(*FString::Printf(TEXT("Geschoss %d hat eine Decke"), Floor), Decken, 1);
-		TestEqual(*FString::Printf(TEXT("Geschoss %d hat ein Glasband"), Floor), Glas, 1);
+		if (Floor == 0)
+		{
+			// Die Einfahrt und das Portal teilen nur die Erdgeschossfassade. Ein
+			// einzelner Glaskasten wuerde beide Oeffnungen wieder verschliessen.
+			TestTrue(TEXT("Das Erdgeschoss ist fuer Einfahrt und Portal geteilt"), Glas >= 3);
+		}
+		else
+		{
+			TestEqual(*FString::Printf(TEXT("Geschoss %d hat ein Glasband"), Floor), Glas, 1);
+		}
 	}
 
 	// --- Der Sockel ist breiter als der Schaft ------------------------------
@@ -387,6 +396,81 @@ bool FSebboHqStairHeadroomTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("Die oberste Stufe endet auf dem naechsten Geschossboden"),
 		Oberste, D.FloorHeightCm + 20.0, 1.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqArrivalLayoutTest,
+	"WiesbadenReal.World.SebboHq.ArrivalLayout",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqArrivalLayoutTest::RunTest(const FString& Parameters)
+{
+	// Dieser Test faengt den Rueckfall ab, bei dem Garage und Eingang nur als
+	// Deko vor einer geschlossenen Fassade standen. Die Ankunftsbereiche muessen
+	// getrennte, ausreichend grosse und von der Platter-Strassen-Seite (+X)
+	// erreichbare Ziele sein.
+	const FSebboHqDimensions D;
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+
+	TestTrue(TEXT("Die Garage liegt auf der Strassenseite"),
+		Layout.GarageTarget.CenterCm.X > D.FootprintCm * 0.25);
+	TestTrue(TEXT("Die Garage ist fahrzeugbreit"),
+		Layout.GarageTarget.ExtentCm.Y >= 150.0);
+	TestTrue(TEXT("Das Portal ist mindestens 120 cm frei"),
+		Layout.PedestrianTarget.ExtentCm.Y * 2.0 >= 120.0);
+	TestTrue(TEXT("Garage und Portal sind getrennte Ziele"),
+		FVector::DistSquared2D(Layout.GarageTarget.CenterCm, Layout.PedestrianTarget.CenterCm)
+			> FMath::Square(200.0));
+	TestEqual(TEXT("Das Heli-Ziel liegt auf dem Dachpad"),
+		Layout.HelicopterTarget.CenterCm.Z, SebboHq::GetHelipadHeightCm(D), 1.0);
+
+	int32 Haltstreifen = 0;
+	for (const FHqPart& Part : Layout.Parts)
+	{
+		const bool bQuerZurZufahrt = Part.Material == EHqMaterial::Marking
+			&& Part.SizeCm.X <= 20.0 && Part.SizeCm.Y >= 500.0;
+		Haltstreifen += bQuerZurZufahrt ? 1 : 0;
+	}
+	TestEqual(TEXT("Genau ein sichtbarer Haltstreifen markiert die Konfliktzone"), Haltstreifen, 1);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqHelipadApproachTest,
+	"WiesbadenReal.World.SebboHq.HelipadApproach",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqHelipadApproachTest::RunTest(const FString& Parameters)
+{
+	// Gefunden hat das die Laufzeit-Sonde (-WbAnkunftProbe), nicht eine
+	// Rechnung: das Lot auf die Aufsetzflaeche traf die Krone bei 70 m statt
+	// den Platz bei 60,2 m. Die Krone war 16,5 m breit und haengte ueber den
+	// inneren 8 m des 18-m-Platzes - der Landeplatz war gezeichnet, aber von
+	// oben nicht erreichbar. Dieser Test haelt die Geometrie fest, damit der
+	// Befund nicht wieder ein Spielstart lang unbemerkt bleibt.
+	const FSebboHqDimensions D;
+	const double KroneHalb = SebboHq::GetCrownHalfWidthCm(D);
+	const double PadVersatz = SebboHq::GetHelipadOffsetCm(D);
+	const double PadRadius = D.HelipadDiameterCm * 0.5;
+	const double RotorRadius = D.HelipadDiameterCm * 0.35;
+	const double Dachkante = D.FootprintCm * 0.5;
+
+	TestTrue(TEXT("Die Krone sitzt auf dem Kern und nicht ueber dem halben Dach"),
+		KroneHalb * 2.0 <= D.CoreCm * 1.2);
+	TestTrue(TEXT("Der Anflugkorridor liegt vollstaendig neben der Krone"),
+		PadVersatz - RotorRadius > KroneHalb);
+	TestTrue(TEXT("Der Anflugkorridor bleibt ueber dem Dach"),
+		PadVersatz + RotorRadius < Dachkante);
+	TestTrue(TEXT("Die Aufsetzflaeche liegt ganz auf dem Dach"),
+		PadVersatz + PadRadius <= Dachkante);
+	TestTrue(TEXT("Die Aufsetzflaeche stoesst nicht an den Kern"),
+		PadVersatz - PadRadius > -D.CoreCm * 0.5);
+
+	// Das Ankunftsziel und die gebaute Flaeche teilen EINE Rechnung.
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+	TestEqual(TEXT("Das Heli-Ziel liegt ueber der Aufsetzflaeche"),
+		Layout.HelicopterTarget.CenterCm.X, PadVersatz, 1.0);
 
 	return true;
 }

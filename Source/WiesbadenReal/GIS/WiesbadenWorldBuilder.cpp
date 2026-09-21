@@ -40,6 +40,8 @@
 #include "UObject/UObjectGlobals.h"
 #include "World/RegionAssetSpawnerComponent.h"
 #include "World/RoadFurnitureSpawnerComponent.h"
+#include "World/SebboHqShape.h"
+#include "World/SebboHqSite.h"
 #include "World/WiesbadenCityChunk.h"
 
 #include <atomic>
@@ -115,6 +117,37 @@ namespace
 
 		Context->bCancelled = (Result == WiesbadenCityPipeline::EBuildResult::Cancelled);
 		Context->bDone.store(true);
+	}
+
+	/**
+	 * Die Stadt-Geometrie bleibt Eigentuemerin des Uebergangs von der Platter
+	 * Strasse zum Tower. Die privaten Ziele stammen aus derselben Form, die der
+	 * Tower zur Laufzeit baut; eine explizite Editor-Ueberschreibung gewinnt.
+	 */
+	void ConfigureSebboHqAccess(FRoadGenerationSettings& Settings,
+		const UGeoCoordinateConverter& Converter)
+	{
+		if (Settings.AccessOverride.bEnabled)
+		{
+			return;
+		}
+
+		const FSebboHqDimensions Dimensions;
+		const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(Dimensions);
+		const FVector TowerBase = Converter.GeoToUnrealGround(SebboHqSite::Coordinate());
+		const FRotator TowerHeading = SebboHqSite::Heading();
+		const auto ToWorld = [&TowerBase, &TowerHeading](const FVector& Local)
+		{
+			return TowerBase + TowerHeading.RotateVector(Local);
+		};
+
+		FRoadAccessOverride& Access = Settings.AccessOverride;
+		Access.bEnabled = true;
+		Access.GarageEntranceWorldCm = ToWorld(Layout.GarageTarget.CenterCm);
+		Access.PedestrianEntranceWorldCm = ToWorld(Layout.PedestrianTarget.CenterCm);
+		Access.SearchRadiusCm = 5000.0;
+		Access.GarageWidthCm = 700.0;
+		Access.PedestrianWidthCm = 200.0;
 	}
 }
 
@@ -247,6 +280,7 @@ void AWiesbadenWorldBuilder::BuildCity()
 	Context->Input.RegionAssetSettings = RegionAssetSettings;
 	Context->Input.VerticalReferenceMeters = VerticalReferenceMeters;
 	Context->Input.RoadSettings = RoadSettings;
+	ConfigureSebboHqAccess(Context->Input.RoadSettings, *PipelineConverter);
 	Context->Input.BuildingSettings = BuildingSettings;
 	AddressFacadeMaterials.GetKeys(Context->Input.BuildingSettings.FacadeOverrideAddresses);
 	Context->Input.TerrainSettings = TerrainSettings;
