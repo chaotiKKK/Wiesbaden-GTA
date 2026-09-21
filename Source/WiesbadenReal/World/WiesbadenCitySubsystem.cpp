@@ -4307,6 +4307,22 @@ void UWiesbadenCitySubsystem::InitializeCity()
 					UE_LOG(LogWbTraffic, Warning,
 						TEXT("-WbOhneKonfliktgruppen: Freigabegruppen NICHT konfliktfrei (nur zum Messen)."));
 				}
+				// Die beiden Hebel der Gruppenbildung, einzeln abschaltbar, damit
+				// sich ihr Anteil am Fluss TRENNEN laesst. Ohne getrennte
+				// Schalter misst man nur die Summe und weiss hinterher nicht,
+				// welcher der beiden gewirkt hat.
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbZielspurSperrt")))
+				{
+					LightSettings.bSameTargetLaneBlocksGroup = true;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbZielspurSperrt: gemeinsame Zielspur trennt die Freigabegruppen (alter Stand)."));
+				}
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbOhneGradreihenfolge")))
+				{
+					LightSettings.bOrderGroupsByConflictDegree = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbOhneGradreihenfolge: Gruppen in Verbindungs-Nummer statt nach Konfliktgrad."));
+				}
 				TrafficLightSystem.Initialize(Builder->RoadNetwork, LightSettings);
 				TrafficSimulation.SetTrafficLightSystem(&TrafficLightSystem);
 

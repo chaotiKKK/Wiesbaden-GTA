@@ -3758,3 +3758,63 @@ eigenen Wegwerf-Repo-Aufrufe (damit sie auch bei direktem Lauf stimmen), und
 
 Belegt: Hook-Weg mit geerbtem Index -> alle Gates gruen, Index-Eintraege
 vorher 1604, nachher 1604, keine Fremddatei.
+
+
+## Freigabegruppen: die Fortsetzung, und was sie wirklich einbrachte (21.09.2026)
+
+Der Eintrag oben endete mit "wer hier weiterarbeitet, faengt bei Clique statt
+Farbe an". **Diese Formulierung war falsch, und der Irrtum ist lehrreich:**
+eine Farbklasse im Konfliktgraphen IST eine Clique im Vertraeglichkeitsgraphen
+- dasselbe Problem, nur vom Komplement aus gesehen. Der Hebel liegt nicht im
+Verfahren, sondern in der REIHENFOLGE und in der Frage, was ueberhaupt als
+Konflikt zaehlt.
+
+**Zwei Hebel, beide schaltbar, damit ihr Anteil messbar bleibt:**
+
+* `bSameTargetLaneBlocksGroup` (Vorgabe **false**) - der zweite, frueher
+  ausdruecklich NICHT gemessene Verdacht. Die Laufzeitregel zaehlt eine
+  gemeinsame Zielspur als Konflikt; das ist dort richtig. Eine
+  Freigabegruppe stellt eine ANDERE Frage: duerfen beide gleichzeitig Gruen
+  bekommen? Ein Verkehrsplaner gibt einfaedelnde Stroeme gemeinsam frei, sie
+  sortieren sich ueber Luecken - genau dafuer gibt es die Laufzeitregel.
+* `bOrderGroupsByConflictDegree` (Vorgabe **true**) - die am staerksten
+  gebundenen Bewegungen zuerst einsortieren. Aufsteigende Nummer ist
+  reproduzierbar, aber blind: wer viele Konflikte hat, findet spaet keinen
+  Platz und bekommt eine eigene Gruppe.
+
+Die Geometrie wurde NICHT kopiert, sondern als `FindPathCrossing`
+herausgezogen; `DoConnectionsConflict` (Laufzeit) und
+`DoConnectionsConflictForGroup` (Gruppen) benutzen dieselbe Rechnung mit
+verschiedenen Regelwerken darum. Zwei Rechnungen fuer dieselbe Frage laufen
+auseinander.
+
+**DREI ZUSTAENDE GEMESSEN**, derselbe Build, dieselbe Karte, je 300 s,
+Spieler per Koordinate 250 m noerdlich geparkt (`-WbGoto=22230,145934`),
+verglichen mit `Tools/vergleich_staukarten.py` ueber 61-63 Strassen:
+
+| Zustand | Stadt gewichtet | Bahnhofsplatz | Umlauf | Spanne | verschoben |
+|---|---|---|---|---|---|
+| Faustregel (`-WbOhneKonfliktgruppen`) | 39,9 % | 14,6 % (7,0 km/h) | 36 s | 20..70 | 0 |
+| alt (`-WbZielspurSperrt -WbOhneGradreihenfolge`) | 29,5 % | 12,0 % (5,5 km/h) | 51 s | 20..180 | 6357 |
+| **neu (Vorgabe)** | **30,8 %** | **8,5 % (3,8 km/h)** | **44 s** | **20..110** | **4683** |
+
+**Das Ergebnis ist gemischt, und so steht es hier.** Stadtweit kostet
+Konfliktfreiheit 10,4 Punkte; die beiden Hebel holen davon 1,3 zurueck -
+13 Prozent. Die Struktur wird deutlich besser (466 -> 142 Zusatzgruppen,
+groesste Gruppenzahl 10 -> 7, Umlaufspanne 180 -> 110 s), und die grossen
+Achsen gewinnen klar: Konrad-Adenauer-Ring 13,2 -> 27,3 %, Mainzer Strasse
+23,5 -> 30,1 % (973.000 Messwerte), Kaiser-Friedrich-Ring 22,8 -> 27,2 %.
+
+**Der Bahnhofsplatz selbst wurde schlechter** (12,0 -> 8,5 %), also genau der
+Ort, um den es urspruenglich ging. Einschraenkung, die dazugehoert: JE
+ZUSTAND EIN LAUF. Die Messwertzahl am Bahnhofsplatz schwankte zwischen den
+Laeufen um das Zehnfache (131.000 bis 1,17 Mio.) - der stadtweite gewichtete
+Wert ueber 60 Strassen traegt, die einzelne Strasse traegt weniger. Wer die
+Bahnhofsplatz-Zahl belastbar will, braucht Wiederholungen.
+
+**Der Test hielt vorher eine POLITIK fest**, nicht eine Eigenschaft: "Sechs
+einfaedelnde Verbindungen ergeben sechs Gruppen". Jetzt prueft er beide
+Stellungen des Schalters (Vorgabe: eine Gruppe; streng: sechs) und
+zusaetzlich die Invariante, die unter BEIDEN gelten muss - sich KREUZENDE
+Wege bleiben getrennt. Ein Schalter, dessen zweite Stellung niemand testet,
+ist eine Behauptung.

@@ -95,7 +95,8 @@ int32 FWiesbadenTrafficLightSystem::GroupForApproach(int32 Axis, bool bLeftTurn)
 }
 
 int32 FWiesbadenTrafficLightSystem::MakeGroupsConflictFree(
-	const FRoadNetwork& InNetwork, TMap<int32, int32>& InOutGroups)
+	const FRoadNetwork& InNetwork, TMap<int32, int32>& InOutGroups,
+	bool bSameTargetLaneBlocksGroup, bool bOrderGroupsByConflictDegree)
 {
 	if (InOutGroups.Num() == 0)
 	{
@@ -114,10 +115,60 @@ int32 FWiesbadenTrafficLightSystem::MakeGroupsConflictFree(
 	}
 	Reihenfolge.Sort();
 
+	// DIE AM STAERKSTEN GEBUNDENEN ZUERST.
+	//
+	// Aufsteigende Nummer ist reproduzierbar, aber blind: wer viele Konflikte
+	// hat, findet spaet keinen Platz mehr und bekommt eine eigene Gruppe -
+	// und jede zusaetzliche Gruppe ist eine Phase mehr im Umlauf, fuer ALLE
+	// Zufahrten. Setzt man die Schwierigen zuerst, faellt der leichte Rest
+	// hinterher in die schon vorhandenen Gruppen.
+	//
+	// Der Grad wird nur unter Verbindungen DESSELBEN Knotens gezaehlt -
+	// andere koennen einander nicht im Weg liegen, und ein Vergleich aller
+	// gegen alle waere bei 199867 Verbindungen quadratisch.
+	TMap<int32, int32> Grad;
+	if (bOrderGroupsByConflictDegree)
+	{
+		TMap<int64, TArray<int32>> NachKnoten;
+		for (const int32 Index : Reihenfolge)
+		{
+			if (InNetwork.Connections.IsValidIndex(Index))
+			{
+				NachKnoten.FindOrAdd(InNetwork.Connections[Index].IntersectionNodeId).Add(Index);
+			}
+		}
+		for (const TPair<int64, TArray<int32>>& Knoten : NachKnoten)
+		{
+			const TArray<int32>& Am = Knoten.Value;
+			for (int32 a = 0; a < Am.Num(); ++a)
+			{
+				for (int32 b = a + 1; b < Am.Num(); ++b)
+				{
+					if (FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
+						InNetwork.Connections[Am[a]], InNetwork.Connections[Am[b]],
+						bSameTargetLaneBlocksGroup))
+					{
+						Grad.FindOrAdd(Am[a], 0)++;
+						Grad.FindOrAdd(Am[b], 0)++;
+					}
+				}
+			}
+		}
+		// Hoher Grad zuerst; bei Gleichstand weiter die Nummer, damit
+		// dieselbe Stadt dasselbe Signalprogramm bekommt.
+		Reihenfolge.Sort([&Grad](int32 L, int32 R)
+		{
+			const int32 GL = Grad.FindRef(L);
+			const int32 GR = Grad.FindRef(R);
+			return (GL != GR) ? (GL > GR) : (L < R);
+		});
+	}
+
 	// Gruppe -> die Verbindungen, die schon darin liegen.
 	TMap<int32, TArray<int32>> Belegung;
 
-	const auto Passt = [&InNetwork, &Belegung](int32 Gruppe, int32 Kandidat)
+	const bool bZielspurSperrt = bSameTargetLaneBlocksGroup;
+	const auto Passt = [&InNetwork, &Belegung, bZielspurSperrt](int32 Gruppe, int32 Kandidat)
 	{
 		const TArray<int32>* Drin = Belegung.Find(Gruppe);
 		if (!Drin)
@@ -126,8 +177,9 @@ int32 FWiesbadenTrafficLightSystem::MakeGroupsConflictFree(
 		}
 		for (const int32 Anderer : *Drin)
 		{
-			if (FWiesbadenTrafficSimulation::DoConnectionsConflict(
-				InNetwork.Connections[Kandidat], InNetwork.Connections[Anderer]))
+			if (FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
+				InNetwork.Connections[Kandidat], InNetwork.Connections[Anderer],
+				bZielspurSperrt))
 			{
 				return false;
 			}
@@ -263,7 +315,8 @@ void FWiesbadenTrafficLightSystem::Initialize(
 		if (Settings.bConflictFreeGroups)
 		{
 			TMap<int32, int32> Vorher = Light.ConnectionGroups;
-			Light.GroupCount = MakeGroupsConflictFree(InNetwork, Light.ConnectionGroups);
+			Light.GroupCount = MakeGroupsConflictFree(InNetwork, Light.ConnectionGroups,
+				Settings.bSameTargetLaneBlocksGroup, Settings.bOrderGroupsByConflictDegree);
 			for (const TPair<int32, int32>& Paar : Light.ConnectionGroups)
 			{
 				ConflictMovedConnections += (Vorher[Paar.Key] != Paar.Value) ? 1 : 0;

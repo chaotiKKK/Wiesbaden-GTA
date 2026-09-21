@@ -1151,6 +1151,16 @@ bool FWiesbadenTrafficSimulation::FindConnectionConflict(
 		return true;
 	}
 
+	return FindPathCrossing(A, B, OutClearOnA, OutClearOnB);
+}
+
+bool FWiesbadenTrafficSimulation::FindPathCrossing(
+	const FLaneConnection& A, const FLaneConnection& B,
+	double& OutClearOnA, double& OutClearOnB)
+{
+	OutClearOnA = 0.0;
+	OutClearOnB = 0.0;
+
 	double AlongA = 0.0;
 	for (int32 i = 1; i < A.ConnectionPath.Num(); ++i)
 	{
@@ -1174,6 +1184,38 @@ bool FWiesbadenTrafficSimulation::FindConnectionConflict(
 		AlongA += SegmentA;
 	}
 	return false;
+}
+
+bool FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
+	const FLaneConnection& A, const FLaneConnection& B, bool bSameTargetLaneBlocks)
+{
+	// Dieselbe Rechnung wie fuer die Laufzeitregel, aber eine andere FRAGE.
+	//
+	// Die Laufzeitregel fragt: darf dieses Fahrzeug jetzt losfahren? Dort ist
+	// eine gemeinsame ZIELSPUR ein Konflikt - der Hintere wartet, bis der
+	// Vordere die Verbindung verlassen hat.
+	//
+	// Eine FREIGABEGRUPPE fragt etwas anderes: duerfen diese beiden Stroeme
+	// gleichzeitig Gruen bekommen? Ein Verkehrsplaner gibt zwei einfaedelnde
+	// Stroeme sehr wohl gemeinsam frei; sie sortieren sich ueber Luecken, und
+	// genau dafuer gibt es die Laufzeitregel. Wer sie auch hier trennt, kauft
+	// Konfliktfreiheit mit zusaetzlichen Phasen - und jede Phase verlaengert
+	// den Umlauf fuer ALLE.
+	//
+	// Die Geometrie kommt aus FindPathCrossing, derselben Funktion, die auch
+	// die Laufzeitregel benutzt. Zwei Rechnungen fuer dieselbe Frage laufen
+	// auseinander; hier ist es EINE Rechnung mit zwei Regelwerken darum.
+	if (A.FromLaneId == B.FromLaneId)
+	{
+		return false;       // aus einer Kolonne aufgefaechert
+	}
+	if (bSameTargetLaneBlocks && A.ToLaneId == B.ToLaneId)
+	{
+		return true;
+	}
+	double ClearA = 0.0;
+	double ClearB = 0.0;
+	return FindPathCrossing(A, B, ClearA, ClearB);
 }
 
 bool FWiesbadenTrafficSimulation::DoConnectionsConflict(

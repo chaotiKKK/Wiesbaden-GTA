@@ -657,8 +657,17 @@ namespace
 	}
 
 	/** Alle Paare EINER Gruppe auf Konflikt pruefen. */
+	/**
+	 * Konfliktfrei - nach der GRUPPEN-Frage, nicht nach der Laufzeitregel.
+	 *
+	 * Die Laufzeitregel zaehlt eine gemeinsame Zielspur als Konflikt; eine
+	 * Freigabegruppe nur, wenn bZielspurSperrt gesetzt ist. Wer hier die
+	 * Laufzeitfrage stellt, prueft eine Eigenschaft, die die Gruppenbildung
+	 * gar nicht herstellen will.
+	 */
 	bool GruppenSindKonfliktfrei(const FRoadNetwork& Netz,
-		const TMap<int32, int32>& Gruppen, FString& OutGrund)
+		const TMap<int32, int32>& Gruppen, FString& OutGrund,
+		bool bZielspurSperrt = false)
 	{
 		TArray<int32> Alle;
 		Gruppen.GetKeys(Alle);
@@ -671,8 +680,9 @@ namespace
 				{
 					continue;
 				}
-				if (FWiesbadenTrafficSimulation::DoConnectionsConflict(
-					Netz.Connections[Alle[a]], Netz.Connections[Alle[b]]))
+				if (FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
+					Netz.Connections[Alle[a]], Netz.Connections[Alle[b]],
+					bZielspurSperrt))
 				{
 					OutGrund = FString::Printf(
 						TEXT("Verbindung %d und %d liegen beide in Gruppe %d und kollidieren"),
@@ -718,20 +728,42 @@ bool FSignalConflictFreeTest::RunTest(const FString& Parameters)
 			FWiesbadenTrafficSimulation::DoConnectionsConflict(
 				Netz.Connections[0], Netz.Connections[1]));
 
-		// Faustregel: beide in Gruppe 0 - genau der Fall, den es zu heilen gilt.
-		TMap<int32, int32> Gruppen;
-		Gruppen.Add(0, 0);
-		Gruppen.Add(1, 0);
-		FString Grund;
-		TestFalse(TEXT("Die Faustregel allein ist NICHT konfliktfrei"),
-			GruppenSindKonfliktfrei(Netz, Gruppen, Grund));
+		// VORGABE (einfaedeln erlaubt): die beiden duerfen zusammen Gruen
+		// bekommen. Ein Verkehrsplaner gibt einfaedelnde Stroeme gemeinsam
+		// frei; sie sortieren sich ueber Luecken, und genau dafuer gibt es
+		// die Laufzeitregel. Bis zum 21.09.2026 trennte die Gruppenbildung
+		// sie - das kostete am Bahnhofsplatz gemessen 37 Prozent Tempo.
+		{
+			TMap<int32, int32> Gruppen;
+			Gruppen.Add(0, 0);
+			Gruppen.Add(1, 0);
+			FString Grund;
+			const int32 Anzahl = FSys::MakeGroupsConflictFree(Netz, Gruppen);
+			TestTrue(TEXT("Einfaedeln: konfliktfrei nach der Gruppen-Frage"),
+				GruppenSindKonfliktfrei(Netz, Gruppen, Grund, false));
+			TestEqual(TEXT("Einfaedeln: beide bleiben in EINER Gruppe"),
+				Gruppen[0], Gruppen[1]);
+			TestEqual(TEXT("Einfaedeln: eine Gruppe genuegt"), Anzahl, 1);
+		}
 
-		const int32 Anzahl = FSys::MakeGroupsConflictFree(Netz, Gruppen);
-		TestTrue(TEXT("Danach konfliktfrei"), GruppenSindKonfliktfrei(Netz, Gruppen, Grund));
-		TestNotEqual(TEXT("Die beiden sitzen in verschiedenen Gruppen"),
-			Gruppen[0], Gruppen[1]);
-		TestTrue(TEXT("Gruppenzahl deckt die benutzten Gruppen ab"),
-			Anzahl > FMath::Max(Gruppen[0], Gruppen[1]));
+		// STRENG (Zielspur sperrt): dann muessen sie getrennt werden. Der
+		// Hebel wird in BEIDE Richtungen geprueft - ein Schalter, dessen
+		// zweite Stellung niemand testet, ist eine Behauptung.
+		{
+			TMap<int32, int32> Gruppen;
+			Gruppen.Add(0, 0);
+			Gruppen.Add(1, 0);
+			FString Grund;
+			TestFalse(TEXT("Streng: die Faustregel allein ist NICHT konfliktfrei"),
+				GruppenSindKonfliktfrei(Netz, Gruppen, Grund, true));
+			const int32 Anzahl = FSys::MakeGroupsConflictFree(Netz, Gruppen, true);
+			TestTrue(TEXT("Streng: danach konfliktfrei"),
+				GruppenSindKonfliktfrei(Netz, Gruppen, Grund, true));
+			TestNotEqual(TEXT("Streng: die beiden sitzen in verschiedenen Gruppen"),
+				Gruppen[0], Gruppen[1]);
+			TestTrue(TEXT("Streng: Gruppenzahl deckt die benutzten Gruppen ab"),
+				Anzahl > FMath::Max(Gruppen[0], Gruppen[1]));
+		}
 	}
 
 	// -- 2. Zwei Wege KREUZEN sich, ohne dieselbe Zielspur. -----------------
@@ -819,8 +851,17 @@ bool FSignalConflictFreeTest::RunTest(const FString& Parameters)
 			TestEqual(*FString::Printf(TEXT("Verbindung %d bekommt dieselbe Gruppe"), i),
 				A[i], B[i]);
 		}
-		// Sechs Verbindungen in dieselbe Spur: jede braucht ihre eigene Gruppe.
-		TestEqual(TEXT("Sechs einfaedelnde Verbindungen ergeben sechs Gruppen"), AnzahlA, 6);
+		// Sechs Verbindungen in dieselbe Spur: mit der Vorgabe EINE Freigabe -
+		// sonst braeuchte diese eine Kreuzung sechs Phasen, und der Umlauf
+		// waechst fuer jede Zufahrt mit, auch fuer die unbeteiligten.
+		TestEqual(TEXT("Sechs einfaedelnde Verbindungen ergeben EINE Gruppe"), AnzahlA, 1);
+
+		// Und mit der strengen Stellung wieder sechs - der Preis, den die
+		// Zahl sichtbar macht.
+		TMap<int32, int32> Streng;
+		for (int32 i = 0; i < 6; ++i) { Streng.Add(i, 0); }
+		TestEqual(TEXT("Streng: sechs einfaedelnde ergeben sechs Gruppen"),
+			FSys::MakeGroupsConflictFree(Netz, Streng, true), 6);
 	}
 
 	return true;

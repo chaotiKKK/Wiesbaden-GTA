@@ -869,6 +869,20 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	static bool FindConnectionConflict(const FLaneConnection& A, const FLaneConnection& B,
 		double& OutClearOnA, double& OutClearOnB);
 
+	/** Nur die Weg-Geometrie: schneiden sich die beiden Bahnen? */
+	static bool FindPathCrossing(const FLaneConnection& A, const FLaneConnection& B,
+		double& OutClearOnA, double& OutClearOnB);
+
+	/**
+	 * Duerfen diese beiden gleichzeitig Gruen bekommen?
+	 *
+	 * Andere Frage als DoConnectionsConflict, gleiche Geometrie. Die
+	 * gemeinsame Zielspur ist fuer die Laufzeitregel ein Konflikt, fuer eine
+	 * Freigabegruppe nur dann, wenn bSameTargetLaneBlocks gesetzt ist.
+	 */
+	static bool DoConnectionsConflictForGroup(const FLaneConnection& A,
+		const FLaneConnection& B, bool bSameTargetLaneBlocks);
+
 	/**
 	 * Geduldeter Abstand der Karosserie zur Sollbahn bei diesem Tempo (cm).
 	 *

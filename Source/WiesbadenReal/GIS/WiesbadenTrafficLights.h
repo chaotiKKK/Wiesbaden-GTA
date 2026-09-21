@@ -127,6 +127,39 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights")
 	bool bConflictFreeGroups = true;
 
+	/**
+	 * Sperrt eine gemeinsame ZIELSPUR zwei Bewegungen gegeneinander?
+	 *
+	 * GEMESSEN am 20.09.2026: die konfliktfreien Gruppen kosteten am
+	 * Bahnhofsplatz 37 Prozent Tempo (7,8 -> 4,9 km/h), weil 6357
+	 * Verbindungen ihre Wunschgruppe verlassen mussten und der Umlauf von
+	 * 36 auf 51 s stieg. Ein Teil davon geht auf diese Frage.
+	 *
+	 * Fuer die LAUFZEITREGEL ist die gemeinsame Zielspur ein Konflikt - der
+	 * Hintere wartet, bis der Vordere die Verbindung verlassen hat. Fuer eine
+	 * FREIGABEGRUPPE ist sie es nicht: ein Verkehrsplaner gibt zwei
+	 * einfaedelnde Stroeme gemeinsam frei, sie sortieren sich ueber Luecken,
+	 * und genau dafuer gibt es die Laufzeitregel. Wer sie auch hier trennt,
+	 * kauft Konfliktfreiheit mit zusaetzlichen Phasen - und jede Phase
+	 * verlaengert den Umlauf fuer ALLE Zufahrten.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights")
+	bool bSameTargetLaneBlocksGroup = false;
+
+	/**
+	 * Die am staerksten gebundenen Bewegungen zuerst einsortieren.
+	 *
+	 * Die erste Fassung lief in aufsteigender Verbindungs-Nummer. Das ist
+	 * reproduzierbar, aber blind: wer viele Konflikte hat, findet spaet keinen
+	 * Platz mehr und bekommt eine eigene Gruppe. Wer zuerst die am staerksten
+	 * gebundenen setzt, laesst den leichten Rest hinterher in die vorhandenen
+	 * Gruppen fallen - weniger Gruppen, weniger Phasen, kuerzerer Umlauf.
+	 * Bei gleichem Grad entscheidet weiter die Nummer, damit dieselbe Stadt
+	 * dasselbe Programm bekommt.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights")
+	bool bOrderGroupsByConflictDegree = true;
+
 	/** Gruenzeit der Abbiegephase (s). Kurz - es sind wenige Fahrzeuge. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "0.0"))
 	double LeftTurnGreenSeconds = 5.0;
@@ -316,7 +349,9 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSystem
 	 * Rueckgabe: die Zahl der benutzten Gruppen (also das neue GroupCount).
 	 */
 	static int32 MakeGroupsConflictFree(
-		const FRoadNetwork& InNetwork, TMap<int32, int32>& InOutGroups);
+		const FRoadNetwork& InNetwork, TMap<int32, int32>& InOutGroups,
+		bool bSameTargetLaneBlocksGroup = false,
+		bool bOrderGroupsByConflictDegree = true);
 
 	/**
 	 * Wie viele Verbindungen die Faustregel verlassen mussten (Diagnose).
