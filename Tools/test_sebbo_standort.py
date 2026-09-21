@@ -16,12 +16,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sebbo_standort as st  # noqa: E402
 
 # GEMESSEN am 21.09.2026 auf Karte Alkis17, aus Saved/Logs/WiesbadenReal.log:
-#   LogWbSebboHq: Sebbo-Hauptsitz gebaut bei (-110985, -128485, 10251)
+#   LogWbSebboHq: Sebbo-Hauptsitz gebaut bei (-110714, -127729, 10095)
 # Das ist die Stelle, an der die Engine den Turm WIRKLICH gebaut hat. Ein
 # Anker aus derselben Formel waere wertlos - er wuerde nur bestaetigen, dass
 # die Formel sich selbst gleicht.
-ENGINE_X_CM = -110985.0
-ENGINE_Y_CM = -128485.0
+#
+# Der Wert hat sich geaendert, weil der Standort sich geaendert hat: der Turm
+# stand in der Wolkenbruch (die Fahrbahn lief 497 cm unter dem Gebaeude
+# durch), und wurde um 8 m zurueckgenommen - siehe SebboHqSite.h. Vorher
+# stand hier (-110985, -128485).
+ENGINE_X_CM = -110714.0
+ENGINE_Y_CM = -127729.0
 
 
 class TrifftDieEngineTest(unittest.TestCase):
@@ -72,13 +77,13 @@ class LiestWirklichDieHeaderTest(unittest.TestCase):
         echt = st.standort_cm()
         # 0,01 Grad noerdlich sind rund 1,1 km - das muss sich zeigen.
         verschoben = st.standort_cm(
-            site_h=self.schreibe_site(50.103950, 8.224490))
+            site_h=self.schreibe_site(50.103882, 8.224528))
         self.assertAlmostEqual(verschoben[1] - echt[1], -111000.0, delta=3000.0,
                                msg="der Standort wird nicht aus dem Header gelesen")
 
     def test_dieselben_werte_ergeben_dieselbe_stelle(self):
         echt = st.standort_cm()
-        kopie = st.standort_cm(site_h=self.schreibe_site(50.093950, 8.224490))
+        kopie = st.standort_cm(site_h=self.schreibe_site(50.093882, 8.224528))
         self.assertAlmostEqual(kopie[0], echt[0], delta=1.0)
         self.assertAlmostEqual(kopie[1], echt[1], delta=1.0)
 
@@ -99,7 +104,7 @@ class KeineZweitwahrheitTest(unittest.TestCase):
         # erklaeren duerfen.
         code = "\n".join(z for z in text.splitlines()
                          if not z.lstrip().startswith("#"))
-        for zahl in ("50.093950", "8.224490", "50.0824", "8.2400", "6378137"):
+        for zahl in ("50.093882", "8.224528", "50.0824", "8.2400", "6378137"):
             self.assertNotIn(zahl, code,
                              "%s steht fest im Modul statt gelesen zu werden" % zahl)
 

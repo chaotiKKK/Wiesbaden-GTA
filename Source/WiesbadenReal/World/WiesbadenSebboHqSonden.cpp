@@ -723,12 +723,35 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		// Lauf setzte die Kapsel auf Portalhoehe an, waehrend der Gehweg
 		// 1,66 m tiefer lag - sie meldete im ersten Schritt "nichts unter
 		// den Fuessen" und das sah aus wie ein verbautes Portal.
-		const double StartZ = (bStrassePortal ? StrassePortalZ : BodenZ) + 2.0;
-		FVector Jetzt = NachWelt(FVector(Half + 400.0, PortalY, StartZ + Kapselmitte));
+		//
+		// UND DIE HOEHE AM STARTPUNKT NEHMEN, nicht 4 m weiter draussen. Hier
+		// stand StrassePortalZ - das ist der Belag bei Half+800, gesetzt wird
+		// die Kapsel aber bei Half+400. Solange dort dasselbe Gelaende lag,
+		// fiel der Unterschied nicht auf; seit die Wolkenbruch bis vor das
+		// Grundstueck reicht, misst das aeussere Lot die Fahrbahn und das
+		// innere den Hang darueber. Die Kapsel startete 22 cm zu tief und
+		// meldete "steckt in der Geometrie (RoadCollisionStaticMesh)" - ein
+		// verbautes Portal, das es nicht gab. Dass es vorher gutging, lag nur
+		// daran, dass SteckenderKoerper das Landscape ausnimmt.
+		constexpr double StartXLokal = 400.0;
+		double StartZ = BodenZ + 2.0;
+		{
+			FCollisionQueryParams PS(SCENE_QUERY_STAT(WbAnkunftProbeFussStart), true);
+			PS.AddIgnoredActor(this);
+			const FVector Oben = NachWelt(
+				FVector(Half + StartXLokal, PortalY, BodenZ + 2000.0));
+			FHitResult Belag;
+			if (World->LineTraceSingleByChannel(Belag, Oben,
+				Oben - FVector(0.0, 0.0, 8000.0), ECC_WorldStatic, PS))
+			{
+				StartZ = (Belag.Location.Z - Fuss.Z) + 2.0;
+			}
+		}
+		FVector Jetzt = NachWelt(FVector(Half + StartXLokal, PortalY, StartZ + Kapselmitte));
 		const FVector Start = Jetzt;
 		const FVector NachInnen = Drehung.RotateVector(FVector(-1.0, 0.0, 0.0));
 		const double ZielX = Layout.PedestrianTarget.CenterCm.X;
-		const int32 SchritteSoll = FMath::CeilToInt((Half + 400.0 - ZielX) / 40.0);
+		const int32 SchritteSoll = FMath::CeilToInt((Half + StartXLokal - ZielX) / 40.0);
 		Fussweg.bFrei = true;
 		for (int32 i = 0; i < SchritteSoll; ++i)
 		{

@@ -340,8 +340,22 @@ FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(const FSebboHqDimensions& 
 		// als Zufahrtsschuerze. 20 Stufen zu je 3 cm verschwinden auf jede
 		// normale Entfernung in der Flaeche.
 		constexpr int32 StufenZahl = 20;
-		constexpr double RampeLaengeCm = 300.0;
-		constexpr double RampeFallCm = 60.0;
+		// LANG GENUG, DASS SIE DIE FAHRBAHN ERREICHT.
+		//
+		// 300 cm endeten in der Wiese. Das lag nicht an der Laenge, sondern
+		// daran, dass der Turm in der Strasse stand (siehe SebboHqSite.h);
+		// nach der Ruecknahme um 8 m liegt die Wolkenbruch vor dem Haus, und
+		// die Zufahrtssonde misst ihre turmseitige Kante vor der
+		// Garagenoeffnung bei 1946..2162 cm. Der Fuss der Schuerze trifft sie
+		// bei 1551 + 620 = 2171 cm.
+		//
+		// Und FLACHER: die 60 cm stammen vom alten 40-cm-Absatz. Das neu
+		// gebackene Gelaende steigt von der Fahrbahn (10093 cm) gleichmaessig
+		// zum Garagenboden (10141 cm) - 48 cm auf 6,2 m. 50 cm Fall legen die
+		// Schuerze damit praktisch auf das Gelaende, statt sie darueber zu
+		// stellen.
+		constexpr double RampeLaengeCm = 620.0;
+		constexpr double RampeFallCm = 50.0;
 		for (int32 i = 0; i < StufenZahl; ++i)
 		{
 			const double X0 = Half + RampeLaengeCm * i / StufenZahl;

@@ -674,5 +674,29 @@ bool FSebboHqSchwellenrampeTest::RunTest(const FString& Parameters)
 		BreitesteLageCm, SpurBreiteCm),
 		BreitesteLageCm >= SpurBreiteCm + 200.0);
 
+	// UND SIE MUSS BIS AN DIE FAHRBAHN REICHEN.
+	//
+	// GEMESSEN am 21.09.2026 auf Alkis17 (Saved/Diagnose/zufahrtsprobe.json,
+	// "fahrbahn_lokal"): die turmseitige Kante der Wolkenbruch liegt vor der
+	// Garagenoeffnung bei 1946..2162 cm vom Mittelpunkt. Mit 300 cm endete
+	// die Schuerze bei 1851 cm - bis zu 3 m davor, im Gras. Der Vertrag haelt
+	// darum die LAENGE fest und nicht nur die Form; eine kuerzere Schuerze
+	// waere wieder eine Zufahrt, die nirgendwohin fuehrt.
+	double FussDerSchuerzeCm = Half;
+	for (const FHqPart& Teil : Layout.Parts)
+	{
+		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
+		if (Oberkante <= BodenZ + 1.0 && Oberkante > BodenZ - 200.0
+			&& Teil.CenterCm.Y < 0.0 && Teil.SizeCm.Y <= SpurBreiteCm + 1.0)
+		{
+			FussDerSchuerzeCm = FMath::Max(FussDerSchuerzeCm,
+				Teil.CenterCm.X + Teil.SizeCm.X * 0.5);
+		}
+	}
+	TestTrue(*FString::Printf(
+		TEXT("Die Schuerze reicht bis an die Fahrbahn (%.0f cm, noetig 2162)"),
+		FussDerSchuerzeCm),
+		FussDerSchuerzeCm >= 2162.0);
+
 	return true;
 }

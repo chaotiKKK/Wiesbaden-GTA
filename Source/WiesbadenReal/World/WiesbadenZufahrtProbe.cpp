@@ -192,6 +192,97 @@ void UWiesbadenZufahrtProbe::Messen()
 	const FResolvedRoadAccess Aufgeloest =
 		URoadNetworkGenerator::ResolveRoadAccess(Netz, Zugang);
 
+	// --- 2b) DIE GEWAEHLTE FAHRBAHN IN TURMKOORDINATEN -----------------------
+	//
+	// "0,9 m vom Garagenzugang" sagt noch nicht, WIE die Wolkenbruch dort
+	// liegt: quer vor der Tuer, laengs an der Fassade oder schraeg durch das
+	// Erdgeschoss. Von der Antwort haengt ab, ob eine Zufahrt ueberhaupt
+	// irgendwohin fuehren kann - darum die Achse selbst, Punkt fuer Punkt, in
+	// derselben Rechnung, in der auch der Turm gebaut wird (X aus der
+	// Garagenoeffnung heraus, Y quer).
+	FString AchseJson;
+	double UnterbauCm = 0.0;
+	double FahrbahnBreiteCm = 0.0;
+	{
+		const FRotator Zurueck(0.0, -Drehung.Yaw, 0.0);
+		int32 Geschrieben = 0;
+		for (const FRoadSegment& Segment : Netz.Segments)
+		{
+			if (Segment.SegmentId != Aufgeloest.Garage.SegmentId)
+			{
+				continue;
+			}
+			FahrbahnBreiteCm = Segment.CarriagewayWidthCm;
+			const TArray<FVector>& Linie = Segment.TrimmedCenterline.Num() >= 2
+				? Segment.TrimmedCenterline : Segment.Centerline;
+			// WIE WEIT REICHT DIE FAHRBAHN UNTER DAS HAUS?
+			//
+			// Diese eine Zahl fehlte. "0,9 m vom Garagenzugang" klang nach
+			// bester Anbindung und war in Wahrheit der Befund, dass der Turm
+			// in der Strasse steht: die Achse laeuft HINTER der Fassade
+			// durch, nicht davor. Darum fuehrte die Garagenschuerze ins
+			// Nichts; der Wagen kam trotzdem an, er fuhr auf genau diesem
+			// verdeckten Stueck Fahrbahn.
+			//
+			// Gemessen wird die turmseitige Fahrbahnkante gegen die
+			// Fassadenlinie - und zwar ueber die echte Normale der Strecke,
+			// nicht ueber X allein: die Wolkenbruch laeuft hier schraeg, eine
+			// Abschaetzung entlang der Achse waere um rund 10 cm daneben.
+			{
+				const double Halb = Masse.FootprintCm * 0.5
+					+ FMath::Max(0.0, Masse.PodiumOversizeCm);
+				for (int32 i = 0; i + 1 < Linie.Num(); ++i)
+				{
+					const FVector A = Zurueck.RotateVector(Linie[i] - Fuss);
+					const FVector B = Zurueck.RotateVector(Linie[i + 1] - Fuss);
+					const FVector2D Richtung = FVector2D(B.X - A.X, B.Y - A.Y);
+					if (Richtung.IsNearlyZero())
+					{
+						continue;
+					}
+					FVector2D Normale(-Richtung.Y, Richtung.X);
+					Normale.Normalize();
+					if (Normale.X < 0.0)
+					{
+						Normale = -Normale;   // zur Garagenseite zeigend
+					}
+					// Beide Enden und die Mitte reichen: die Stuecke sind kurz.
+					for (const double T : { 0.0, 0.5, 1.0 })
+					{
+						const FVector2D M = FVector2D(A.X, A.Y)
+							+ (FVector2D(B.X, B.Y) - FVector2D(A.X, A.Y)) * T;
+						if (FMath::Abs(M.Y) > Halb)
+						{
+							continue;
+						}
+						const double InnereKante =
+							M.X - Normale.X * Segment.CarriagewayWidthCm * 0.5;
+						if (InnereKante < Halb)
+						{
+							UnterbauCm = FMath::Max(UnterbauCm, Halb - InnereKante);
+						}
+					}
+				}
+			}
+
+			for (const FVector& Punkt : Linie)
+			{
+				const FVector Lokal = Zurueck.RotateVector(Punkt - Fuss);
+				if (FVector2D(Lokal.X, Lokal.Y).Size() > 6000.0)
+				{
+					continue;   // nur die Umgebung des Grundstuecks
+				}
+				AchseJson += FString::Printf(
+					TEXT("%s[%.0f, %.0f, %.0f]"),
+					Geschrieben > 0 ? TEXT(", ") : TEXT(""),
+					Lokal.X, Lokal.Y, Punkt.Z);
+				++Geschrieben;
+			}
+			break;
+		}
+	}
+
+
 	// --- 3) Ringtaster MIT Komponentennamen -----------------------------------
 	//
 	// Der entscheidende Zusatz: ein WiesbadenCityChunk traegt Fahrbahn und
@@ -279,6 +370,7 @@ void UWiesbadenZufahrtProbe::Messen()
 		TEXT(" \"portal_anker\": [%.0f, %.0f],\n")
 		TEXT(" \"pad_wahl\": {\"segment\": %d, \"name\": \"%s\", \"z_cm\": %.0f, \"abstand_m\": %.1f},\n")
 		TEXT(" \"road_access\": {\"garage_segment\": %d, \"portal_segment\": %d, \"gueltig\": %s},\n")
+		TEXT(" \"fahrbahn_lokal\": {\"breite_cm\": %.0f, \"unter_gebaeude_cm\": %.0f, \"achse\": [%s]},\n")
 		TEXT(" \"nachbarstrassen\": [\n  %s\n ],\n")
 		TEXT(" \"ring\": [\n  %s\n ]\n}\n"),
 		Fuss.Z,
@@ -287,6 +379,7 @@ void UWiesbadenZufahrtProbe::Messen()
 		PadWahl ? PadWahl->ZCm : 0.0, PadWahl ? PadWahl->AbstandCm / 100.0 : 0.0,
 		Aufgeloest.Garage.SegmentId, Aufgeloest.Pedestrian.SegmentId,
 		Aufgeloest.IsValid() ? TEXT("true") : TEXT("false"),
+		FahrbahnBreiteCm, UnterbauCm, *AchseJson,
 		*NachbarJson, *RingJson);
 
 	const FString Pfad = FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("zufahrtsprobe.json");
