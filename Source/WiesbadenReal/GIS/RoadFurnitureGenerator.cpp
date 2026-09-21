@@ -173,6 +173,7 @@ namespace
 		double HalfWidthCm = 0.0;
 		/** Breite des Gehwegstreifens daneben (cm). */
 		double SidewalkWidthCm = 0.0;
+		bool bBankettErlaubt = false;
 		/** Einheitsvektor vom Weg WEG, zum Moebel hin. */
 		FVector2D AwayDirection = FVector2D(0.0, 1.0);
 		/** Einheitsvektor laengs der Wegachse. */
@@ -195,12 +196,42 @@ namespace
 		/** Ueber 200 m von jedem Weg entfernt ist kein Strassenrand mehr. */
 		static constexpr int32 MaxRings = 4;
 
+		/** Wegtypen, neben denen wirklich ein begehbarer Streifen liegt. */
+		static bool WbBankettErlaubt(EOSMHighwayType Typ)
+		{
+			switch (Typ)
+			{
+			case EOSMHighwayType::Footway:
+			case EOSMHighwayType::Path:
+			case EOSMHighwayType::Track:
+			case EOSMHighwayType::Pedestrian:
+			case EOSMHighwayType::Steps:
+			case EOSMHighwayType::Cycleway:
+			case EOSMHighwayType::LivingStreet:
+				return true;
+			default:
+				return false;   // Autobahn, Trunk, Service, Zubringer ...
+			}
+		}
+
 		struct FSpan
 		{
 			FVector2D Start = FVector2D::ZeroVector;
 			FVector2D End = FVector2D::ZeroVector;
 			double HalfWidthCm = 0.0;
 			double SidewalkWidthCm = 0.0;
+
+			/**
+			 * Darf hier ein BANKETT als Ersatz-Gehweg gelten?
+			 *
+			 * Gehwegbreite 0 heisst nicht "da ist ein begehbarer Streifen".
+			 * Sie steht auch an Autobahn, Kraftfahrstrasse und Zubringer.
+			 * Das Bankett wurde mit dem Fussweg begruendet - dort stehen
+			 * Baenke neben dem Weg. Neben einer 130er-Fahrbahn steht die
+			 * Standspur, und eine Bank 0,5 m daneben waere kein gerettetes
+			 * Moebel, sondern ein Hindernis.
+			 */
+			bool bBankettErlaubt = false;
 		};
 
 		TArray<FSpan> Spans;
@@ -225,6 +256,7 @@ namespace
 					Span.End = FVector2D(Line[i + 1].X, Line[i + 1].Y);
 					Span.HalfWidthCm = Segment.CarriagewayWidthCm * 0.5;
 					Span.SidewalkWidthCm = FMath::Max(0.0, Segment.SidewalkWidthCm);
+					Span.bBankettErlaubt = WbBankettErlaubt(Segment.HighwayType);
 
 					const int32 Index = Spans.Add(Span);
 					const FVector2D Min(
@@ -308,6 +340,7 @@ namespace
 			OutWay.DistanceCm = FMath::Sqrt(BestDistSq);
 			OutWay.HalfWidthCm = Span.HalfWidthCm;
 			OutWay.SidewalkWidthCm = Span.SidewalkWidthCm;
+			OutWay.bBankettErlaubt = Span.bBankettErlaubt;
 			OutWay.AxisDirection = (Span.End - Span.Start).GetSafeNormal();
 			OutWay.AwayDirection = (Point - BestFoot).GetSafeNormal();
 			if (OutWay.AwayDirection.IsNearlyZero())
@@ -1353,9 +1386,13 @@ void URoadFurnitureGenerator::PlaceStreetFurniture(
 		// nur so breit wie der Weg, bei 1,80 m Fussweg also 0,90 m ab Achse.
 		// Eine Bank einen Meter daneben lag damit ausserhalb. 78 Prozent der
 		// 1464 verworfenen Knoten hingen genau daran.
+		// Das Bankett gilt NUR neben Wegen, neben denen wirklich einer liegt.
+		// Gehwegbreite 0 steht auch an der Autobahn; dort waere eine
+		// herangezogene Bank kein gerettetes Moebel, sondern ein Hindernis
+		// einen halben Meter neben 130 km/h.
 		const double BelagCm = Way.SidewalkWidthCm > KINDA_SMALL_NUMBER
 			? Way.SidewalkWidthCm
-			: FMath::Max(0.0, Settings.FurnitureVergeCm);
+			: (Way.bBankettErlaubt ? FMath::Max(0.0, Settings.FurnitureVergeCm) : 0.0);
 		const double PavedCm = Way.HalfWidthCm + BelagCm;
 
 		// Das ZIELBAND bleibt schmal: wer herangezogen werden MUSS, landet auf
