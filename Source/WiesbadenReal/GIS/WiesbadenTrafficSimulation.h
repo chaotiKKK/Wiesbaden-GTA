@@ -869,6 +869,9 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	static bool FindConnectionConflict(const FLaneConnection& A, const FLaneConnection& B,
 		double& OutClearOnA, double& OutClearOnB);
 
+	/** Bogenlaenge einer Verbindung - geteilt, damit es nur EINE gibt. */
+	static double ConnectionPathLength(const FLaneConnection& C);
+
 	/** Nur die Weg-Geometrie: schneiden sich die beiden Bahnen? */
 	static bool FindPathCrossing(const FLaneConnection& A, const FLaneConnection& B,
 		double& OutClearOnA, double& OutClearOnB);

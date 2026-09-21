@@ -476,9 +476,28 @@ void FWiesbadenTrafficLightSystem::BuildSignalProgram(FWiesbadenTrafficLight& Li
 		for (const TPair<int32, int32>& Pair : Light.ConnectionGroups)
 		{
 			bool& NichtNurLinks = HasNonLeft.FindOrAdd(Pair.Value, false);
-			// Ungerade Gruppen unter 4 sind die Linksgruppen der Faustregel;
-			// alles darueber ist eine Konfliktgruppe und gilt als vollwertig.
-			const bool bLinks = (Pair.Value < 4) && ((Pair.Value % 2) == 1);
+			// AUS DER BEWEGUNG, NICHT AUS DER GRUPPENNUMMER.
+			//
+			// Frueher stand hier `(Pair.Value < 4) && (Pair.Value % 2 == 1)`:
+			// die Faustregel legte Linksabbieger auf die ungeraden Nummern 1
+			// und 3, also konnte man sie an der Nummer ablesen. Die
+			// Konfliktfaerbung hat diese Zuordnung zerschlagen - sie sucht
+			// aufsteigend die erste freie Gruppe, und dabei landet
+			// GERADEAUSVERKEHR routinemaessig in 1 oder 3.
+			//
+			// Folge war eine stille Drosselung: so eine Gruppe galt als
+			// Abbiegegruppe und bekam LeftTurnGreenSeconds (5 s) statt der
+			// vollen Geradeaus-Gruenzeit. An einer Kreuzung mit sieben
+			// Gruppen konnten damit zwei Phasen auf 5 s verhungern,
+			// unabhaengig davon, wer darin stand.
+			//
+			// Der Zeiger auf das Netz liegt vor; also wird gefragt, was die
+			// Verbindung TUT.
+			bool bLinks = false;
+			if (Network && Network->Connections.IsValidIndex(Pair.Key))
+			{
+				bLinks = IsLeftTurn(Network->Connections[Pair.Key].TurnType);
+			}
 			NichtNurLinks = NichtNurLinks || !bLinks;
 		}
 		for (const TPair<int32, bool>& Paar : HasNonLeft)
@@ -588,7 +607,8 @@ void FWiesbadenTrafficLightSystem::BuildSignalProgram(FWiesbadenTrafficLight& Li
 	{
 		FWiesbadenSignalPhase Phase;
 		Phase.Group = Gruppe;
-		Phase.DurationSeconds = static_cast<float>(IstKurz(Gruppe) ? LeftSlot : ThroughSlot);
+		Phase.bLeftTurnOnly = IstKurz(Gruppe);
+		Phase.DurationSeconds = static_cast<float>(Phase.bLeftTurnOnly ? LeftSlot : ThroughSlot);
 		Light.Phases.Add(Phase);
 	}
 
@@ -726,7 +746,13 @@ void FWiesbadenTrafficLightSystem::GetProgramStatistics(
 		OutMaxCycleSeconds = FMath::Max(OutMaxCycleSeconds, Light.CycleSeconds);
 		for (const FWiesbadenSignalPhase& Phase : Light.Phases)
 		{
-			if ((Phase.Group % 2) == 1)
+			// Das FLAG, nicht die Nummer. `Group % 2 == 1` war nur richtig,
+			// solange es die vier Gruppen der Faustregel gab; die
+			// Konfliktfaerbung erzeugt ungerade Gruppen 5, 7, 9 ..., und die
+			// sind keine Abbiegegruppen. Die gemeldete Zahl war damit
+			// aufgeblaeht - eine Kennzahl, die still aufhoerte zu bedeuten,
+			// was ihr Name sagt.
+			if (Phase.bLeftTurnOnly)
 			{
 				++OutWithLeftPhase;
 				break;

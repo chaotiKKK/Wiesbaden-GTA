@@ -715,10 +715,31 @@ bool FSignalConflictFreeTest::RunTest(const FString& Parameters)
 		Netz.Lanes.Add(MakeSignalLane(1, { FVector(0.0, -3640.0, 0.0), FVector(10000.0, 0.0, 0.0) }));
 		Netz.Lanes.Add(MakeSignalLane(2, { FVector(10500.0, 0.0, 0.0), FVector(20000.0, 0.0, 0.0) }));
 		Netz.Intersections.Add(KonfliktKreuzung());
+		// ECHTE Zusammenfuehrung: zwei VERSCHIEDENE Anfahrten auf EINEN
+		// gemeinsamen Endpunkt.
+		//
+		// Die erste Fassung gab beiden denselben Weg. Zwei deckungsgleiche
+		// Strecken fallen in die Parallel-Abkuerzung der Schnittrechnung, nie
+		// in die Schnittrechnung selbst - der Test bestaetigte also die
+		// Absicht, waehrend der Mechanismus fehlte. Genau der Fehlertyp, vor
+		// dem der Eintrag zur Achsenkorrektur warnt.
 		Netz.Connections.Add(KonfliktVerbindung(0, 2, ETurnType::Through,
-			FVector(10000.0, 0.0, 0.0), FVector(10500.0, 0.0, 0.0)));
+			FVector(9500.0, -300.0, 0.0), FVector(10500.0, 0.0, 0.0)));
 		Netz.Connections.Add(KonfliktVerbindung(1, 2, ETurnType::Through,
-			FVector(10000.0, 0.0, 0.0), FVector(10500.0, 0.0, 0.0)));
+			FVector(9500.0, 300.0, 0.0), FVector(10500.0, 0.0, 0.0)));
+
+		// Der gemeinsame Endpunkt ist da - und er ist der EINZIGE
+		// Beruehrpunkt. Ohne die Endpunkt-Ausnahme meldete die Geometrie ihn
+		// als Kreuzung, und der Schalter "einfaedeln erlaubt" erlaubte nichts.
+		TestFalse(TEXT("Einfaedeln gilt nicht als Kreuzen"),
+			FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
+				Netz.Connections[0], Netz.Connections[1], false));
+		TestTrue(TEXT("Streng gilt es sehr wohl"),
+			FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
+				Netz.Connections[0], Netz.Connections[1], true));
+		TestTrue(TEXT("Und die Laufzeitregel sieht weiter einen Konflikt"),
+			FWiesbadenTrafficSimulation::DoConnectionsConflict(
+				Netz.Connections[0], Netz.Connections[1]));
 
 		// Beide Zufahrten liegen auf derselben Achse - das ist die
 		// Voraussetzung dafuer, dass die Faustregel sie zusammenlegt.
@@ -834,8 +855,11 @@ bool FSignalConflictFreeTest::RunTest(const FString& Parameters)
 		Netz.Intersections.Add(KonfliktKreuzung());
 		for (int32 i = 0; i < 6; ++i)
 		{
+			// Faecher: jede Anfahrt kommt aus einer anderen Richtung auf
+			// denselben Endpunkt. Deckungsgleiche Wege wuerden in die
+			// Parallel-Abkuerzung fallen und nichts pruefen.
 			Netz.Connections.Add(KonfliktVerbindung(i, 6, ETurnType::Through,
-				FVector(10000.0, 0.0, 0.0), FVector(10500.0, 0.0, 0.0)));
+				FVector(9500.0, -500.0 + i * 200.0, 0.0), FVector(10500.0, 0.0, 0.0)));
 		}
 
 		TMap<int32, int32> A;

@@ -1116,6 +1116,16 @@ bool FWiesbadenTrafficSimulation::SegmentsIntersect2D(
 	return WbSegmentIntersection2D(A0, A1, B0, B1, TA, TB);
 }
 
+double FWiesbadenTrafficSimulation::ConnectionPathLength(const FLaneConnection& C)
+{
+	double Sum = 0.0;
+	for (int32 i = 1; i < C.ConnectionPath.Num(); ++i)
+	{
+		Sum += FVector::Dist(C.ConnectionPath[i], C.ConnectionPath[i - 1]);
+	}
+	return Sum;
+}
+
 bool FWiesbadenTrafficSimulation::FindConnectionConflict(
 	const FLaneConnection& A, const FLaneConnection& B,
 	double& OutClearOnA, double& OutClearOnB)
@@ -1131,23 +1141,14 @@ bool FWiesbadenTrafficSimulation::FindConnectionConflict(
 		return false;
 	}
 
-	const auto PathLength = [](const FLaneConnection& C)
-	{
-		double Sum = 0.0;
-		for (int32 i = 1; i < C.ConnectionPath.Num(); ++i)
-		{
-			Sum += FVector::Dist(C.ConnectionPath[i], C.ConnectionPath[i - 1]);
-		}
-		return Sum;
-	};
 
 	// In DIESELBE Spur: Konflikt bis zum Ende. Die beiden treffen sich beim
 	// Einfaedeln, auch wenn sich die Wege vorher nicht schneiden - frei wird es
 	// erst, wenn einer die Verbindung verlassen hat.
 	if (A.ToLaneId == B.ToLaneId)
 	{
-		OutClearOnA = PathLength(A);
-		OutClearOnB = PathLength(B);
+		OutClearOnA = ConnectionPathLength(A);
+		OutClearOnB = ConnectionPathLength(B);
 		return true;
 	}
 
@@ -1213,9 +1214,43 @@ bool FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
 	{
 		return true;
 	}
+
 	double ClearA = 0.0;
 	double ClearB = 0.0;
-	return FindPathCrossing(A, B, ClearA, ClearB);
+	if (!FindPathCrossing(A, B, ClearA, ClearB))
+	{
+		return false;
+	}
+
+	// DER GEMEINSAME ENDPUNKT IST KEINE KREUZUNG.
+	//
+	// Ohne diese Unterscheidung war der Schalter WIRKUNGSLOS, und zwar
+	// unsichtbar: RoadNetworkGenerator setzt das Ende JEDER Verbindung auf
+	// ToLane.GetStartPoint(). Zwei Stroeme in dieselbe Spur enden also auf
+	// demselben Punkt, und WbSegmentIntersection2D laesst T und U bis
+	// EINSCHLIESSLICH 1.0 durch - der Einfaedelpunkt wurde als Schnittpunkt
+	// gemeldet. "Einfaedeln erlaubt" erlaubte damit nichts.
+	//
+	// Aufgefallen ist das in der Durchsicht, nicht in der Messung: der Test
+	// dazu gab beiden Verbindungen denselben Weg, und zwei deckungsgleiche
+	// Strecken fallen in die Parallel-Abkuerzung, nicht in die Schnittrechnung.
+	// Ein Test, der die Absicht bestaetigt, waehrend der Mechanismus fehlt.
+	//
+	// Geprueft wird darum, ob der ERSTE Schnittpunkt bei beiden am Wegende
+	// liegt. Kreuzen sie sich vorher und fliessen dann zusammen, meldet
+	// FindPathCrossing den frueheren Punkt - und der bleibt ein Konflikt.
+	if (A.ToLaneId == B.ToLaneId)
+	{
+		constexpr double EndeToleranzCm = 1.0;
+		const bool bNurAmEnde =
+			(ConnectionPathLength(A) - ClearA) <= EndeToleranzCm &&
+			(ConnectionPathLength(B) - ClearB) <= EndeToleranzCm;
+		if (bNurAmEnde)
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
 bool FWiesbadenTrafficSimulation::DoConnectionsConflict(

@@ -201,6 +201,19 @@ struct WIESBADENREAL_API FWiesbadenSignalPhase
 	/** Laenge des Fensters inklusive Rot-Gelb, Gelb und Raeumzeit (s). */
 	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
 	float DurationSeconds = 0.0f;
+
+	/**
+	 * Enthaelt diese Gruppe AUSSCHLIESSLICH Linksabbieger?
+	 *
+	 * Wird dort gesetzt, wo es aus den Bewegungen berechnet wird, und von
+	 * der Statistik gelesen - statt an zwei Stellen aus der Gruppennummer
+	 * geraten zu werden. Die Nummer taugt dafuer seit der Konfliktfaerbung
+	 * nicht mehr: sie vergibt aufsteigend, Geradeausverkehr landet auf
+	 * ungeraden Nummern, und ungerade Nummern ueber 3 gibt es ueberhaupt
+	 * erst seit der Faerbung.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
+	bool bLeftTurnOnly = false;
 };
 
 /** Eine einzelne Ampel an einer Kreuzung (datenrein). */
