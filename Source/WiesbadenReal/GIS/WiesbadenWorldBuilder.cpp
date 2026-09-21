@@ -149,6 +149,45 @@ namespace
 		Access.GarageWidthCm = 700.0;
 		Access.PedestrianWidthCm = 200.0;
 	}
+
+	/**
+	 * Das Bauplateau des Grundstuecks.
+	 *
+	 * Der Turm ist ein zur Laufzeit gespawnter Actor und steht in keinem
+	 * OSM-Datensatz - FlattenUnderBuildings legt ihm deshalb kein Plateau an.
+	 * Gemessen stand er quer im Hang: 11,2 m Gelaendespanne ueber einen
+	 * 40-m-Ring, die Garage 5,1 m in der Boeschung, das Portal 1,66 m ueber
+	 * der Strasse. Radius und Bodenhoehe kommen aus DERSELBEN Form, die der
+	 * Turm baut; der Zufahrtsanker ist der Garagenzugang.
+	 */
+	void ConfigureSebboHqPad(FTerrainGenerationSettings& Settings,
+		const FRoadAccessOverride& Access, const UGeoCoordinateConverter& Converter)
+	{
+		if (!Access.bEnabled)
+		{
+			return;
+		}
+
+		const FSebboHqDimensions Dimensions;
+		const FVector TowerBase = Converter.GeoToUnrealGround(SebboHqSite::Coordinate());
+		const double HalbCm = Dimensions.FootprintCm * 0.5
+			+ FMath::Max(0.0, Dimensions.PodiumOversizeCm);
+
+		FTerrainSitePad Pad;
+		Pad.CenterCm = FVector2D(TowerBase.X, TowerBase.Y);
+		// Umkreisradius des gedrehten Grundrisses plus ein Meter Arbeitsraum -
+		// ein Plateau, das an der Fassade endet, laesst die Ecken im Hang.
+		Pad.RadiusCm = HalbCm * UE_SQRT_2 + 100.0;
+		Pad.SlopeRunCm = 2500.0;
+		Pad.RoadAnchorCm = FVector2D(
+			Access.GarageEntranceWorldCm.X, Access.GarageEntranceWorldCm.Y);
+		Pad.RoadSearchRadiusCm = Access.SearchRadiusCm;
+		// Oberkante des privaten Bodens ueber dem Fusspunkt, wie in
+		// SebboHq::BuildArrivalFacilities: Deckenstaerke plus Belag.
+		Pad.AccessFloorCm = Dimensions.SlabCm + 15.0;
+
+		Settings.SitePads.Add(Pad);
+	}
 }
 
 AWiesbadenWorldBuilder::AWiesbadenWorldBuilder()
@@ -284,6 +323,8 @@ void AWiesbadenWorldBuilder::BuildCity()
 	Context->Input.BuildingSettings = BuildingSettings;
 	AddressFacadeMaterials.GetKeys(Context->Input.BuildingSettings.FacadeOverrideAddresses);
 	Context->Input.TerrainSettings = TerrainSettings;
+	ConfigureSebboHqPad(Context->Input.TerrainSettings,
+		Context->Input.RoadSettings.AccessOverride, *PipelineConverter);
 	Context->Input.FurnitureSettings = FurnitureSettings;
 	Context->Input.TrafficSettings = TrafficSettings;
 	Context->Input.RoadTypeConfigPath = RoadTypeConfigPath;

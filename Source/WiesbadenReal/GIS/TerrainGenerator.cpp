@@ -919,6 +919,117 @@ int32 UTerrainGenerator::FlattenUnderRoads(
 }
 
 
+int32 UTerrainGenerator::FlattenSitePads(
+	const FRoadNetwork& Network,
+	const FTerrainGenerationSettings& Settings,
+	FTerrainTile& Tile) const
+{
+	if (!Settings.bFlattenSitePads || !Tile.IsValid() || Settings.SitePads.Num() == 0)
+	{
+		return 0;
+	}
+
+	int32 Changed = 0;
+	for (const FTerrainSitePad& Pad : Settings.SitePads)
+	{
+		if (Pad.RadiusCm <= 0.0)
+		{
+			continue;
+		}
+
+		// Die Hoehe kommt aus der naechsten Fahrbahn am Zufahrtsanker.
+		// Findet sich dort keine, wird NICHT geraten: ein Plateau auf
+		// geratener Hoehe waere ein zweiter, stiller Hang.
+		double RoadZCm = 0.0;
+		bool bRoadFound = false;
+		{
+			double BestDistanceSquared = FMath::Square(Pad.RoadSearchRadiusCm);
+			for (const FRoadSegment& Segment : Network.Segments)
+			{
+				if (Segment.bIsArea || Segment.bIsBridge || Segment.bIsTunnel || Segment.Layer != 0)
+				{
+					continue;
+				}
+				const TArray<FVector>& Line = Segment.TrimmedCenterline.Num() >= 2
+					? Segment.TrimmedCenterline : Segment.Centerline;
+				for (int32 Index = 0; Index + 1 < Line.Num(); ++Index)
+				{
+					const FVector2D A(Line[Index].X, Line[Index].Y);
+					const FVector2D B(Line[Index + 1].X, Line[Index + 1].Y);
+					const FVector2D Delta = B - A;
+					const double LengthSquared = Delta.SizeSquared();
+					if (LengthSquared <= KINDA_SMALL_NUMBER)
+					{
+						continue;
+					}
+					const double T = FMath::Clamp(
+						FVector2D::DotProduct(Pad.RoadAnchorCm - A, Delta) / LengthSquared, 0.0, 1.0);
+					const FVector2D Projected = A + Delta * T;
+					const double DistanceSquared = FVector2D::DistSquared(Pad.RoadAnchorCm, Projected);
+					if (DistanceSquared < BestDistanceSquared)
+					{
+						BestDistanceSquared = DistanceSquared;
+						RoadZCm = FMath::Lerp(Line[Index].Z, Line[Index + 1].Z, T);
+						bRoadFound = true;
+					}
+				}
+			}
+		}
+
+		if (!bRoadFound)
+		{
+			UE_LOG(LogWbTerrain, Warning,
+				TEXT("Bauplateau bei (%.0f, %.0f) uebersprungen: keine Fahrbahn im Umkreis von %.0f m."),
+				Pad.CenterCm.X, Pad.CenterCm.Y, Pad.RoadSearchRadiusCm / CmPerMeter);
+			continue;
+		}
+
+		// Das Plateau liegt um die Bodenhoehe des Bauwerks UNTER der Fahrbahn,
+		// damit der fertige Boden die Strasse trifft.
+		const double PlateauCm = RoadZCm - Pad.AccessFloorCm;
+		const double SlopeRun = FMath::Max(0.0, Pad.SlopeRunCm);
+		const double AussenRadius = Pad.RadiusCm + SlopeRun;
+
+		int32 EbenCount = 0;
+		double AbtragCm = 0.0;
+		double AuftragCm = 0.0;
+
+		ForEachDiscCell(Tile, Pad.CenterCm, AussenRadius,
+			[&Tile, &Pad, PlateauCm, SlopeRun, &Changed, &EbenCount, &AbtragCm, &AuftragCm](int32 CellIndex)
+		{
+			const int32 X = CellIndex % Tile.GridSize;
+			const int32 Y = CellIndex / Tile.GridSize;
+			const FVector2D P = Tile.CellToWorld(X, Y);
+			const double Distance = FVector2D::Distance(P, Pad.CenterCm);
+			const double Gewachsen = Tile.GetHeightCm(X, Y);
+
+			double ZielCm = PlateauCm;
+			if (Distance > Pad.RadiusCm && SlopeRun > 0.0)
+			{
+				// Boeschung: linear vom Plateau auf das gewachsene Gelaende.
+				const double T = FMath::Clamp((Distance - Pad.RadiusCm) / SlopeRun, 0.0, 1.0);
+				ZielCm = FMath::Lerp(PlateauCm, Gewachsen, T);
+			}
+			else
+			{
+				++EbenCount;
+				AbtragCm = FMath::Max(AbtragCm, Gewachsen - PlateauCm);
+				AuftragCm = FMath::Max(AuftragCm, PlateauCm - Gewachsen);
+			}
+
+			Changed += SetHeightIfChanged(Tile, X, Y, static_cast<float>(ZielCm)) ? 1 : 0;
+		});
+
+		UE_LOG(LogWbTerrain, Log,
+			TEXT("Bauplateau bei (%.0f, %.0f): Hoehe %.0f cm aus der Fahrbahn (%.0f cm) abgeleitet, ")
+			TEXT("%d ebene Stuetzpunkte, groesster Abtrag %.2f m, groesster Auftrag %.2f m."),
+			Pad.CenterCm.X, Pad.CenterCm.Y, PlateauCm, RoadZCm,
+			EbenCount, AbtragCm / CmPerMeter, AuftragCm / CmPerMeter);
+	}
+
+	return Changed;
+}
+
 int32 UTerrainGenerator::FlattenUnderBuildings(
 	const FOSMDataSet& DataSet,
 	const UGeoCoordinateConverter& Converter,
