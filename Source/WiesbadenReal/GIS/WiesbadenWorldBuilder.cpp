@@ -188,6 +188,12 @@ namespace
 		// sind genau die Bauart, an der dieses Grundstueck schon einmal
 		// auseinandergelaufen ist.
 		Pad.AccessFloorCm = SebboHq::GetAccessFloorCm(Dimensions);
+	// Der Grundriss, damit die Strassenboeschung nicht durch das Haus laeuft.
+	// GEMESSEN am 21.09.2026: sie reichte 6,5 m ins Erdgeschoss und lag dort
+	// 97 cm ueber dem Boden - im Portal wuchs Gras. Dieselbe halbe Kante, aus
+	// der auch der Turm seine Fassade stellt.
+	Pad.BuildingHalfCm = HalbCm;
+	Pad.BuildingYawDeg = SebboHqSite::HeadingDegrees;
 
 		Settings.SitePads.Add(Pad);
 	}

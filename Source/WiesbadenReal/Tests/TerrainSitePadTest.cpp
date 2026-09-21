@@ -187,3 +187,82 @@ bool FTerrainSitePadOhneStrasseTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainSitePadGrundrissTest,
+	"WiesbadenReal.GIS.Terrain.SitePadGrundriss",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTerrainSitePadGrundrissTest::RunTest(const FString& Parameters)
+{
+	// DURCH EIN HAUS LAEUFT KEINE STRASSENBOESCHUNG.
+	//
+	// GEMESSEN am 21.09.2026 auf Alkis17: die Wolkenbruch laeuft 2 m vor der
+	// Fassade des SebboTower vorbei. FlattenUnderRoads ebnet bis
+	// Fahrbahnbreite/2 + 900 cm neben die Achse ein und hat das letzte Wort -
+	// der Korridor reichte damit 6,5 m in das Erdgeschoss und lag dort bis zu
+	// 97 cm UEBER dem fertigen Boden. Im Portal wuchs Gras.
+	//
+	// Geprueft wird deshalb der Zusammenprall selbst: erst das Plateau, dann
+	// die Strasse, und zwar mit einer Fahrbahn, die HOEHER liegt als das
+	// Plateau und nah genug, dass ihr Korridor den Grundriss ueberdeckt.
+	UTerrainGenerator* Generator = NewObject<UTerrainGenerator>();
+
+	// Die Fahrbahn liegt auf 500, das Plateau also auf 440 (AccessFloor 60).
+	// Ihre Achse laeuft bei y = 8000, der Korridor reicht Breite/2 + 900 cm
+	// daneben, also bis y = 6800. Geprueft wird bei y = 7000 - klar innerhalb
+	// des Korridors UND innerhalb des Grundrisses (halbe Kante 7500).
+	//
+	// Die erste Fassung pruefte bei y = 6000. Das liegt 2000 cm neben der
+	// Achse und damit ausserhalb des Korridors: der Test war gruen, ohne
+	// irgendetwas zu zeigen. Aufgefallen ist es nur an der Gegenprobe unten.
+	FRoadNetwork Netz = StrasseAuf(500.0);
+	Netz.Segments[0].CarriagewayWidthCm = 600.0;
+
+	FTerrainSitePad Pad = Plateau();
+	Pad.RadiusCm = 9000.0;          // Plateau bis unter die Fahrbahn
+	Pad.BuildingHalfCm = 7500.0;
+	Pad.BuildingYawDeg = 0.0;
+
+	FTerrainGenerationSettings Settings;
+	Settings.SitePads.Add(Pad);
+
+	FTerrainTile Tile = HangTile();
+	Generator->FlattenSitePads(Netz, Settings, Tile);
+	Generator->FlattenUnderRoads(Netz, Settings, Tile);
+
+	// Eine Zelle klar INNERHALB des Grundrisses und klar im Strassenkorridor.
+	const auto ZelleBei = [&Tile](double X, double Y)
+	{
+		const int32 Sx = FMath::RoundToInt((X - Tile.WorldMinXY.X) / Tile.CellSizeCm);
+		const int32 Sy = FMath::RoundToInt((Y - Tile.WorldMinXY.Y) / Tile.CellSizeCm);
+		return Tile.GetHeightCm(Sx, Sy);
+	};
+
+	const double PlateauCm = 500.0 - 60.0;
+	TestEqual(TEXT("Im Grundriss bleibt das Plateau stehen"),
+		static_cast<double>(ZelleBei(0.0, 7000.0)), PlateauCm, 1.0);
+
+	// Und DAVOR darf die Strasse weiter das letzte Wort haben, sonst waere
+	// die Regel keine Ausnahme fuer das Haus, sondern eine Abschaffung der
+	// Strassen-Einebnung.
+	TestTrue(TEXT("Ausserhalb des Grundrisses ebnet die Strasse weiter ein"),
+		ZelleBei(0.0, 8000.0) > PlateauCm + 10.0);
+
+	// Gegenprobe: OHNE Grundriss schuettet die Strasse den Bauplatz wieder zu.
+	// Ohne sie wuerde der Test auch dann gruen, wenn der Korridor den Platz
+	// von vornherein gar nicht erreicht.
+	FTerrainSitePad OhneGrundriss = Pad;
+	OhneGrundriss.BuildingHalfCm = 0.0;
+	FTerrainGenerationSettings Alt;
+	Alt.SitePads.Add(OhneGrundriss);
+	FTerrainTile Vergleich = HangTile();
+	Generator->FlattenSitePads(Netz, Alt, Vergleich);
+	Generator->FlattenUnderRoads(Netz, Alt, Vergleich);
+
+	const int32 Sx = FMath::RoundToInt((0.0 - Vergleich.WorldMinXY.X) / Vergleich.CellSizeCm);
+	const int32 Sy = FMath::RoundToInt((7000.0 - Vergleich.WorldMinXY.Y) / Vergleich.CellSizeCm);
+	TestTrue(TEXT("Ohne Grundriss hob die Strasse den Bauplatz an (Gegenprobe)"),
+		Vergleich.GetHeightCm(Sx, Sy) > PlateauCm + 10.0);
+
+	return true;
+}

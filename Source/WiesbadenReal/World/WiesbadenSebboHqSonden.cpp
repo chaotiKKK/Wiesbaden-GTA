@@ -714,6 +714,70 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		}
 	}
 
+	// --- 1c) Hoehenprofil des Portaldurchgangs --------------------------------
+	//
+	// "Portal begehbar" beweist keinen ebenen Durchgang. KapselSchritt sucht
+	// den Boden bis zu ZWEI Stufen nach unten (80 cm) - ein Absatz von 44 cm
+	// laesst die Kapsel also durch, ohne dass irgendetwas meldet. Genau das
+	// war der offene Befund schwelle_portal_cm = -44: das Gelaende liegt vor
+	// dem Personeneingang hoeher als der Innenboden, und man steigt hinein
+	// statt hinauf.
+	//
+	// Darum dieselbe Behandlung wie bei der Zufahrt: die Oberflaeche Punkt
+	// fuer Punkt, ENG (10 cm), damit eine Kante nicht zwischen zwei Tastern
+	// verschwindet - und MIT dem Turm, denn seine Bodenplatte ist hier die
+	// Trittflaeche und nicht die Frage.
+	FString FussProfilJson;
+	double GroessterAbsatzCm = 0.0;
+	double AbsatzBeiXCm = 0.0;
+	{
+		FCollisionQueryParams P(SCENE_QUERY_STAT(WbAnkunftFussProfil), true);
+		int32 N = 0;
+		double VorigesZ = 0.0;
+		bool bVorigesGueltig = false;
+		// BIS TIEF INS HAUS. Ein Profil, das an der Portalmitte endet, zeigt
+		// die Schwelle gar nicht: gesucht ist die Stelle, an der das
+		// Gelaende aufhoert und der Innenboden anfaengt.
+		//
+		// DIE 3 CM VERSATZ SIND KEIN SCHOENHEITSFEHLER. Ohne sie liegen die
+		// Taster auf demselben Zentimeterraster wie die Bauteile, und ein Lot
+		// genau auf der Kante eines Quaders trifft ihn nicht: die 10 cm
+		// langen Stufen der Portalrampe waren damit komplett unsichtbar, bei
+		// 20 cm langen blinkte jede zweite Probe auf den Hallenboden durch.
+		// Beides sah wie fehlende Geometrie aus und war die Messung.
+		for (double X = Half + 500.0 - 3.0; X >= -Half; X -= 10.0)
+		{
+			const FVector Oben = NachWelt(FVector(X, PortalY, BodenZ + 200.0));
+			FHitResult Treffer;
+			if (!World->LineTraceSingleByChannel(Treffer, Oben,
+				Oben - FVector(0.0, 0.0, 8000.0), ECC_WorldStatic, P))
+			{
+				bVorigesGueltig = false;
+				continue;
+			}
+			const double ZUeberFuss = Treffer.Location.Z - Fuss.Z;
+			if (bVorigesGueltig)
+			{
+				// Der Gehende kommt von aussen: ein SPRUNG NACH UNTEN ist der
+				// Absatz, ueber den er stolpert.
+				const double Absatz = VorigesZ - ZUeberFuss;
+				if (Absatz > GroessterAbsatzCm)
+				{
+					GroessterAbsatzCm = Absatz;
+					AbsatzBeiXCm = X;
+				}
+			}
+			VorigesZ = ZUeberFuss;
+			bVorigesGueltig = true;
+
+			FussProfilJson += FString::Printf(
+				TEXT("%s{\"x_lokal\": %.0f, \"z_ueber_fuss_cm\": %.0f, \"belag\": \"%s\"}"),
+				N > 0 ? TEXT(",\n  ") : TEXT(""), X, ZUeberFuss,
+				*GetNameSafe(Treffer.GetComponent()));
+			++N;
+		}
+	}
+
 	// --- 2) Fuss: durch das Portal --------------------------------------------
 	FWbAnkunftsweg Fussweg;
 	FVector FussEnde = FVector::ZeroVector;
@@ -942,6 +1006,8 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		TEXT(" \"portal_volumen\": {\"mitte\": [%.0f, %.0f, %.0f], \"halb\": [%.0f, %.0f, %.0f]},\n")
 		TEXT(" \"fuss_in_volumenkoordinaten\": [%.0f, %.0f, %.0f],\n")
 		TEXT(" \"auto_profil\": [\n  %s\n ],\n")
+		TEXT(" \"portal_absatz\": {\"groesster_cm\": %.0f, \"bei_x_lokal\": %.0f},\n")
+		TEXT(" \"fuss_profil\": [\n  %s\n ],\n")
 		TEXT(" \"fuss_blocker\": {\"name\": \"%s\", \"lokal_mitte\": [%.0f, %.0f, %.0f], ")
 		TEXT("\"lokal_groesse\": [%.0f, %.0f, %.0f]},\n")
 		TEXT(" \"auto_treffer\": {\"z_cm\": %.0f, \"quader_unterkante_cm\": %.0f, ")
@@ -962,6 +1028,8 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		PortalHalb.X, PortalHalb.Y, PortalHalb.Z,
 		FussImVolumen.X, FussImVolumen.Y, FussImVolumen.Z,
 		*AutoProfilJson,
+		GroessterAbsatzCm, AbsatzBeiXCm,
+		*FussProfilJson,
 		*BlockerName, BlockerMitte.X, BlockerMitte.Y, BlockerMitte.Z,
 		BlockerGroesse.X, BlockerGroesse.Y, BlockerGroesse.Z,
 		AutoTrefferWeltZCm, AutoQuaderUnterkanteCm, AutoBelagZCm, *AutoBelagName,

@@ -418,8 +418,42 @@ FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(const FSebboHqDimensions& 
 	// Personeneingang: ebenerdiger Vorraum mit schlankem Sturz - die Oeffnung
 	// selbst bleibt frei fuer die reale Pawn-Kapsel.
 	AddBetween(Layout.Parts, EHqMaterial::Concrete,
-		Half - 260.0, Half + 20.0, Openings.PortalY0, Openings.PortalY1,
+		Half - 160.0, Half + 20.0, Openings.PortalY0, Openings.PortalY1,
 		D.SlabCm, FloorZ);
+
+	// UND EINE RAMPE AUF DEN HALLENBODEN statt einer Kante.
+	//
+	// Der Vorraum liegt auf FloorZ (SlabCm + 15), die Halle auf SlabCm. An
+	// seinem inneren Rand stand damit eine 15 cm hohe Stufe quer im Weg -
+	// 2,9 m hinter der Tuer, im Dunkeln. Gesehen hat sie niemand, weil das
+	// Gelaende bis dahin ueber ihr lag: erst seit die Strassenboeschung den
+	// Grundriss nicht mehr zuschuettet, ist der Vorraum ueberhaupt die
+	// Trittflaeche (GEMESSEN am 21.09.2026 auf Alkis17, fuss_profil: Wechsel
+	// auf den Vorraum bei x 1720, auf die Halle bei x 1430).
+	//
+	// 15 cm sind unter der Schrittgrenze der Kapsel (40 cm) - die Sonde haette
+	// nie etwas gemeldet. Es ist trotzdem eine Stolperkante.
+	{
+		// 200 cm lang, nicht 100 - 1,5 cm Fall je Stufe statt 3.
+		//
+		// NICHT, weil die kurze Rampe fehlte: sie war da. Die Sonde tastete
+		// alle 10 cm, die Stufen waren 10 cm lang, und ein Lot genau auf der
+		// Kante eines Quaders trifft ihn nicht - das Profil zeigte darum
+		// durchgehend den Hallenboden. Der Messfehler ist im Taster behoben
+		// (3 cm Versatz); die laengere Rampe bleibt, weil sie flacher ist.
+		constexpr int32 StufenZahl = 10;
+		constexpr double RampeLaengeCm = 200.0;
+		const double FallCm = FloorZ - D.SlabCm;
+		for (int32 i = 0; i < StufenZahl; ++i)
+		{
+			const double X1 = Half - 160.0 - RampeLaengeCm * i / StufenZahl;
+			const double X0 = Half - 160.0 - RampeLaengeCm * (i + 1) / StufenZahl;
+			const double Oben = FloorZ - FallCm * (i + 1) / StufenZahl;
+			AddBetween(Layout.Parts, EHqMaterial::Concrete,
+				X0, X1, Openings.PortalY0, Openings.PortalY1,
+				D.SlabCm - 20.0, Oben);
+		}
+	}
 	AddBetween(Layout.Parts, EHqMaterial::Metal,
 		Half - 60.0, Half, Openings.PortalY0, Openings.PortalY1,
 		Openings.ClearHeightCm, D.FloorHeightCm - D.SlabCm);

@@ -700,3 +700,73 @@ bool FSebboHqSchwellenrampeTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqPortalSchwelleTest,
+	"WiesbadenReal.World.SebboHq.PortalSchwelle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqPortalSchwelleTest::RunTest(const FString& Parameters)
+{
+	// IM DURCHGANG DARF KEINE KANTE STEHEN.
+	//
+	// GEMESSEN am 21.09.2026 auf Alkis17 (fuss_profil, 391 Taster im Abstand
+	// von 10 cm): der Vorraum liegt auf FloorZ = SlabCm + 15, die Halle auf
+	// SlabCm. An seinem inneren Rand - 2,9 m hinter der Tuer - stand eine
+	// 15-cm-Stufe quer im Weg.
+	//
+	// Die Sonde hat sie nie gemeldet, und das ist kein Versehen: KapselSchritt
+	// steigt bis MaxStufe (40 cm) und setzt bis 80 cm ab. Eine Kante unter
+	// dieser Grenze ist fuer sie kein Hindernis - fuer einen Gehenden schon.
+	// Darum haelt dieser Vertrag die GEOMETRIE fest und nicht den Weg.
+	const FSebboHqDimensions D;
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+	const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
+	const double FloorZ = SebboHq::GetAccessFloorCm(D);
+	const double PortalY = Layout.PedestrianTarget.CenterCm.Y;
+
+	// Alle Trittflaechen im Portalband zwischen Hallenboden und Vorraum,
+	// nach X sortiert - das ist der Weg, den der Gehende nimmt.
+	TArray<TPair<double, double>> Stufen;   // (X der Aussenkante, Oberkante)
+	for (const FHqPart& Teil : Layout.Parts)
+	{
+		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
+		const double Y0 = Teil.CenterCm.Y - Teil.SizeCm.Y * 0.5;
+		const double Y1 = Teil.CenterCm.Y + Teil.SizeCm.Y * 0.5;
+		const double X0 = Teil.CenterCm.X - Teil.SizeCm.X * 0.5;
+		const bool bImPortalband = PortalY > Y0 && PortalY < Y1;
+		const bool bAufTritthoehe = Oberkante >= D.SlabCm - 1.0 && Oberkante <= FloorZ + 1.0;
+		const bool bImDurchgang = X0 > Half - 500.0 && X0 < Half + 30.0;
+		if (bImPortalband && bAufTritthoehe && bImDurchgang)
+		{
+			Stufen.Add({ Teil.CenterCm.X + Teil.SizeCm.X * 0.5, Oberkante });
+		}
+	}
+	Stufen.Sort([](const TPair<double, double>& A, const TPair<double, double>& B)
+	{
+		return A.Key > B.Key;   // von aussen nach innen
+	});
+
+	TestTrue(*FString::Printf(TEXT("Im Durchgang liegen Trittflaechen (%d)"), Stufen.Num()),
+		Stufen.Num() >= 2);
+
+	double GroessteKanteCm = 0.0;
+	for (int32 i = 1; i < Stufen.Num(); ++i)
+	{
+		GroessteKanteCm = FMath::Max(GroessteKanteCm,
+			FMath::Abs(Stufen[i].Value - Stufen[i - 1].Value));
+	}
+	TestTrue(*FString::Printf(
+		TEXT("Keine Kante im Durchgang (groesste %.1f cm)"), GroessteKanteCm),
+		GroessteKanteCm <= 6.0);
+
+	// Und er muss wirklich bis auf den Hallenboden herunterkommen, sonst
+	// waere die Rampe eine Rampe ins Nichts.
+	double TiefsteCm = FloorZ;
+	for (const TPair<double, double>& S : Stufen)
+	{
+		TiefsteCm = FMath::Min(TiefsteCm, S.Value);
+	}
+	TestEqual(TEXT("Der Durchgang erreicht den Hallenboden"), TiefsteCm, D.SlabCm, 1.0);
+
+	return true;
+}

@@ -199,6 +199,24 @@ struct WIESBADENREAL_API FTerrainSitePad
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain", meta = (ClampMin = "0.0"))
 	double AccessFloorCm = 0.0;
+
+	/**
+	 * Halbe Kantenlaenge des Gebaeudegrundrisses (cm). 0 schaltet die Regel ab.
+	 *
+	 * WOFUER: In das Plateau wird ein Haus gebaut, und durch ein Haus laeuft
+	 * keine Strassenboeschung. FlattenUnderRoads hat das letzte Wort und
+	 * ebnet in einem Korridor von Fahrbahnbreite/2 + RoadFlattenMarginCm
+	 * (900 cm) ein - GEMESSEN am 21.09.2026 reichte dieser Korridor 6,5 m in
+	 * das Erdgeschoss des SebboTower und lag dort bis zu 97 cm UEBER dem
+	 * fertigen Boden. Im Portal wuchs Gras. Innerhalb dieses Grundrisses darf
+	 * die Strasse das Gelaende darum nicht mehr ueber das Plateau heben.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain", meta = (ClampMin = "0.0"))
+	double BuildingHalfCm = 0.0;
+
+	/** Drehung des Grundrisses um Z (Grad), wie der Bau selbst steht. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+	double BuildingYawDeg = 0.0;
 };
 
 /** Parameter der Landscape-Erzeugung. */
@@ -530,6 +548,25 @@ public:
 		const FRoadNetwork& Network,
 		const FTerrainGenerationSettings& Settings,
 		FTerrainTile& Tile) const;
+
+	/**
+	 * Die Plateauhoehe eines Bauplateaus aus der naechsten Fahrbahn am Anker.
+	 *
+	 * Steht hier, weil ZWEI Paesse sie brauchen: FlattenSitePads legt das
+	 * Plateau damit an, und FlattenUnderRoads muss wissen, wie hoch es liegt,
+	 * um es im Gebaeudegrundriss nicht wieder zuzuschuetten. Zwei Kopien
+	 * derselben Rechnung waeren genau die stille Zweitwahrheit, an der die
+	 * Hoehe eines Tages auseinanderliefe.
+	 *
+	 * @return false, wenn im Suchradius keine Fahrbahn liegt. Dann wird NICHT
+	 *         geraten - ein Plateau auf geratener Hoehe waere ein zweiter,
+	 *         stiller Hang.
+	 */
+	static bool ResolveSitePadPlateauCm(
+		const FRoadNetwork& Network,
+		const FTerrainSitePad& Pad,
+		double& OutPlateauCm,
+		double& OutRoadZCm);
 
 	/**
 	 * Ebnet das Terrain unter allen geschlossenen Gebaeudegrundrissen ein.
