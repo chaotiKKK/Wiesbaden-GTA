@@ -13,6 +13,8 @@
 #include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInterface.h"
 #include "CollisionQueryParams.h"
+#include "Engine/OverlapResult.h"
+#include "LandscapeHeightfieldCollisionComponent.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/CommandLine.h"
@@ -749,6 +751,38 @@ namespace
 		FString Woran;
 	};
 
+	/**
+	 * Steckt der Koerper in etwas ANDEREM als dem Gelaende?
+	 *
+	 * GEMESSEN am 21.09.2026: der Fahrzeugquader stand mit Unterkante 10012 cm
+	 * ueber einem Belag von 9987 cm - 25 cm Luft - und
+	 * OverlapBlockingTestByChannel meldete trotzdem eine blockierende
+	 * Ueberlappung mit dem LandscapeHeightfieldCollisionComponent. Dieselbe
+	 * Falschmeldung hatte zuvor schon die Fusskapsel keinen Schritt weit
+	 * kommen lassen.
+	 *
+	 * Das Gelaende wird darum uebergangen: der Quader wird ohnehin mit
+	 * Bodenfreiheit UEBER den hoechsten Belag unter seiner Laenge gesetzt, er
+	 * KANN dort nicht stecken. Eine Wand meldet sich weiterhin.
+	 */
+	bool SteckenderKoerper(const UWorld* World, const FVector& Ort, const FQuat& Drehung,
+		const FCollisionShape& Form, const FCollisionQueryParams& Params, FString& OutName)
+	{
+		TArray<FOverlapResult> Ueberlappungen;
+		World->OverlapMultiByChannel(Ueberlappungen, Ort, Drehung,
+			ECC_WorldStatic, Form, Params);
+		for (const FOverlapResult& U : Ueberlappungen)
+		{
+			UPrimitiveComponent* Teil = U.GetComponent();
+			if (Teil && !Teil->IsA<ULandscapeHeightfieldCollisionComponent>())
+			{
+				OutName = GetNameSafe(Teil);
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** Liegt der Weltpunkt im Zielvolumen? Genau die Frage, die der Overlap stellt. */
 	bool ImZielvolumen(const UBoxComponent* Volumen, const FVector& Punkt)
 	{
@@ -849,64 +883,200 @@ void AWiesbadenSebboHq::ProbeArrival() const
 
 	// --- 1) Auto: durch die Garagenoeffnung -----------------------------------
 	//
-	// Ein Quader in Fahrzeuggroesse. KEIN AddIgnoredActor: der Turm ist genau
-	// das, wogegen getastet wird - eine Oeffnung, die nur gemalt ist, faellt
-	// hier auf.
+	// DER WAGEN FOLGT DEM BELAG, statt auf fester Hoehe zu fliegen.
+	//
+	// GEMESSEN am 21.09.2026 auf Alkis17, Hoehenprofil entlang der Zufahrt:
+	//
+	//     x 2400..1800   9987 .. 10020 cm   Landscape
+	//     x 1700..1300  10052 .. 10094 cm   RoadCollisionStaticMesh
+	//
+	// Das ist eine gleichmaessige Rampe von 107 cm auf 11 m (rund 10 %) OHNE
+	// Absatz, und sie endet mit 10094 cm buendig am Garagenboden (10096 cm).
+	// Ein Quader auf fester Hoehe streifte sie trotzdem: er stiess bei 10176
+	// an, also auf seiner eigenen Mittelhoehe und 124 cm ueber dem Belag
+	// darunter. Gemessen war das kein Hindernis der Zufahrt, sondern die
+	// Flughoehe der Sonde.
+	//
+	// Ein Auto faehrt auf dem Belag. Der Quader tut das jetzt auch: Schritt
+	// fuer Schritt wird die Oberflaeche abgetastet und die Fahrhoehe daraus
+	// gesetzt. Eine echte Wand haelt ihn weiterhin auf - sie steht in jeder
+	// Hoehe im Weg.
 	double AutoTrefferWeltZCm = 0.0;
 	double AutoQuaderUnterkanteCm = 0.0;
 	double AutoBelagZCm = 0.0;
 	FString AutoBelagName = TEXT("-");
 	FWbAnkunftsweg Wagenweg;
 	{
-		// 5 cm Luft ueber dem hoeheren Belag: ein Quader, der die Bodenplatte
-		// genau beruehrt, meldete deren 15-cm-Lippe als versperrte Einfahrt.
-		const double WagenZ = FMath::Max(StrasseGarageZ, BodenZ) + 80.0;
-		const FVector Start = NachWelt(FVector(Half + 700.0, GarageY, WagenZ));
-		const FVector Ziel = NachWelt(FVector(Layout.GarageTarget.CenterCm.X, GarageY, WagenZ));
 		const FCollisionShape Wagen = FCollisionShape::MakeBox(FVector(225.0, 100.0, 75.0));
-		FCollisionQueryParams P(SCENE_QUERY_STAT(WbAnkunftProbeAuto), false);
-		FHitResult Treffer;
 		// ECC_WorldStatic, nicht ECC_Vehicle: dieses Projekt richtet den
-		// Fahrzeugkanal nirgends ein: die gebaute Geometrie antwortet dort
-		// nicht, und die Sonde meldete jede Wand als freie Durchfahrt.
-		//
-		// Der STARTPUNKT wird zuerst eigens geprueft. Ein Sweep, der bereits
-		// steckend beginnt, meldet bStartPenetrating - das als "nicht
-		// versperrt" zu lesen war die Regel aus der Treppensonde, wo die
-		// Kapsel die Stufe beruehrt. Hier stand der Quader im Hang, und die
-		// Sonde meldete dafuer "Durchfahrt frei".
-		const bool bStartSteckt = World->OverlapBlockingTestByChannel(Start,
-			Drehung.Quaternion(), ECC_WorldStatic, Wagen, P);
-		if (bStartSteckt)
+		// Fahrzeugkanal nirgends ein - dort antwortet die gebaute Geometrie
+		// gar nicht, und die Sonde meldete jede Wand als freie Durchfahrt.
+		FCollisionQueryParams P(SCENE_QUERY_STAT(WbAnkunftProbeAuto), false);
+		// Fuer die BELAGSUCHE zaehlt auch der Garagenboden - der Wagen faehrt
+		// am Ende darauf. Darum hier NICHT den Turm ignorieren.
+		FCollisionQueryParams Belag(SCENE_QUERY_STAT(WbAnkunftProbeBelag), true);
+
+		const double StartX = Half + 700.0;
+		const double ZielX = Layout.GarageTarget.CenterCm.X;
+		constexpr double SchrittCm = 50.0;
+		constexpr double BodenfreiheitCm = 20.0;
+
+		// Fahrhoehe an einer Stelle: Belag plus halbe Quaderhoehe plus
+		// Bodenfreiheit. Ohne Belag gibt es dort keine Zufahrt.
+		const auto PoseBei = [&](double X, double SuchhoeheCm, FVector& Out) -> bool
+		{
+			// UEBER DIE GANZE QUADERLAENGE tasten, nicht nur unter der Mitte.
+			// Der Quader ist 4,5 m lang; auf einer 10-%-Rampe liegt sein Heck
+			// 22 cm hoeher als seine Mitte. Mit nur einem Taster steckte er am
+			// Anfahrpunkt im Gelaende. Ein Auto ruht auf seinem HOECHSTEN
+			// Aufstandspunkt - der zaehlt.
+			const FVector Grund = NachWelt(FVector(X, GarageY, 0.0));
+			bool bGefunden = false;
+			double HoechsterCm = -TNumericLimits<double>::Max();
+			// Laengs UND QUER tasten. Gemessen hat die Zufahrt 48 bis 87 cm
+			// Quergefaelle ueber die 2 m Quaderbreite - die linke Seite liegt
+			// durchweg hoeher als die Mitte. Mit nur einer Tastreihe in der
+			// Mitte grub sich der Quader auf der hohen Seite ein und meldete
+			// "versperrt", obwohl in Fahrtrichtung kein Absatz liegt.
+			for (const double Versatz : { -200.0, 0.0, 200.0 })
+			for (const double Quer : { -100.0, 0.0, 100.0 })
+			{
+				// VON DER BISHERIGEN FAHRHOEHE herab, nicht von 200 m.
+				//
+				// GEMESSEN: ein Taster von ganz oben findet, sobald er unter
+				// das Gebaeude kommt, dessen DACH - der Quader wurde damit auf
+				// 10856 cm gesetzt, 7,6 m ueber dem Garagenboden, und stiess
+				// prompt an ein Bauteil in 125 m Hoehe. Die Zufahrt liegt
+				// unter dem Turm, nicht auf ihm.
+				const FVector Oben = NachWelt(FVector(X + Versatz, GarageY + Quer, 0.0))
+					+ FVector(0.0, 0.0, SuchhoeheCm);
+				FHitResult T;
+				if (World->LineTraceSingleByChannel(T, Oben,
+					Oben - FVector(0.0, 0.0, SuchhoeheCm + 600.0), ECC_WorldStatic, Belag))
+				{
+					HoechsterCm = FMath::Max(HoechsterCm, T.Location.Z);
+					bGefunden = true;
+				}
+			}
+			if (!bGefunden)
+			{
+				return false;
+			}
+			Out = FVector(Grund.X, Grund.Y, HoechsterCm + 75.0 + BodenfreiheitCm);
+			return true;
+		};
+
+		FVector Jetzt = FVector::ZeroVector;
+		if (!PoseBei(StartX, 20000.0, Jetzt))
 		{
 			Wagenweg.bFrei = false;
-			Wagenweg.WegCm = 0.0;
-			Wagenweg.Woran = TEXT("Startpunkt steckt im Gelaende - keine Zufahrt auf dieser Hoehe");
+			Wagenweg.Woran = TEXT("am Anfahrpunkt liegt kein Belag");
+		}
+		else if (SteckenderKoerper(World, Jetzt, Drehung.Quaternion(), Wagen, P,
+			AutoBelagName))
+		{
+			// Der Startpunkt wird eigens geprueft: ein Sweep, der steckend
+			// beginnt, meldet bStartPenetrating, und das als "nicht versperrt"
+			// zu lesen hatte frueher einen Quader im Hang als freie Durchfahrt
+			// ausgegeben.
+			AutoQuaderUnterkanteCm = Jetzt.Z - 75.0;
+			Wagenweg.bFrei = false;
+			Wagenweg.Woran = FString::Printf(
+				TEXT("Startpunkt steckt in der Geometrie (%s)"), *AutoBelagName);
 		}
 		else
 		{
-			const bool bGetroffen = World->SweepSingleByChannel(Treffer, Start, Ziel,
-				Drehung.Quaternion(), ECC_WorldStatic, Wagen, P);
-			Wagenweg.bFrei = !(bGetroffen && Treffer.bBlockingHit);
-			Wagenweg.WegCm = Wagenweg.bFrei ? (Ziel - Start).Size() : Treffer.Distance;
-			Wagenweg.Woran = Wagenweg.bFrei ? TEXT("Durchfahrt frei")
-				: FString::Printf(TEXT("versperrt durch %s"), *GetNameSafe(Treffer.GetComponent()));
-
-			// WO stoesst er an, und was liegt dort? Ohne diese Zahlen ist
-			// "versperrt" nicht von "die Sonde faehrt zu tief" zu trennen.
-			if (!Wagenweg.bFrei)
+			Wagenweg.bFrei = true;
+			double Gefahren = 0.0;
+			for (double X = StartX - SchrittCm; X >= ZielX - 1.0; X -= SchrittCm)
 			{
-				AutoTrefferWeltZCm = Treffer.Location.Z;
-				AutoQuaderUnterkanteCm = Start.Z - 75.0;
-				FHitResult Darunter;
-				const FVector Lot(Treffer.Location.X, Treffer.Location.Y, Treffer.Location.Z + 3000.0);
-				if (World->LineTraceSingleByChannel(Darunter, Lot,
-					Lot - FVector(0.0, 0.0, 6000.0), ECC_WorldStatic, P))
+				FVector Naechste;
+				// 150 cm ueber der bisherigen Fahrhoehe suchen: das reicht fuer
+				// jede Rampe und bleibt unter jedem Dach.
+				const double SuchhoeheCm = (Jetzt.Z - 75.0) + 150.0
+					- NachWelt(FVector(X, GarageY, 0.0)).Z;
+				if (!PoseBei(X, FMath::Max(SuchhoeheCm, 150.0), Naechste))
 				{
-					AutoBelagZCm = Darunter.Location.Z;
-					AutoBelagName = GetNameSafe(Darunter.GetComponent());
+					Wagenweg.bFrei = false;
+					Wagenweg.Woran = FString::Printf(
+						TEXT("kein Belag bei x = %.0f"), X);
+					break;
+				}
+				FHitResult Treffer;
+				if (World->SweepSingleByChannel(Treffer, Jetzt, Naechste,
+					Drehung.Quaternion(), ECC_WorldStatic, Wagen, P)
+					&& Treffer.bBlockingHit && !Treffer.bStartPenetrating)
+				{
+					Wagenweg.bFrei = false;
+					Wagenweg.Woran = FString::Printf(TEXT("versperrt durch %s"),
+						*GetNameSafe(Treffer.GetComponent()));
+					AutoTrefferWeltZCm = Treffer.Location.Z;
+					AutoQuaderUnterkanteCm = Jetzt.Z - 75.0;
+					FHitResult Darunter;
+					const FVector Lot(Treffer.Location.X, Treffer.Location.Y,
+						Treffer.Location.Z + 3000.0);
+					if (World->LineTraceSingleByChannel(Darunter, Lot,
+						Lot - FVector(0.0, 0.0, 6000.0), ECC_WorldStatic, Belag))
+					{
+						AutoBelagZCm = Darunter.Location.Z;
+						AutoBelagName = GetNameSafe(Darunter.GetComponent());
+					}
+					break;
+				}
+				Gefahren += (Naechste - Jetzt).Size();
+				Jetzt = Naechste;
+			}
+			Wagenweg.WegCm = Gefahren;
+			if (Wagenweg.bFrei)
+			{
+				Wagenweg.Woran = TEXT("Durchfahrt frei");
+			}
+		}
+	}
+
+	// --- 1b) Hoehenprofil des Anfahrwegs --------------------------------------
+	//
+	// "versperrt durch RoadCollisionStaticMesh" sagt nicht, OB die Zufahrt
+	// wirklich verbaut ist. Der Quader faehrt geradeaus auf fester Hoehe; ein
+	// Belag, der unterwegs ansteigt, blockiert ihn auch dann, wenn ein Auto
+	// dort muehelos hochfuehre. Darum die Oberflaeche Punkt fuer Punkt.
+	FString AutoProfilJson;
+	{
+		FCollisionQueryParams P(SCENE_QUERY_STAT(WbAnkunftProfil), true);
+		P.AddIgnoredActor(this);   // der Turm ist hier nicht die Frage
+		int32 N = 0;
+		for (double X = Half + 700.0; X >= Layout.GarageTarget.CenterCm.X - 50.0; X -= 100.0)
+		{
+			const FVector Oben = NachWelt(FVector(X, GarageY, 0.0)) + FVector(0.0, 0.0, 20000.0);
+			FHitResult Treffer;
+			if (!World->LineTraceSingleByChannel(Treffer, Oben,
+				Oben - FVector(0.0, 0.0, 40000.0), ECC_WorldStatic, P))
+			{
+				continue;
+			}
+			// UND QUER: der Quader ist 2 m breit. Liegt die Fahrbahn an seinen
+			// Raendern hoeher als in der Mitte, stoesst er dort an, ohne dass
+			// das Laengsprofil davon etwas zeigt.
+			double LinksCm = 0.0;
+			double RechtsCm = 0.0;
+			for (int32 Seite = 0; Seite < 2; ++Seite)
+			{
+				const double Quer = Seite == 0 ? -100.0 : 100.0;
+				const FVector ObenQ = NachWelt(FVector(X, GarageY + Quer, 0.0))
+					+ FVector(0.0, 0.0, 20000.0);
+				FHitResult TQ;
+				if (World->LineTraceSingleByChannel(TQ, ObenQ,
+					ObenQ - FVector(0.0, 0.0, 40000.0), ECC_WorldStatic, P))
+				{
+					(Seite == 0 ? LinksCm : RechtsCm) = TQ.Location.Z;
 				}
 			}
+			AutoProfilJson += FString::Printf(
+				TEXT("%s{\"x_lokal\": %.0f, \"z_cm\": %.0f, \"links\": %.0f, ")
+				TEXT("\"rechts\": %.0f, \"belag\": \"%s\"}"),
+				N > 0 ? TEXT(",\n  ") : TEXT(""), X, Treffer.Location.Z,
+				LinksCm, RechtsCm, *GetNameSafe(Treffer.GetComponent()));
+			++N;
 		}
 	}
 
@@ -1113,6 +1283,7 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		TEXT(" \"fuss_ende_welt\": [%.0f, %.0f, %.0f],\n")
 		TEXT(" \"portal_volumen\": {\"mitte\": [%.0f, %.0f, %.0f], \"halb\": [%.0f, %.0f, %.0f]},\n")
 		TEXT(" \"fuss_in_volumenkoordinaten\": [%.0f, %.0f, %.0f],\n")
+		TEXT(" \"auto_profil\": [\n  %s\n ],\n")
 		TEXT(" \"fuss_blocker\": {\"name\": \"%s\", \"lokal_mitte\": [%.0f, %.0f, %.0f], ")
 		TEXT("\"lokal_groesse\": [%.0f, %.0f, %.0f]},\n")
 		TEXT(" \"auto_treffer\": {\"z_cm\": %.0f, \"quader_unterkante_cm\": %.0f, ")
@@ -1130,6 +1301,7 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		PortalWeltMitte.X, PortalWeltMitte.Y, PortalWeltMitte.Z,
 		PortalHalb.X, PortalHalb.Y, PortalHalb.Z,
 		FussImVolumen.X, FussImVolumen.Y, FussImVolumen.Z,
+		*AutoProfilJson,
 		*BlockerName, BlockerMitte.X, BlockerMitte.Y, BlockerMitte.Z,
 		BlockerGroesse.X, BlockerGroesse.Y, BlockerGroesse.Z,
 		AutoTrefferWeltZCm, AutoQuaderUnterkanteCm, AutoBelagZCm, *AutoBelagName,

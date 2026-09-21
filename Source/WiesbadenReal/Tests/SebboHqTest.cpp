@@ -576,3 +576,47 @@ bool FSebboHqPortalDurchgangTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqSchwellenrampeTest,
+	"WiesbadenReal.World.SebboHq.Schwellenrampe",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqSchwellenrampeTest::RunTest(const FString& Parameters)
+{
+	// Der Garagenboden darf nicht als Kante ueber der Zufahrt enden.
+	//
+	// GEMESSEN am 21.09.2026: die Zufahrt steigt in Fahrtrichtung von 9987 auf
+	// 10094 cm und trifft den Garagenboden (10096) fast genau - aber erst
+	// unter dem Gebaeude. An der Fassadenlinie liegt sie noch bei rund
+	// 10054 cm. Die ueberstehende Bodenplatte stand dort als 40-cm-Stufe quer
+	// im Weg, und der Fahrzeugquader blieb daran haengen.
+	const FSebboHqDimensions D;
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+	const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
+	const double BodenZ = SebboHq::GetAccessFloorCm(D);
+
+	// Bauteile VOR der Fassade auf Garagenhoehe: das ist die Rampe.
+	double TiefsteKanteCm = BodenZ;
+	int32 Stufen = 0;
+	for (const FHqPart& Teil : Layout.Parts)
+	{
+		const double Aussenkante = Teil.CenterCm.X + Teil.SizeCm.X * 0.5;
+		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
+		const bool bVorDerFassade = Aussenkante > Half + 1.0;
+		const bool bAufFahrhoehe = Oberkante <= BodenZ + 1.0 && Oberkante > BodenZ - 200.0;
+		if (bVorDerFassade && bAufFahrhoehe && Teil.CenterCm.Y < 0.0)
+		{
+			TiefsteKanteCm = FMath::Min(TiefsteKanteCm, Oberkante);
+			++Stufen;
+		}
+	}
+
+	TestTrue(*FString::Printf(TEXT("Vor der Garage liegt eine Rampe (%d Stufen)"), Stufen),
+		Stufen >= 3);
+	// Sie muss den gemessenen Rest von rund 40 cm ueberbruecken.
+	TestTrue(*FString::Printf(
+		TEXT("Die Rampe faellt weit genug (%.0f cm unter den Boden)"), BodenZ - TiefsteKanteCm),
+		BodenZ - TiefsteKanteCm >= 40.0);
+
+	return true;
+}

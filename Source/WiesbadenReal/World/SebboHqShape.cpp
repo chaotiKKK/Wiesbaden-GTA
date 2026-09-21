@@ -314,8 +314,37 @@ FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(const FSebboHqDimensions& 
 	// Strassenband; bis zur Fassadenlinie bleibt die Oeffentlichkeit Sache der
 	// RoadNetwork-Pipeline.
 	AddBetween(Layout.Parts, EHqMaterial::Concrete,
-		Half - 900.0, Half + 20.0, Openings.GarageY0, Openings.GarageY1,
+		Half - 900.0, Half, Openings.GarageY0, Openings.GarageY1,
 		D.SlabCm, FloorZ);
+
+	// SCHWELLENRAMPE: der Garagenboden darf nicht als Kante ueber der Zufahrt
+	// enden.
+	//
+	// GEMESSEN am 21.09.2026 auf Alkis17. Die Zufahrt steigt in Fahrtrichtung
+	// gleichmaessig an - 9987 cm auf 25 m draussen, 10094 cm unter dem
+	// Gebaeude - und trifft den Garagenboden (10096 cm) am Ende fast genau.
+	// Sie ist aber erst dort oben angekommen; an der Fassadenlinie liegt sie
+	// noch bei rund 10054 cm. Die 15 cm dicke Bodenplatte ragte mit ihrer
+	// Aussenkante 20 cm darueber hinaus und stand damit als rund 40 cm hohe
+	// Stufe quer im Weg - der Fahrzeugquader blieb dort haengen.
+	//
+	// Die Rampe ueberbrueckt diesen Rest in flachen Stufen. Sie reicht
+	// bewusst weit nach unten: wo die Zufahrt schon hoeher liegt, verschwindet
+	// sie im Belag, statt als Podest darueber zu schweben.
+	{
+		constexpr int32 StufenZahl = 5;
+		constexpr double RampeLaengeCm = 300.0;
+		constexpr double RampeFallCm = 60.0;
+		for (int32 i = 0; i < StufenZahl; ++i)
+		{
+			const double X0 = Half + RampeLaengeCm * i / StufenZahl;
+			const double X1 = Half + RampeLaengeCm * (i + 1) / StufenZahl;
+			const double Oben = FloorZ - RampeFallCm * (i + 1) / StufenZahl;
+			AddBetween(Layout.Parts, EHqMaterial::Concrete,
+				X0, X1, Openings.GarageY0, Openings.GarageY1,
+				Oben - 300.0, Oben);
+		}
+	}
 	AddBetween(Layout.Parts, EHqMaterial::Concrete,
 		Half - 900.0, Half - 860.0, Openings.GarageY0, Openings.GarageY1,
 		FloorZ, Openings.ClearHeightCm);
