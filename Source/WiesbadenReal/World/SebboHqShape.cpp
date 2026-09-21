@@ -37,21 +37,48 @@ namespace
 
 	struct FArrivalOpenings
 	{
-		double GarageY0 = -1400.0;
+		double GarageY0 = -1300.0;
 		double GarageY1 = -700.0;
-		double PortalY0 = 650.0;
-		double PortalY1 = 850.0;
+		double PortalY0 = -1520.0;
+		double PortalY1 = -1340.0;
 		double ClearHeightCm = 270.0;
 	};
 
+	/**
+	 * EINE Zufahrtsbucht, nicht zwei gegenueberliegende Oeffnungen.
+	 *
+	 * GEMESSEN am 21.09.2026 auf Alkis17: das Grundstueck wird von genau einer
+	 * Strasse bedient (Wolkenbruch, 0,7 m vom Garagenanker; die naechste
+	 * andere liegt 57,6 m weg), und diese Strasse FAELLT quer ueber das
+	 * Grundstueck - rund 11 cm Hoehe je Grad Umfangswinkel.
+	 *
+	 * Das Portal lag frueher auf der anderen Fassadenhaelfte, 65 Grad von der
+	 * Garage entfernt. Daraus folgten rund 7 m Hoehenunterschied zwischen den
+	 * beiden Zufahrtspunkten - und ein Plateau hat EINE Hoehe. Ebenerdige
+	 * Ankunft fuer Auto und Fuss war damit nicht an zu wenig Erdbau
+	 * gescheitert, sondern an Arithmetik.
+	 *
+	 * Das Portal steht darum jetzt unmittelbar NEBEN der Garage, mit einem
+	 * schmalen Pfeiler dazwischen. Beide sehen dieselbe Stelle der Strasse.
+	 * Der Test SebboHq.EineZufahrtsbucht haelt das fest.
+	 */
 	FArrivalOpenings GroundFloorOpenings(const FSebboHqDimensions& D)
 	{
 		const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
+		constexpr double PfeilerCm = 40.0;      // Wandstueck zwischen Tor und Tuer
+		constexpr double TuerbreiteCm = 180.0;  // lichte Breite des Personeneingangs
+
 		FArrivalOpenings Openings;
 		Openings.GarageY0 = FMath::Max(-Half + 120.0, Openings.GarageY0);
 		Openings.GarageY1 = FMath::Min(Half - 120.0, Openings.GarageY1);
+
+		// Das Portal folgt der Garage, statt eigene Zahlen zu fuehren: zwei
+		// unabhaengige Werte liefen beim ersten Versuch genau deshalb
+		// auseinander.
+		Openings.PortalY1 = Openings.GarageY0 - PfeilerCm;
+		Openings.PortalY0 = Openings.PortalY1 - TuerbreiteCm;
 		Openings.PortalY0 = FMath::Max(-Half + 120.0, Openings.PortalY0);
-		Openings.PortalY1 = FMath::Min(Half - 120.0, Openings.PortalY1);
+
 		Openings.ClearHeightCm = FMath::Min(Openings.ClearHeightCm, D.FloorHeightCm - D.SlabCm - 20.0);
 		return Openings;
 	}
@@ -66,13 +93,35 @@ namespace
 
 		// Die +X-Fassade ist in Abschnitte geteilt: Garage und Portal sind echte
 		// Luecken, nicht vor eine Vollwand gestellte Attrappen.
-		AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half, -Half, Openings.GarageY0, Z0, Z1, 0);
-		AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half, Openings.GarageY1, Openings.PortalY0, Z0, Z1, 0);
-		AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half, Openings.PortalY1, Half, Z0, Z1, 0);
-		AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half, Openings.GarageY0, Openings.GarageY1,
-			Openings.ClearHeightCm, Z1, 0);
-		AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half, Openings.PortalY0, Openings.PortalY1,
-			Openings.ClearHeightCm, Z1, 0);
+		//
+		// Die Reihenfolge wird SORTIERT statt vorausgesetzt. Vorher stand
+		// "erst Garage, dann Portal" fest verdrahtet; seit beide in derselben
+		// Bucht liegen, ist das Portal das untere - die feste Reihenfolge
+		// haette Wandstuecke mit negativer Breite erzeugt und die Oeffnungen
+		// an der falschen Stelle gelassen.
+		struct FLuecke { double Y0; double Y1; };
+		TArray<FLuecke> Luecken;
+		Luecken.Add({ Openings.GarageY0, Openings.GarageY1 });
+		Luecken.Add({ Openings.PortalY0, Openings.PortalY1 });
+		Luecken.Sort([](const FLuecke& A, const FLuecke& B) { return A.Y0 < B.Y0; });
+
+		double Laufend = -Half;
+		for (const FLuecke& Luecke : Luecken)
+		{
+			if (Luecke.Y0 > Laufend)
+			{
+				AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half,
+					Laufend, Luecke.Y0, Z0, Z1, 0);
+			}
+			// Sturz ueber der Oeffnung.
+			AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half,
+				Luecke.Y0, Luecke.Y1, Openings.ClearHeightCm, Z1, 0);
+			Laufend = FMath::Max(Laufend, Luecke.Y1);
+		}
+		if (Half > Laufend)
+		{
+			AddBetween(Parts, EHqMaterial::Glass, Half - Wall, Half, Laufend, Half, Z0, Z1, 0);
+		}
 
 		// Die drei anderen Fassaden halten die Erdgeschoss-Silhouette geschlossen,
 		// der Innenraum bleibt aber fuer die zwei Ankunftswege begehbar.
@@ -85,6 +134,11 @@ namespace
 double SebboHq::GetRoofHeightCm(const FSebboHqDimensions& D)
 {
 	return D.TotalHeightCm();
+}
+
+double SebboHq::GetAccessFloorCm(const FSebboHqDimensions& D)
+{
+	return D.SlabCm + 15.0;
 }
 
 double SebboHq::GetHelipadHeightCm(const FSebboHqDimensions& D)
@@ -208,7 +262,7 @@ FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(const FSebboHqDimensions& 
 	FSebboHqArrivalLayout Layout;
 	const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
 	const FArrivalOpenings Openings = GroundFloorOpenings(D);
-	const double FloorZ = D.SlabCm + 15.0;
+	const double FloorZ = GetAccessFloorCm(D);
 
 	// Die Ziele liegen HINTER den Oeffnungen. Die Zufahrt bleibt auf der
 	// Strassenseite +X; eine spaetere Tiefgarage kann von dieser ebenerdigen

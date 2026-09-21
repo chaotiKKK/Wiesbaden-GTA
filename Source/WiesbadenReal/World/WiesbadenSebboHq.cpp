@@ -8,6 +8,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "LandscapeProxy.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInterface.h"
@@ -18,6 +19,7 @@
 #include "Misc/Parse.h"
 #include "World/WiesbadenCitySubsystem.h"
 #include "GIS/WiesbadenWorldBuilder.h"
+#include "GIS/RoadNetworkGenerator.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogWbSebboHq, Log, All);
 
@@ -92,16 +94,47 @@ bool AWiesbadenSebboHq::ResolveGround(const FVector& WorldXY, double& OutZ) cons
 	{
 		return false;
 	}
-	FHitResult Hit;
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbSebboHqGround), true);
 	Params.AddIgnoredActor(this);
 	const FVector Start(WorldXY.X, WorldXY.Y, 100000.0);
 	const FVector End(WorldXY.X, WorldXY.Y, -20000.0);
-	if (World->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params)
-		&& !Hit.bStartPenetrating)
+
+	TArray<FHitResult> Hits;
+	if (!World->LineTraceMultiByChannel(Hits, Start, End, ECC_WorldStatic, Params))
 	{
-		OutZ = Hit.Location.Z;
-		return true;
+		return false;
+	}
+
+	// DAS GELAENDE, nicht das Erste unter dem Himmel.
+	//
+	// GEMESSEN am 21.09.2026 auf Alkis17: der Turm baute auf 10251 cm,
+	// waehrend sein eigenes Bauplateau auf 10048 cm liegt - 2,03 m zu hoch.
+	// Der Einzeltaster nahm den obersten Treffer, und ueber dem Grundstueck
+	// liegt Stadtgeometrie: Wolkenbruch quert es, und Nachbardaecher reichen
+	// bis 16296 cm. Der Turm stellte sich damit auf eine Fahrbahn statt auf
+	// den Boden, den der Bake eigens fuer ihn eingeebnet hat.
+	//
+	// Das Plateau IST das Landscape. Darum wird die ganze Saeule gelesen und
+	// der Landscape-Treffer gewaehlt.
+	for (const FHitResult& Hit : Hits)
+	{
+		if (!Hit.bStartPenetrating && Cast<ALandscapeProxy>(Hit.GetActor()))
+		{
+			OutZ = Hit.Location.Z;
+			return true;
+		}
+	}
+
+	// Kein Landscape in der Saeule (ungebackene Karte, Probelevel): dann der
+	// oberste brauchbare Treffer wie bisher. NICHT aufgeben - ein Turm, der
+	// gar nicht baut, waere schlechter als einer, der zu hoch steht.
+	for (const FHitResult& Hit : Hits)
+	{
+		if (!Hit.bStartPenetrating)
+		{
+			OutZ = Hit.Location.Z;
+			return true;
+		}
 	}
 	return false;
 }
@@ -143,10 +176,21 @@ void AWiesbadenSebboHq::Tick(float DeltaSeconds)
 	Coord.Height = 0.0;
 	const FVector Ground = Converter->GeoToUnrealGround(Coord);
 
-	double Z = 0.0;
-	if (!ResolveGround(Ground, Z))
+	// Der Taster sagt nur, DASS die Zelle da ist - die Hoehe kommt aus der
+	// Zufahrt. Beides zu trennen ist noetig: das Plateau waere sofort
+	// bekannt (das Strassennetz liegt serialisiert im WorldBuilder), aber ein
+	// Turm, der vor dem Streaming baut, laesst die Ankunftssonde in eine
+	// leere Welt tasten.
+	double BodenZ = 0.0;
+	if (!ResolveGround(Ground, BodenZ))
 	{
 		return;     // Zelle noch nicht gestreamt - naechster Tick
+	}
+
+	double Z = BodenZ;
+	if (!ResolvePlateau(Z))
+	{
+		Z = BodenZ;
 	}
 
 	Build(FVector(Ground.X, Ground.Y, Z), FRotator(0.0, HeadingDegrees, 0.0));
@@ -166,6 +210,48 @@ void AWiesbadenSebboHq::Tick(float DeltaSeconds)
 	{
 		SetActorTickEnabled(false);
 	}
+}
+
+bool AWiesbadenSebboHq::ResolvePlateau(double& OutZ) const
+{
+	const UWorld* World = GetWorld();
+	if (!World || !Converter)
+	{
+		return false;
+	}
+
+	FGeoCoordinate Coord;
+	Coord.Latitude = PlotLatitude;
+	Coord.Longitude = PlotLongitude;
+	Coord.Height = 0.0;
+	const FVector GrundXY = Converter->GeoToUnrealGround(Coord);
+	const FRotator Drehung(0.0, HeadingDegrees, 0.0);
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(Dimensions);
+
+	// DIESELBEN Ankerpunkte, die ConfigureSebboHqPad dem Bake uebergibt. Nur
+	// ihr XY zaehlt - die Hoehe kommt aus der Fahrbahn.
+	FRoadAccessOverride Zugang;
+	Zugang.bEnabled = true;
+	Zugang.GarageEntranceWorldCm = GrundXY + Drehung.RotateVector(Layout.GarageTarget.CenterCm);
+	Zugang.PedestrianEntranceWorldCm = GrundXY + Drehung.RotateVector(Layout.PedestrianTarget.CenterCm);
+	Zugang.SearchRadiusCm = 5000.0;
+
+	for (TActorIterator<AWiesbadenWorldBuilder> It(const_cast<UWorld*>(World)); It; ++It)
+	{
+		if (It->RoadNetwork.Segments.Num() == 0)
+		{
+			continue;
+		}
+		const FResolvedRoadAccess Zugeloest =
+			URoadNetworkGenerator::ResolveRoadAccess(It->RoadNetwork, Zugang);
+		if (!Zugeloest.Garage.IsValid())
+		{
+			continue;
+		}
+		OutZ = Zugeloest.Garage.RoadPointCm.Z - SebboHq::GetAccessFloorCm(Dimensions);
+		return true;
+	}
+	return false;
 }
 
 void AWiesbadenSebboHq::Build(const FVector& BaseWorld, const FRotator& BaseYaw)

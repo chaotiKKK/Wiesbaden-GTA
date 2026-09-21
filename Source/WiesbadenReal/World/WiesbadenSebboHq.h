@@ -122,6 +122,26 @@ private:
 	/** Bodenhoehe am Standort; false, solange die Zelle nicht gestreamt ist. */
 	bool ResolveGround(const FVector& WorldXY, double& OutZ) const;
 
+	/**
+	 * Hoehe des Bauplateaus - aus DERSELBEN Beziehung, die der Bake benutzt.
+	 *
+	 * Ein Bodentaster liefert sie NICHT. Gemessen am 21.09.2026 auf Alkis17:
+	 * das Plateau liegt auf 10036 cm, das Landscape unter der Grundrissmitte
+	 * auf 10240 cm - 2,04 m hoeher. Der Pad-Pass schreibt seine ebene Flaeche,
+	 * und danach schreibt FlattenUnderRoads noch einmal ins selbe Gelaende;
+	 * Wolkenbruch laeuft ueber das Grundstueck. "Das Landscape" ist darum
+	 * nicht "das Plateau", und ein Turm, der sich auf den obersten oder auch
+	 * nur auf den obersten LANDSCAPE-Treffer stellt, steht auf der Strasse.
+	 *
+	 * Richtig ist, dieselbe Rechnung zu lesen: naechste Fahrbahn am
+	 * Garagenzugang minus GetAccessFloorCm. Damit stimmen Turm und Plateau
+	 * ueberein, WEIL sie dieselbe Quelle befragen - nicht, weil zwei
+	 * Messungen zufaellig gleich ausgehen.
+	 *
+	 * @return false, wenn kein gebackenes Strassennetz erreichbar ist.
+	 */
+	bool ResolvePlateau(double& OutZ) const;
+
 	void Build(const FVector& BaseWorld, const FRotator& BaseYaw);
 
 	void CreateArrivalVolume(UBoxComponent*& OutVolume, FName Name,

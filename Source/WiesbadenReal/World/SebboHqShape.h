@@ -172,6 +172,16 @@ namespace SebboHq
 	/** Oberkante der Attika ueber dem Fusspunkt (cm). */
 	WIESBADENREAL_API double GetRoofHeightCm(const FSebboHqDimensions& Dimensions);
 
+	/**
+	 * Hoehe des privaten Bodens ueber dem Bauplateau (cm).
+	 *
+	 * Deckenstaerke plus Belag. Das Bauplateau wird beim Bake um genau diesen
+	 * Betrag UNTER die Fahrbahn gelegt, damit der fertige Boden die Strasse
+	 * trifft (ConfigureSebboHqPad). Der Wert steht hier, damit Turm und
+	 * Plateau nicht zwei Zahlen fuehren.
+	 */
+	WIESBADENREAL_API double GetAccessFloorCm(const FSebboHqDimensions& Dimensions);
+
 	/** Hoehe der Landeplatzflaeche ueber dem Fusspunkt (cm). */
 	WIESBADENREAL_API double GetHelipadHeightCm(const FSebboHqDimensions& Dimensions);
 

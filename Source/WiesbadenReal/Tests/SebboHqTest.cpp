@@ -474,3 +474,52 @@ bool FSebboHqHelipadApproachTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqEineZufahrtsbuchtTest,
+	"WiesbadenReal.World.SebboHq.EineZufahrtsbucht",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqEineZufahrtsbuchtTest::RunTest(const FString& Parameters)
+{
+	// GEMESSEN am 21.09.2026 auf Alkis17: das Grundstueck wird von GENAU EINER
+	// Strasse bedient (Wolkenbruch, Segment 54432, 0,7 m vom Garagenanker; die
+	// naechste andere liegt 57,6 m weg). Diese Strasse FAELLT quer ueber das
+	// Grundstueck - Fahrbahnpunkte im 20-m-Ring:
+	//
+	//     330 Grad -> 10048 cm     0 Grad -> 9715 cm     15 Grad -> 9569 cm
+	//
+	// also rund 11 cm Hoehe je Grad Umfangswinkel.
+	//
+	// Ein Plateau hat EINE Hoehe. Ebenerdige Ankunft fuer Auto UND Fuss ist
+	// darum nur moeglich, wenn beide Oeffnungen dieselbe STELLE der fallenden
+	// Strasse adressieren. Frueher lagen sie 65 Grad auseinander - allein
+	// daraus folgten rund 5 m Hoehenunterschied, die kein Plateau einebnen
+	// kann, weil die Strasse selbst nicht eben ist.
+	const FSebboHqDimensions D;
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+
+	const FVector2D Garage(Layout.GarageTarget.CenterCm.X, Layout.GarageTarget.CenterCm.Y);
+	const FVector2D Portal(Layout.PedestrianTarget.CenterCm.X, Layout.PedestrianTarget.CenterCm.Y);
+
+	const double GradGarage = FMath::RadiansToDegrees(FMath::Atan2(Garage.Y, Garage.X));
+	const double GradPortal = FMath::RadiansToDegrees(FMath::Atan2(Portal.Y, Portal.X));
+	const double SpanneGrad = FMath::Abs(GradGarage - GradPortal);
+
+	// 10 Grad sind bei 11 cm/Grad rund 1,1 m Hoehenunterschied - mehr als eine
+	// Bordsteinabsenkung ueberbruecken kann.
+	TestTrue(*FString::Printf(
+		TEXT("Beide Oeffnungen adressieren dieselbe Stelle der Zufahrt (%.1f Grad auseinander)"),
+		SpanneGrad),
+		SpanneGrad <= 10.0);
+
+	// Und sie liegen auf DERSELBEN Fassadenhaelfte - ein Vorzeichenwechsel in Y
+	// waere die alte, gegenueberliegende Anordnung.
+	TestTrue(TEXT("Garage und Portal liegen auf derselben Fassadenhaelfte"),
+		Garage.Y * Portal.Y > 0.0);
+
+	// Trotzdem zwei getrennte Oeffnungen, kein gemeinsames Loch.
+	TestTrue(TEXT("Garage und Portal bleiben getrennte Ziele"),
+		FVector2D::Distance(Garage, Portal) > 200.0);
+
+	return true;
+}
