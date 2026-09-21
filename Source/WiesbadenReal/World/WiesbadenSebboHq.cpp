@@ -490,7 +490,28 @@ namespace
 		if (World->SweepSingleByChannel(Treffer, Vor, Tief, FQuat::Identity,
 			ECC_Pawn, Kapsel, Params))
 		{
-			OutNach = Treffer.bStartPenetrating ? Vor : Treffer.Location;
+			// EIN SCHRITT, DER IN DER GEOMETRIE ENDET, IST KEINER.
+			//
+			// GEMESSEN am 21.09.2026: der Fussweg meldete "Portal begehbar",
+			// alle 14 Schritte, und endete 3,47 m UEBER dem Portalvolumen
+			// (Volumenkoordinaten Z 347 bei halber Hoehe 90). Vor liegt eine
+			// volle Stufe HOEHER als der Ausgangspunkt; steckte die Kapsel
+			// dort, wurde sie bisher trotzdem dorthin gesetzt und meldete
+			// Erfolg. Ueber 14 Schritte ratscht das 5,6 m nach oben - die
+			// Sonde kletterte durch das Gebaeude und gab das als begangenen
+			// Weg aus.
+			//
+			// Geprueft wird der Sweep-Start, NICHT eine Ueberlappung der
+			// Endlage: eine Kapsel, die auf dem Landscape aufsetzt, meldet
+			// dort regelmaessig Ueberlappung, und die erste Fassung dieser
+			// Pruefung liess deshalb keinen einzigen Schritt mehr zu.
+			if (Treffer.bStartPenetrating)
+			{
+				OutGrund = FString::Printf(TEXT("steckt in der Geometrie (%s)"),
+					*GetNameSafe(Treffer.GetComponent()));
+				return false;
+			}
+			OutNach = Treffer.Location;
 			return true;
 		}
 		OutGrund = TEXT("nichts unter den Fuessen");
@@ -827,6 +848,10 @@ void AWiesbadenSebboHq::ProbeArrival() const
 	// Ein Quader in Fahrzeuggroesse. KEIN AddIgnoredActor: der Turm ist genau
 	// das, wogegen getastet wird - eine Oeffnung, die nur gemalt ist, faellt
 	// hier auf.
+	double AutoTrefferWeltZCm = 0.0;
+	double AutoQuaderUnterkanteCm = 0.0;
+	double AutoBelagZCm = 0.0;
+	FString AutoBelagName = TEXT("-");
 	FWbAnkunftsweg Wagenweg;
 	{
 		// 5 cm Luft ueber dem hoeheren Belag: ein Quader, der die Bodenplatte
@@ -862,6 +887,22 @@ void AWiesbadenSebboHq::ProbeArrival() const
 			Wagenweg.WegCm = Wagenweg.bFrei ? (Ziel - Start).Size() : Treffer.Distance;
 			Wagenweg.Woran = Wagenweg.bFrei ? TEXT("Durchfahrt frei")
 				: FString::Printf(TEXT("versperrt durch %s"), *GetNameSafe(Treffer.GetComponent()));
+
+			// WO stoesst er an, und was liegt dort? Ohne diese Zahlen ist
+			// "versperrt" nicht von "die Sonde faehrt zu tief" zu trennen.
+			if (!Wagenweg.bFrei)
+			{
+				AutoTrefferWeltZCm = Treffer.Location.Z;
+				AutoQuaderUnterkanteCm = Start.Z - 75.0;
+				FHitResult Darunter;
+				const FVector Lot(Treffer.Location.X, Treffer.Location.Y, Treffer.Location.Z + 3000.0);
+				if (World->LineTraceSingleByChannel(Darunter, Lot,
+					Lot - FVector(0.0, 0.0, 6000.0), ECC_WorldStatic, P))
+				{
+					AutoBelagZCm = Darunter.Location.Z;
+					AutoBelagName = GetNameSafe(Darunter.GetComponent());
+				}
+			}
 		}
 	}
 
@@ -1004,6 +1045,20 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		Layout.GarageTarget.CenterCm.X, GarageY, BodenZ + 75.0));
 	const bool bGarageTrifftVolumen = ImZielvolumen(GarageArrivalVolume, GarageZielWelt);
 	const bool bFussTrifftVolumen = ImZielvolumen(PedestrianArrivalVolume, FussEnde);
+
+	// GENAU DIE ZAHLEN, die ImZielvolumen vergleicht - keine nachgerechneten.
+	// Der Widerspruch "rechnerisch drin, gemessen draussen" laesst sich nur so
+	// aufloesen: Endpunkt in Volumenkoordinaten gegen die halbe Ausdehnung.
+	FVector FussImVolumen = FVector::ZeroVector;
+	FVector PortalHalb = FVector::ZeroVector;
+	FVector PortalWeltMitte = FVector::ZeroVector;
+	if (PedestrianArrivalVolume)
+	{
+		FussImVolumen = PedestrianArrivalVolume->GetComponentTransform()
+			.InverseTransformPosition(FussEnde);
+		PortalHalb = PedestrianArrivalVolume->GetScaledBoxExtent();
+		PortalWeltMitte = PedestrianArrivalVolume->GetComponentLocation();
+	}
 	const bool bHeliTrifftVolumen = ImZielvolumen(HelipadArrivalVolume,
 		NachWelt(Layout.HelicopterTarget.CenterCm));
 	const bool bZieleGetrennt =
@@ -1035,6 +1090,11 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		TEXT(" \"strasse_gefunden\": { \"garage\": %s, \"portal\": %s },\n")
 		TEXT(" \"volumen_getroffen\": { \"auto\": %s, \"fuss\": %s, \"heli\": %s },\n")
 		TEXT(" \"volumen_getrennt\": %s,\n")
+		TEXT(" \"fuss_ende_welt\": [%.0f, %.0f, %.0f],\n")
+		TEXT(" \"portal_volumen\": {\"mitte\": [%.0f, %.0f, %.0f], \"halb\": [%.0f, %.0f, %.0f]},\n")
+		TEXT(" \"fuss_in_volumenkoordinaten\": [%.0f, %.0f, %.0f],\n")
+		TEXT(" \"auto_treffer\": {\"z_cm\": %.0f, \"quader_unterkante_cm\": %.0f, ")
+		TEXT("\"belag_z_cm\": %.0f, \"belag\": \"%s\"},\n")
 		TEXT(" \"gelaende_ring\": { \"punkte\": %d, \"min_cm\": %.0f, \"max_cm\": %.0f, \"mittel_cm\": %.0f },\n")
 		TEXT(" \"gelaende_schnitt\": [%s]\n}\n"),
 		JaNein(Wagenweg.bFrei), Wagenweg.WegCm, *Wagenweg.Woran,
@@ -1044,6 +1104,11 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		JaNein(bStrasseGarage), JaNein(bStrassePortal),
 		JaNein(bGarageTrifftVolumen), JaNein(bFussTrifftVolumen), JaNein(bHeliTrifftVolumen),
 		JaNein(bZieleGetrennt),
+		FussEnde.X, FussEnde.Y, FussEnde.Z,
+		PortalWeltMitte.X, PortalWeltMitte.Y, PortalWeltMitte.Z,
+		PortalHalb.X, PortalHalb.Y, PortalHalb.Z,
+		FussImVolumen.X, FussImVolumen.Y, FussImVolumen.Z,
+		AutoTrefferWeltZCm, AutoQuaderUnterkanteCm, AutoBelagZCm, *AutoBelagName,
 		GelaendePunkte, GelaendeMinCm, GelaendeMaxCm, GelaendeMittelCm, *GelaendeSchnitt);
 	FFileHelper::SaveStringToFile(Inhalt, *Pfad);
 }
