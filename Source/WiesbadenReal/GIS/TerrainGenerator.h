@@ -150,6 +150,75 @@ struct WIESBADENREAL_API FTerrainTile
 	static uint16 EncodeLandscapeHeightCm(double HeightCm, double ZScale);
 };
 
+/**
+ * Ein gerechnetes Bauplateau: ebene Flaeche mit anschliessender Boeschung.
+ *
+ * Die Hoehe wird NICHT eingetragen, sondern aus der Zufahrt genommen: das
+ * Grundstueck trifft die Strasse, nicht umgekehrt. Ein fester Wert waere eine
+ * zweite Wahrheit neben dem Strassennetz und liefe beim naechsten
+ * DEM-Wechsel davon.
+ */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FTerrainSitePad
+{
+	GENERATED_BODY()
+
+	/** Mittelpunkt des Grundstuecks in Weltkoordinaten (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+	FVector2D CenterCm = FVector2D::ZeroVector;
+
+	/** Radius der EBENEN Flaeche (cm). 0 schaltet das Plateau ab. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain", meta = (ClampMin = "0.0"))
+	double RadiusCm = 0.0;
+
+	/**
+	 * Breite der Boeschung nach aussen (cm).
+	 *
+	 * Ohne sie endet das Plateau als senkrechte Kante im Gelaende. Muss
+	 * deutlich ueber der Gitterweite (7,81 m) liegen, sonst faellt die
+	 * Boeschung zwischen zwei Stuetzpunkte und die Kante bleibt - dieselbe
+	 * Falle wie bei RoadFlattenMarginCm.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain", meta = (ClampMin = "0.0"))
+	double SlopeRunCm = 2000.0;
+
+	/** Punkt an der Zufahrt; die naechste Fahrbahn dort gibt die Hoehe vor. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+	FVector2D RoadAnchorCm = FVector2D::ZeroVector;
+
+	/** Groesster Abstand des Ankers zur Fahrbahnachse (cm). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain", meta = (ClampMin = "100.0"))
+	double RoadSearchRadiusCm = 5000.0;
+
+	/**
+	 * Hoehe des privaten Bodens ueber dem Plateau (cm).
+	 *
+	 * Das Plateau wird um genau diesen Betrag UNTER die Fahrbahn gelegt,
+	 * damit der fertige Boden des Bauwerks die Strasse trifft. Sonst haette
+	 * man ein ebenes Grundstueck und trotzdem eine Stufe davor.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain", meta = (ClampMin = "0.0"))
+	double AccessFloorCm = 0.0;
+
+	/**
+	 * Halbe Kantenlaenge des Gebaeudegrundrisses (cm). 0 schaltet die Regel ab.
+	 *
+	 * WOFUER: In das Plateau wird ein Haus gebaut, und durch ein Haus laeuft
+	 * keine Strassenboeschung. FlattenUnderRoads hat das letzte Wort und
+	 * ebnet in einem Korridor von Fahrbahnbreite/2 + RoadFlattenMarginCm
+	 * (900 cm) ein - GEMESSEN am 21.09.2026 reichte dieser Korridor 6,5 m in
+	 * das Erdgeschoss des SebboTower und lag dort bis zu 97 cm UEBER dem
+	 * fertigen Boden. Im Portal wuchs Gras. Innerhalb dieses Grundrisses darf
+	 * die Strasse das Gelaende darum nicht mehr ueber das Plateau heben.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain", meta = (ClampMin = "0.0"))
+	double BuildingHalfCm = 0.0;
+
+	/** Drehung des Grundrisses um Z (Grad), wie der Bau selbst steht. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+	double BuildingYawDeg = 0.0;
+};
+
 /** Parameter der Landscape-Erzeugung. */
 USTRUCT(BlueprintType)
 struct WIESBADENREAL_API FTerrainGenerationSettings
@@ -167,6 +236,21 @@ struct WIESBADENREAL_API FTerrainGenerationSettings
 	/** Einebnung der Flaeche unter Fahrbahnen (empfohlen). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
 	bool bFlattenUnderRoads = true;
+
+	/** Gerechnete Bauplateaus fuer Grundstuecke ohne OSM-Grundriss. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+	bool bFlattenSitePads = true;
+
+	/**
+	 * Grundstuecke, die ein eigenes Plateau bekommen.
+	 *
+	 * FlattenUnderBuildings legt fuer jeden OSM-Grundriss eines an. Bauwerke,
+	 * die zur Laufzeit gespawnt werden, stehen in keinem OSM-Datensatz und
+	 * bekommen deshalb keines - der SebboTower stand so quer im Hang, seine
+	 * Garage 5,1 m in der Boeschung und sein Portal 1,66 m ueber der Strasse.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+	TArray<FTerrainSitePad> SitePads;
 
 	/** Einebnung der Flaeche unter Gebaeudegrundrissen (empfohlen). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
@@ -327,6 +411,10 @@ struct WIESBADENREAL_API FTerrainGenerationReport
 	UPROPERTY(BlueprintReadOnly, Category = "Terrain")
 	int32 BuildingFlattenedCellCount = 0;
 
+	/** Durch die gerechneten Bauplateaus veraenderte Zellen. */
+	UPROPERTY(BlueprintReadOnly, Category = "Terrain")
+	int32 SitePadFlattenedCellCount = 0;
+
 	UPROPERTY(BlueprintReadOnly, Category = "Terrain")
 	double DurationSeconds = 0.0;
 
@@ -337,10 +425,12 @@ struct WIESBADENREAL_API FTerrainGenerationReport
 			return FString::Printf(TEXT("FEHLGESCHLAGEN: %s"), *ErrorMessage);
 		}
 		return FString::Printf(
-			TEXT("OK: %dx%d Tile (%.0f x %.0f m), %.1f..%.1f m, %d/%d Zellen eingeebnet, %.2f s"),
+			TEXT("OK: %dx%d Tile (%.0f x %.0f m), %.1f..%.1f m, %d/%d/%d Zellen eingeebnet ")
+			TEXT("(Strasse/Gebaeude/Plateau), %.2f s"),
 			GridSize, GridSize, WorldWidthMeters, WorldHeightMeters,
 			MinHeightCm / 100.0, MaxHeightCm / 100.0,
-			RoadFlattenedCellCount, BuildingFlattenedCellCount, DurationSeconds);
+			RoadFlattenedCellCount, BuildingFlattenedCellCount, SitePadFlattenedCellCount,
+			DurationSeconds);
 	}
 };
 
@@ -445,6 +535,38 @@ public:
 		const FRoadNetwork& Network,
 		const FTerrainGenerationSettings& Settings,
 		FTerrainTile& Tile) const;
+
+	/**
+	 * Legt die gerechneten Bauplateaus an.
+	 *
+	 * Muss VOR FlattenUnderRoads laufen: die Strasse hat das letzte Wort,
+	 * sonst hebt das Plateau sie am Grundstuecksrand wieder zu.
+	 *
+	 * @return Anzahl veraenderter Zellen.
+	 */
+	int32 FlattenSitePads(
+		const FRoadNetwork& Network,
+		const FTerrainGenerationSettings& Settings,
+		FTerrainTile& Tile) const;
+
+	/**
+	 * Die Plateauhoehe eines Bauplateaus aus der naechsten Fahrbahn am Anker.
+	 *
+	 * Steht hier, weil ZWEI Paesse sie brauchen: FlattenSitePads legt das
+	 * Plateau damit an, und FlattenUnderRoads muss wissen, wie hoch es liegt,
+	 * um es im Gebaeudegrundriss nicht wieder zuzuschuetten. Zwei Kopien
+	 * derselben Rechnung waeren genau die stille Zweitwahrheit, an der die
+	 * Hoehe eines Tages auseinanderliefe.
+	 *
+	 * @return false, wenn im Suchradius keine Fahrbahn liegt. Dann wird NICHT
+	 *         geraten - ein Plateau auf geratener Hoehe waere ein zweiter,
+	 *         stiller Hang.
+	 */
+	static bool ResolveSitePadPlateauCm(
+		const FRoadNetwork& Network,
+		const FTerrainSitePad& Pad,
+		double& OutPlateauCm,
+		double& OutRoadZCm);
 
 	/**
 	 * Ebnet das Terrain unter allen geschlossenen Gebaeudegrundrissen ein.

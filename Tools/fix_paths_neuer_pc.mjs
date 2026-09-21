@@ -18,8 +18,14 @@ const PAIRS = [
   ['C:\\Users\\ssonn\\aivideo\\WiesbadenReal', 'C:\\freebuff\\WiesbadenReal_Sicherung\\WiesbadenReal'],
   ['C:/Users/ssonn/aivideo/WiesbadenReal', 'C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal'],
   // Engine (beide Slash-Formen)
-  ['C:\\Program Files\\Epic Games\\UE_5.8', 'C:\\freebuff\\WiesbadenReal_Sicherung\\UE_5.8'],
-  ['C:/Program Files/Epic Games/UE_5.8', 'C:/Program Files/Epic Games/UE_5.8'],
+  // UMGEDREHT am 21.09.2026. Diese Abbildung zeigte von der
+  // installierten Engine AUF die Plattenkopie - sie haette jeden
+  // richtigen Pfad auf die veraltete 5.8.1 umgeschrieben. Beim
+  // Umzug war das richtig; seither ist die installierte 5.8.2 die
+  // kanonische (Tools/engine.py). Ein einmaliges Werkzeug veraltet
+  // nicht von selbst - es bleibt scharf liegen.
+  ['C:\\freebuff\\WiesbadenReal_Sicherung\\UE_5.8', 'C:\\Program Files\\Epic Games\\UE_5.8'],
+  ['C:/freebuff/WiesbadenReal_Sicherung/UE_5.8', 'C:/Program Files/Epic Games/UE_5.8'],
 ];
 
 const files = [];

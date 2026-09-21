@@ -225,6 +225,20 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 
 ---
 
+## WbSpawnPursuer
+
+- **Signatur:** `WbSpawnPursuer`
+- **Wirkung:** Setzt einen `AWiesbadenPursuerActor` 40 m vor der eigenen Figur
+  ab. Die 40 m sind mit Absicht gewaehlt: sie liegen INNERHALB des
+  Erkennungsradius von 50 m, der Verfolger nimmt die Jagd also sofort auf,
+  ohne dass man ihm erst entgegenlaufen muss.
+- **Voraussetzung:** keine. Ohne besessene Figur wird vom Weltursprung aus
+  gemessen - der Verfolger steht dann bei (4000, 0).
+- **Log-Nachweis:**
+  - `WbDev: WbSpawnPursuer - Verfolger %s bei (%.0f, %.0f).`
+
+---
+
 ## Typische Abfolgen
 
 - **Helikopter-Autopilot testen:** `WbHeli,WbHeliGoto 200 0 50,WbHeliHover` -

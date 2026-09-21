@@ -21,7 +21,7 @@
 # gesichert, damit eine schlechte Release umkehrbar ist.
 #
 # Aufruf:  Tools\build_release.cmd            (voll, inkl. Paket - dauert Stunden)
-#          Tools\build_release.cmd -GatesOnly (nur Gates 1-3, ~10-15 min, fuer vor
+#          Tools\build_release.cmd -GatesOnly (nur Gates 0-3, ~10-15 min, fuer vor
 #                                              dem Commit; ueberspringt NUR das
 #                                              Paket, KEIN Qualitaets-Gate)
 #          Tools\build_release.cmd -Rollback  (Sekunden: aktuelles <-> vorheriges
@@ -34,13 +34,27 @@
 [CmdletBinding()]
 param(
     [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
+    [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8",
     [switch]$GatesOnly,
     [switch]$Rollback
 )
 
 $ErrorActionPreference = "Stop"
 
-$Engine  = Join-Path $Root "UE_5.8\Engine"
+# INSTALLIERTE Engine, NICHT die Kopie unter $Root.
+#
+# GEMESSEN am 21.09.2026: die Pipeline baute gegen
+# C:\freebuff\WiesbadenReal_Sicherung\UE_5.8 (Kopie vom 11.08.2026), waehrend
+# Tools\build_gate1.cmd, Wiesbaden_spielen.cmd und die Desktop-Verknuepfung
+# die installierte Engine (07.09.2026) benutzen. Das Projekt-Intermediate
+# traegt deren Shared-PCH; der Build starb darum in einem ENGINE-Header
+# (GenericPlatform.h: C2953 "SelectIntPointerType" bereits definiert) - das
+# sieht nach kaputtem Engine-Quelltext aus und ist keiner.
+#
+# Die Vorhandenseins-Pruefung weiter unten schlug NICHT an: die alte Kopie
+# existiert ja. Ein Pfad, der da ist und trotzdem falsch ist, faellt keiner
+# Test-Path-Pruefung auf - nur dem Vergleich mit dem, was sonst baut.
+$Engine  = Join-Path $EngineRoot "Engine"
 $BuildBat = Join-Path $Engine "Build\BatchFiles\Build.bat"
 $CmdExe   = Join-Path $Engine "Binaries\Win64\UnrealEditor-Cmd.exe"
 $ProjDir  = Join-Path $Root "WiesbadenReal"
@@ -115,7 +129,30 @@ function Fail([string]$Gate, [string]$Detail, [string]$LogHint) {
 }
 
 Write-Host "======== Release-Pipeline WiesbadenReal ========"
-Write-Host ("Modus: {0}" -f ($(if ($GatesOnly) { "nur Gates 1-3 (-GatesOnly)" } else { "voll inkl. Paketierung" })))
+Write-Host ("Modus: {0}" -f ($(if ($GatesOnly) { "nur Gates 0-3 (-GatesOnly)" } else { "voll inkl. Paketierung" })))
+
+# ---- Gate 0: Engine-Pfade ------------------------------------------------
+#
+# Sekunden, und ganz vorn: dieses Gate haette den Lauf vom 21.09.2026 gespart.
+# Damals zeigte die Pipeline selbst auf die aeltere Engine-Kopie, und der
+# Build starb erst zehn Minuten spaeter in einem ENGINE-Header, der aussah,
+# als sei der Engine-Quelltext kaputt. Ein falscher Pfad soll hier auffallen,
+# nicht im Compiler.
+Section 0 "Engine-Pfade (Tools\pruefe_engine.py)"
+$EngineCheck = Join-Path $PSScriptRoot "pruefe_engine.py"
+if (Test-Path $EngineCheck) {
+    $prevEAP0 = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & python $EngineCheck | ForEach-Object { Write-Host ("  {0}" -f $_) }
+    $engineRc = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP0
+    if ($engineRc -ne 0) {
+        Fail "Gate 0 (Engine-Pfade)" ("Mindestens ein Werkzeug nennt eine andere Engine als {0}." -f $EngineRoot) ""
+    }
+    Write-Host "  Gate 0 gruen: alle Werkzeuge zeigen auf dieselbe Engine."
+} else {
+    Write-Host "  uebersprungen: pruefe_engine.py fehlt."
+}
 
 # ---- Gate 1: Kompilieren -------------------------------------------------
 Section 1 "Kompilieren (WiesbadenRealEditor Win64 Development)"

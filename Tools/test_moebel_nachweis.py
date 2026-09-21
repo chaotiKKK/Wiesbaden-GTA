@@ -54,10 +54,28 @@ class RegelTest(unittest.TestCase):
     def test_zu_weit_weg_faellt_raus(self):
         self.assertFalse(nw.ueberlebt("bench", (8.0, 2.75, 2.0, "residential")))
 
-    def test_am_fussweg_ist_die_schwelle_viel_enger(self):
-        # befestigt bis 0,9 m, plus 1,5 m Reichweite -> ab 2,4 m ist Schluss.
-        self.assertTrue(nw.ueberlebt("bench", (2.3, 0.9, 0.0, "footway")))
-        self.assertFalse(nw.ueberlebt("bench", (2.5, 0.9, 0.0, "footway")))
+    def test_am_fussweg_traegt_das_bankett(self):
+        # Kalibrierung vom 21.09.2026: befestigt bis 0,9 + 2,5 m Bankett,
+        # plus 2,5 m Reichweite -> erst ab 5,9 m ist Schluss. Vorher endete
+        # es bei 2,4 m, und dieser Test hat genau das festgehalten, nachdem
+        # das C++ laengst weiter war.
+        self.assertTrue(nw.ueberlebt("bench", (2.5, 0.9, 0.0, "footway")))
+        self.assertTrue(nw.ueberlebt("bench", (5.8, 0.9, 0.0, "footway")))
+        self.assertFalse(nw.ueberlebt("bench", (6.0, 0.9, 0.0, "footway")))
+
+    def test_bankett_typen_decken_das_cpp_ab(self):
+        # Die Liste steht im C++ (WbBankettErlaubt) ein zweites Mal. Beim
+        # Uebertragen fiel living_street heraus - eine Spielstrasse hat
+        # keinen eigenen Gehweg, begangen wird sie trotzdem. Der Nachbau
+        # verwarf dort Moebel, die der Bake stehen laesst.
+        self.assertIn("living_street", nw.BANKETT_TYPEN)
+        self.assertTrue(nw.ueberlebt("bench", (5.0, 0.9, 0.0, "living_street")))
+
+    def test_das_bankett_gilt_NICHT_auf_der_autobahn(self):
+        # Eine Autobahn hat auch keinen Gehweg - aber dort steht kein
+        # begehbarer Streifen, sondern die Standspur. Die Begruendung des
+        # Banketts traegt hier nicht.
+        self.assertFalse(nw.ueberlebt("bench", (10.5, 7.5, 0.0, "motorway")))
 
     def test_poller_duerfen_ueberall_stehen(self):
         self.assertTrue(nw.ueberlebt("bollard", (50.0, 2.75, 2.0, "residential")))
@@ -66,7 +84,12 @@ class RegelTest(unittest.TestCase):
         self.assertFalse(nw.ueberlebt("bench", None))
 
     def test_groessere_reichweite_rettet_mehr(self):
-        fall = (3.5, 0.9, 0.0, "footway")
+        # An einer Strasse MIT Gehweg: dort greift das Bankett nicht, also
+        # misst dieser Fall allein die Reichweite. Der frueher benutzte
+        # Fussweg taugt dafuer nicht mehr - dort wirken seit dem 21.09.2026
+        # zwei Hebel, und ein Test, der zwei Dinge gleichzeitig bewegt, sagt
+        # ueber keines davon etwas.
+        fall = (6.8, 2.75, 2.0, "residential")     # befestigt bis 4,75 m
         self.assertFalse(nw.ueberlebt("bench", fall, reichweite_m=1.5))
         self.assertTrue(nw.ueberlebt("bench", fall, reichweite_m=2.6))
 

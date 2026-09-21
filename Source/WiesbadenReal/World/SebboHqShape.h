@@ -61,6 +61,41 @@ struct WIESBADENREAL_API FHqPart
 	int32 Floor = -1;
 };
 
+/** Ein physisches Zielvolumen der Tower-Ankunft in lokalen Zentimetern. */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FHqArrivalTarget
+{
+	GENERATED_BODY()
+
+	/** Mittelpunkt des Ziels relativ zum Tower-Fusspunkt. */
+	UPROPERTY(BlueprintReadOnly, Category = "HQ|Arrival")
+	FVector CenterCm = FVector::ZeroVector;
+
+	/** Halbe Ausdehnung der akzeptierten Ankunftszone. */
+	UPROPERTY(BlueprintReadOnly, Category = "HQ|Arrival")
+	FVector ExtentCm = FVector::ZeroVector;
+};
+
+/** Private Tower-Bauteile und die drei getrennten Ankunftsziele. */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FSebboHqArrivalLayout
+{
+	GENERATED_BODY()
+
+	/** Garage, Eingangsbereich und deren konstruktive Umfassung. */
+	UPROPERTY(BlueprintReadOnly, Category = "HQ|Arrival")
+	TArray<FHqPart> Parts;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HQ|Arrival")
+	FHqArrivalTarget GarageTarget;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HQ|Arrival")
+	FHqArrivalTarget PedestrianTarget;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HQ|Arrival")
+	FHqArrivalTarget HelicopterTarget;
+};
+
 /**
  * Die Masse des Hauptsitzes.
  *
@@ -106,9 +141,15 @@ struct WIESBADENREAL_API FSebboHqDimensions
 	UPROPERTY(EditAnywhere, Category = "HQ", meta = (ClampMin = "0.0"))
 	double CrownHeightCm = 600.0;
 
-	/** Durchmesser des Landeplatzes auf dem Dach (cm). */
+	/**
+	 * Durchmesser des Landeplatzes auf dem Dach (cm).
+	 *
+	 * 11 m, nicht 18: auf ein 30-m-Dach passt neben der Krone kein groesserer
+	 * Platz, dessen Anflug frei bleibt. Mit 18 m lag die Aufsetzflaeche zur
+	 * Haelfte unter der Krone - gross gezeichnet und unbenutzbar.
+	 */
 	UPROPERTY(EditAnywhere, Category = "HQ", meta = (ClampMin = "500.0"))
-	double HelipadDiameterCm = 1800.0;
+	double HelipadDiameterCm = 1100.0;
 
 	/** Gesamthoehe bis Oberkante Attika (cm) - abgeleitet, nicht eingestellt. */
 	double TotalHeightCm() const { return FloorCount * FloorHeightCm; }
@@ -131,8 +172,38 @@ namespace SebboHq
 	/** Oberkante der Attika ueber dem Fusspunkt (cm). */
 	WIESBADENREAL_API double GetRoofHeightCm(const FSebboHqDimensions& Dimensions);
 
+	/**
+	 * Hoehe des privaten Bodens ueber dem Bauplateau (cm).
+	 *
+	 * Deckenstaerke plus Belag. Das Bauplateau wird beim Bake um genau diesen
+	 * Betrag UNTER die Fahrbahn gelegt, damit der fertige Boden die Strasse
+	 * trifft (ConfigureSebboHqPad). Der Wert steht hier, damit Turm und
+	 * Plateau nicht zwei Zahlen fuehren.
+	 */
+	WIESBADENREAL_API double GetAccessFloorCm(const FSebboHqDimensions& Dimensions);
+
 	/** Hoehe der Landeplatzflaeche ueber dem Fusspunkt (cm). */
 	WIESBADENREAL_API double GetHelipadHeightCm(const FSebboHqDimensions& Dimensions);
+
+	/**
+	 * Versatz der Landeplatzmitte aus der Dachmitte (cm, +X).
+	 *
+	 * EINE Wahrheit fuer Huelle und Ankunftsziel. Beide rechneten den Versatz
+	 * vorher getrennt aus demselben Faktor - der Landeplatz lag darum zwar
+	 * unter dem Ziel, aber beide gemeinsam unter der Krone, und das fiel
+	 * keiner der beiden Rechnungen auf.
+	 */
+	WIESBADENREAL_API double GetHelipadOffsetCm(const FSebboHqDimensions& Dimensions);
+
+	/**
+	 * Halbe Kantenlaenge der Krone (cm).
+	 *
+	 * Die Krone sitzt auf dem Erschliessungskern und darf den Anflug auf den
+	 * Landeplatz nicht ueberdecken: sie war 16,5 m breit und haengte damit
+	 * ueber den inneren 8 m des Landeplatzes - von oben war das Aufsetzfeld
+	 * nicht erreichbar (Laufzeit-Sonde, 21.09.2026).
+	 */
+	WIESBADENREAL_API double GetCrownHalfWidthCm(const FSebboHqDimensions& Dimensions);
 
 	/**
 	 * Oberkante des Erschliessungskerns (cm).
@@ -161,4 +232,12 @@ namespace SebboHq
 	 */
 	WIESBADENREAL_API void BuildVerticalCore(
 		const FSebboHqDimensions& Dimensions, TArray<FHqPart>& OutParts);
+
+	/**
+	 * Private Garage und Personeneingang an der +X-Seite (Platter Strasse).
+	 * Die oeffentliche Fahrbahn, Gehweg und Bordstein gehoeren bewusst NICHT
+	 * hierher; dieser reine Builder beschreibt nur die Tower-Seite der Grenze.
+	 */
+	WIESBADENREAL_API FSebboHqArrivalLayout BuildArrivalFacilities(
+		const FSebboHqDimensions& Dimensions);
 }

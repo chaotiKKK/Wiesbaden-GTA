@@ -1,0 +1,11 @@
+#!/bin/sh
+# Schnelle Release-Gates vor jedem Commit (gemessen ~48 s).
+#
+# Gate 0 Engine-Pfade, alle Python-Suiten, und Gate 1 NUR, wenn wirklich
+# C++ vorgemerkt ist. Gates 2 und 3 brauchen den Unreal-Editor und laufen
+# darum vor dem PUSH (siehe pre-push) - ein Hook, der vor jedem Commit eine
+# Viertelstunde braucht, wird umgangen und prueft dann gar nichts mehr.
+#
+# Notausgang:  git commit --no-verify   oder   WB_KEINE_GATES=1
+WURZEL=$(git rev-parse --show-toplevel)
+exec python "$WURZEL/Tools/vor_dem_commit.py" --stufe schnell --gestaged

@@ -1,491 +1,92 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Wiesbaden Real — Projektübersicht</title>
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wiesbaden Real - Projektuebersicht</title>
 <style>
-  :root {
-    --bg: #0d1117;
-    --panel: #161b22;
-    --panel2: #1c2129;
-    --border: #2d333b;
-    --text: #e6edf3;
-    --muted: #8b949e;
-    --accent: #f5a623;
-    --green: #3fb950;
-    --blue: #58a6ff;
-    --code: #f0f6fc;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    line-height: 1.6;
-    font-size: 15px;
-  }
-  header {
-    padding: 40px 32px 24px;
-    border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
-  }
-  .wrap { max-width: 980px; margin: 0 auto; }
-  h1 {
-    margin: 0;
-    font-size: 30px;
-    letter-spacing: -0.02em;
-    font-weight: 700;
-  }
-  h1 .accent { color: var(--accent); }
-  .subtitle { color: var(--muted); margin-top: 6px; font-size: 14px; }
-  .badges { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
-  .badge {
-    display: inline-block;
-    padding: 3px 10px;
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background: var(--panel2);
-    font-size: 12px;
-    color: var(--blue);
-    white-space: nowrap;
-  }
-  .badge.ok { color: var(--green); border-color: #2ea04366; }
-  nav {
-    display: flex;
-    gap: 4px;
-    padding: 0 32px;
-    border-bottom: 1px solid var(--border);
-    background: var(--panel);
-    position: sticky;
-    top: 0;
-    z-index: 10;
-  }
-  nav button {
-    appearance: none;
-    border: none;
-    background: none;
-    color: var(--muted);
-    font: inherit;
-    font-size: 14px;
-    padding: 14px 16px;
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: color .15s, border-color .15s;
-  }
-  nav button:hover { color: var(--text); }
-  nav button.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
-  main { padding: 28px 32px 80px; }
-  section.tab { display: none; }
-  section.tab.active { display: block; }
-  .card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 20px 24px;
-    margin-bottom: 20px;
-  }
-  .card h2 { margin: 0 0 12px; font-size: 19px; }
-  .card h3 { margin: 18px 0 8px; font-size: 15px; color: var(--blue); }
-  .card h2:first-child, .card h3:first-child { margin-top: 0; }
-  p { margin: 8px 0; }
-  .muted { color: var(--muted); }
-  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13.5px; }
-  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
-  tr:last-child td { border-bottom: none; }
-  code {
-    font-family: "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", Menlo, monospace;
-    font-size: 12.5px;
-    background: #0d1117;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 1px 6px;
-    color: var(--code);
-  }
-  pre {
-    background: #0d1117;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
-    overflow-x: auto;
-    font-family: "SF Mono", "Cascadia Code", Consolas, Menlo, monospace;
-    font-size: 12.5px;
-    line-height: 1.5;
-    color: var(--code);
-  }
-  .tree { font-family: "SF Mono", "Cascadia Code", Consolas, Menlo, monospace; font-size: 12.5px; line-height: 1.55; color: var(--code); }
-  .tree .dir { color: var(--blue); font-weight: 600; }
-  .tree .file { color: var(--code); }
-  .tree .ext { color: var(--muted); }
-  .tree .root { color: var(--accent); font-weight: 700; }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: #2ea04322; color: var(--green); border: 1px solid #2ea04355; }
-  .pill.open { background: #f5a62322; color: var(--accent); border-color: #f5a62355; }
-  ul.tight { margin: 8px 0; padding-left: 22px; }
-  ul.tight li { margin: 3px 0; }
-  .note {
-    border-left: 3px solid var(--accent);
-    background: #f5a62311;
-    padding: 10px 14px;
-    border-radius: 0 6px 6px 0;
-    margin: 14px 0;
-    font-size: 13.5px;
-  }
-  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
-  footer { padding: 20px 32px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
-</style>
-</head>
-<body>
+ :root{--bg:#12141a;--flaeche:#1b1e26;--rand:#2a2f3a;--text:#e6e9ef;
+       --matt:#9aa3b2;--leise:#5d6675;--akzent:#e8b04b}
+ *{box-sizing:border-box}
+ body{margin:0;background:var(--bg);color:var(--text);
+      font:15px/1.6 "Segoe UI",system-ui,sans-serif}
+ .rahmen{max-width:980px;margin:0 auto;padding:0 24px 60px}
+ header{border-bottom:1px solid var(--rand);padding:30px 0 22px;margin-bottom:8px}
+ h1{margin:0 0 6px;font-size:27px;letter-spacing:.2px}
+ h1 b{color:var(--akzent);font-weight:600}
+ .unter{color:var(--matt);font-size:14px;max-width:70ch}
+ .marken{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
+ .marke{background:var(--flaeche);border:1px solid var(--rand);border-radius:12px;
+        padding:3px 11px;font-size:12px;color:var(--matt)}
+ .marke b{color:var(--text);font-weight:600}
+ section{margin-top:30px}
+ h2{font-size:15px;margin:0 0 4px;letter-spacing:.5px;text-transform:uppercase;
+    color:var(--matt)}
+ .hinweis{color:var(--leise);font-size:13px;margin:0 0 12px;max-width:80ch}
+ table{width:100%;border-collapse:collapse;background:var(--flaeche);
+       border:1px solid var(--rand);border-radius:6px;overflow:hidden}
+ td{padding:9px 14px;border-top:1px solid var(--rand);vertical-align:top}
+ tr:first-child td{border-top:0}
+ td.n{color:var(--matt);width:30%}
+ td.w{font-weight:600}
+ td.q{color:var(--leise);font-size:12px;font-family:Consolas,monospace;
+      text-align:right;width:34%}
+ footer{margin-top:40px;padding-top:18px;border-top:1px solid var(--rand);
+        color:var(--leise);font-size:12px}
+ code{background:var(--flaeche);border:1px solid var(--rand);border-radius:3px;
+      padding:1px 5px;font-size:12px}
+</style></head><body><div class="rahmen">
 
 <header>
-  <div class="wrap">
-    <h1>Wiesbaden <span class="accent">Real</span></h1>
-    <p class="subtitle">Open-World-Action-Spiel im Stil von GTA V — die Landeshauptstadt Wiesbaden photorealistisch, generiert aus echten GIS-Daten (OSM + SRTM/Copernicus).</p>
-    <div class="badges">
-      <span class="badge">Unreal Engine 5.8.1+</span>
-      <span class="badge">C++ + Blueprints</span>
-      <span class="badge">1 UU = 1 cm</span>
-      <span class="badge">WGS84 → ECEF → ESU</span>
-      <span class="badge ok">Phase 1 (GIS-Pipeline) fertig</span>
-      <span class="badge">Nanite · Lumen · World Partition</span>
-    </div>
+  <h1>Wiesbaden <b>Real</b></h1>
+  <div class="unter">Open-World-Spiel im Stil von GTA V - die Landeshauptstadt
+  Wiesbaden, gebaut aus echten Geodaten (OpenStreetMap, amtliches ALKIS/LoD2,
+  DGM1-Gelaende). Unreal Engine 5.8, C++.</div>
+  <div class="marken">
+    <span class="marke">gespielt: <b>WiesbadenCity_Alkis16</b></span>
+    <span class="marke"><b>247</b> Automation-Tests</span>
+    <span class="marke">1 UU = 1 cm</span>
+    <span class="marke">World Partition</span>
   </div>
 </header>
 
-<nav>
-  <button id="tab-ueber" class="active" onclick="show('ueber', this)">Übersicht</button>
-  <button id="tab-spec" onclick="show('spec', this)">Spezifikation</button>
-  <button id="tab-struktur" onclick="show('struktur', this)">Projektstruktur</button>
-</nav>
+<section>
+  <h2>Quelltext</h2>
+  <p class="hinweis">Gezaehlt ueber die in git verfolgten Dateien - zusammen
+  256 Dateien, 93.075 Zeilen.</p>
+  <table><tr><td class="n">Core</td><td class="w">12 Dateien, 3.557 Zeilen</td><td class="q">git ls-files Source/WiesbadenReal/Core</td></tr><tr><td class="n">GIS</td><td class="w">60 Dateien, 32.164 Zeilen</td><td class="q">git ls-files Source/WiesbadenReal/GIS</td></tr><tr><td class="n">World</td><td class="w">64 Dateien, 24.807 Zeilen</td><td class="q">git ls-files Source/WiesbadenReal/World</td></tr><tr><td class="n">Vehicles</td><td class="w">37 Dateien, 10.491 Zeilen</td><td class="q">git ls-files Source/WiesbadenReal/Vehicles</td></tr><tr><td class="n">Weapons</td><td class="w">4 Dateien, 706 Zeilen</td><td class="q">git ls-files Source/WiesbadenReal/Weapons</td></tr><tr><td class="n">Tests</td><td class="w">79 Dateien, 21.350 Zeilen</td><td class="q">git ls-files Source/WiesbadenReal/Tests</td></tr></table>
+</section>
 
-<main class="wrap">
+<section>
+  <h2>Pruefungen</h2>
+  <p class="hinweis">Die Anzahl ist gezaehlt, nicht gefahren: sie sagt, wie
+  viele Tests es GIBT. Ob sie gruen sind, sagt ein Lauf
+  (<code>Tools/run_automation_test.cmd</code>).</p>
+  <table><tr><td class="n">Automation-Tests (C++)</td><td class="w">247</td><td class="q">IMPLEMENT_SIMPLE_AUTOMATION_TEST in Source/.../Tests</td></tr><tr><td class="n">davon je Gebiet</td><td class="w">GIS 84, Vehicles 46, World 38, Traffic 28, Weather 14, Missions 13, Core 5, UI 4</td><td class="q">Testnamen WiesbadenReal.&lt;Gebiet&gt;.*</td></tr><tr><td class="n">Python-Suiten</td><td class="w">10 Dateien, 112 Einzeltests</td><td class="q">Tools/test_*.py</td></tr><tr><td class="n">Werkzeuge</td><td class="w">207</td><td class="q">Tools/*.py *.cmd *.ps1</td></tr></table>
+</section>
 
-  <!-- ==================== ÜBERSICHT ==================== -->
-  <section id="ueber" class="tab active">
+<section>
+  <h2>Die Stadt im Spiel</h2>
+  <p class="hinweis">Gemessen im Spiel am 20.09.2026 um 21:26. Diese Zahlen sind der Stand JENES Laufs, nicht der Gegenwart.</p>
+  <table><tr><td class="n">Ausstattung</td><td class="w">52689 Schilder, 187191 Leitpfosten, 112329 Markierungen, 72434 Laternen (48 davon mit Licht)</td><td class="q">Saved/Logs/WiesbadenReal.log</td></tr><tr><td class="n">Strassennetz</td><td class="w">117351 Spuren, davon 12155 mit Nachbarspur zum Ueberholen (13820 Paare)</td><td class="q">Saved/Logs/WiesbadenReal.log</td></tr><tr><td class="n">Ampeln</td><td class="w">1073 im Netz</td><td class="q">Saved/Logs/WiesbadenReal.log</td></tr><tr><td class="n">Signalprogramm</td><td class="w">936 von 1073 Kreuzungen mit eigener Abbiegephase, Umlauf 51 s im Mittel, Spanne 20..180 s, gruene Welle an</td><td class="q">Saved/Logs/WiesbadenReal.log</td></tr><tr><td class="n">Freigabegruppen</td><td class="w">6357 Verbindung(en) aus ihrer Wunschgruppe verschoben, 466 Gruppe(n) ueber die vier der Faustregel hinaus, groesste Gruppenzahl an einer Kreuzung 10</td><td class="q">Saved/Logs/WiesbadenReal.log</td></tr></table>
+</section>
 
-    <div class="card">
-      <h2>Herkunft &amp; Aufteilung</h2>
-      <p>Begonnen in Claude Code unter <code>C:\Users\ssonn\aivideo\WiesbadenReal</code> — wird dort weiterhin von Claude fortgesetzt. Dieser Ordner ist der <strong>eigenständige, abgesicherte Freebuff-Pfad</strong> desselben Projekts: eine isolierte Arbeitskopie mit eigenem Git-Verlauf.</p>
-      <ul class="tight">
-        <li>Ursprung (Claude): <code>C:\Users\ssonn\aivideo\WiesbadenReal</code></li>
-        <li>Freebuff-Pfad (hier): <code>/d/freebuff_city_wi/WiesbadenReal</code></li>
-      </ul>
-    </div>
+<section>
+  <h2>Inhalte</h2>
+  <table><tr><td class="n">gespielte Karte</td><td class="w">WiesbadenCity_Alkis16</td><td class="q">GameDefaultMap in Config/DefaultEngine.ini</td></tr><tr><td class="n">gebackene Stadtkarten</td><td class="w">WiesbadenCity_Alkis16, WiesbadenCity_Alkis17</td><td class="q">Content/Maps/WiesbadenCity_*.umap</td></tr><tr><td class="n">externe Actors WiesbadenCity_Alkis16</td><td class="w">1.8 GB</td><td class="q">Content/__ExternalActors__</td></tr><tr><td class="n">externe Actors WiesbadenCity_Alkis17</td><td class="w">1.8 GB</td><td class="q">Content/__ExternalActors__</td></tr><tr><td class="n">Verkehrszeichen im Katalog</td><td class="w">110</td><td class="q">Content/Config/TrafficSignCatalog.json</td></tr><tr><td class="n">Schild-Grafiken</td><td class="w">147</td><td class="q">Content/Textures/TrafficSigns/*.png</td></tr><tr><td class="n">Entwurfsdokumente</td><td class="w">12</td><td class="q">docs/superpowers/specs/*.md</td></tr></table>
+</section>
 
-    <div class="card">
-      <h2>Stand der Implementierung</h2>
-      <table>
-        <thead><tr><th>Modul</th><th>Status</th></tr></thead>
-        <tbody>
-          <tr><td><code>GeoCoordinateConverter</code> (WGS84 ↔ UE)</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>OSMTypes</code> / <code>OSMDataParser</code> (XML/JSON/Overpass)</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>PolygonUtils</code> (2D-Geometrie, Triangulierung)</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>RoadTypeLibrary</code> / <code>RoadNetworkTypes</code></td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>RoadNetworkGenerator</code> (Straßen, Kreuzungen, Spuren)</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>BuildingGenerator</code> (Gebäude, Dächer, Multipolygone)</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>HeightmapImporter</code> (DEM: ASCII-Grid + SRTM .hgt)</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>TerrainGenerator</code> (Landscape-Heightmaps + Einebnung)</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>WiesbadenWorldBuilder</code> (Editor-Workflow, orchestriert alles)</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td>Core-Modul (GameInstance / GameMode / WorldSubsystem / StreamingSource)</td><td><span class="pill">fertig</span></td></tr>
-        </tbody>
-      </table>
-      <p><strong>Phase 1 (GIS-Pipeline) ist vollständig und über einen Editor-Actor bedienbar.</strong></p>
-      <p class="muted">Noch offen: Phasen 2–12 (Fahrzeuge, Traffic-KI, Pedestrians, Player, Wanted-Level, UI, Audio, Wetter, Optimierung).</p>
-    </div>
-
-    <div class="card">
-      <h2>Editor-Workflow — <code>AWiesbadenWorldBuilder</code></h2>
-      <ol class="tight">
-        <li>In der UE-Level-View einen <strong>WiesbadenWorldBuilder</strong> platzieren.</li>
-        <li><code>OsmFilePath</code> (<code>.osm</code>/<code>.xml</code>/<code>.json</code>) und optional <code>DemFilePath</code> (<code>.asc</code>/<code>.hgt</code>) setzen, Materialien zuweisen.</li>
-        <li>Button <strong>„Build City“</strong> klicken — Pipeline: OSM parsen → Georeferenzierung → DEM importieren → Straßen → Gebäude → Landscape (+ Einebnung).</li>
-        <li>Ergebnis: Procedural-Meshes (Straßen, Gebäude) + echte <code>ALandscape</code> (oder Vorschau-Mesh via <code>bCreateLandscapeActor = false</code>).</li>
-      </ol>
-      <p class="muted">Die Generierung läuft asynchron auf einem Worker-Thread; im Editor zeigt ein Fortschrittsdialog (mit Abbrechen) den Stand — nur das finale Mesh-/Landscape-Erzeugen passiert im Game-Thread.</p>
-    </div>
-
-    <div class="card">
-      <h2>Laufzeit-Core — GameInstance / GameMode / WorldSubsystem</h2>
-      <table>
-        <thead><tr><th>Datei</th><th>Rolle</th></tr></thead>
-        <tbody>
-          <tr><td><code>Core/WiesbadenCityData.h</code></td><td>Session-weite Stadt-Daten (OSM, DEM, Netz, Meshes, Reports)</td></tr>
-          <tr><td><code>Core/WiesbadenGameInstance</code></td><td>Konfiguration (Config) + asynchroner Laufzeit-Build der Pipeline</td></tr>
-          <tr><td><code>Core/WiesbadenGameMode</code></td><td>Spielfluss: Init anstoßen, Status an Blueprints (<code>OnCityStatus</code>)</td></tr>
-          <tr><td><code>World/WiesbadenCitySubsystem</code></td><td>Orchestrierung je Welt: Daten holen, Stadt spawnen, Streaming-Zustand</td></tr>
-          <tr><td><code>World/WiesbadenCityActor</code></td><td>Procedural-Mesh-Host (Straßen, Gebäude, Terrain)</td></tr>
-          <tr><td><code>World/WiesbadenStreamingSource</code></td><td>World-Partition-Streaming-Quelle, folgt dem Player-Pawn</td></tr>
-        </tbody>
-      </table>
-      <h3>Zwei Betriebsmodi</h3>
-      <ul class="tight">
-        <li><strong>Laufzeit-Build</strong> (<code>bGenerateAtRuntime = true</code>, Standard): komplette Pipeline beim Start auf einem Worker-Thread — ideal für PIE/Entwicklung.</li>
-        <li><strong>Produktion</strong> (<code>bGenerateAtRuntime = false</code>): gebackene World-Partition-Map; World Partition streamt Zellen automatisch um die Streaming-Quelle.</li>
-      </ul>
-      <div class="note">Laufzeit erzeugte Geometrie landet im persistenten Teil einer partitionierten Welt (nicht zellenweise gestreamt). Eine echte <code>ALandscape</code> ist nur im Editor möglich (Import-API ist editor-only); im Packaged Game zeigt der Terrain-Kanal das Vorschau-Mesh.</div>
-    </div>
-
-    <div class="card">
-      <h2>Automation-Tests</h2>
-      <table>
-        <thead><tr><th>Datei</th><th>Abgedeckt</th></tr></thead>
-        <tbody>
-          <tr><td><code>GeoCoordinateConverterTest.cpp</code></td><td>ECEF/ESU-Roundtrip, Achsenkonvention, Metrik</td></tr>
-          <tr><td><code>OSMDataParserTest.cpp</code></td><td>XML/JSON-Parsing, Fehlerfälle, Tag-Interpretation</td></tr>
-          <tr><td><code>HeightmapImporterTest.cpp</code></td><td>Raster/Bilinear, ASCII-Grid, SRTM-Rohdaten, Sampler</td></tr>
-          <tr><td><code>GeneratorTest.cpp</code></td><td>Straßen/Kreuzungen, Gebäude, Terrain-Tile, Heightmap</td></tr>
-        </tbody>
-      </table>
-      <pre>UnrealEditor-Cmd.exe WiesbadenReal.uproject -ExecCmds="Automation RunTests WiesbadenReal.GIS; Quit" -unattended -nop4 -nullrhi</pre>
-    </div>
-
-    <div class="card">
-      <h2>Datenquellen</h2>
-      <ul class="tight">
-        <li>OSM-Extrakt: Overpass-API (Query siehe <code>UOSMDataParser::BuildOverpassQuery</code>)</li>
-        <li>DEM: Copernicus DEM / SRTM, per <code>gdal_translate -of AAIGrid</code> in ESRI-ASCII-Grid konvertiert</li>
-      </ul>
-    </div>
-
-  </section>
-
-  <!-- ==================== SPEZIFIKATION ==================== -->
-  <section id="spec" class="tab">
-
-    <div class="card">
-      <h2>1. Projekt-Übersicht &amp; Zielsetzung</h2>
-      <p>Open-World-Action-Spiel im Stil von GTA V, das Wiesbaden in photorealistischer Qualität abbildet. Modulare Multi-File-Architektur; jedes System vollständig, fehlerfrei und produktionsreif.</p>
-      <p><strong>Kernanforderung:</strong> Der Spieler muss visuell und haptisch erkennen, dass er durch echte Wiesbadener Straßen fährt — korrekte Topographie, Straßenbreiten, Spuranzahl, Bürgersteiggeometrie, Kreuzungslogik und Bebauung.</p>
-    </div>
-
-    <div class="card">
-      <h2>2. Technologie-Stack</h2>
-      <ul class="tight">
-        <li><strong>Engine:</strong> Unreal Engine 5.8.1+ (Nanite, Lumen, Chaos Physics)</li>
-        <li><strong>Sprache:</strong> C++ (Core) + Blueprints (Gameplay)</li>
-        <li><strong>GIS:</strong> OSM (Straßen/Gebäude/POIs), SRTM/ASTER GDEM (Topographie), Hessen-Atlas, Overpass API</li>
-        <li><strong>Plugins:</strong> Cesium for Unreal (optional), OSM2World/Blender-OSM, Houdini Engine (optional), SpeedTree, Quixel Megascans</li>
-        <li><strong>DB:</strong> PostgreSQL + PostGIS (optional, Multiplayer) · <strong>VCS:</strong> Git mit LFS</li>
-      </ul>
-    </div>
-
-    <div class="card">
-      <h2>3. Architektur &amp; Projektstruktur</h2>
-      <pre>/Source
-  /Core     WiesbadenGame, GameMode, PlayerController, GameState
-  /GIS      OSMDataParser, HeightmapImporter, GeoCoordinateConverter,
-            RoadNetworkGenerator, BuildingGenerator, TerrainGenerator
-  /World    WorldSubsystem, TrafficSystem, PedestrianSystem, WeatherSystem,
-            TimeOfDayManager
-  /Vehicles VehicleBase, PhysicsComponent, InputComponent, TrafficVehicle,
-            DamageSystem, Inventory
-  /Player   PlayerCharacter, Inventory, WantedLevelSystem, PlayerStats
-  /AI       TrafficAIController, PedestrianAIController, PoliceAIController,
-            AINavigationSystem, AIPerceptionSystem
-  /UI       HUDWidget, MinimapWidget, GPSNavigationWidget, PhoneWidget,
-            PauseMenuWidget
-  /Audio    AmbientSoundManager, VehicleAudioComponent, MusicManager,
-            SpatialAudioSystem
-  /Network  MultiplayerSession, ReplicationSystem
-  /Data     /Config (RoadTypes, BuildingPresets, VehiclePresets)
-            /Raw (/OSM, /DEM, /Satellite)
-/Content
-  /Maps     Wiesbaden_Main.umap + SubLevels
-  /Blueprints /Materials /Meshes /Textures /Sounds</pre>
-    </div>
-
-    <div class="card">
-      <h2>4. GIS-Daten-Integration (kritisch)</h2>
-      <h3>4.1 OSM-Datenpipeline</h3>
-      <ul class="tight">
-        <li>Bounding Box: 50.0°N–50.1°N, 8.1°E–8.4°E (erweitert 8.08–8.42, 49.995–50.16)</li>
-        <li>Abfrage: highway, building, landuse, natural, amenity, barrier, traffic_signals, crossing, sidewalk, lanes, maxspeed, oneway, surface</li>
-        <li>Eigener XML-Parser; WGS84 → ECEF → UE (1:1, 1 uu = 1 cm)</li>
-      </ul>
-      <h3>4.2 Höhendaten (DEM)</h3>
-      <ul class="tight">
-        <li>SRTM 1-Arc-Second (~30 m) oder ASTER GDEM v3</li>
-        <li>Konvertierung zu UE5 Landscape Heightmap (8129×8129 oder 4033×4033 Tiles)</li>
-        <li>Topographie: Taunus-Ausläufer Nord, Rheinebene Süd, Gefälle Richtung Biebrich</li>
-      </ul>
-      <h3>4.3 Straßennetz-Generierung (präzise)</h3>
-      <p>Jede Straße mit <code>lanes</code>, <code>lanes:forward/backward</code>, <code>width</code>, <code>sidewalk</code>, <code>cycleway</code>, <code>surface</code>, <code>oneway</code>, <code>maxspeed</code>, <code>highway</code>. Kreuzungslogik: Ampeln, <code>turn:lanes</code>, Zebrastreifen, Kreisverkehre.</p>
-      <p><strong>Referenzstraßen:</strong> Rheinstraße (B263), Mainzer Straße (3+2), Wilhelmstraße, Taunusstraße, Dotzheimer Straße, Biebricher Allee — alle Einbahnstraßen.</p>
-    </div>
-
-    <div class="card">
-      <h2>5. Gebäude-Generierung</h2>
-      <p>Typen aus <code>building=*</code> (residential, apartments, office, commercial, industrial, church, civic, train_station, university, hospital). Prozedurale Fassaden (Fenster, Balkone, Dachformen, Materialien), LOD0–LOD3.</p>
-      <p><strong>Landmarken (manuell):</strong> Kurhaus, Hessischer Landtag, Rathaus, Marktkirche, Neroberg + Nerobergbahn, Schloss Biebrich, BRITA-Arena, Hauptbahnhof, Mauritius-Therme, Lilien-Carré, Wilhelmstraße komplett.</p>
-    </div>
-
-    <div class="grid2">
-      <div class="card">
-        <h2>6. Fahrzeug-System</h2>
-        <p>Chaos-Vehicle-Physik; Klassen (PKW, SUV, Motorrad, LKW, Bus); Schadensmodell, Tank, Interieur. Verkehrs-KI: Spurhaltung, Tempolimit, Spurwechsel, Vorfahrt, Rush-Hour, deutsche Marken, ESWE-Buslinien (RMV-GTFS).</p>
-      </div>
-      <div class="card">
-        <h2>7. Fußgänger-System</h2>
-        <p>Spawn nach Tageszeit/Ortstyp; Gehweg-Nutzung, Ampel-/Zebrastreifen-Beachtung; Innenstadt &gt; 500 gleichzeitig, Vororte &lt; 100; Reaktionen.</p>
-      </div>
-    </div>
-
-    <div class="grid2">
-      <div class="card">
-        <h2>8. Spieler-System</h2>
-        <p>Third/First-Person, Cover, Klettern, Schwimmen. Wanted-Level 1–6 (Polizei → SEK → Heli → BFE+ → GSG9/Militär). Waffen: HK MP5/G36/USP, Walther P99, Ballistik, Lizenz-Mechanik.</p>
-      </div>
-      <div class="card">
-        <h2>9. UI/UX</h2>
-        <p>Minimap (echte Karte, GPS-Route, POIs), GPS-Navigation (A* auf OSM-Graph, Sprachansagen), Smartphone (Karte, Kontakte, Internet, Kamera, Radio).</p>
-      </div>
-    </div>
-
-    <div class="grid2">
-      <div class="card">
-        <h2>10. Audio</h2>
-        <p>Umgebungsaudio (Verkehr, Fußgänger, Parks, Rhein), Fahrzeug-Audio (Motor, Reifen, Crash, Doppler), Radiosender (HR1/HR3/YOU FM-Varianten, Klassik, Elektro, Talkradio).</p>
-      </div>
-      <div class="card">
-        <h2>11. Wetter &amp; Tageszeit</h2>
-        <p>Sky Atmosphere + Volumetric Clouds + Niagara; 1 Real-Stunde = 24 Ingame-Stunden; Klar/Bewölkt/Nebel (Rhein-Nebel!)/Regen/Gewitter/Schnee; Jahreszeiten.</p>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>12. Performance &amp; Optimierung</h2>
-      <p>World Partition, Nanite, Lumen, Virtual Shadow Maps; Traffic-Culling (1 km), Pedestrian-Culling (500 m); Budget &lt; 4 GB VRAM / &lt; 16 GB RAM; 60 FPS @ 1440p auf RTX 4070.</p>
-    </div>
-
-    <div class="card">
-      <h2>13. Qualitätsanforderungen</h2>
-      <p>Keine Platzhalter/TODOs; vollständige Fehlerbehandlung; strukturiertes Logging pro Subsystem (<code>UE_LOG</code>); Unit-Tests für Parser/Konverter/Mathematik; UE Coding Standard.</p>
-    </div>
-
-    <div class="card">
-      <h2>14. Datenquellen-Referenz</h2>
-      <table>
-        <thead><tr><th>Daten</th><th>Quelle</th></tr></thead>
-        <tbody>
-          <tr><td>Straßennetz</td><td>OpenStreetMap (overpass-api.de)</td></tr>
-          <tr><td>Höhendaten</td><td>NASA SRTM (earthexplorer.usgs.gov), Copernicus DEM</td></tr>
-          <tr><td>Satellitenbilder</td><td>Sentinel-2 (scihub.copernicus.eu)</td></tr>
-          <tr><td>3D-Gebäude</td><td>LoD2 Hessen (geoportal.hessen.de)</td></tr>
-          <tr><td>Verkehrsdaten</td><td>Hessen Mobil (vmz.hessen.de)</td></tr>
-          <tr><td>ÖPNV</td><td>RMV GTFS (rmv.de)</td></tr>
-          <tr><td>Fotoreferenz</td><td>Street View / Mapillary</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="card">
-      <h2>15. Implementierungs-Reihenfolge</h2>
-      <ol class="tight">
-        <li>GIS-Pipeline (Parser, Konverter, Terrain) <span class="pill">✓</span></li>
-        <li>Straßennetz-Generator <span class="pill">✓</span></li>
-        <li>Gebäude-Generator <span class="pill">✓</span></li>
-        <li>Fahrzeug-Physik &amp; Basisfahrmechanik <span class="pill open">offen</span></li>
-        <li>Verkehrs-KI &amp; Fußgänger-KI <span class="pill open">offen</span></li>
-        <li>Spieler-Charakter &amp; Kamera <span class="pill open">offen</span></li>
-        <li>Wanted-Level &amp; Polizei-KI <span class="pill open">offen</span></li>
-        <li>UI-System <span class="pill open">offen</span></li>
-        <li>Audio-System <span class="pill open">offen</span></li>
-        <li>Wetter, Tageszeit, Optimierung <span class="pill open">offen</span></li>
-        <li>Landmarken-Modellierung <span class="pill open">offen</span></li>
-        <li>Polishing, Bugfixing, Performance-Tuning <span class="pill open">offen</span></li>
-      </ol>
-    </div>
-
-    <div class="card">
-      <h2>16. Finale Anweisung</h2>
-      <p>Vollständigen, ungekürzten, produktionsreifen Code erzeugen. Jede Datei kompilierfähig, keine Platzhalter. Sofort in UE 5.8.1+ einsetzbar. Externe Datenquellen korrekt angebunden und verarbeitet.</p>
-    </div>
-
-  </section>
-
-  <!-- ==================== PROJEKTSTRUKTUR ==================== -->
-  <section id="struktur" class="tab">
-
-    <div class="card">
-      <h2>Verzeichnisbaum (Freebuff-Pfad)</h2>
-      <pre class="tree"><span class="root">/d/freebuff_city_wi</span>
-├─ README.md
-├─ SPEC.md
-├─ preview.html
-├─ .gitignore
-└─ <span class="dir">WiesbadenReal/</span>
-   ├─ WiesbadenReal.uproject
-   ├─ <span class="dir">Source/</span>
-   │  ├─ WiesbadenReal.Target.cs
-   │  ├─ WiesbadenRealEditor.Target.cs
-   │  └─ <span class="dir">WiesbadenReal/</span>
-   │     ├─ WiesbadenReal.Build.cs
-   │     ├─ WiesbadenReal.h
-   │     ├─ WiesbadenReal.cpp
-   │     ├─ <span class="dir">Core/</span>
-   │     │  ├─ WiesbadenCityData.h
-   │     │  ├─ WiesbadenGameInstance.h / .cpp
-   │     │  └─ WiesbadenGameMode.h / .cpp
-   │     ├─ <span class="dir">GIS/</span>
-   │     │  ├─ BuildingGenerator.h / .cpp
-   │     │  ├─ GeoCoordinateConverter.h / .cpp
-   │     │  ├─ HeightmapImporter.h / .cpp
-   │     │  ├─ IHeightSampler.h
-   │     │  ├─ OSMDataParser.h / .cpp
-   │     │  ├─ OSMTypes.h / .cpp
-   │     │  ├─ PolygonUtils.h / .cpp
-   │     │  ├─ RoadNetworkGenerator.h / .cpp
-   │     │  ├─ RoadNetworkTypes.h
-   │     │  ├─ RoadTypeLibrary.h / .cpp
-   │     │  ├─ TerrainGenerator.h / .cpp
-   │     │  └─ WiesbadenWorldBuilder.h / .cpp
-   │     ├─ <span class="dir">Tests/</span>
-   │     │  ├─ GeneratorTest.cpp
-   │     │  ├─ GeoCoordinateConverterTest.cpp
-   │     │  ├─ HeightmapImporterTest.cpp
-   │     │  └─ OSMDataParserTest.cpp
-   │     └─ <span class="dir">World/</span>
-   │        ├─ WiesbadenCityActor.h / .cpp
-   │        ├─ WiesbadenCitySubsystem.h / .cpp
-   │        └─ WiesbadenStreamingSource.h / .cpp
-   └─ <span class="dir">Tools/</span>
-      └─ README.md</pre>
-    </div>
-
-    <div class="card">
-      <h2>Modul-Matrix</h2>
-      <table>
-        <thead><tr><th>Verzeichnis</th><th>Inhalt</th><th>Status</th></tr></thead>
-        <tbody>
-          <tr><td><code>GIS/</code></td><td>Parser, Konverter, Straßen-/Gebäude-/Terrain-Generatoren, Editor-Workflow</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>Core/</code></td><td>GameInstance, GameMode, session-weiter Datencontainer</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>World/</code></td><td>CitySubsystem, CityActor, StreamingSource</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>Tests/</code></td><td>Automation-Tests für GIS-Kernmodule</td><td><span class="pill">fertig</span></td></tr>
-          <tr><td><code>Vehicles/</code>, <code>Player/</code>, <code>AI/</code>, <code>UI/</code>, <code>Audio/</code>, <code>Network/</code></td><td>Phasen 2–12</td><td><span class="pill open">geplant</span></td></tr>
-        </tbody>
-      </table>
-    </div>
-
-  </section>
-
-</main>
+<section>
+  <h2>Stand</h2>
+  <table><tr><td class="n">Commits</td><td class="w">346</td><td class="q">git rev-list --count HEAD</td></tr><tr><td class="n">Zweig</td><td class="w">main</td><td class="q">git rev-parse --abbrev-ref HEAD</td></tr><tr><td class="n">letzter Commit</td><td class="w">20.09.2026  77df250  Galerie der Stadtansichten aus den Diagnose-Bildern</td><td class="q">git log -1</td></tr></table>
+</section>
 
 <footer>
-  <div class="wrap">
-    Wiesbaden Real — statische Projektübersicht, generiert aus README.md + SPEC.md + Verzeichnisbaum. Freebuff-Pfad: <code>/d/freebuff_city_wi</code>.
-  </div>
+  Diese Seite wird ERZEUGT, nicht gepflegt:
+  <code>python Tools/uebersicht.py</code>. Jede Zahl steht mit ihrer Quelle
+  daneben, damit sie sich nachsehen laesst. Zuletzt gebaut am 20.09.2026 um 21:57.
+  <br><br>
+  Was hier NICHT steht: ob ein Teilbereich "fertig" ist. Das laesst sich nicht
+  messen, und die Vorgaengerin dieser Seite hat genau daran jahrelang falsch
+  gelegen - sie meldete die halbe Spielmechanik als offen, waehrend sie lief.
 </footer>
 
-<script>
-  function show(id, btn) {
-    document.querySelectorAll('section.tab').forEach(function (s) { s.classList.remove('active'); });
-    document.querySelectorAll('nav button').forEach(function (b) { b.classList.remove('active'); });
-    document.getElementById(id).classList.add('active');
-    btn.classList.add('active');
-  }
-</script>
-
-</body>
-</html>
+</div></body></html>

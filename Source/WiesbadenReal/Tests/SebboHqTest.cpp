@@ -74,7 +74,16 @@ bool FSebboHqShellTest::RunTest(const FString& Parameters)
 			Glas += Teil.Material == EHqMaterial::Glass ? 1 : 0;
 		}
 		TestEqual(*FString::Printf(TEXT("Geschoss %d hat eine Decke"), Floor), Decken, 1);
-		TestEqual(*FString::Printf(TEXT("Geschoss %d hat ein Glasband"), Floor), Glas, 1);
+		if (Floor == 0)
+		{
+			// Die Einfahrt und das Portal teilen nur die Erdgeschossfassade. Ein
+			// einzelner Glaskasten wuerde beide Oeffnungen wieder verschliessen.
+			TestTrue(TEXT("Das Erdgeschoss ist fuer Einfahrt und Portal geteilt"), Glas >= 3);
+		}
+		else
+		{
+			TestEqual(*FString::Printf(TEXT("Geschoss %d hat ein Glasband"), Floor), Glas, 1);
+		}
 	}
 
 	// --- Der Sockel ist breiter als der Schaft ------------------------------
@@ -288,6 +297,476 @@ bool FSebboHqVerticalCoreTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Zusammen mehr Bauteile als je einzeln"),
 			Huelle.Num() + Kern.Num() > FMath::Max(Huelle.Num(), Kern.Num()));
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqStairHeadroomTest,
+	"WiesbadenReal.World.SebboHq.TreppeBegehbar",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqStairHeadroomTest::RunTest(const FString& Parameters)
+{
+	// KOPFFREIHEIT - der Punkt, an dem die erste Fassung scheiterte.
+	//
+	// Die Stufen waren 25 cm hoch und lueckenlos, und der Test sagte gruen.
+	// Begehbar waren sie trotzdem nicht: das Podest des naechsten Geschosses
+	// deckte den GANZEN Treppenhaus-Grundriss und lag damit als Decke ueber
+	// dem Lauf. Nachgerechnet blieben ueber der achten Stufe noch 155 cm, ueber
+	// der fuenfzehnten 5 cm, und die sechzehnte lag IM Podest. Man kam 220 von
+	// 400 cm hoch und stand dann mit dem Kopf an der Decke.
+	//
+	// Eine Treppe ist erst begehbar, wenn ueber JEDER Trittflaeche Platz fuer
+	// einen Menschen ist.
+	const FSebboHqDimensions D;
+	TArray<FHqPart> Kern;
+	SebboHq::BuildVerticalCore(D, Kern);
+
+	// Die Spielfigur: Kapselhoehe 180 cm (2 x 90 cm Halbhoehe, wie der
+	// Einstiegsversatz beim Nerobergbahn-Wagen).
+	const double Stehhoehe = 180.0;
+
+	// Trittflaechen des ERSTEN Geschosses: waagerecht, duenn, im Treppenhaus
+	// (-Y), und schmal in X - das unterscheidet die Stufe vom Podest.
+	TArray<FHqPart> Stufen;
+	for (const FHqPart& Teil : Kern)
+	{
+		if (Teil.Floor == 0 && Teil.SizeCm.Z <= 40.0 && Teil.CenterCm.Y < 0.0
+			&& Teil.SizeCm.X < 100.0 && Teil.SizeCm.Y > 100.0)
+		{
+			Stufen.Add(Teil);
+		}
+	}
+	if (!TestTrue(TEXT("Es gibt Stufen im ersten Geschoss"), Stufen.Num() >= 8))
+	{
+		return false;
+	}
+
+	// Ueber jeder Stufe: das tiefste Bauteil, das ihre Grundflaeche ueberdeckt.
+	int32 ZuNiedrig = 0;
+	double Schlimmste = TNumericLimits<double>::Max();
+	int32 SchlimmsteNummer = INDEX_NONE;
+	for (int32 i = 0; i < Stufen.Num(); ++i)
+	{
+		const FHqPart& Stufe = Stufen[i];
+		const double TrittZ = Stufe.CenterCm.Z + Stufe.SizeCm.Z * 0.5;
+		// Ein Punkt kurz VOR der Stufenkante, in ihrer Mitte - dort steht der
+		// Fuss, wenn man die Stufe betritt.
+		const FVector2D Fuss(Stufe.CenterCm.X, Stufe.CenterCm.Y);
+
+		double Decke = TNumericLimits<double>::Max();
+		for (const FHqPart& Anderes : Kern)
+		{
+			const double Unten = Anderes.CenterCm.Z - Anderes.SizeCm.Z * 0.5;
+			if (Unten <= TrittZ + 1.0)
+			{
+				continue;     // liegt nicht darueber
+			}
+			const bool bUeberX = FMath::Abs(Anderes.CenterCm.X - Fuss.X) < Anderes.SizeCm.X * 0.5;
+			const bool bUeberY = FMath::Abs(Anderes.CenterCm.Y - Fuss.Y) < Anderes.SizeCm.Y * 0.5;
+			if (bUeberX && bUeberY)
+			{
+				Decke = FMath::Min(Decke, Unten);
+			}
+		}
+		const double Frei = Decke - TrittZ;
+		if (Frei < Stehhoehe)
+		{
+			++ZuNiedrig;
+			if (Frei < Schlimmste)
+			{
+				Schlimmste = Frei;
+				SchlimmsteNummer = i;
+			}
+		}
+	}
+
+	TestEqual(*FString::Printf(
+		TEXT("Jede der %d Stufen hat %.0f cm Kopffreiheit (schlimmste: Stufe %d mit %.0f cm)"),
+		Stufen.Num(), Stehhoehe, SchlimmsteNummer,
+		SchlimmsteNummer == INDEX_NONE ? 0.0 : Schlimmste),
+		ZuNiedrig, 0);
+
+	// Und der Lauf muss das naechste Geschoss WIRKLICH erreichen: die oberste
+	// Trittflaeche liegt auf der Hoehe des naechsten Podests.
+	double Oberste = 0.0;
+	for (const FHqPart& Stufe : Stufen)
+	{
+		Oberste = FMath::Max(Oberste, Stufe.CenterCm.Z + Stufe.SizeCm.Z * 0.5);
+	}
+	TestEqual(TEXT("Die oberste Stufe endet auf dem naechsten Geschossboden"),
+		Oberste, D.FloorHeightCm + 20.0, 1.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqArrivalLayoutTest,
+	"WiesbadenReal.World.SebboHq.ArrivalLayout",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqArrivalLayoutTest::RunTest(const FString& Parameters)
+{
+	// Dieser Test faengt den Rueckfall ab, bei dem Garage und Eingang nur als
+	// Deko vor einer geschlossenen Fassade standen. Die Ankunftsbereiche muessen
+	// getrennte, ausreichend grosse und von der Platter-Strassen-Seite (+X)
+	// erreichbare Ziele sein.
+	const FSebboHqDimensions D;
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+
+	TestTrue(TEXT("Die Garage liegt auf der Strassenseite"),
+		Layout.GarageTarget.CenterCm.X > D.FootprintCm * 0.25);
+	TestTrue(TEXT("Die Garage ist fahrzeugbreit"),
+		Layout.GarageTarget.ExtentCm.Y >= 150.0);
+	TestTrue(TEXT("Das Portal ist mindestens 120 cm frei"),
+		Layout.PedestrianTarget.ExtentCm.Y * 2.0 >= 120.0);
+	TestTrue(TEXT("Garage und Portal sind getrennte Ziele"),
+		FVector::DistSquared2D(Layout.GarageTarget.CenterCm, Layout.PedestrianTarget.CenterCm)
+			> FMath::Square(200.0));
+	TestEqual(TEXT("Das Heli-Ziel liegt auf dem Dachpad"),
+		Layout.HelicopterTarget.CenterCm.Z, SebboHq::GetHelipadHeightCm(D), 1.0);
+
+	int32 Haltstreifen = 0;
+	for (const FHqPart& Part : Layout.Parts)
+	{
+		const bool bQuerZurZufahrt = Part.Material == EHqMaterial::Marking
+			&& Part.SizeCm.X <= 20.0 && Part.SizeCm.Y >= 500.0;
+		Haltstreifen += bQuerZurZufahrt ? 1 : 0;
+	}
+	TestEqual(TEXT("Genau ein sichtbarer Haltstreifen markiert die Konfliktzone"), Haltstreifen, 1);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqHelipadApproachTest,
+	"WiesbadenReal.World.SebboHq.HelipadApproach",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqHelipadApproachTest::RunTest(const FString& Parameters)
+{
+	// Gefunden hat das die Laufzeit-Sonde (-WbAnkunftProbe), nicht eine
+	// Rechnung: das Lot auf die Aufsetzflaeche traf die Krone bei 70 m statt
+	// den Platz bei 60,2 m. Die Krone war 16,5 m breit und haengte ueber den
+	// inneren 8 m des 18-m-Platzes - der Landeplatz war gezeichnet, aber von
+	// oben nicht erreichbar. Dieser Test haelt die Geometrie fest, damit der
+	// Befund nicht wieder ein Spielstart lang unbemerkt bleibt.
+	const FSebboHqDimensions D;
+	const double KroneHalb = SebboHq::GetCrownHalfWidthCm(D);
+	const double PadVersatz = SebboHq::GetHelipadOffsetCm(D);
+	const double PadRadius = D.HelipadDiameterCm * 0.5;
+	const double RotorRadius = D.HelipadDiameterCm * 0.35;
+	const double Dachkante = D.FootprintCm * 0.5;
+
+	TestTrue(TEXT("Die Krone sitzt auf dem Kern und nicht ueber dem halben Dach"),
+		KroneHalb * 2.0 <= D.CoreCm * 1.2);
+	TestTrue(TEXT("Der Anflugkorridor liegt vollstaendig neben der Krone"),
+		PadVersatz - RotorRadius > KroneHalb);
+	TestTrue(TEXT("Der Anflugkorridor bleibt ueber dem Dach"),
+		PadVersatz + RotorRadius < Dachkante);
+	TestTrue(TEXT("Die Aufsetzflaeche liegt ganz auf dem Dach"),
+		PadVersatz + PadRadius <= Dachkante);
+	TestTrue(TEXT("Die Aufsetzflaeche stoesst nicht an den Kern"),
+		PadVersatz - PadRadius > -D.CoreCm * 0.5);
+
+	// Das Ankunftsziel und die gebaute Flaeche teilen EINE Rechnung.
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+	TestEqual(TEXT("Das Heli-Ziel liegt ueber der Aufsetzflaeche"),
+		Layout.HelicopterTarget.CenterCm.X, PadVersatz, 1.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqEineZufahrtsbuchtTest,
+	"WiesbadenReal.World.SebboHq.EineZufahrtsbucht",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqEineZufahrtsbuchtTest::RunTest(const FString& Parameters)
+{
+	// GEMESSEN am 21.09.2026 auf Alkis17: das Grundstueck wird von GENAU EINER
+	// Strasse bedient (Wolkenbruch, Segment 54432, 0,7 m vom Garagenanker; die
+	// naechste andere liegt 57,6 m weg). Diese Strasse FAELLT quer ueber das
+	// Grundstueck - Fahrbahnpunkte im 20-m-Ring:
+	//
+	//     330 Grad -> 10048 cm     0 Grad -> 9715 cm     15 Grad -> 9569 cm
+	//
+	// also rund 11 cm Hoehe je Grad Umfangswinkel.
+	//
+	// Ein Plateau hat EINE Hoehe. Ebenerdige Ankunft fuer Auto UND Fuss ist
+	// darum nur moeglich, wenn beide Oeffnungen dieselbe STELLE der fallenden
+	// Strasse adressieren. Frueher lagen sie 65 Grad auseinander - allein
+	// daraus folgten rund 5 m Hoehenunterschied, die kein Plateau einebnen
+	// kann, weil die Strasse selbst nicht eben ist.
+	const FSebboHqDimensions D;
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+
+	const FVector2D Garage(Layout.GarageTarget.CenterCm.X, Layout.GarageTarget.CenterCm.Y);
+	const FVector2D Portal(Layout.PedestrianTarget.CenterCm.X, Layout.PedestrianTarget.CenterCm.Y);
+
+	const double GradGarage = FMath::RadiansToDegrees(FMath::Atan2(Garage.Y, Garage.X));
+	const double GradPortal = FMath::RadiansToDegrees(FMath::Atan2(Portal.Y, Portal.X));
+	const double SpanneGrad = FMath::Abs(GradGarage - GradPortal);
+
+	// 10 Grad sind bei 11 cm/Grad rund 1,1 m Hoehenunterschied - mehr als eine
+	// Bordsteinabsenkung ueberbruecken kann.
+	TestTrue(*FString::Printf(
+		TEXT("Beide Oeffnungen adressieren dieselbe Stelle der Zufahrt (%.1f Grad auseinander)"),
+		SpanneGrad),
+		SpanneGrad <= 10.0);
+
+	// Und sie liegen auf DERSELBEN Fassadenhaelfte - ein Vorzeichenwechsel in Y
+	// waere die alte, gegenueberliegende Anordnung.
+	TestTrue(TEXT("Garage und Portal liegen auf derselben Fassadenhaelfte"),
+		Garage.Y * Portal.Y > 0.0);
+
+	// Trotzdem zwei getrennte Oeffnungen, kein gemeinsames Loch.
+	TestTrue(TEXT("Garage und Portal bleiben getrennte Ziele"),
+		FVector2D::Distance(Garage, Portal) > 200.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqPortalDurchgangTest,
+	"WiesbadenReal.World.SebboHq.PortalDurchgang",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqPortalDurchgangTest::RunTest(const FString& Parameters)
+{
+	// Die lichte Hoehe muss den GEHENDEN Fussgaenger durchlassen, nicht den
+	// stehenden. AWiesbadenFootPawn hebt die Kapsel vor jedem Schritt um
+	// MaxStepHeightCm an; unter dem Sturz braucht es darum
+	// Kapselhoehe + Schritthoehe ueber dem Belag.
+	//
+	// Gemessen am 21.09.2026: mit 270 cm blieb die Sonde im Sturz stecken.
+	const FSebboHqDimensions D;
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+
+	constexpr double KapselHoeheCm = 180.0;    // 2 x 90, wie AWiesbadenFootPawn
+	constexpr double SchritthoeheCm = 40.0;    // MaxStepHeightCm
+	// Der Belag STEIGT zum Tuerlauf hin an: 107 cm vor dem Portal, 118 cm
+	// am Durchgang selbst (gemessen 21.09.2026). Massgeblich ist der hoehere.
+	constexpr double BelagCm = 118.0;
+
+	// Der Sturz ist das unterste Metallteil ueber der Portaloeffnung.
+	double SturzUnterkanteCm = TNumericLimits<double>::Max();
+	for (const FHqPart& Teil : Layout.Parts)
+	{
+		const bool bUeberDemPortal = Teil.Material == EHqMaterial::Metal
+			&& Teil.CenterCm.X > D.FootprintCm * 0.4
+			&& Teil.SizeCm.Z < 150.0;
+		if (bUeberDemPortal)
+		{
+			SturzUnterkanteCm = FMath::Min(SturzUnterkanteCm,
+				Teil.CenterCm.Z - Teil.SizeCm.Z * 0.5);
+		}
+	}
+	TestTrue(TEXT("Ueber dem Portal liegt ein Sturz"),
+		SturzUnterkanteCm < TNumericLimits<double>::Max());
+
+	// Und das Ankunftsziel muss den Durchgang abdecken: wer hindurchgeht, ist
+	// angekommen, auch wenn der Belag dort hoeher liegt als der Innenboden.
+	TestTrue(*FString::Printf(
+		TEXT("Das Portalziel deckt die lichte Hoehe ab (%.0f cm hoch)"),
+		Layout.PedestrianTarget.ExtentCm.Z * 2.0),
+		Layout.PedestrianTarget.ExtentCm.Z * 2.0 >= SturzUnterkanteCm - 1.0);
+
+	const double GebrauchtCm = BelagCm + KapselHoeheCm + SchritthoeheCm;
+	TestTrue(*FString::Printf(
+		TEXT("Der Sturz laesst den gehenden Fussgaenger durch (%.0f cm frei, %.0f gebraucht)"),
+		SturzUnterkanteCm, GebrauchtCm),
+		SturzUnterkanteCm >= GebrauchtCm);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqSchwellenrampeTest,
+	"WiesbadenReal.World.SebboHq.Schwellenrampe",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqSchwellenrampeTest::RunTest(const FString& Parameters)
+{
+	// Der Garagenboden darf nicht als Kante ueber der Zufahrt enden.
+	//
+	// GEMESSEN am 21.09.2026: die Zufahrt steigt in Fahrtrichtung von 9987 auf
+	// 10094 cm und trifft den Garagenboden (10096) fast genau - aber erst
+	// unter dem Gebaeude. An der Fassadenlinie liegt sie noch bei rund
+	// 10054 cm. Die ueberstehende Bodenplatte stand dort als 40-cm-Stufe quer
+	// im Weg, und der Fahrzeugquader blieb daran haengen.
+	const FSebboHqDimensions D;
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+	const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
+	const double BodenZ = SebboHq::GetAccessFloorCm(D);
+
+	// Bauteile VOR der Fassade auf Garagenhoehe UND IN DER FAHRSPUR: das ist
+	// die Rampe. Die Boeschung darunter ist breiter als die Oeffnung und
+	// faellt in groben Lagen ab - sie ist Anschuettung, keine Fahrflaeche, und
+	// wuerde die Stufenpruefung unten sonst zu Recht reissen.
+	// Die Oeffnungsbreite steht nicht oeffentlich, wohl aber das Zielvolumen
+	// der Garage - es ist aus derselben Luecke gerechnet: halbe Breite
+	// abzueglich 30 cm Rand je Seite.
+	const double SpurBreiteCm = (Layout.GarageTarget.ExtentCm.Y + 30.0) * 2.0;
+	double TiefsteKanteCm = BodenZ;
+	int32 Stufen = 0;
+	TArray<double> Oberkanten;
+	for (const FHqPart& Teil : Layout.Parts)
+	{
+		const double Aussenkante = Teil.CenterCm.X + Teil.SizeCm.X * 0.5;
+		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
+		const bool bVorDerFassade = Aussenkante > Half + 1.0;
+		const bool bAufFahrhoehe = Oberkante <= BodenZ + 1.0 && Oberkante > BodenZ - 200.0;
+		const bool bInDerSpur = Teil.SizeCm.Y <= SpurBreiteCm + 1.0;
+		if (bVorDerFassade && bAufFahrhoehe && bInDerSpur && Teil.CenterCm.Y < 0.0)
+		{
+			TiefsteKanteCm = FMath::Min(TiefsteKanteCm, Oberkante);
+			Oberkanten.Add(Oberkante);
+			++Stufen;
+		}
+	}
+
+	TestTrue(*FString::Printf(TEXT("Vor der Garage liegt eine Rampe (%d Stufen)"), Stufen),
+		Stufen >= 3);
+	// Sie muss den gemessenen Rest von rund 40 cm ueberbruecken.
+	TestTrue(*FString::Printf(
+		TEXT("Die Rampe faellt weit genug (%.0f cm unter den Boden)"), BodenZ - TiefsteKanteCm),
+		BodenZ - TiefsteKanteCm >= 40.0);
+
+	// UND SIE MUSS ALS SCHRAEGE LESEN, nicht als Treppe.
+	//
+	// GESEHEN am 21.09.2026 auf Alkis17: mit 5 Stufen ueber denselben 60 cm
+	// zeichnete sich jede Kante einzeln ab - vor der Garage stand ein
+	// gestuftes Betonpodest, keine Zufahrtsschuerze. Der Weg war gemessen
+	// frei, das Bild trotzdem falsch; darum haelt der Vertrag jetzt auch die
+	// Stufenhoehe fest und nicht nur den Gesamtfall.
+	Oberkanten.Sort();
+	double GroessteStufeCm = 0.0;
+	for (int32 i = 1; i < Oberkanten.Num(); ++i)
+	{
+		GroessteStufeCm = FMath::Max(GroessteStufeCm, Oberkanten[i] - Oberkanten[i - 1]);
+	}
+	TestTrue(*FString::Printf(
+		TEXT("Keine Stufe steht als Kante heraus (groesste %.1f cm)"), GroessteStufeCm),
+		GroessteStufeCm <= 6.0);
+
+	// UND SIE DARF NICHT IN DER LUFT ENDEN.
+	//
+	// GESEHEN am 21.09.2026 auf Alkis17: das Gelaende faellt quer zur Zufahrt,
+	// die Schuerze ist waagerecht - ihre talseitige Ecke stand rund 1,5 m frei
+	// ueber der Wiese. Feine Stufen haben daran nichts geaendert; es blieb ein
+	// Betonpodest. Erst die Boeschung darunter laesst den Beton als Schraege
+	// ins Gelaende laufen.
+	double BoeschungFallCm = 0.0;
+	double BreitesteLageCm = 0.0;
+	for (const FHqPart& Teil : Layout.Parts)
+	{
+		const double Aussenkante = Teil.CenterCm.X + Teil.SizeCm.X * 0.5;
+		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
+		const bool bUnterDerRampe = Oberkante <= TiefsteKanteCm + 1.0;
+		if (Aussenkante > Half + 1.0 && bUnterDerRampe
+			&& Teil.SizeCm.Y > SpurBreiteCm + 1.0 && Teil.CenterCm.Y < 0.0)
+		{
+			BoeschungFallCm = FMath::Max(BoeschungFallCm, TiefsteKanteCm - Oberkante);
+			BreitesteLageCm = FMath::Max(BreitesteLageCm, Teil.SizeCm.Y);
+		}
+	}
+	TestTrue(*FString::Printf(
+		TEXT("Unter der Rampe steht eine Boeschung (%.0f cm tief)"), BoeschungFallCm),
+		BoeschungFallCm >= 100.0);
+	TestTrue(*FString::Printf(
+		TEXT("Sie greift ueber die Fahrspur hinaus (%.0f statt %.0f cm)"),
+		BreitesteLageCm, SpurBreiteCm),
+		BreitesteLageCm >= SpurBreiteCm + 200.0);
+
+	// UND SIE MUSS BIS AN DIE FAHRBAHN REICHEN.
+	//
+	// GEMESSEN am 21.09.2026 auf Alkis17 (Saved/Diagnose/zufahrtsprobe.json,
+	// "fahrbahn_lokal"): die turmseitige Kante der Wolkenbruch liegt vor der
+	// Garagenoeffnung bei 1946..2162 cm vom Mittelpunkt. Mit 300 cm endete
+	// die Schuerze bei 1851 cm - bis zu 3 m davor, im Gras. Der Vertrag haelt
+	// darum die LAENGE fest und nicht nur die Form; eine kuerzere Schuerze
+	// waere wieder eine Zufahrt, die nirgendwohin fuehrt.
+	double FussDerSchuerzeCm = Half;
+	for (const FHqPart& Teil : Layout.Parts)
+	{
+		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
+		if (Oberkante <= BodenZ + 1.0 && Oberkante > BodenZ - 200.0
+			&& Teil.CenterCm.Y < 0.0 && Teil.SizeCm.Y <= SpurBreiteCm + 1.0)
+		{
+			FussDerSchuerzeCm = FMath::Max(FussDerSchuerzeCm,
+				Teil.CenterCm.X + Teil.SizeCm.X * 0.5);
+		}
+	}
+	TestTrue(*FString::Printf(
+		TEXT("Die Schuerze reicht bis an die Fahrbahn (%.0f cm, noetig 2162)"),
+		FussDerSchuerzeCm),
+		FussDerSchuerzeCm >= 2162.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqPortalSchwelleTest,
+	"WiesbadenReal.World.SebboHq.PortalSchwelle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqPortalSchwelleTest::RunTest(const FString& Parameters)
+{
+	// IM DURCHGANG DARF KEINE KANTE STEHEN.
+	//
+	// GEMESSEN am 21.09.2026 auf Alkis17 (fuss_profil, 391 Taster im Abstand
+	// von 10 cm): der Vorraum liegt auf FloorZ = SlabCm + 15, die Halle auf
+	// SlabCm. An seinem inneren Rand - 2,9 m hinter der Tuer - stand eine
+	// 15-cm-Stufe quer im Weg.
+	//
+	// Die Sonde hat sie nie gemeldet, und das ist kein Versehen: KapselSchritt
+	// steigt bis MaxStufe (40 cm) und setzt bis 80 cm ab. Eine Kante unter
+	// dieser Grenze ist fuer sie kein Hindernis - fuer einen Gehenden schon.
+	// Darum haelt dieser Vertrag die GEOMETRIE fest und nicht den Weg.
+	const FSebboHqDimensions D;
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+	const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
+	const double FloorZ = SebboHq::GetAccessFloorCm(D);
+	const double PortalY = Layout.PedestrianTarget.CenterCm.Y;
+
+	// Alle Trittflaechen im Portalband zwischen Hallenboden und Vorraum,
+	// nach X sortiert - das ist der Weg, den der Gehende nimmt.
+	TArray<TPair<double, double>> Stufen;   // (X der Aussenkante, Oberkante)
+	for (const FHqPart& Teil : Layout.Parts)
+	{
+		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
+		const double Y0 = Teil.CenterCm.Y - Teil.SizeCm.Y * 0.5;
+		const double Y1 = Teil.CenterCm.Y + Teil.SizeCm.Y * 0.5;
+		const double X0 = Teil.CenterCm.X - Teil.SizeCm.X * 0.5;
+		const bool bImPortalband = PortalY > Y0 && PortalY < Y1;
+		const bool bAufTritthoehe = Oberkante >= D.SlabCm - 1.0 && Oberkante <= FloorZ + 1.0;
+		const bool bImDurchgang = X0 > Half - 500.0 && X0 < Half + 30.0;
+		if (bImPortalband && bAufTritthoehe && bImDurchgang)
+		{
+			Stufen.Add({ Teil.CenterCm.X + Teil.SizeCm.X * 0.5, Oberkante });
+		}
+	}
+	Stufen.Sort([](const TPair<double, double>& A, const TPair<double, double>& B)
+	{
+		return A.Key > B.Key;   // von aussen nach innen
+	});
+
+	TestTrue(*FString::Printf(TEXT("Im Durchgang liegen Trittflaechen (%d)"), Stufen.Num()),
+		Stufen.Num() >= 2);
+
+	double GroessteKanteCm = 0.0;
+	for (int32 i = 1; i < Stufen.Num(); ++i)
+	{
+		GroessteKanteCm = FMath::Max(GroessteKanteCm,
+			FMath::Abs(Stufen[i].Value - Stufen[i - 1].Value));
+	}
+	TestTrue(*FString::Printf(
+		TEXT("Keine Kante im Durchgang (groesste %.1f cm)"), GroessteKanteCm),
+		GroessteKanteCm <= 6.0);
+
+	// Und er muss wirklich bis auf den Hallenboden herunterkommen, sonst
+	// waere die Rampe eine Rampe ins Nichts.
+	double TiefsteCm = FloorZ;
+	for (const TPair<double, double>& S : Stufen)
+	{
+		TiefsteCm = FMath::Min(TiefsteCm, S.Value);
+	}
+	TestEqual(TEXT("Der Durchgang erreicht den Hallenboden"), TiefsteCm, D.SlabCm, 1.0);
 
 	return true;
 }

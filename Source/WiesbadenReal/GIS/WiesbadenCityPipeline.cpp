@@ -303,6 +303,17 @@ namespace WiesbadenCityPipeline
 						OutData.OSMData, *Tools.Converter, Input.TerrainSettings, OutData.TerrainTile);
 			}
 
+			// Bauplateaus nach den Gebaeuden, aber VOR den Strassen: sie
+			// gehoeren zur selben Familie wie die Gebaeude-Einebnung (ein
+			// Grundstueck bekommt eine ebene Flaeche), und wie diese darf ein
+			// Plateau die Fahrbahn am Rand nicht wieder zuheben.
+			if (Input.bGenerateRoads && Input.TerrainSettings.bFlattenSitePads)
+			{
+				OutData.TerrainReport.SitePadFlattenedCellCount =
+					Tools.TerrainGenerator->FlattenSitePads(
+						OutData.RoadNetwork, Input.TerrainSettings, OutData.TerrainTile);
+			}
+
 			// REIHENFOLGE IST WESENTLICH: Gebaeude zuerst, Strassen danach.
 			//
 			// Beide Durchgaenge schreiben in dieselben Landscape-Zellen. Lief die

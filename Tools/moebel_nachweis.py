@@ -161,20 +161,38 @@ class Wegnetz:
 
 # -- Die Platzierungsregel, wie der Bake-Pass sie anwendet --------------------
 
-def ueberlebt(art, naechster_weg, reichweite_m=1.5):
+# Die beiden Masse stehen im C++ als FRoadFurnitureSettings. HIER stehen sie
+# ein zweites Mal, und das ist eine bekannte Schwaeche: am 21.09.2026 wurden
+# sie dort auf 250/250 kalibriert, waehrend dieser Nachbau bei 1,5 m blieb -
+# eine GRUENE Testsuite bescheinigte danach die ueberholte Regel, und das
+# Werkzeug haette seine Fotos an den falschen Stellen aufgenommen.
+#
+# Aufgefallen ist das in einer Durchsicht, nicht im Betrieb. Wer die Werte im
+# C++ aendert, MUSS sie hier nachziehen - darum stehen sie oben und nicht
+# verstreut in der Rechnung.
+REICHWEITE_M = 2.5          # FurnitureDockingRangeCm = 250
+BANKETT_M = 2.5             # FurnitureVergeCm = 250, nur wo Gehweg = 0
+# Wegtypen, fuer die das Bankett gilt - NICHT jede Strasse ohne Gehweg.
+BANKETT_TYPEN = ("footway", "path", "track", "pedestrian", "steps", "cycleway",
+                 "living_street")
+
+
+def ueberlebt(art, naechster_weg, reichweite_m=REICHWEITE_M):
     """Bleibt dieses Moebel nach der Andock-Regel stehen?
 
-    Nachbau von URoadFurnitureGenerator::PlaceStreetFurniture. Gemessen an
-    3.607 echten Knoten weicht der Nachbau um 0,7 % vom Bake ab (1474 gegen
-    1464 Verwuerfe) - genug, um einen Ort zu waehlen, zu wenig fuer eine
-    Aussage ueber ein EINZELNES Moebel.
+    Nachbau von URoadFurnitureGenerator::PlaceStreetFurniture - genug, um
+    einen Ort zu waehlen, zu wenig fuer eine Aussage ueber ein EINZELNES
+    Moebel.
     """
     if naechster_weg is None:
         return False
     if art == "bollard":
         return True          # Poller duerfen auf der Fahrbahn stehen
-    abstand, halb, gehweg, _typ = naechster_weg
-    return (abstand - (halb + gehweg)) <= reichweite_m
+    abstand, halb, gehweg, typ = naechster_weg
+    belag = gehweg
+    if belag <= 0.0 and (typ or "").lower() in BANKETT_TYPEN:
+        belag = BANKETT_M
+    return (abstand - (halb + belag)) <= reichweite_m
 
 
 def moebel_art(element):

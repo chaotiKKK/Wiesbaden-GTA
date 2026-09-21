@@ -40,6 +40,8 @@
 #include "UObject/UObjectGlobals.h"
 #include "World/RegionAssetSpawnerComponent.h"
 #include "World/RoadFurnitureSpawnerComponent.h"
+#include "World/SebboHqShape.h"
+#include "World/SebboHqSite.h"
 #include "World/WiesbadenCityChunk.h"
 
 #include <atomic>
@@ -115,6 +117,85 @@ namespace
 
 		Context->bCancelled = (Result == WiesbadenCityPipeline::EBuildResult::Cancelled);
 		Context->bDone.store(true);
+	}
+
+	/**
+	 * Die Stadt-Geometrie bleibt Eigentuemerin des Uebergangs von der Platter
+	 * Strasse zum Tower. Die privaten Ziele stammen aus derselben Form, die der
+	 * Tower zur Laufzeit baut; eine explizite Editor-Ueberschreibung gewinnt.
+	 */
+	void ConfigureSebboHqAccess(FRoadGenerationSettings& Settings,
+		const UGeoCoordinateConverter& Converter)
+	{
+		if (Settings.AccessOverride.bEnabled)
+		{
+			return;
+		}
+
+		const FSebboHqDimensions Dimensions;
+		const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(Dimensions);
+		const FVector TowerBase = Converter.GeoToUnrealGround(SebboHqSite::Coordinate());
+		const FRotator TowerHeading = SebboHqSite::Heading();
+		const auto ToWorld = [&TowerBase, &TowerHeading](const FVector& Local)
+		{
+			return TowerBase + TowerHeading.RotateVector(Local);
+		};
+
+		FRoadAccessOverride& Access = Settings.AccessOverride;
+		Access.bEnabled = true;
+		Access.GarageEntranceWorldCm = ToWorld(Layout.GarageTarget.CenterCm);
+		Access.PedestrianEntranceWorldCm = ToWorld(Layout.PedestrianTarget.CenterCm);
+		Access.SearchRadiusCm = 5000.0;
+		Access.GarageWidthCm = 700.0;
+		Access.PedestrianWidthCm = 200.0;
+	}
+
+	/**
+	 * Das Bauplateau des Grundstuecks.
+	 *
+	 * Der Turm ist ein zur Laufzeit gespawnter Actor und steht in keinem
+	 * OSM-Datensatz - FlattenUnderBuildings legt ihm deshalb kein Plateau an.
+	 * Gemessen stand er quer im Hang: 11,2 m Gelaendespanne ueber einen
+	 * 40-m-Ring, die Garage 5,1 m in der Boeschung, das Portal 1,66 m ueber
+	 * der Strasse. Radius und Bodenhoehe kommen aus DERSELBEN Form, die der
+	 * Turm baut; der Zufahrtsanker ist der Garagenzugang.
+	 */
+	void ConfigureSebboHqPad(FTerrainGenerationSettings& Settings,
+		const FRoadAccessOverride& Access, const UGeoCoordinateConverter& Converter)
+	{
+		if (!Access.bEnabled)
+		{
+			return;
+		}
+
+		const FSebboHqDimensions Dimensions;
+		const FVector TowerBase = Converter.GeoToUnrealGround(SebboHqSite::Coordinate());
+		const double HalbCm = Dimensions.FootprintCm * 0.5
+			+ FMath::Max(0.0, Dimensions.PodiumOversizeCm);
+
+		FTerrainSitePad Pad;
+		Pad.CenterCm = FVector2D(TowerBase.X, TowerBase.Y);
+		// Umkreisradius des gedrehten Grundrisses plus ein Meter Arbeitsraum -
+		// ein Plateau, das an der Fassade endet, laesst die Ecken im Hang.
+		Pad.RadiusCm = HalbCm * UE_SQRT_2 + 100.0;
+		Pad.SlopeRunCm = 2500.0;
+		Pad.RoadAnchorCm = FVector2D(
+			Access.GarageEntranceWorldCm.X, Access.GarageEntranceWorldCm.Y);
+		Pad.RoadSearchRadiusCm = Access.SearchRadiusCm;
+		// Oberkante des privaten Bodens ueber dem Plateau - EIN Eigentuemer.
+		// Hier stand dieselbe Rechnung ein zweites Mal; der Turm liest sie
+		// laengst aus GetAccessFloorCm, und zwei Kopien derselben Beziehung
+		// sind genau die Bauart, an der dieses Grundstueck schon einmal
+		// auseinandergelaufen ist.
+		Pad.AccessFloorCm = SebboHq::GetAccessFloorCm(Dimensions);
+	// Der Grundriss, damit die Strassenboeschung nicht durch das Haus laeuft.
+	// GEMESSEN am 21.09.2026: sie reichte 6,5 m ins Erdgeschoss und lag dort
+	// 97 cm ueber dem Boden - im Portal wuchs Gras. Dieselbe halbe Kante, aus
+	// der auch der Turm seine Fassade stellt.
+	Pad.BuildingHalfCm = HalbCm;
+	Pad.BuildingYawDeg = SebboHqSite::HeadingDegrees;
+
+		Settings.SitePads.Add(Pad);
 	}
 }
 
@@ -247,9 +328,12 @@ void AWiesbadenWorldBuilder::BuildCity()
 	Context->Input.RegionAssetSettings = RegionAssetSettings;
 	Context->Input.VerticalReferenceMeters = VerticalReferenceMeters;
 	Context->Input.RoadSettings = RoadSettings;
+	ConfigureSebboHqAccess(Context->Input.RoadSettings, *PipelineConverter);
 	Context->Input.BuildingSettings = BuildingSettings;
 	AddressFacadeMaterials.GetKeys(Context->Input.BuildingSettings.FacadeOverrideAddresses);
 	Context->Input.TerrainSettings = TerrainSettings;
+	ConfigureSebboHqPad(Context->Input.TerrainSettings,
+		Context->Input.RoadSettings.AccessOverride, *PipelineConverter);
 	Context->Input.FurnitureSettings = FurnitureSettings;
 	Context->Input.TrafficSettings = TrafficSettings;
 	Context->Input.RoadTypeConfigPath = RoadTypeConfigPath;
@@ -618,7 +702,31 @@ void AWiesbadenWorldBuilder::SaveCityAsMap()
 		return;
 	}
 
-	// Als Default-Map verdrahten, damit Play/Standalone direkt die Stadt laden.
+	// Als Default-Map verdrahten - NUR wenn ausdruecklich gewollt.
+	//
+	// Frueher geschah das bedingungslos. Ein PROBE-Bake - und die meisten sind
+	// Proben - stellte damit still die gespielte Stadt um; gemerkt hat man es
+	// erst an `git status Config/`, und zurueckgenommen wurde es jedes Mal von
+	// Hand. Schlimmer noch bei einem Bake, der sich spaeter als untauglich
+	// erwies (Alkis10 und Alkis11 meldeten FERTIG und waren im Spiel nur Gras):
+	// der hatte die funktionierende Karte da schon verdraengt.
+	const FString MapName = FPackageName::GetShortName(AssetPath);
+	const FString MapRef = AssetPath + TEXT(".") + MapName;
+
+	if (!bMakeNewMapDefault)
+	{
+		// LAUT sagen, was NICHT passiert ist. Eine stille Unterlassung waere
+		// genauso schlecht wie die stille Umstellung: wer die neue Karte
+		// spielen will, soll wissen, wie.
+		UE_LOG(LogWbCore, Warning,
+			TEXT("SaveCityAsMap: Karte %s gespeichert, aber NICHT als Default verdrahtet ")
+			TEXT("(bMakeNewMapDefault = false). Die gespielte Karte bleibt unveraendert. ")
+			TEXT("Zum Umstellen: bMakeNewMapDefault im Details-Panel setzen oder den Bake ")
+			TEXT("mit WB_LIVE_SCHALTEN=1 laufen lassen."),
+			*MapRef);
+	}
+	else
+	{
 	// WICHTIG (UE 5.8, im Editor verifiziert): GConfig->SetString + Flush(
 	// GEngineIni) kann STILL nichts schreiben - Flush ueberspringt die Datei,
 	// wenn FindBranch den Branch unter dem vollen Pfad nicht findet, und
@@ -627,8 +735,6 @@ void AWiesbadenWorldBuilder::SaveCityAsMap()
 	// datenreinen Helfer geschrieben und danach gegen die Platte verifiziert;
 	// GConfig bleibt zusaetzlich im Speicher aktuell (harmlos, falls ein
 	// spaeterer Flush den Branch doch findet).
-	const FString MapName = FPackageName::GetShortName(AssetPath);
-	const FString MapRef = AssetPath + TEXT(".") + MapName;
 	const FString DefaultMapSection = TEXT("/Script/EngineSettings.GameMapsSettings");
 	GConfig->SetString(*DefaultMapSection, TEXT("GameDefaultMap"), *MapRef, GEngineIni);
 	GConfig->SetString(*DefaultMapSection, TEXT("EditorStartupMap"), *MapRef, GEngineIni);
@@ -684,6 +790,11 @@ void AWiesbadenWorldBuilder::SaveCityAsMap()
 			UE_LOG(LogWbCore, Error, TEXT("SaveCityAsMap: %s"), *LastError);
 			return;
 		}
+	}
+
+	UE_LOG(LogWbCore, Log,
+		TEXT("SaveCityAsMap: %s ist jetzt die Default-Karte (bMakeNewMapDefault war gesetzt)."),
+		*MapRef);
 	}
 
 	GConfig->Flush(false, GEngineIni);

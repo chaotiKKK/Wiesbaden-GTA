@@ -3238,3 +3238,583 @@ Commits gelten als UNGEPRUEFT und werden gemeldet, nicht durchgewunken.
 Selbsttest: `python -m unittest discover -s Tools -p "test_ausliefern.py"`
 (15 Tests, jeder auf einem echten Wegwerf-Repo; einer haelt das Verhalten von
 `git add` selbst fest - faellt er, hat git sich geaendert).
+
+
+## Ampel-Freigabegruppen: der Achsenfehler und sein Preis (20.09.2026)
+
+**Der Fehler:** `AxisForBearing` teilte nach FAHRTRICHTUNG (`Peilung < 180`).
+Die Peilung kommt aber aus `Atan2(dY, dX)` - 0 Grad ist Ostfahrt, 90 Grad
+Nordfahrt. Beide lagen unter 180 und damit in DERSELBEN Freigabegruppe: an
+jeder der 1073 signalisierten Kreuzungen bekamen zwei zueinander senkrechte
+Richtungen gleichzeitig Gruen. Zugleich lagen die beiden Richtungen DERSELBEN
+Strasse (0 und 180 Grad) in verschiedenen Gruppen und bekamen nie zusammen
+Gruen. Ein Test hielt das fest ("Peilung 90 -> Achse 0") und hat den Fehler
+damit festgeschrieben, statt ihn zu finden. Richtig ist `Fmod(Peilung, 180)`.
+
+**Konfliktfreiheit kommt nicht aus der Faustregel.** Achse x Abbiegeart trifft
+die Regelkreuzung, aber nicht den funfarmigen Knoten, die schiefe Einmuendung
+oder zwei Zufahrten, die in dieselbe Spur einfaedeln.
+`MakeGroupsConflictFree` faerbt die Gruppen darum gierig nach, geprueft mit
+`FWiesbadenTrafficSimulation::DoConnectionsConflict` - DERSELBEN Rechnung, mit
+der die Simulation ihre Kreuzungsregel baut (sie kennt beide Faelle:
+schneidende Wege UND gemeinsame Zielspur). Zwei Rechnungen fuer dieselbe Frage
+laufen auseinander.
+
+**Eine Gruppe ohne Phase ist DAUERHAFT ROT** (`GetGroupAspect` faellt nicht auf
+Gruen zurueck, es prueft `Phase.Group != Group`). Solange die Phasen je ACHSE
+gebaut wurden, konnte das passieren: mit `bProtectedLeftTurns = false` bekamen
+die Linksabbieger-Gruppen keine Phase. Die Phasen folgen jetzt den tatsaechlich
+BENUTZTEN Gruppen. Nebenwirkung: die Einstellung steuert nur noch die
+Gruenzeit, nicht mehr das Ob - ein Linksabbieger kreuzt den Gegenverkehr, die
+Faerbung trennt ihn also ohnehin.
+
+**DER PREIS, gemessen - er ist hoch.** A/B auf derselben Karte, im selben
+Build, Spieler 250 m daneben geparkt, je 300 s, Bahnhofsplatz (66 Spuren,
+rund 1,6 Mio. Messwerte je Lauf):
+
+| | Faustregel | konfliktfrei |
+|---|---|---|
+| Mitteltempo | 7,8 km/h | **4,9 km/h** |
+| Anteil am Limit | 18,0 % | **11,2 %** |
+| Steh-Anteil | 68,7 % | **81,2 %** |
+| Umlauf im Mittel | 36 s | 51 s |
+| Spanne | 20..70 s | **20..180 s** |
+
+Also 37 Prozent weniger Tempo. 6357 Verbindungen mussten ihre Wunschgruppe
+verlassen, 466 Gruppen kamen ueber die vier der Faustregel hinaus, groesste
+Gruppenzahl an einer Kreuzung 10 - macht dort 10 Phasen und 180 s Umlauf.
+
+Der Grund liegt im Verfahren: eine gierige FAERBUNG gibt jeder konfliktbehafteten
+Bewegung eine eigene Phase. Ein Verkehrsplaner macht das Gegenteil und fasst
+moeglichst viele VERTRAEGLICHE Bewegungen in einer Freigabe zusammen (Clique
+statt Farbe). Wer hier weiterarbeitet, faengt dort an.
+
+Zweiter Verdacht, NICHT gemessen: `DoConnectionsConflict` meldet auch
+gemeinsame ZIELSPUR als Konflikt. Das ist fuer die Laufzeitregel richtig (ein
+Fahrzeug wartet, bis der andere durch ist), fuer eine Freigabegruppe aber
+womoeglich zu streng - zwei einfaedelnde Stroeme werden real gemeinsam
+freigegeben und sortieren sich ueber Luecken. Wieviel der 6357 Verschiebungen
+darauf entfaellt, ist offen.
+
+**MESSFALLE, die zweimal Zeit gekostet hat:** `-WbGoto=<Ort>` parkt den
+Spieler MITTEN INS MOTIV, und sein Fahrzeug blockiert dort eine Spur. Am
+Bahnhofsplatz gemessen: 5,8 km/h mit dem Spieler auf dem Platz gegen 12,0 km/h
+ohne ihn - der Aufbau halbiert das Ergebnis. Fuer Flussmessungen den Spieler
+per Koordinate danebensetzen (`-WbGoto=22230,145934` ist 250 m noerdlich des
+Bahnhofsplatzes, innerhalb der Spawn-Reichweite).
+
+**Vergleichsschalter:** `-WbOhneKonfliktgruppen` laesst die Gruppen bei der
+Faustregel stehen - dasselbe Muster wie `-WbOhneKreuzungsregel`, damit sich
+beide Zustaende auf derselben Karte und im selben Build messen lassen.
+
+
+## Karten aufraeumen: der Bake schlaegt vor, geloescht wird gefragt (20.09.2026)
+
+Jeder Bake legt eine neue Stadtkarte an und laesst die alte stehen - richtig
+so, aber JE Karte 1,9 GB externe Actors. `Tools/karten_aufraeumen.py` behaelt
+genau zwei: die neue und ihre Vorgaengerin (der Rueckweg, wenn sich die neue
+erst im Spiel als schlecht erweist).
+
+    python Tools/karten_aufraeumen.py                 # nur zeigen
+    python Tools/karten_aufraeumen.py --loeschen      # fragt nach
+    python Tools/karten_aufraeumen.py --loeschen --ja # ohne Rueckfrage
+
+**Warum der Bake NICHT selbst aufraeumt:** `rebuild_city.py` laeuft im Editor
+mit `-unattended`, und dort gibt es niemanden, den man fragen koennte - ein
+`input()` haette in einem abgesetzten Bake stundenlang gewartet, ohne dass es
+jemand sieht. Der Bake legt darum nur
+`Saved/Diagnose/bake_vorschlag.json` ab (neue Karte + Vorgaengerin) und nennt
+im Log die naechsten Schritte. Zweiter Grund: "FERTIG" ist kein Beleg -
+Alkis10 und Alkis11 meldeten Erfolg und waren im Spiel nur Gras.
+
+**Vier Sicherungen, jede mit Gegenprobe im Test:** ohne Terminal wird nicht
+geloescht (sondern der Befehl ausgegeben); die gespielte Karte aus
+`GameDefaultMap` ist auch mit `--ja` unantastbar; wiegt die NEUE Karte unter
+1,7 GB externe Actors, gilt sie als Leerbake und es wird nichts geloescht
+(die Grenze stammt aus `bake_abnahme.py`: volle Stadt 1,8-1,9 GB, Leerbake
+1,4 GB); und die Rueckfrage nimmt nur das ausgeschriebene "ja" - "j", "y",
+"yes" und die blosse Eingabetaste loeschen nichts.
+
+**ZWEI TESTFALLEN, die hier Zeit gekostet haben:**
+
+* **`sys.stdin.isatty()` ist in dieser Umgebung NICHT verlaesslich.** Stand in
+  derselben Aufrufkette vorher ein Here-Dokument (`python - <<'PY'`), ist
+  stdin verbraucht und `isatty()` liefert False - sonst True. Ein Test, der
+  den einen oder anderen Zustand VORFINDEN will, ist mal gruen und mal rot,
+  ohne dass sich eine Zeile geaendert hat. Beide Zustaende gehoeren
+  hergestellt (stdin durch eine Attrappe ersetzen), nie vorausgesetzt.
+* **Der Bytecode-Zwischenspeicher taeuscht bei schnellen Umschreibungen.**
+  Wird eine .py-Datei zweimal innerhalb derselben Sekunde geschrieben, kann
+  Python den `.pyc` des VORIGEN Stands weiterverwenden - eine Gegenprobe
+  ("faellt der Test, wenn ich die Sicherung aushebele?") misst dann den
+  falschen Stand. Vor jeder solchen Messung `Tools/__pycache__` loeschen.
+
+
+## Sebbo-Hauptsitz: die Treppe war nicht begehbar (20.09.2026)
+
+Der Auftrag lautete, mit einem Bild zu belegen, dass man die Treppe
+hinauflaeuft. Beim Nachrechnen stellte sich heraus, dass man es NICHT konnte.
+
+**Der Defekt:** Das Podest jedes Geschosses deckte den GANZEN Grundriss der
+Treppenhaus-Haelfte und lag damit als Decke ueber dem Lauf, der von unten
+genau dorthin steigt. Kopffreiheit ueber der achten Stufe 155 cm, ueber der
+fuenfzehnten 5 cm, die sechzehnte lag IM Podest. Man kam 220 von 400 cm hoch.
+
+Die bestehenden Tests sagten gruen: Stufenhoehe 25 cm, lueckenlos, je Geschoss
+ein Podest. **Kopffreiheit hatte keiner geprueft** - und ohne sie ist eine
+Treppe eine Skulptur. Jetzt liegen Lauf und Podest NEBENeinander (der Lauf in
+der aeusseren Y-Haelfte, das Podest in der inneren), wie im echten Bau die
+Treppenoeffnung im Podest bleibt. Ueber jeder Stufe stehen 380 cm.
+
+**Nachweis im Spiel, nicht auf dem Papier:** `-WbTreppenProbe` laesst eine
+Kapsel (Radius 40, Halbhoehe 90) mit der Schrittregel des Fussgaengers
+(anheben, vorwaerts, absetzen, hoechstens 40 cm) die Treppe hochsteigen -
+gegen die ECHTE Kollision. Ergebnis: 157 Schritte, 57,7 m gestiegen, Hoehe
+61,35 m, Dach erreicht. Ablage: `Saved/Diagnose/treppenprobe.json`.
+
+**DREI FALLEN, die die Sonde erst blind gemacht haben:**
+
+1. **`AddIgnoredActor(this)` aus der Bodensuche uebernommen.** Der Turm IST
+   das, wogegen getastet wird - die Sonde ignorierte das ganze Gebaeude und
+   traf nur das Landscape. Sie meldete ueberall "nichts unter den Fuessen",
+   was wie eine kaputte Treppe aussah.
+2. **`GetActorLocation()` ist NICHT der Bauort.** Der Actor wird im Ursprung
+   gespawnt und nie bewegt; gesetzt werden nur seine Komponenten. Die Sonde
+   sondierte bei (0,0,0) ins Leere. Der Bauort wird jetzt in `BuiltBase`
+   gemerkt.
+3. **Eine Kapsel, die die Trittflaeche genau beruehrt**, meldet beim Sweep
+   sofort einen Treffer (`bStartPenetrating`). Als Wand gewertet kam die
+   Sonde keinen Schritt weit. Sie startet jetzt 2 cm hoeher und wertet
+   `bStartPenetrating` nicht als Hindernis.
+
+**ZWEI WEITERE DEFEKTE, gefunden und gemessen, NICHT behoben:**
+
+* Das Gelaende steht an der Treppenhausecke **250 cm ueber dem Fusspunkt** des
+  Turms: der Turm setzt sich auf den Bodenpunkt seiner MITTE und hat keine
+  Einschnitt- oder Sockelloesung, also liegt das Erdgeschoss am Hang im
+  Erdreich. Die Sonde beginnt darum auf der ersten Stufe ueber dem Gelaende.
+* **Ein Baum waechst mitten durch das Treppenhaus** (im Bild deutlich zu
+  sehen). Dieselbe Ursache wie beim Nerobergbahn-Wagen: die Freihalteflaechen
+  der Bewuchs-Streuung kennen nur Strassen, keine Bauwerke.
+
+**Bildaufnahme im Turm - zwei Stolpersteine:** `-WbShotDelay` steuert
+`-WbShotWhenReady`, NICHT `-WbScreenshot` (falsch gepaart entsteht gar kein
+Bild). Und `-WbTeleportTo` nimmt das FAHRZEUG mit, wenn der Spieler darin
+sitzt - dann fuellt das Armaturenbrett das Bild. Mit `-WbZuFuss=<Sekunden>`
+vorher aussteigen.
+
+
+## Die Default-Karte stellt kein Bake mehr um (20.09.2026)
+
+**Vorher:** `AWiesbadenWorldBuilder::SaveCityAsMap` schrieb `GameDefaultMap`
+und `EditorStartupMap` BEDINGUNGSLOS in `Config/DefaultEngine.ini`. Ein
+PROBE-Bake - und die meisten sind Proben - stellte damit still die gespielte
+Stadt um. Gemerkt hat man es erst, wenn `git status Config/` eine Aenderung
+zeigte, die niemand gewollt hatte, und zurueckgenommen wurde sie jedes Mal von
+Hand. Bei Alkis10 und Alkis11 war es schlimmer: die meldeten FERTIG, waren im
+Spiel nur Gras - und hatten die funktionierende Karte da schon verdraengt.
+
+**Jetzt:** `bMakeNewMapDefault` (UPROPERTY am WorldBuilder) steht auf **false**.
+Ohne ausdrueckliche Ansage bleibt die gespielte Karte, wie sie ist; der Bake
+sagt im Log als WARNUNG, was er nicht getan hat und wie man es tut. Der
+geprueften Schreibpfad selbst (mit allem Wissen ueber den stillen
+GConfig-Flush-No-Op) ist unveraendert - er laeuft nur noch auf Ansage.
+
+    # Probe-Bake (Regelfall): gespielte Karte bleibt
+    rebake_alkisNN.cmd
+
+    # Live schalten, ausdruecklich:
+    set WB_LIVE_SCHALTEN=1
+    rebake_alkisNN.cmd
+
+Im Editor: `bMakeNewMapDefault` im Details-Panel des WorldBuilders.
+
+**Wache:** `WiesbadenReal.GIS.MapBake.DefaultKarteNurAufAnsage` prueft die
+Vorgabe am CDO. Gegengeprueft - mit `= true` faellt sie. Sie prueft ausserdem,
+dass der Schreibpfad selbst noch funktioniert, damit die Abschaltung ihn nicht
+heimlich beschaedigt.
+
+**Reihenfolge, die sich daraus ergibt:** backen -> abnehmen
+(`bake_abnahme.py`) -> live schalten -> aufraeumen
+(`karten_aufraeumen.py`). Jeder Schritt ist eine eigene Entscheidung; keiner
+passiert als Nebenwirkung des vorigen.
+
+
+## Galerie der Stadtansichten: Tools/galerie.py (20.09.2026)
+
+Unter `Saved/Diagnose` liegen 270 Bilder und 1,9 GB. `Tools/galerie.py` sucht
+daraus die echten SPIELANSICHTEN, verkleinert sie und schreibt
+`Saved/Diagnose/galerie/index.html` - durchblaetterbar mit Pfeiltasten, nach
+Datum gruppiert.
+
+    python Tools/galerie.py --zeigen   # nur die Auswahl, mit Begruendung
+    python Tools/galerie.py            # bauen (191 Bilder, 37 MB, ~25 s)
+
+**Die Auswahl ist das Eigentliche.** Erkannt wird ein Spielbild am
+Seitenverhaeltnis (1.50 bis 1.95) und an der Mindestbreite - ein Kontaktbogen
+(4320 x 574) oder ein Hochformat faellt damit von selbst heraus. Dazu eine
+kurze Namensliste fuer das, was im Format passt, aber keine Stadt zeigt:
+Stau-Karten, Kartenausschnitte, UI-Aufnahmen. Was weggelassen wurde, gibt das
+Werkzeug MIT GRUND aus.
+
+**Nach Datum gruppiert, neueste zuerst** - und das ist keine Kosmetik: 85 der
+191 Bilder stammen vom 04.09.2026, seither sind Strassenmoebel,
+Signalprogramme, Fahrzeuge und der Sebbo-Hauptsitz dazugekommen. Eine Galerie,
+die ein Bild von damals ohne Datum neben eines von heute haengt, behauptet
+etwas Falsches.
+
+**FUER DIE VORSCHAU BRAUCHT SIE EINEN DATEISERVER.** Der `htmlPath`-Modus von
+`register_preview` serviert NUR die eine HTML-Datei - die Bilder daneben
+laufen auf 404, und im Browser steht der Aufbau ohne ein einziges Bild da
+(genau so gesehen). Richtig:
+
+    cd Saved/Diagnose/galerie
+    python -m http.server 8790 --bind 127.0.0.1
+
+dann URL samt Prozessnummer registrieren. Als lokale Datei (file://) geht es
+ohne Server.
+
+**Zwei Fallen beim Erzeugen der Seite**, beide im Browser erst als SCHWARZE
+BUEHNE sichtbar (Aufbau da, kein Bild):
+
+* `%`-Formatierung und HTML/JS vertragen sich nicht: `max-width:100%` und das
+  JS-Modulo werden als Formatzeichen gelesen ("unsupported format
+  character"). Die Seite benutzt darum Platzhalter `@@NAME@@` und
+  `str.replace`.
+* Beim Umstellen blieb ein `%%` aus der alten Formatierung im JavaScript
+  stehen - im Browser ein SyntaxError, der das ganze Skript kippt. Ein Test
+  haelt beides fest (`test_galerie.py`, 16 Pruefungen).
+
+Die erzeugten Dateien liegen unter `Saved/` und sind damit nicht versioniert;
+versioniert ist nur das Werkzeug.
+
+
+## Die Projektuebersicht zieht ihre Zahlen selbst (20.09.2026)
+
+`preview.html` wurde von Hand gepflegt und lag entsprechend daneben: sie
+meldete "Phase 1 (GIS-Pipeline) fertig" und "Noch offen: Phasen 2-12
+(Fahrzeuge, Traffic-KI, Pedestrians, Player, Wanted-Level, UI, Audio, Wetter,
+Optimierung)", waehrend genau das alles lief. Auch die Pfade waren die des
+alten Rechners.
+
+Jetzt erzeugt `Tools/uebersicht.py` die Seite:
+
+    python Tools/uebersicht.py            # preview.html neu schreiben
+    python Tools/uebersicht.py --zeigen   # nur die Zahlen
+
+**Vier Regeln**, die sie von der alten unterscheiden: jede Zahl wird GEMESSEN
+(Dateien und Zeilen ueber `git ls-files`, Testmakros gezaehlt, die INI
+gelesen, git gefragt); jede Zahl nennt IHRE QUELLE in der Zeile daneben;
+Laufzeit-Zahlen tragen den ZEITPUNKT ihres Laufs ("Gemessen im Spiel am
+20.09.2026 um 21:26 - der Stand JENES Laufs, nicht der Gegenwart"); und was
+sich nicht messen laesst, steht nicht drin - "Modul X ist fertig" ist keine
+Messung.
+
+**ZWEI ZAEHLFEHLER, die erst die Gegenprobe zeigte** (ein Test haelt zwei
+Zaehlwege gegeneinander):
+
+* Ein Testname in einem KOMMENTAR sieht aus wie eine Registrierung. Die erste
+  Fassung las die ganze Datei und kam auf 249 Gebiets-Eintraege bei 247
+  Makros; die zwei Extras waren Zeilen wie
+  `// "WiesbadenReal.Vehicles.CarLights" war ...`. Gezaehlt wird jetzt der
+  MAKROAUFRUF, nicht der Dateitext.
+* `([^.]*)\.` schnitt die Signalprogramm-Zeile bei "Spanne 20" ab, weil die
+  Spanne "20..180 s" heisst und Punkte enthaelt. Auf der Seite stand danach
+  eine Zahl, die es nicht gibt - und sie sah so verbindlich aus wie jede
+  andere. Gefangen wird jetzt bis Zeilenende, der Schlusspunkt faellt weg.
+
+`preview.html` bleibt versioniert (die Vorschau zeigt sie ueber `htmlPath`),
+ist aber ein ERZEUGNIS: wer sie von Hand aendert, verliert es beim naechsten
+Lauf. Selbsttest: `Tools/test_uebersicht.py`, 14 Pruefungen.
+
+
+## Moebel-Kalibrierung: Bankett neben Wegen ohne Gehweg (20.09.2026)
+
+**Befund vorher:** 2012 von 3607 OSM-Moebelknoten kamen in die Stadt (55,8 %),
+1464 wurden "ohne befestigten Rand" verworfen. 78 Prozent dieser Verwuerfe
+liegen an `footway`, `path` und `track` - Wegtypen, denen `RoadTypeLibrary`
+die Gehwegbreite 0,0 gibt. Dort ist das RICHTIG (ein Fussweg hat keinen
+Gehweg), fuer die Moebel aber folgenschwer: der "befestigte Streifen" war nur
+so breit wie der Weg selbst. Bei 1,80 m Fussweg endete er 0,90 m von der
+Achse, und eine Bank einen Meter daneben lag schon ausserhalb.
+
+**Die Kalibrierung sind zwei Zahlen in `FRoadFurnitureSettings`:**
+
+    FurnitureVergeCm        = 250   (neu)   Ersatzbreite, wenn Gehweg = 0
+    FurnitureDockingRangeCm = 250   (150)   Reichweite zum Heranziehen
+
+Am 1,80-m-Fussweg heisst das: angenommen wird bis 5,90 m statt bis 2,40 m,
+und alles innerhalb 3,40 m bleibt, WO OSM ES VERORTET HAT. Das Zielband
+bleibt schmal (halbe Wegbreite + 50 cm) - das Bankett erweitert nur, was noch
+als "am Weg" gilt.
+
+**GEMESSEN am echten Bestand** (Laufzeit-Stadtbau auf `__AaaRuntimeShot` mit
+`wiesbaden.osm.moebel.json`, je ein Lauf vor und nach der Aenderung):
+
+| | vorher | nachher |
+|---|---|---|
+| uebernommen | 2012 (55,8 %) | **2986 (82,8 %)** |
+| angedockt | 1357 | 1028 |
+| im Gebaeude verworfen | 131 | 131 |
+| ohne Rand verworfen | 1464 | **490** |
+
+974 Moebel mehr, die Verwuerfe fallen um 67 Prozent - und 329 Objekte werden
+nicht mehr von ihrer kartierten Stelle weggezogen. Die Gebaeude-Regel bleibt
+unveraendert (131), wie sie soll.
+
+Die Vorhersage aus der Untersuchung lautete "59 % -> 85 %". Der ZUWACHS
+stimmte (+26 vorhergesagt, +27 gemessen), die Grundlinie lag drei Punkte zu
+hoch.
+
+**WICHTIG - die gespielte Stadt hat das noch nicht.** Die Platzierung laeuft
+im BAKE; Alkis16 traegt weiter die alten 2012 Moebel. Gemessen wurde am
+Laufzeit-Stadtbau. Damit es im Spiel ankommt, braucht es einen Re-Bake.
+
+Test: `WiesbadenReal.GIS.RoadFurniture.BankettOhneGehweg` - eigener Fussweg
+ohne Gehweg, vier Faelle (im Bankett bleibt es stehen, dahinter wird
+herangezogen, weit weg bleibt verworfen), und die Zahl der Andockungen als
+Mass dafuer, wie sehr die Regel die Kartierung noch verbiegt.
+
+
+## Release-Pipeline baute mit der FALSCHEN Engine (21.09.2026)
+
+`Tools/build_release.ps1` leitete den Engine-Pfad aus `$Root` ab:
+
+    $Engine = Join-Path $Root "UE_5.8\Engine"     # ALT, falsch
+
+Das ist die **Kopie vom 11.08.2026** unter `C:\freebuff\...\UE_5.8`.
+`Tools/build_gate1.cmd`, `Wiesbaden_spielen.cmd`, die Desktop-Verknuepfung und
+`package_game.cmd` benutzen dagegen die **installierte** Engine
+(`C:\Program Files\Epic Games\UE_5.8`, 07.09.2026). Das Projekt-Intermediate
+traegt deren Shared-PCH - der Pipeline-Build starb darum mitten in einem
+ENGINE-Header:
+
+    GenericPlatform.h(10,8): error C2953: "SelectIntPointerType":
+                              Klassenvorlage wurde bereits definiert
+
+Das sieht nach kaputtem Engine-Quelltext aus und ist keiner (dieselbe
+Signatur wie die bekannte SharedPCH-Korruption). **Der Beweis war der
+Vergleich:** `build_gate1.cmd` lief Minuten vorher am selben Baum GRUEN. Wenn
+zwei Kompilierwege am gleichen Quelltext verschieden ausgehen, liegt es nicht
+am Quelltext.
+
+**Warum kein Abbruch, sondern ein Compilerfehler:** die Pipeline prueft mit
+`Test-Path`, ob `Build.bat` existiert - und die alte Kopie existiert ja. Ein
+Pfad, der DA ist und trotzdem FALSCH ist, faellt keiner
+Vorhandenseins-Pruefung auf. Jetzt: eigener Parameter `-EngineRoot` mit der
+installierten Engine als Vorgabe.
+
+**Gate 3 fand eine echte Luecke:** `WbSpawnPursuer` ist `UFUNCTION(Exec)`,
+stand aber nicht in `docs/reference/wbdev-konsolenbefehle.md`. Die Pruefung
+(`Tools/check_wbdev_docs.ps1`) verlangt den Abschnitt UND die `UE_LOG`-Zeile
+woertlich. Nachgetragen; jetzt 14 Exec-Befehle gedeckt.
+
+**Gemessen:** Voller Release-Lauf 13,1 min (nicht die frueher notierten
+Stunden - der Cook lief inkrementell). Ergebnis: Paket 3,2 GB, EXE 21.09.
+02:45, Vorgaenger nach `Saved/Package_previous` gesichert,
+Desktop-Verknuepfung `Wiesbaden Real (Paket).lnk` nachgezogen.
+
+**Die EXE gestartet und belegt:** die 171-KB-`WiesbadenReal.exe` ist nur der
+Shim - der echte Prozess ist ein ZWEITER gleichen Namens (3,2 GB, Titel
+`WiesbadenReal (64-bit Development PCD3D_SM6)`). Wer nur den ersten misst,
+haelt einen laufenden Build fuer tot. Das Paket-Log liegt unter
+`Saved/Package/Windows/WiesbadenReal/Saved/Logs/`, NICHT in `%LOCALAPPDATA%`:
+Alkis16 in 3,2 s geladen, 52.689 Schilder, 117.351 Spuren, 1.073 Ampeln,
+Sebbo-Hauptsitz 449 Bauteile, 31 Chunk-Actors (0 ohne Render-Geometrie),
+0 Fehlerzeilen.
+
+
+## Eine Engine fuer alle Werkzeuge - und ein Waechter davor (21.09.2026)
+
+Auf diesem Rechner liegen ZWEI Engines 5.8 nebeneinander. Sie heissen gleich,
+beide existieren, beide bauen - getrennt werden sie erst durch die
+PATCH-Nummer aus `Engine/Build/Build.version`:
+
+    C:\Program Files\Epic Games\UE_5.8          5.8.2   Build.bat 09.09.2026
+    C:\freebuff\WiesbadenReal_Sicherung\UE_5.8  5.8.1   Build.bat 11.08.2026
+
+**Die eine Quelle:** `Tools/engine.cmd` (setzt `WB_ENGINE`, `WB_BUILD_BAT`,
+`WB_EDITOR`, `WB_EDITOR_CMD`, `WB_RUNUAT`) und `Tools/engine.py`
+(`engine_wurzel()`, `build_bat()`, `editor_cmd()`, ...) - gebaut nach dem
+Vorbild von `Tools/karte.cmd`. `WB_ENGINE` in der Umgebung gewinnt. Die
+gewaehlte Engine wird gegen `EngineAssociation` des .uproject geprueft, der
+Ordnername entscheidet also NICHT.
+
+**Der Waechter:** `python Tools/pruefe_engine.py` durchsucht alle von git
+verfolgten Dateien und meldet jede Nennung einer anderen Engine - in
+Sekunden, bevor ein Compiler dasselbe in zehn Minuten und mit irrefuehrender
+Meldung tut. Er laeuft als **Gate 0** der Release-Pipeline, vor dem
+Kompilieren. Regel: **ein Kommentar darf jede Engine nennen** (er warnt ja
+vor ihr), **Code nicht**. Das ersetzte den groessten Teil der Ausnahmeliste -
+eine Liste von Dateinamen veraltet, eine Regel nicht. Uebrig: AGENTS.md
+(Fliesstext) und `Tools/fix_paths_neuer_pc.mjs` (Umzugstabelle, alter Pfad
+ist die Quellseite).
+
+**Gemessen:** 128 Nennungen in 109 Dateien. 14 Abweichler gefunden, nach der
+Kommentarregel blieben 6 echte:
+
+* `build_gate1_nouba.cmd`, `check_ka52_mats.cmd`, `import_ka52.cmd` rufen
+  jetzt `engine.cmd` und tragen gar keinen Pfad mehr.
+* `sweep_map_zoom.sh` auf die installierte Engine gezogen.
+* **`Tools/fix_paths_neuer_pc.mjs` bildete die INSTALLIERTE Engine auf die
+  Plattenkopie ab** - ein erneuter Lauf haette jeden richtigen Pfad auf die
+  veraltete 5.8.1 umgeschrieben. Beim Umzug war das richtig; ein einmaliges
+  Werkzeug veraltet nicht von selbst, es bleibt scharf liegen. Abbildung
+  umgedreht.
+
+**DREI EIGENE FEHLER beim Bau des Waechters, alle mit derselben Handschrift:
+er meldete "alles in Ordnung", weil er nichts fand.**
+
+1. Die Trenner-Zeichenklasse verlor durch die Shell eine Backslash-Ebene und
+   passte nur noch auf Vorwaerts-Schraegstriche - KEIN Windows-Pfad wurde
+   gefunden.
+2. Die Wortgrenze hinter `REM` wurde zu einem echten **Backspace-Byte
+   (0x08)**. `grep` zeigt das brav als "REM" an; sichtbar wurde es erst an
+   `repr(muster.pattern)`. Jede Kommentarzeile galt danach als Code.
+3. Der normalisierte Pfad behielt doppelte Trenner
+   (`C://Program Files//`), worauf der Waechter die KANONISCHE Engine als
+   Abweichler meldete.
+
+Konsequenz: im Waechter steht jetzt **kein einziger Backslash-Escape** mehr
+(Zeichenklassen aus `chr()`, Kommentarerkennung ohne Regex).
+
+**Und ein vierter, im TEST:** die erste Testfassung normalisierte die Zeile
+selbst und pruefte damit nur das Muster statt des Produktionswegs - nimmt man
+dem Waechter die Normalisierung weg, blieb sie gruen. `test_backslash_pfad_im
+_ECHTEN_weg` geht jetzt durch `abweichler()`. Gegengeprueft: alle drei
+Fehler oben faerben die Suite rot. 19 Tests in
+`Tools/test_pruefe_engine.py`.
+
+
+## Die Release-Gates laufen jetzt vor dem Commit (21.09.2026)
+
+Die Gates gab es schon - aber erst in `build_release.cmd`, also erst wenn
+jemand ein Paket wollte. Ein Fehler von heute fiel damit Tage spaeter auf,
+verteilt ueber mehrere Commits, und blockierte ausgerechnet den Lauf, der
+Stunden dauert.
+
+**GEMESSENE Kosten - daraus folgt der Entwurf, nicht aus einer Meinung:**
+
+    Gate 0  Engine-Pfade        1 s
+    Python-Suiten              46 s
+    Gate 1  Kompilieren         2 s ohne C++-Aenderung, Minuten mit
+    Gate 2  Unit-Tests          Minuten (startet den Unreal-Editor)
+    Gate 3  Rauchtest           Minuten (mehrere Editor-Sitzungen)
+
+Ein Hook, der vor JEDEM Commit eine Viertelstunde braucht, wird binnen eines
+Tages mit `--no-verify` umgangen - und prueft dann gar nichts mehr. Darum
+ZWEI Stufen:
+
+* **pre-commit** (gemessen 48 s): Gate 0, alle Python-Suiten, Gate 1 **nur
+  wenn C++ vorgemerkt ist**. Wer ein Python-Werkzeug aendert, wartet nicht
+  auf einen Compiler.
+* **pre-push** (Minuten): zusaetzlich Gates 2 und 3. Dort ist die Wartezeit
+  vertretbar, und nichts verlaesst den Rechner ungeprueft. Die Blockade
+  wandert damit vom Paketieren an die Stelle, an der sie noch billig ist.
+
+Notausgang: `--no-verify` oder `WB_KEINE_GATES=1`. Absichtlich - ein
+Wachposten ohne Tuer wird eingerissen, nicht benutzt.
+
+**Die Hooks liegen unter `Tools/git-hooks/`, NICHT in `.git/hooks`** - der
+Ordner ist nicht versioniert und ueberlebt keinen frischen Klon. `core.hooks
+Path` zeigt dorthin; das ist eine LOKALE Einstellung und muss einmal je Klon
+gesetzt werden:
+
+    python Tools/hooks_einrichten.py            # einschalten
+    python Tools/hooks_einrichten.py --zeigen   # Stand
+    python Tools/hooks_einrichten.py --aus      # abschalten
+
+**EIN BLINDER FLECK, den erst dieser Umbau zeigte:** `pruefe_engine.py` sah
+nur, was `git ls-files` kennt - also nur VERFOLGTE Dateien. Eine neue Datei
+faellt damit erst auf, NACHDEM sie committet wurde. Der Waechter meldete
+seine eigene Testdatei und `Tools/engine.py` genau einen Commit zu spaet.
+Fuer einen Pre-Commit-Hook waere das wertlos: er soll ja pruefen, was gleich
+hineinwandert. `verfolgte_dateien()` nimmt jetzt auch `git diff --cached`
+dazu. (Beide Fundstellen sind begruendete Ausnahmen: Testdaten und die
+kanonische Quelle stellen beide Engines mit Absicht nebeneinander.)
+
+**Nachweis gegen ein echtes Wegwerf-Repo, nicht gegen eine Nachbildung:**
+rotes Gate -> 0 Commits, gruenes Gate -> 1 Commit, `--no-verify` -> 1 Commit.
+Ein Test, der nur die Hook-DATEI liest, wuerde jede Verdrahtungspanne
+uebersehen. 14 Tests in `Tools/test_vor_dem_commit.py`.
+
+**UND EIN FUND, DER FAST TEUER WURDE.** Der erste Lauf des frisch scharfen
+Hooks fiel rot aus - zu Recht, aber aus einem Grund, den ich nicht erwartet
+hatte: git setzt fuer `git commit --only` ein TEMPORAERES `GIT_INDEX_FILE`
+und vererbt es an JEDEN Unterprozess. Die Testsuiten legen Wegwerf-Repos an
+und rufen dort `git add -A` - das schrieb prompt in den Index des laufenden
+Commits. Nachgemessen: `datei.txt` aus einem Wegwerf-Repo stand im Index des
+echten Commits, und drei Suiten fielen um, weil sie plotzlich einen fremden
+Dateibestand sahen.
+
+Waeren die Gates gruen gewesen, waere die Wegwerfdatei mitgekommen.
+
+`cwd` allein schuetzt NICHT - die Umgebungsvariable schlaegt das
+Arbeitsverzeichnis. Abgedichtet an drei Stellen, jede mit eigenem Grund:
+`vor_dem_commit.py` startet alle Gates ohne `GIT_*` (eine Stelle, schuetzt
+jede Suite), `test_ausliefern.py` und `test_vor_dem_commit.py` saeubern ihre
+eigenen Wegwerf-Repo-Aufrufe (damit sie auch bei direktem Lauf stimmen), und
+`ausliefern.py` selbst (es koennte aus einem Hook gerufen werden).
+
+Belegt: Hook-Weg mit geerbtem Index -> alle Gates gruen, Index-Eintraege
+vorher 1604, nachher 1604, keine Fremddatei.
+
+
+## Freigabegruppen: die Fortsetzung, und was sie wirklich einbrachte (21.09.2026)
+
+Der Eintrag oben endete mit "wer hier weiterarbeitet, faengt bei Clique statt
+Farbe an". **Diese Formulierung war falsch, und der Irrtum ist lehrreich:**
+eine Farbklasse im Konfliktgraphen IST eine Clique im Vertraeglichkeitsgraphen
+- dasselbe Problem, nur vom Komplement aus gesehen. Der Hebel liegt nicht im
+Verfahren, sondern in der REIHENFOLGE und in der Frage, was ueberhaupt als
+Konflikt zaehlt.
+
+**Zwei Hebel, beide schaltbar, damit ihr Anteil messbar bleibt:**
+
+* `bSameTargetLaneBlocksGroup` (Vorgabe **false**) - der zweite, frueher
+  ausdruecklich NICHT gemessene Verdacht. Die Laufzeitregel zaehlt eine
+  gemeinsame Zielspur als Konflikt; das ist dort richtig. Eine
+  Freigabegruppe stellt eine ANDERE Frage: duerfen beide gleichzeitig Gruen
+  bekommen? Ein Verkehrsplaner gibt einfaedelnde Stroeme gemeinsam frei, sie
+  sortieren sich ueber Luecken - genau dafuer gibt es die Laufzeitregel.
+* `bOrderGroupsByConflictDegree` (Vorgabe **true**) - die am staerksten
+  gebundenen Bewegungen zuerst einsortieren. Aufsteigende Nummer ist
+  reproduzierbar, aber blind: wer viele Konflikte hat, findet spaet keinen
+  Platz und bekommt eine eigene Gruppe.
+
+Die Geometrie wurde NICHT kopiert, sondern als `FindPathCrossing`
+herausgezogen; `DoConnectionsConflict` (Laufzeit) und
+`DoConnectionsConflictForGroup` (Gruppen) benutzen dieselbe Rechnung mit
+verschiedenen Regelwerken darum. Zwei Rechnungen fuer dieselbe Frage laufen
+auseinander.
+
+**DREI ZUSTAENDE GEMESSEN**, derselbe Build, dieselbe Karte, je 300 s,
+Spieler per Koordinate 250 m noerdlich geparkt (`-WbGoto=22230,145934`),
+verglichen mit `Tools/vergleich_staukarten.py` ueber 61-63 Strassen:
+
+| Zustand | Stadt gewichtet | Bahnhofsplatz | Umlauf | Spanne | verschoben |
+|---|---|---|---|---|---|
+| Faustregel (`-WbOhneKonfliktgruppen`) | 39,9 % | 14,6 % (7,0 km/h) | 36 s | 20..70 | 0 |
+| alt (`-WbZielspurSperrt -WbOhneGradreihenfolge`) | 29,5 % | 12,0 % (5,5 km/h) | 51 s | 20..180 | 6357 |
+| **neu (Vorgabe)** | **30,8 %** | **8,5 % (3,8 km/h)** | **44 s** | **20..110** | **4683** |
+
+**Das Ergebnis ist gemischt, und so steht es hier.** Stadtweit kostet
+Konfliktfreiheit 10,4 Punkte; die beiden Hebel holen davon 1,3 zurueck -
+13 Prozent. Die Struktur wird deutlich besser (466 -> 142 Zusatzgruppen,
+groesste Gruppenzahl 10 -> 7, Umlaufspanne 180 -> 110 s), und die grossen
+Achsen gewinnen klar: Konrad-Adenauer-Ring 13,2 -> 27,3 %, Mainzer Strasse
+23,5 -> 30,1 % (973.000 Messwerte), Kaiser-Friedrich-Ring 22,8 -> 27,2 %.
+
+**Der Bahnhofsplatz selbst wurde schlechter** (12,0 -> 8,5 %), also genau der
+Ort, um den es urspruenglich ging. Einschraenkung, die dazugehoert: JE
+ZUSTAND EIN LAUF. Die Messwertzahl am Bahnhofsplatz schwankte zwischen den
+Laeufen um das Zehnfache (131.000 bis 1,17 Mio.) - der stadtweite gewichtete
+Wert ueber 60 Strassen traegt, die einzelne Strasse traegt weniger. Wer die
+Bahnhofsplatz-Zahl belastbar will, braucht Wiederholungen.
+
+**Der Test hielt vorher eine POLITIK fest**, nicht eine Eigenschaft: "Sechs
+einfaedelnde Verbindungen ergeben sechs Gruppen". Jetzt prueft er beide
+Stellungen des Schalters (Vorgabe: eine Gruppe; streng: sechs) und
+zusaetzlich die Invariante, die unter BEIDEN gelten muss - sich KREUZENDE
+Wege bleiben getrennt. Ein Schalter, dessen zweite Stellung niemand testet,
+ist eine Behauptung.

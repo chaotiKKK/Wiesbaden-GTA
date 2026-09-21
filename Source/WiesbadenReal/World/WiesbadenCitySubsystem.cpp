@@ -1660,6 +1660,23 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					MinCycleSeconds, MaxCycleSeconds,
 					TrafficLightSystem.Settings.bGreenWave
 						? TEXT(", gruene Welle an") : TEXT(", gruene Welle aus"));
+
+				// Was die Konfliktfreiheit gekostet hat. Ohne diese Zahlen
+				// liesse sich nicht beurteilen, ob sie ein paar Sonderfaelle
+				// betrifft oder den halben Stadtplan umbaut - und ein
+				// laengerer Umlauf zahlt sich in Wartezeit fuer ALLE.
+				{
+					int32 Verschoben = 0;
+					int32 Zusatzgruppen = 0;
+					int32 GroessteGruppenzahl = 0;
+					TrafficLightSystem.GetConflictStatistics(
+						Verschoben, Zusatzgruppen, GroessteGruppenzahl);
+					UE_LOG(LogWbTraffic, Log,
+						TEXT("Freigabegruppen konfliktfrei: %d Verbindung(en) aus ihrer ")
+						TEXT("Wunschgruppe verschoben, %d Gruppe(n) ueber die vier der ")
+						TEXT("Faustregel hinaus, groesste Gruppenzahl an einer Kreuzung %d."),
+						Verschoben, Zusatzgruppen, GroessteGruppenzahl);
+				}
 				break;
 
 			case EWiesbadenTrafficLightVerdict::Broken:
@@ -4278,7 +4295,35 @@ void UWiesbadenCitySubsystem::InitializeCity()
 				// wurde aber nie mit der Simulation verbunden - der Verkehr fuhr
 				// durch jede rote Ampel. SetTrafficLightSystem MUSS gerufen werden,
 				// sonst bleibt der Zeiger nullptr und alles gilt als gruen.
-				TrafficLightSystem.Initialize(Builder->RoadNetwork, Builder->TrafficLightSettings);
+				// Messwerkzeug wie -WbOhneKreuzungsregel: -WbOhneKonfliktgruppen
+				// laesst die Freigabegruppen bei der Faustregel Achse x
+				// Abbiegeart stehen, damit sich der Preis der Konfliktfreiheit
+				// (laengere Umlaeufe) auf derselben Karte gegen ihren Nutzen
+				// halten laesst.
+				FWiesbadenTrafficLightSettings LightSettings = Builder->TrafficLightSettings;
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbOhneKonfliktgruppen")))
+				{
+					LightSettings.bConflictFreeGroups = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbOhneKonfliktgruppen: Freigabegruppen NICHT konfliktfrei (nur zum Messen)."));
+				}
+				// Die beiden Hebel der Gruppenbildung, einzeln abschaltbar, damit
+				// sich ihr Anteil am Fluss TRENNEN laesst. Ohne getrennte
+				// Schalter misst man nur die Summe und weiss hinterher nicht,
+				// welcher der beiden gewirkt hat.
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbZielspurSperrt")))
+				{
+					LightSettings.bSameTargetLaneBlocksGroup = true;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbZielspurSperrt: gemeinsame Zielspur trennt die Freigabegruppen (alter Stand)."));
+				}
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbOhneGradreihenfolge")))
+				{
+					LightSettings.bOrderGroupsByConflictDegree = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbOhneGradreihenfolge: Gruppen in Verbindungs-Nummer statt nach Konfliktgrad."));
+				}
+				TrafficLightSystem.Initialize(Builder->RoadNetwork, LightSettings);
 				TrafficSimulation.SetTrafficLightSystem(&TrafficLightSystem);
 
 				// Fussgaenger-Dichte optional hochsetzen - NUR fuer Sicht-/Screenshot-

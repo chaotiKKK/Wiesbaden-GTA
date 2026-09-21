@@ -114,6 +114,52 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights")
 	bool bProtectedLeftTurns = true;
 
+	/**
+	 * Konfliktfreie Freigabegruppen (an). Nur zum MESSEN abschaltbar.
+	 *
+	 * Aus bleibt die Faustregel Achse x Abbiegeart stehen, und zwei
+	 * gleichzeitig freigegebene Verbindungen koennen sich wieder kreuzen oder
+	 * in dieselbe Spur einfaedeln. Das ist kein Spielmodus, sondern der
+	 * Vergleichspunkt: ohne ihn liesse sich der Preis der Konfliktfreiheit
+	 * (laengere Umlaeufe) nicht gegen ihren Nutzen halten. Startschalter:
+	 * -WbOhneKonfliktgruppen.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights")
+	bool bConflictFreeGroups = true;
+
+	/**
+	 * Sperrt eine gemeinsame ZIELSPUR zwei Bewegungen gegeneinander?
+	 *
+	 * GEMESSEN am 20.09.2026: die konfliktfreien Gruppen kosteten am
+	 * Bahnhofsplatz 37 Prozent Tempo (7,8 -> 4,9 km/h), weil 6357
+	 * Verbindungen ihre Wunschgruppe verlassen mussten und der Umlauf von
+	 * 36 auf 51 s stieg. Ein Teil davon geht auf diese Frage.
+	 *
+	 * Fuer die LAUFZEITREGEL ist die gemeinsame Zielspur ein Konflikt - der
+	 * Hintere wartet, bis der Vordere die Verbindung verlassen hat. Fuer eine
+	 * FREIGABEGRUPPE ist sie es nicht: ein Verkehrsplaner gibt zwei
+	 * einfaedelnde Stroeme gemeinsam frei, sie sortieren sich ueber Luecken,
+	 * und genau dafuer gibt es die Laufzeitregel. Wer sie auch hier trennt,
+	 * kauft Konfliktfreiheit mit zusaetzlichen Phasen - und jede Phase
+	 * verlaengert den Umlauf fuer ALLE Zufahrten.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights")
+	bool bSameTargetLaneBlocksGroup = false;
+
+	/**
+	 * Die am staerksten gebundenen Bewegungen zuerst einsortieren.
+	 *
+	 * Die erste Fassung lief in aufsteigender Verbindungs-Nummer. Das ist
+	 * reproduzierbar, aber blind: wer viele Konflikte hat, findet spaet keinen
+	 * Platz mehr und bekommt eine eigene Gruppe. Wer zuerst die am staerksten
+	 * gebundenen setzt, laesst den leichten Rest hinterher in die vorhandenen
+	 * Gruppen fallen - weniger Gruppen, weniger Phasen, kuerzerer Umlauf.
+	 * Bei gleichem Grad entscheidet weiter die Nummer, damit dieselbe Stadt
+	 * dasselbe Programm bekommt.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights")
+	bool bOrderGroupsByConflictDegree = true;
+
 	/** Gruenzeit der Abbiegephase (s). Kurz - es sind wenige Fahrzeuge. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights", meta = (ClampMin = "0.0"))
 	double LeftTurnGreenSeconds = 5.0;
@@ -155,6 +201,19 @@ struct WIESBADENREAL_API FWiesbadenSignalPhase
 	/** Laenge des Fensters inklusive Rot-Gelb, Gelb und Raeumzeit (s). */
 	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
 	float DurationSeconds = 0.0f;
+
+	/**
+	 * Enthaelt diese Gruppe AUSSCHLIESSLICH Linksabbieger?
+	 *
+	 * Wird dort gesetzt, wo es aus den Bewegungen berechnet wird, und von
+	 * der Statistik gelesen - statt an zwei Stellen aus der Gruppennummer
+	 * geraten zu werden. Die Nummer taugt dafuer seit der Konfliktfaerbung
+	 * nicht mehr: sie vergibt aufsteigend, Geradeausverkehr landet auf
+	 * ungeraden Nummern, und ungerade Nummern ueber 3 gibt es ueberhaupt
+	 * erst seit der Faerbung.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
+	bool bLeftTurnOnly = false;
 };
 
 /** Eine einzelne Ampel an einer Kreuzung (datenrein). */
@@ -255,12 +314,16 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSystem
 	void Tick(float DeltaSeconds);
 
 	/**
-	 * Achse einer Anfahrt aus ihrer Peilung (datenrein, testbar).
+	 * STRASSENACHSE einer Anfahrt aus ihrer Peilung (datenrein, testbar).
 	 *
-	 * Zwei Hauptachsen: 0 fuer Peilungen in [0, 180), sonst 1. Wer einen
-	 * Ampelzustand fuer eine Fahrtrichtung braucht, MUSS diese Fassung
-	 * benutzen - eine zweite, gleich aussehende Rechnung an anderer Stelle
-	 * laeuft frueher oder spaeter auseinander.
+	 * Die Peilung kommt aus Atan2(dY, dX): 0 Grad ist Ostfahrt, 90 Grad
+	 * Nordfahrt. Geteilt wird modulo 180, damit die BEIDEN Richtungen
+	 * derselben Strasse dieselbe Achse tragen - Ost und West die Achse 0,
+	 * Nord und Sued die Achse 1.
+	 *
+	 * Wer einen Ampelzustand fuer eine Fahrtrichtung braucht, MUSS diese
+	 * Fassung benutzen - eine zweite, gleich aussehende Rechnung an anderer
+	 * Stelle laeuft frueher oder spaeter auseinander.
 	 */
 	static int32 AxisForBearing(double BearingDeg);
 
@@ -274,6 +337,43 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSystem
 
 	/** True, wenn diese Abbiegeart eine eigene Linksphase braucht. */
 	static bool IsLeftTurn(ETurnType Turn);
+
+	/**
+	 * Macht die Richtungsgruppen einer Kreuzung KONFLIKTFREI.
+	 *
+	 * Achse und Abbiegeart sind nur eine Faustregel. Sie trifft die
+	 * Regelkreuzung gut, aber nicht den funfarmigen Knoten, die schiefe
+	 * Einmuendung oder die Stelle, an der zwei Zufahrten in dieselbe Spur
+	 * einfaedeln. Weil je Phase genau EINE Gruppe freigegeben wird, ist jeder
+	 * Konflikt INNERHALB einer Gruppe ein gleichzeitig freigegebenes
+	 * Begegnungspaar - und das ist genau der Fall, den eine Ampel verhindern
+	 * soll.
+	 *
+	 * Geprueft wird mit FWiesbadenTrafficSimulation::DoConnectionsConflict -
+	 * derselben Rechnung, mit der die Simulation ihre Kreuzungsregel baut.
+	 * Zwei Rechnungen fuer dieselbe Frage laufen auseinander; diese eine
+	 * kennt beide Faelle: sich schneidende Wege UND gemeinsame Zielspur.
+	 *
+	 * Verfahren: eine gierige Faerbung in aufsteigender Verbindungsnummer
+	 * (deterministisch). Jede Verbindung behaelt ihre Wunschgruppe, wenn dort
+	 * kein Konfliktpartner sitzt; sonst nimmt sie die naechste freie, notfalls
+	 * eine neue. Die Regelkreuzung bleibt damit bei ihren vier Gruppen.
+	 *
+	 * Rueckgabe: die Zahl der benutzten Gruppen (also das neue GroupCount).
+	 */
+	static int32 MakeGroupsConflictFree(
+		const FRoadNetwork& InNetwork, TMap<int32, int32>& InOutGroups,
+		bool bSameTargetLaneBlocksGroup = false,
+		bool bOrderGroupsByConflictDegree = true);
+
+	/**
+	 * Wie viele Verbindungen die Faustregel verlassen mussten (Diagnose).
+	 *
+	 * Ohne diese Zahl liesse sich nicht beurteilen, ob die Konfliktfreiheit
+	 * ein paar Sonderfaelle kostet oder den halben Stadtplan umbaut.
+	 */
+	void GetConflictStatistics(int32& OutMovedConnections, int32& OutExtraGroups,
+		int32& OutMaxGroupsAtOneLight) const;
 
 	/**
 	 * Wie viele Kreuzungen eine eigene Abbiegephase bekommen haben, und wie
@@ -366,6 +466,18 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSystem
 	/** Aktive Ampeln (je TrafficSignals-Kreuzung eine). */
 	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
 	TArray<FWiesbadenTrafficLight> Lights;
+
+	/** Verbindungen, die wegen eines Konflikts ihre Wunschgruppe verlassen haben. */
+	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
+	int32 ConflictMovedConnections = 0;
+
+	/** Gruppen ueber die vier der Faustregel hinaus (Summe ueber alle Ampeln). */
+	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
+	int32 ConflictExtraGroups = 0;
+
+	/** Groesste Gruppenzahl an einer einzelnen Kreuzung. */
+	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")
+	int32 MaxGroupsAtOneLight = 0;
 
 	/** Fortgeschrittene Ampel-Zeit in Sekunden. */
 	UPROPERTY(BlueprintReadOnly, Category = "TrafficLights")

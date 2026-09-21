@@ -18,9 +18,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ausliefern  # noqa: E402
 
 
+def _ohne_git_umgebung():
+    """Umgebung ohne GIT_*.
+
+    Laeuft diese Suite aus einem pre-commit-Hook, zeigt GIT_INDEX_FILE auf
+    den Index des LAUFENDEN Commits. Die Wegwerf-Repos hier rufen "git add" -
+    das schrieb sonst dorthin statt in ihr eigenes Repo. Am 21.09.2026 stand
+    so eine Wegwerfdatei im Index eines echten Commits.
+    """
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def git(wurzel, *args):
     return subprocess.run(["git", *args], cwd=wurzel, capture_output=True,
-                          text=True, encoding="utf-8", check=True).stdout
+                          text=True, encoding="utf-8", check=True,
+                          env=_ohne_git_umgebung()).stdout
 
 
 class BaumMitFremderArbeit(unittest.TestCase):

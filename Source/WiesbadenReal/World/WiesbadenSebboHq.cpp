@@ -3,13 +3,41 @@
 #include "World/WiesbadenSebboHq.h"
 
 #include "GIS/GeoCoordinateConverter.h"
+#include "Components/BoxComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "LandscapeProxy.h"
+#include "EngineUtils.h"
+#include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInterface.h"
 #include "CollisionQueryParams.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "World/WiesbadenCitySubsystem.h"
+#include "GIS/WiesbadenWorldBuilder.h"
+#include "GIS/RoadNetworkGenerator.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogWbSebboHq, Log, All);
+
+namespace
+{
+	/** Die Zufahrt wird mit dem World-Builder gebacken. Der Tower muss deshalb
+	 * dieselbe Kartenreferenz benutzen, auch wenn die Map den Standard-Origin
+	 * bewusst ueberschreibt. */
+	bool InitializeTowerConverter(UGeoCoordinateConverter& Converter, UWorld& World)
+	{
+		for (TActorIterator<AWiesbadenWorldBuilder> It(&World); It; ++It)
+		{
+			return It->bUseWiesbadenOrigin
+				? Converter.InitializeWithWiesbadenOrigin()
+				: Converter.Initialize(It->CustomOrigin);
+		}
+
+		return Converter.InitializeWithWiesbadenOrigin();
+	}
+}
 
 namespace
 {
@@ -48,7 +76,12 @@ void AWiesbadenSebboHq::BeginPlay()
 	}
 
 	UGeoCoordinateConverter* Own = NewObject<UGeoCoordinateConverter>(this);
-	Own->InitializeWithWiesbadenOrigin();
+	UWorld* World = GetWorld();
+	if (!World || !InitializeTowerConverter(*Own, *World))
+	{
+		UE_LOG(LogWbSebboHq, Error, TEXT("Tower-Georeferenzierung konnte nicht initialisiert werden."));
+		return;
+	}
 	Converter = Own;
 }
 
@@ -59,16 +92,47 @@ bool AWiesbadenSebboHq::ResolveGround(const FVector& WorldXY, double& OutZ) cons
 	{
 		return false;
 	}
-	FHitResult Hit;
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbSebboHqGround), true);
 	Params.AddIgnoredActor(this);
 	const FVector Start(WorldXY.X, WorldXY.Y, 100000.0);
 	const FVector End(WorldXY.X, WorldXY.Y, -20000.0);
-	if (World->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params)
-		&& !Hit.bStartPenetrating)
+
+	TArray<FHitResult> Hits;
+	if (!World->LineTraceMultiByChannel(Hits, Start, End, ECC_WorldStatic, Params))
 	{
-		OutZ = Hit.Location.Z;
-		return true;
+		return false;
+	}
+
+	// DAS GELAENDE, nicht das Erste unter dem Himmel.
+	//
+	// GEMESSEN am 21.09.2026 auf Alkis17: der Turm baute auf 10251 cm,
+	// waehrend sein eigenes Bauplateau auf 10048 cm liegt - 2,03 m zu hoch.
+	// Der Einzeltaster nahm den obersten Treffer, und ueber dem Grundstueck
+	// liegt Stadtgeometrie: Wolkenbruch quert es, und Nachbardaecher reichen
+	// bis 16296 cm. Der Turm stellte sich damit auf eine Fahrbahn statt auf
+	// den Boden, den der Bake eigens fuer ihn eingeebnet hat.
+	//
+	// Das Plateau IST das Landscape. Darum wird die ganze Saeule gelesen und
+	// der Landscape-Treffer gewaehlt.
+	for (const FHitResult& Hit : Hits)
+	{
+		if (!Hit.bStartPenetrating && Cast<ALandscapeProxy>(Hit.GetActor()))
+		{
+			OutZ = Hit.Location.Z;
+			return true;
+		}
+	}
+
+	// Kein Landscape in der Saeule (ungebackene Karte, Probelevel): dann der
+	// oberste brauchbare Treffer wie bisher. NICHT aufgeben - ein Turm, der
+	// gar nicht baut, waere schlechter als einer, der zu hoch steht.
+	for (const FHitResult& Hit : Hits)
+	{
+		if (!Hit.bStartPenetrating)
+		{
+			OutZ = Hit.Location.Z;
+			return true;
+		}
 	}
 	return false;
 }
@@ -76,7 +140,30 @@ bool AWiesbadenSebboHq::ResolveGround(const FVector& WorldXY, double& OutZ) cons
 void AWiesbadenSebboHq::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (bBuilt || !Converter)
+	if (bBuilt)
+	{
+		// Treppenprobe NACH dem Bauen, nicht im selben Bild (siehe
+		// SecondsSinceBuild): die Kollisionskoerper brauchen einen Takt.
+		if (!bProbed && SecondsSinceBuild >= 0.0f)
+		{
+			SecondsSinceBuild += DeltaSeconds;
+			if (SecondsSinceBuild >= 2.0f)
+			{
+				bProbed = true;
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbTreppenProbe")))
+				{
+					ProbeStaircase();
+				}
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbAnkunftProbe")))
+				{
+					ProbeArrival();
+				}
+				SetActorTickEnabled(false);
+			}
+		}
+		return;
+	}
+	if (!Converter)
 	{
 		return;
 	}
@@ -87,22 +174,93 @@ void AWiesbadenSebboHq::Tick(float DeltaSeconds)
 	Coord.Height = 0.0;
 	const FVector Ground = Converter->GeoToUnrealGround(Coord);
 
-	double Z = 0.0;
-	if (!ResolveGround(Ground, Z))
+	// Der Taster sagt nur, DASS die Zelle da ist - die Hoehe kommt aus der
+	// Zufahrt. Beides zu trennen ist noetig: das Plateau waere sofort
+	// bekannt (das Strassennetz liegt serialisiert im WorldBuilder), aber ein
+	// Turm, der vor dem Streaming baut, laesst die Ankunftssonde in eine
+	// leere Welt tasten.
+	double BodenZ = 0.0;
+	if (!ResolveGround(Ground, BodenZ))
 	{
 		return;     // Zelle noch nicht gestreamt - naechster Tick
 	}
 
+	double Z = BodenZ;
+	if (!ResolvePlateau(Z))
+	{
+		Z = BodenZ;
+	}
+
 	Build(FVector(Ground.X, Ground.Y, Z), FRotator(0.0, HeadingDegrees, 0.0));
 	bBuilt = true;
-	SetActorTickEnabled(false);
+
+	// -WbTreppenProbe steigt einmal die Treppe hoch, -WbAnkunftProbe tastet die
+	// drei Ankunftswege ab. Beides sind Messwerkzeuge - ohne einen der beiden
+	// Schalter tickt der Actor gar nicht weiter.
+	const bool bSondeGewuenscht =
+		FParse::Param(FCommandLine::Get(), TEXT("WbTreppenProbe"))
+		|| FParse::Param(FCommandLine::Get(), TEXT("WbAnkunftProbe"));
+	if (bSondeGewuenscht)
+	{
+		SecondsSinceBuild = 0.0f;
+	}
+	else
+	{
+		SetActorTickEnabled(false);
+	}
+}
+
+bool AWiesbadenSebboHq::ResolvePlateau(double& OutZ) const
+{
+	const UWorld* World = GetWorld();
+	if (!World || !Converter)
+	{
+		return false;
+	}
+
+	FGeoCoordinate Coord;
+	Coord.Latitude = PlotLatitude;
+	Coord.Longitude = PlotLongitude;
+	Coord.Height = 0.0;
+	const FVector GrundXY = Converter->GeoToUnrealGround(Coord);
+	const FRotator Drehung(0.0, HeadingDegrees, 0.0);
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(Dimensions);
+
+	// DIESELBEN Ankerpunkte, die ConfigureSebboHqPad dem Bake uebergibt. Nur
+	// ihr XY zaehlt - die Hoehe kommt aus der Fahrbahn.
+	FRoadAccessOverride Zugang;
+	Zugang.bEnabled = true;
+	Zugang.GarageEntranceWorldCm = GrundXY + Drehung.RotateVector(Layout.GarageTarget.CenterCm);
+	Zugang.PedestrianEntranceWorldCm = GrundXY + Drehung.RotateVector(Layout.PedestrianTarget.CenterCm);
+	Zugang.SearchRadiusCm = 5000.0;
+
+	for (TActorIterator<AWiesbadenWorldBuilder> It(const_cast<UWorld*>(World)); It; ++It)
+	{
+		if (It->RoadNetwork.Segments.Num() == 0)
+		{
+			continue;
+		}
+		const FResolvedRoadAccess Zugeloest =
+			URoadNetworkGenerator::ResolveRoadAccess(It->RoadNetwork, Zugang);
+		if (!Zugeloest.Garage.IsValid())
+		{
+			continue;
+		}
+		OutZ = Zugeloest.Garage.RoadPointCm.Z - SebboHq::GetAccessFloorCm(Dimensions);
+		return true;
+	}
+	return false;
 }
 
 void AWiesbadenSebboHq::Build(const FVector& BaseWorld, const FRotator& BaseYaw)
 {
+	BuiltBase = BaseWorld;
+
 	TArray<FHqPart> Teile;
 	SebboHq::BuildShell(Dimensions, Teile);
 	SebboHq::BuildVerticalCore(Dimensions, Teile);
+	const FSebboHqArrivalLayout ArrivalLayout = SebboHq::BuildArrivalFacilities(Dimensions);
+	Teile.Append(ArrivalLayout.Parts);
 
 	for (const FHqPart& Teil : Teile)
 	{
@@ -116,7 +274,14 @@ void AWiesbadenSebboHq::Build(const FVector& BaseWorld, const FRotator& BaseYaw)
 		Komponente->SetupAttachment(Root);
 		// MIT Kollision, anders als die Wahrzeichen: auf diesem Dach soll der
 		// Helikopter aufsetzen und der Spieler herumlaufen koennen.
-		Komponente->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		//
+		// AUSSER Markierungen: die sind Farbe. Als 6 cm hohe Quader mit
+		// Kollision war der Haltstreifen vor der Garage eine Schwelle quer in
+		// der Einfahrt - die Laufzeit-Sonde blieb mit dem Fahrzeugquader
+		// daran haengen, noch bevor sie die Oeffnung erreicht hatte.
+		Komponente->SetCollisionEnabled(Teil.Material == EHqMaterial::Marking
+			? ECollisionEnabled::NoCollision
+			: ECollisionEnabled::QueryAndPhysics);
 		Komponente->RegisterComponent();
 		Komponente->SetWorldLocation(BaseWorld + BaseYaw.RotateVector(Teil.CenterCm));
 		Komponente->SetWorldRotation(BaseYaw);
@@ -133,10 +298,129 @@ void AWiesbadenSebboHq::Build(const FVector& BaseWorld, const FRotator& BaseYaw)
 		Parts.Add(Komponente);
 	}
 
+	CreateArrivalVolume(GarageArrivalVolume, TEXT("GarageArrival"),
+		ArrivalLayout.GarageTarget, BaseWorld, BaseYaw);
+	CreateArrivalVolume(PedestrianArrivalVolume, TEXT("PedestrianArrival"),
+		ArrivalLayout.PedestrianTarget, BaseWorld, BaseYaw);
+	CreateArrivalVolume(HelipadArrivalVolume, TEXT("HelipadArrival"),
+		ArrivalLayout.HelicopterTarget, BaseWorld, BaseYaw);
+
+	FHqArrivalTarget GarageYieldTarget = ArrivalLayout.GarageTarget;
+	GarageYieldTarget.CenterCm.X += GarageYieldTarget.ExtentCm.X - 60.0;
+	GarageYieldTarget.ExtentCm.X = 60.0;
+	CreateArrivalVolume(GarageYieldVolume, TEXT("GarageYield"),
+		GarageYieldTarget, BaseWorld, BaseYaw);
+
+	CreateGuidanceLight(GarageGuidanceLight, TEXT("GarageGuidance"),
+		GarageYieldTarget.CenterCm + FVector(0.0, 0.0, 180.0), BaseWorld, BaseYaw,
+		FLinearColor(1.0f, 0.65f, 0.05f), 3500.0f, 1800.0f);
+	CreateGuidanceLight(PortalGuidanceLight, TEXT("PortalGuidance"),
+		ArrivalLayout.PedestrianTarget.CenterCm + FVector(0.0, 0.0, 200.0), BaseWorld, BaseYaw,
+		FLinearColor(0.65f, 0.85f, 1.0f), 2500.0f, 1400.0f);
+	CreateGuidanceLight(HelipadGuidanceLight, TEXT("HelipadGuidance"),
+		ArrivalLayout.HelicopterTarget.CenterCm + FVector(0.0, 0.0, 150.0), BaseWorld, BaseYaw,
+		FLinearColor(0.25f, 1.0f, 0.5f), 6000.0f, 2600.0f);
+
 	UE_LOG(LogWbSebboHq, Log,
 		TEXT("Sebbo-Hauptsitz gebaut bei (%.0f, %.0f, %.0f): %d Bauteile, %d Geschosse, ")
 		TEXT("%.0f m hoch, Landeplatz auf %.0f m."),
 		BaseWorld.X, BaseWorld.Y, BaseWorld.Z, Parts.Num(), Dimensions.FloorCount,
 		SebboHq::GetRoofHeightCm(Dimensions) / 100.0,
 		SebboHq::GetHelipadHeightCm(Dimensions) / 100.0);
+}
+
+void AWiesbadenSebboHq::CreateArrivalVolume(UBoxComponent*& OutVolume, FName Name,
+	const FHqArrivalTarget& Target, const FVector& BaseWorld, const FRotator& BaseYaw)
+{
+	UBoxComponent* Volume = NewObject<UBoxComponent>(this, Name);
+	Volume->SetupAttachment(Root);
+	Volume->SetBoxExtent(Target.ExtentCm);
+	Volume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	Volume->SetCollisionResponseToAllChannels(ECR_Overlap);
+	Volume->SetGenerateOverlapEvents(true);
+	Volume->OnComponentBeginOverlap.AddDynamic(this, &AWiesbadenSebboHq::OnArrivalTargetOverlap);
+	Volume->RegisterComponent();
+	Volume->SetWorldLocation(BaseWorld + BaseYaw.RotateVector(Target.CenterCm));
+	Volume->SetWorldRotation(BaseYaw);
+	OutVolume = Volume;
+}
+
+void AWiesbadenSebboHq::CreateGuidanceLight(UPointLightComponent*& OutLight, FName Name,
+	const FVector& LocalPosition, const FVector& BaseWorld, const FRotator& BaseYaw,
+	const FLinearColor& Color, float Intensity, float Radius)
+{
+	UPointLightComponent* Light = NewObject<UPointLightComponent>(this, Name);
+	Light->SetupAttachment(Root);
+	Light->SetLightColor(Color);
+	Light->SetIntensity(Intensity);
+	Light->SetAttenuationRadius(Radius);
+	Light->SetCastShadows(false);
+	Light->SetVolumetricScatteringIntensity(2.0f);
+	Light->RegisterComponent();
+	Light->SetWorldLocation(BaseWorld + BaseYaw.RotateVector(LocalPosition));
+	OutLight = Light;
+}
+
+bool AWiesbadenSebboHq::HasCrossTraffic(const FVector& WorldPosition) const
+{
+	const UWorld* World = GetWorld();
+	const UWiesbadenCitySubsystem* City = World ? World->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+	if (!City)
+	{
+		return false;
+	}
+
+	constexpr double ConflictRadiusCm = 1800.0;
+	for (const FTrafficVehicle& Vehicle : City->GetTrafficVehicles())
+	{
+		const FVector& VehiclePosition = Vehicle.bBodyInitialized ? Vehicle.BodyLocation : Vehicle.Location;
+		if (FVector::DistSquared2D(WorldPosition, VehiclePosition) <= FMath::Square(ConflictRadiusCm))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void AWiesbadenSebboHq::OnArrivalTargetOverlap(UPrimitiveComponent* OverlappedComponent,
+	AActor* OtherActor, UPrimitiveComponent* /*OtherComponent*/, int32 /*OtherBodyIndex*/,
+	bool /*bFromSweep*/, const FHitResult& /*SweepResult*/)
+{
+	UWorld* World = GetWorld();
+	APlayerController* PlayerController = World ? World->GetFirstPlayerController() : nullptr;
+	if (!PlayerController || OtherActor != PlayerController->GetPawn())
+	{
+		return;
+	}
+	if (OverlappedComponent == GarageYieldVolume)
+	{
+		const bool bCrossTraffic = HasCrossTraffic(GarageYieldVolume->GetComponentLocation());
+		if (GarageGuidanceLight)
+		{
+			GarageGuidanceLight->SetLightColor(bCrossTraffic ? FLinearColor::Red : FLinearColor::Green);
+		}
+		UE_LOG(LogWbSebboHq, Log, TEXT("Tower-Zufahrt: %s auf der Platter Strasse."),
+			bCrossTraffic ? TEXT("warte auf Querverkehr") : TEXT("Fahrbahn frei"));
+		return;
+	}
+
+	if (OverlappedComponent == GarageArrivalVolume)
+	{
+		ArrivalTarget = ESebboHqArrivalTarget::Garage;
+	}
+	else if (OverlappedComponent == PedestrianArrivalVolume)
+	{
+		ArrivalTarget = ESebboHqArrivalTarget::Pedestrian;
+	}
+	else if (OverlappedComponent == HelipadArrivalVolume)
+	{
+		ArrivalTarget = ESebboHqArrivalTarget::Helipad;
+	}
+	else
+	{
+		return;
+	}
+
+	UE_LOG(LogWbSebboHq, Log, TEXT("Tower-Ankunft erreicht: %s"),
+		*UEnum::GetValueAsString(ArrivalTarget));
 }

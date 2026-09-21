@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "GIS/WiesbadenTrafficLights.h"
+#include "GIS/WiesbadenTrafficSimulation.h"
 
 namespace
 {
@@ -123,15 +124,35 @@ bool FSignalGroupTest::RunTest(const FString& Parameters)
 {
 	using FSys = FWiesbadenTrafficLightSystem;
 
-	// -- 1. Achse aus der Peilung, auch bei negativen Winkeln. --------------
+	// -- 1. STRASSENACHSE aus der Peilung, auch bei negativen Winkeln. ------
 	//
 	// Atan2 liefert -180..180. Ohne Normierung faellt -90 Grad in die falsche
 	// Achse, und eine ganze Anfahrtsrichtung bekommt das Signal der Querachse.
-	TestEqual(TEXT("Peilung 0 -> Achse 0"), FSys::AxisForBearing(0.0), 0);
-	TestEqual(TEXT("Peilung 90 -> Achse 0"), FSys::AxisForBearing(90.0), 0);
-	TestEqual(TEXT("Peilung 200 -> Achse 1"), FSys::AxisForBearing(200.0), 1);
-	TestEqual(TEXT("Peilung -90 ist 270 -> Achse 1"), FSys::AxisForBearing(-90.0), 1);
+	//
+	// Hier stand frueher eine Teilung nach FAHRTRICHTUNG ("Peilung 90 -> Achse
+	// 0"). Die war falsch und hat den Fehler festgeschrieben, den sie haette
+	// finden sollen: bei Atan2(dY, dX) ist 0 Grad Ostfahrt und 90 Grad
+	// Nordfahrt - beide lagen unter 180 und damit in derselben Gruppe, also
+	// gleichzeitig gruen und quer zueinander.
+	TestEqual(TEXT("Ostfahrt 0 -> Achse 0"), FSys::AxisForBearing(0.0), 0);
+	TestEqual(TEXT("Westfahrt 180 -> dieselbe Achse 0"), FSys::AxisForBearing(180.0), 0);
+	TestEqual(TEXT("Nordfahrt 90 -> Achse 1"), FSys::AxisForBearing(90.0), 1);
+	TestEqual(TEXT("Suedfahrt -90 ist 270 -> dieselbe Achse 1"), FSys::AxisForBearing(-90.0), 1);
+	TestEqual(TEXT("Peilung 200 liegt 20 Grad neben Ost -> Achse 0"),
+		FSys::AxisForBearing(200.0), 0);
 	TestEqual(TEXT("Peilung 360 ist 0 -> Achse 0"), FSys::AxisForBearing(360.0), 0);
+
+	// Die Kernaussage in einem Satz: Hin- und Rueckrichtung derselben Strasse
+	// teilen sich die Achse, senkrecht zueinander liegende nicht.
+	for (double Peilung = 0.0; Peilung < 360.0; Peilung += 15.0)
+	{
+		TestEqual(*FString::Printf(TEXT("Peilung %.0f und %.0f sind dieselbe Achse"),
+			Peilung, Peilung + 180.0),
+			FSys::AxisForBearing(Peilung), FSys::AxisForBearing(Peilung + 180.0));
+		TestNotEqual(*FString::Printf(TEXT("Peilung %.0f und %.0f sind verschiedene Achsen"),
+			Peilung, Peilung + 90.0),
+			FSys::AxisForBearing(Peilung), FSys::AxisForBearing(Peilung + 90.0));
+	}
 
 	// -- 2. Gruppen: geradeaus und rechts teilen sich eine, links bekommt
 	//       eine eigene. ---------------------------------------------------
@@ -264,14 +285,53 @@ bool FSignalProgramTest::RunTest(const FString& Parameters)
 			PlainSys.Lights[0].CycleSeconds < Light.CycleSeconds - 1.0);
 	}
 
-	// -- 5. Abbiegephasen abschaltbar. --------------------------------------
+	// -- 5. bProtectedLeftTurns steuert die LAENGE, nicht mehr das Ob. ------
+	//
+	// Hier stand: "Ohne Abbiegephasen bleiben zwei Phasen". Das war der
+	// Dauerrot-Fall - die Linksabbieger hatten eine eigene Gruppe, aber keine
+	// Phase, und eine Gruppe ohne Phase ist in GetGroupAspect FUER IMMER ROT.
+	//
+	// Seit die Gruppen konfliktfrei sind, laesst sich das auch nicht mehr
+	// anders loesen: der Weg eines Linksabbiegers kreuzt den Gegenverkehr
+	// derselben Achse, die Faerbung trennt die beiden also ohnehin. Ein
+	// ungeschuetzter Linksabbieger waere kein Gruppenmerkmal, sondern eine
+	// eigene Regel ("bedingtes Gruen, Vorrang beachten") - die gibt es hier
+	// nicht. Die Einstellung bestimmt darum nur noch die Gruenzeit: kurzes
+	// Abbiegefenster (an) oder volles Geradeaus-Fenster (aus).
 	{
 		FWiesbadenTrafficLightSettings S = MakeProgramSettings();
 		S.bProtectedLeftTurns = false;
 		FWiesbadenTrafficLightSystem NoLeft;
 		NoLeft.Initialize(Network, S);
-		TestEqual(TEXT("Ohne Abbiegephasen bleiben zwei Phasen"),
-			NoLeft.Lights[0].Phases.Num(), 2);
+
+		TestEqual(TEXT("Jede Gruppe behaelt ihre Phase - auch die Linksabbieger"),
+			NoLeft.Lights[0].Phases.Num(), 3);
+
+		// Und zwar mit der vollen Gruenzeit statt des kurzen Fensters.
+		double Kuerzeste = TNumericLimits<double>::Max();
+		double Laengste = 0.0;
+		for (const FWiesbadenSignalPhase& Phase : NoLeft.Lights[0].Phases)
+		{
+			Kuerzeste = FMath::Min(Kuerzeste, static_cast<double>(Phase.DurationSeconds));
+			Laengste = FMath::Max(Laengste, static_cast<double>(Phase.DurationSeconds));
+		}
+		TestEqual(TEXT("Ohne geschuetzte Linksphase sind alle Fenster gleich lang"),
+			Kuerzeste, Laengste, 0.01);
+
+		// Gegenprobe: MIT geschuetzter Linksphase ist eines kuerzer.
+		FWiesbadenTrafficLightSettings Mit = MakeProgramSettings();
+		Mit.bProtectedLeftTurns = true;
+		FWiesbadenTrafficLightSystem MitLinks;
+		MitLinks.Initialize(Network, Mit);
+		double KuerzesteMit = TNumericLimits<double>::Max();
+		double LaengsteMit = 0.0;
+		for (const FWiesbadenSignalPhase& Phase : MitLinks.Lights[0].Phases)
+		{
+			KuerzesteMit = FMath::Min(KuerzesteMit, static_cast<double>(Phase.DurationSeconds));
+			LaengsteMit = FMath::Max(LaengsteMit, static_cast<double>(Phase.DurationSeconds));
+		}
+		TestTrue(TEXT("Mit geschuetzter Linksphase ist das Abbiegefenster kuerzer"),
+			KuerzesteMit < LaengsteMit - 0.01);
 	}
 
 	return true;
@@ -566,6 +626,326 @@ bool FJunctionCycleSizeTest::RunTest(const FString& Parameters)
 		TestTrue(FString::Printf(TEXT("Mindestgruen gehalten (%.1f s)"),
 			Small.Lights[0].GreenSeconds),
 			Small.Lights[0].GreenSeconds >= S.MinGreenSecondsPerCycle - 0.01);
+	}
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Konfliktfreie Freigabegruppen
+// ---------------------------------------------------------------------------
+
+namespace
+{
+	/** Verbindung mit EIGENEM Weg - MakeConnection gibt allen denselben. */
+	FLaneConnection KonfliktVerbindung(int32 Von, int32 Nach, ETurnType Art,
+		const FVector& Start, const FVector& Ziel)
+	{
+		FLaneConnection C = MakeConnection(Von, Nach, 42, Art);
+		C.ConnectionPath = { Start, (Start + Ziel) * 0.5, Ziel };
+		return C;
+	}
+
+	FRoadIntersection KonfliktKreuzung()
+	{
+		FRoadIntersection K;
+		K.NodeId = 42;
+		K.Location = FVector(10000.0, 0.0, 0.0);
+		K.Control = EIntersectionControl::TrafficSignals;
+		K.RadiusCm = 500.0;
+		return K;
+	}
+
+	/** Alle Paare EINER Gruppe auf Konflikt pruefen. */
+	/**
+	 * Konfliktfrei - nach der GRUPPEN-Frage, nicht nach der Laufzeitregel.
+	 *
+	 * Die Laufzeitregel zaehlt eine gemeinsame Zielspur als Konflikt; eine
+	 * Freigabegruppe nur, wenn bZielspurSperrt gesetzt ist. Wer hier die
+	 * Laufzeitfrage stellt, prueft eine Eigenschaft, die die Gruppenbildung
+	 * gar nicht herstellen will.
+	 */
+	bool GruppenSindKonfliktfrei(const FRoadNetwork& Netz,
+		const TMap<int32, int32>& Gruppen, FString& OutGrund,
+		bool bZielspurSperrt = false)
+	{
+		TArray<int32> Alle;
+		Gruppen.GetKeys(Alle);
+		Alle.Sort();
+		for (int32 a = 0; a < Alle.Num(); ++a)
+		{
+			for (int32 b = a + 1; b < Alle.Num(); ++b)
+			{
+				if (Gruppen[Alle[a]] != Gruppen[Alle[b]])
+				{
+					continue;
+				}
+				if (FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
+					Netz.Connections[Alle[a]], Netz.Connections[Alle[b]],
+					bZielspurSperrt))
+				{
+					OutGrund = FString::Printf(
+						TEXT("Verbindung %d und %d liegen beide in Gruppe %d und kollidieren"),
+						Alle[a], Alle[b], Gruppen[Alle[a]]);
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSignalConflictFreeTest,
+	"WiesbadenReal.GIS.TrafficLights.KonfliktfreieGruppen",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSignalConflictFreeTest::RunTest(const FString& Parameters)
+{
+	using FSys = FWiesbadenTrafficLightSystem;
+
+	// -- 1. Zwei Zufahrten faedeln in DIESELBE Spur ein. --------------------
+	//
+	// Beide kommen aus flachem Winkel von Westen (Peilung 0 und 20 Grad),
+	// liegen damit auf derselben Achse und sind beide Geradeausverkehr - die
+	// Faustregel steckt sie in eine Gruppe. Sie enden aber auf derselben
+	// Spur, treffen sich also beim Einfaedeln.
+	{
+		FRoadNetwork Netz;
+		Netz.Lanes.Add(MakeSignalLane(0, { FVector(0.0, 0.0, 0.0), FVector(10000.0, 0.0, 0.0) }));
+		Netz.Lanes.Add(MakeSignalLane(1, { FVector(0.0, -3640.0, 0.0), FVector(10000.0, 0.0, 0.0) }));
+		Netz.Lanes.Add(MakeSignalLane(2, { FVector(10500.0, 0.0, 0.0), FVector(20000.0, 0.0, 0.0) }));
+		Netz.Intersections.Add(KonfliktKreuzung());
+		// ECHTE Zusammenfuehrung: zwei VERSCHIEDENE Anfahrten auf EINEN
+		// gemeinsamen Endpunkt.
+		//
+		// Die erste Fassung gab beiden denselben Weg. Zwei deckungsgleiche
+		// Strecken fallen in die Parallel-Abkuerzung der Schnittrechnung, nie
+		// in die Schnittrechnung selbst - der Test bestaetigte also die
+		// Absicht, waehrend der Mechanismus fehlte. Genau der Fehlertyp, vor
+		// dem der Eintrag zur Achsenkorrektur warnt.
+		Netz.Connections.Add(KonfliktVerbindung(0, 2, ETurnType::Through,
+			FVector(9500.0, -300.0, 0.0), FVector(10500.0, 0.0, 0.0)));
+		Netz.Connections.Add(KonfliktVerbindung(1, 2, ETurnType::Through,
+			FVector(9500.0, 300.0, 0.0), FVector(10500.0, 0.0, 0.0)));
+
+		// Der gemeinsame Endpunkt ist da - und er ist der EINZIGE
+		// Beruehrpunkt. Ohne die Endpunkt-Ausnahme meldete die Geometrie ihn
+		// als Kreuzung, und der Schalter "einfaedeln erlaubt" erlaubte nichts.
+		TestFalse(TEXT("Einfaedeln gilt nicht als Kreuzen"),
+			FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
+				Netz.Connections[0], Netz.Connections[1], false));
+		TestTrue(TEXT("Streng gilt es sehr wohl"),
+			FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
+				Netz.Connections[0], Netz.Connections[1], true));
+		TestTrue(TEXT("Und die Laufzeitregel sieht weiter einen Konflikt"),
+			FWiesbadenTrafficSimulation::DoConnectionsConflict(
+				Netz.Connections[0], Netz.Connections[1]));
+
+		// Beide Zufahrten liegen auf derselben Achse - das ist die
+		// Voraussetzung dafuer, dass die Faustregel sie zusammenlegt.
+		TestEqual(TEXT("Beide Zufahrten auf derselben Achse"),
+			FSys::AxisForBearing(0.0), FSys::AxisForBearing(20.0));
+		TestTrue(TEXT("Die beiden Verbindungen kollidieren wirklich"),
+			FWiesbadenTrafficSimulation::DoConnectionsConflict(
+				Netz.Connections[0], Netz.Connections[1]));
+
+		// VORGABE (einfaedeln erlaubt): die beiden duerfen zusammen Gruen
+		// bekommen. Ein Verkehrsplaner gibt einfaedelnde Stroeme gemeinsam
+		// frei; sie sortieren sich ueber Luecken, und genau dafuer gibt es
+		// die Laufzeitregel. Bis zum 21.09.2026 trennte die Gruppenbildung
+		// sie - das kostete am Bahnhofsplatz gemessen 37 Prozent Tempo.
+		{
+			TMap<int32, int32> Gruppen;
+			Gruppen.Add(0, 0);
+			Gruppen.Add(1, 0);
+			FString Grund;
+			const int32 Anzahl = FSys::MakeGroupsConflictFree(Netz, Gruppen);
+			TestTrue(TEXT("Einfaedeln: konfliktfrei nach der Gruppen-Frage"),
+				GruppenSindKonfliktfrei(Netz, Gruppen, Grund, false));
+			TestEqual(TEXT("Einfaedeln: beide bleiben in EINER Gruppe"),
+				Gruppen[0], Gruppen[1]);
+			TestEqual(TEXT("Einfaedeln: eine Gruppe genuegt"), Anzahl, 1);
+		}
+
+		// STRENG (Zielspur sperrt): dann muessen sie getrennt werden. Der
+		// Hebel wird in BEIDE Richtungen geprueft - ein Schalter, dessen
+		// zweite Stellung niemand testet, ist eine Behauptung.
+		{
+			TMap<int32, int32> Gruppen;
+			Gruppen.Add(0, 0);
+			Gruppen.Add(1, 0);
+			FString Grund;
+			TestFalse(TEXT("Streng: die Faustregel allein ist NICHT konfliktfrei"),
+				GruppenSindKonfliktfrei(Netz, Gruppen, Grund, true));
+			const int32 Anzahl = FSys::MakeGroupsConflictFree(Netz, Gruppen, true);
+			TestTrue(TEXT("Streng: danach konfliktfrei"),
+				GruppenSindKonfliktfrei(Netz, Gruppen, Grund, true));
+			TestNotEqual(TEXT("Streng: die beiden sitzen in verschiedenen Gruppen"),
+				Gruppen[0], Gruppen[1]);
+			TestTrue(TEXT("Streng: Gruppenzahl deckt die benutzten Gruppen ab"),
+				Anzahl > FMath::Max(Gruppen[0], Gruppen[1]));
+		}
+	}
+
+	// -- 2. Zwei Wege KREUZEN sich, ohne dieselbe Zielspur. -----------------
+	{
+		FRoadNetwork Netz;
+		Netz.Lanes.Add(MakeSignalLane(0, { FVector(0.0, 0.0, 0.0), FVector(10000.0, 0.0, 0.0) }));
+		Netz.Lanes.Add(MakeSignalLane(1, { FVector(0.0, -3640.0, 0.0), FVector(10000.0, -500.0, 0.0) }));
+		Netz.Lanes.Add(MakeSignalLane(2, { FVector(10500.0, -500.0, 0.0), FVector(20000.0, -500.0, 0.0) }));
+		Netz.Lanes.Add(MakeSignalLane(3, { FVector(10500.0, 500.0, 0.0), FVector(20000.0, 500.0, 0.0) }));
+		Netz.Intersections.Add(KonfliktKreuzung());
+		// Ueber Kreuz: die eine geht nach rechts unten, die andere nach rechts
+		// oben, und die Wege schneiden sich in der Mitte.
+		Netz.Connections.Add(KonfliktVerbindung(0, 2, ETurnType::Through,
+			FVector(10000.0, 0.0, 0.0), FVector(10500.0, -500.0, 0.0)));
+		Netz.Connections.Add(KonfliktVerbindung(1, 3, ETurnType::Through,
+			FVector(10000.0, -500.0, 0.0), FVector(10500.0, 500.0, 0.0)));
+
+		TestTrue(TEXT("Die Wege kreuzen sich wirklich"),
+			FWiesbadenTrafficSimulation::DoConnectionsConflict(
+				Netz.Connections[0], Netz.Connections[1]));
+
+		TMap<int32, int32> Gruppen;
+		Gruppen.Add(0, 0);
+		Gruppen.Add(1, 0);
+		FSys::MakeGroupsConflictFree(Netz, Gruppen);
+		FString Grund;
+		TestTrue(TEXT("Nach der Faerbung kreuzungsfrei"),
+			GruppenSindKonfliktfrei(Netz, Gruppen, Grund));
+		TestNotEqual(TEXT("Kreuzende Wege sind getrennt"), Gruppen[0], Gruppen[1]);
+	}
+
+	// -- 3. Aus DERSELBEN Spur bleibt zusammen. ------------------------------
+	//
+	// Geradeaus und rechts aus einer Kolonne duerfen sich eine Freigabe
+	// teilen - sonst fliesst jede Kreuzung nur noch im Gaensemarsch ab.
+	{
+		FRoadNetwork Netz;
+		Netz.Lanes.Add(MakeSignalLane(0, { FVector(0.0, 0.0, 0.0), FVector(10000.0, 0.0, 0.0) }));
+		Netz.Lanes.Add(MakeSignalLane(1, { FVector(10500.0, 0.0, 0.0), FVector(20000.0, 0.0, 0.0) }));
+		Netz.Lanes.Add(MakeSignalLane(2, { FVector(10000.0, -500.0, 0.0), FVector(10000.0, -9000.0, 0.0) }));
+		Netz.Intersections.Add(KonfliktKreuzung());
+		Netz.Connections.Add(KonfliktVerbindung(0, 1, ETurnType::Through,
+			FVector(10000.0, 0.0, 0.0), FVector(10500.0, 0.0, 0.0)));
+		Netz.Connections.Add(KonfliktVerbindung(0, 2, ETurnType::Right,
+			FVector(10000.0, 0.0, 0.0), FVector(10000.0, -500.0, 0.0)));
+
+		TMap<int32, int32> Gruppen;
+		Gruppen.Add(0, 0);
+		Gruppen.Add(1, 0);
+		FSys::MakeGroupsConflictFree(Netz, Gruppen);
+		TestEqual(TEXT("Geradeaus und rechts aus einer Spur bleiben in einer Gruppe"),
+			Gruppen[0], Gruppen[1]);
+	}
+
+	// -- 4. Die Faerbung ist deterministisch. --------------------------------
+	//
+	// Eine TMap laeuft in Hash-Reihenfolge. Ohne die Sortierung bekaeme
+	// dieselbe Stadt je nach Lauf andere Signalprogramme, und kein
+	// Messergebnis waere vergleichbar.
+	{
+		FRoadNetwork Netz;
+		for (int32 i = 0; i < 6; ++i)
+		{
+			Netz.Lanes.Add(MakeSignalLane(i,
+				{ FVector(0.0, i * 1000.0, 0.0), FVector(10000.0, 0.0, 0.0) }));
+		}
+		Netz.Lanes.Add(MakeSignalLane(6, { FVector(10500.0, 0.0, 0.0), FVector(20000.0, 0.0, 0.0) }));
+		Netz.Intersections.Add(KonfliktKreuzung());
+		for (int32 i = 0; i < 6; ++i)
+		{
+			// Faecher: jede Anfahrt kommt aus einer anderen Richtung auf
+			// denselben Endpunkt. Deckungsgleiche Wege wuerden in die
+			// Parallel-Abkuerzung fallen und nichts pruefen.
+			Netz.Connections.Add(KonfliktVerbindung(i, 6, ETurnType::Through,
+				FVector(9500.0, -500.0 + i * 200.0, 0.0), FVector(10500.0, 0.0, 0.0)));
+		}
+
+		TMap<int32, int32> A;
+		TMap<int32, int32> B;
+		for (int32 i = 5; i >= 0; --i) { A.Add(i, 0); }     // rueckwaerts eingefuegt
+		for (int32 i = 0; i < 6; ++i) { B.Add(i, 0); }      // vorwaerts
+		const int32 AnzahlA = FSys::MakeGroupsConflictFree(Netz, A);
+		const int32 AnzahlB = FSys::MakeGroupsConflictFree(Netz, B);
+		TestEqual(TEXT("Gleiche Gruppenzahl, egal in welcher Reihenfolge eingefuegt"),
+			AnzahlA, AnzahlB);
+		for (int32 i = 0; i < 6; ++i)
+		{
+			TestEqual(*FString::Printf(TEXT("Verbindung %d bekommt dieselbe Gruppe"), i),
+				A[i], B[i]);
+		}
+		// Sechs Verbindungen in dieselbe Spur: mit der Vorgabe EINE Freigabe -
+		// sonst braeuchte diese eine Kreuzung sechs Phasen, und der Umlauf
+		// waechst fuer jede Zufahrt mit, auch fuer die unbeteiligten.
+		TestEqual(TEXT("Sechs einfaedelnde Verbindungen ergeben EINE Gruppe"), AnzahlA, 1);
+
+		// Und mit der strengen Stellung wieder sechs - der Preis, den die
+		// Zahl sichtbar macht.
+		TMap<int32, int32> Streng;
+		for (int32 i = 0; i < 6; ++i) { Streng.Add(i, 0); }
+		TestEqual(TEXT("Streng: sechs einfaedelnde ergeben sechs Gruppen"),
+			FSys::MakeGroupsConflictFree(Netz, Streng, true), 6);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSignalEveryGroupHasPhaseTest,
+	"WiesbadenReal.GIS.TrafficLights.JedeGruppeHatEinePhase",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSignalEveryGroupHasPhaseTest::RunTest(const FString& Parameters)
+{
+	// Eine Gruppe OHNE Phase ist in GetGroupAspect dauerhaft ROT. Solange die
+	// Phasen je Achse gebaut wurden, konnte das passieren: bei abgeschalteten
+	// geschuetzten Linksphasen bekamen die Linksabbieger gar keine, und eine
+	// fuenfte Konfliktgruppe haette es ebenfalls nie gegeben.
+	for (const bool bGeschuetzteLinks : { true, false })
+	{
+		const FRoadNetwork Netz = MakeLeftTurnNetwork();
+		FWiesbadenTrafficLightSettings Einstellungen;
+		Einstellungen.bProtectedLeftTurns = bGeschuetzteLinks;
+
+		FWiesbadenTrafficLightSystem System;
+		System.Initialize(Netz, Einstellungen);
+		if (!TestEqual(TEXT("Eine Ampel"), System.Lights.Num(), 1))
+		{
+			return false;
+		}
+
+		const FWiesbadenTrafficLight& Ampel = System.Lights[0];
+		TSet<int32> MitPhase;
+		for (const FWiesbadenSignalPhase& Phase : Ampel.Phases)
+		{
+			MitPhase.Add(Phase.Group);
+		}
+		for (const TPair<int32, int32>& Paar : Ampel.ConnectionGroups)
+		{
+			TestTrue(*FString::Printf(
+				TEXT("Gruppe %d hat eine Phase (geschuetzte Links: %d)"),
+				Paar.Value, bGeschuetzteLinks ? 1 : 0),
+				MitPhase.Contains(Paar.Value));
+		}
+
+		// Und keine Verbindung steht dauerhaft auf Rot: ueber einen vollen
+		// Umlauf muss jede einmal gruen gewesen sein.
+		TSet<int32> WarGruen;
+		const double Umlauf = FMath::Max(Ampel.CycleSeconds, 1.0);
+		for (double T = 0.0; T < Umlauf; T += 0.25)
+		{
+			for (const TPair<int32, int32>& Paar : Ampel.ConnectionGroups)
+			{
+				if (System.IsConnectionGreen(Paar.Key))
+				{
+					WarGruen.Add(Paar.Key);
+				}
+			}
+			System.Tick(0.25f);
+		}
+		TestEqual(*FString::Printf(TEXT("Jede Verbindung war einmal gruen (geschuetzte Links: %d)"),
+			bGeschuetzteLinks ? 1 : 0),
+			WarGruen.Num(), Ampel.ConnectionGroups.Num());
 	}
 
 	return true;
