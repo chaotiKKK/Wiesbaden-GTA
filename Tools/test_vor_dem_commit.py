@@ -174,6 +174,91 @@ class Gate0BefehlTest(unittest.TestCase):
             os.environ.update(alt)
 
 
+class StufenZuordnungTest(unittest.TestCase):
+    """WAS laeuft auf WELCHER Stufe - die Frage, um die es hier geht.
+
+    Geprueft wird die Zuordnung selbst, ohne ein einziges Gate zu starten:
+    ein Lauf-Doppel schreibt nur mit, was gefahren und was uebersprungen
+    wurde. Ein Test, der die Gates wirklich faehrt, wuerde Minuten kosten und
+    trotzdem nur dasselbe sagen.
+
+    Die Python-Suiten waren 31 s von 32 s der schnellen Stufe und sind kein
+    Gate der Release-Pipeline. Sie liegen jetzt auf der vollen Stufe - aber
+    sie muessen DORT auch wirklich liegen, sonst waere aus "verschoben"
+    unbemerkt "gestrichen" geworden.
+    """
+
+    class LaufDoppel:
+        def __init__(self):
+            self.gefahren = []
+            self.uebersprungen = []
+
+        def fahre(self, name, befehl, *, shell_cmd=False):
+            self.gefahren.append(name)
+            return True
+
+        def ueberspringe(self, name, grund):
+            self.uebersprungen.append(name)
+
+        def bericht(self):
+            return 0
+
+    def zuordnung(self, stufe, dateien):
+        doppel = self.LaufDoppel()
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: doppel
+        try:
+            vdc.gates_fahren(stufe, dateien)
+        finally:
+            vdc.Lauf = alt
+        return doppel
+
+    @staticmethod
+    def suiten(namen):
+        return [n for n in namen if "Python" in n]
+
+    def test_schnell_faehrt_die_suiten_nicht(self):
+        d = self.zuordnung("schnell", ["Tools/x.py"])
+        self.assertFalse(self.suiten(d.gefahren),
+                         "die Python-Suiten laufen wieder vor jedem Commit")
+        self.assertTrue(self.suiten(d.uebersprungen),
+                        "die Python-Suiten fehlen ganz, statt uebersprungen zu werden")
+
+    def test_voll_faehrt_die_suiten(self):
+        d = self.zuordnung("voll", ["Tools/x.py"])
+        self.assertTrue(self.suiten(d.gefahren),
+                        "verschoben waere zu gestrichen geworden")
+        self.assertFalse(self.suiten(d.uebersprungen))
+
+    def test_die_schnelle_stufe_haelt_nur_die_pipeline_gates(self):
+        """Gate 0 immer, Gate 1 nur bei C++ - und sonst nichts."""
+        ohne = self.zuordnung("schnell", ["Tools/x.py"])
+        self.assertEqual(ohne.gefahren, ["Gate 0  Engine-Pfade"])
+
+        mit = self.zuordnung("schnell", ["Source/X.cpp"])
+        self.assertEqual(len(mit.gefahren), 2)
+        self.assertIn("Gate 0  Engine-Pfade", mit.gefahren)
+        self.assertTrue(any("Gate 1" in n for n in mit.gefahren))
+
+    def test_die_volle_stufe_laesst_nichts_aus(self):
+        d = self.zuordnung("voll", ["Source/X.cpp"])
+        self.assertEqual(d.uebersprungen, [],
+                         "auf der vollen Stufe darf nichts uebersprungen werden")
+        self.assertTrue(any("Gate 2+3" in n for n in d.gefahren))
+
+    def test_build_release_faehrt_die_suiten_nicht_mit(self):
+        """Der Grund, warum die volle Stufe sie SELBST fahren muss.
+
+        Gate 2+3 ist build_release.cmd -GatesOnly. Wuerde das die Suiten
+        mitnehmen, waere der Eintrag auf der vollen Stufe doppelt. Es nimmt
+        sie nicht mit - und faende jemand das eines Tages heraus und
+        entfernte den Eintrag, faende dieser Test es auch heraus.
+        """
+        text = (WURZEL / "Tools" / "build_release.ps1").read_text(
+            encoding="utf-8", errors="replace")
+        self.assertNotIn("unittest", text)
+
+
 class EchterHookTest(unittest.TestCase):
     """Der Kern: haelt der Hook einen roten Commit WIRKLICH auf?
 

@@ -12,19 +12,32 @@ den Lauf, der Stunden dauert.
 WARUM ZWEI STUFEN - und das ist eine gemessene Entscheidung, keine Meinung:
 
     Gate 0  Engine-Pfade        1 s
-    Python-Suiten             46 s
     Gate 1  Kompilieren         2 s ohne C++-Aenderung, Minuten mit
+    Python-Suiten              31 s   (gemessen 21.09.2026, 172 Tests)
     Gate 2  Unit-Tests          Minuten (startet den Unreal-Editor)
     Gate 3  Rauchtest           Minuten (mehrere Editor-Sitzungen)
 
 Ein Hook, der vor JEDEM Commit eine Viertelstunde braucht, wird binnen eines
 Tages mit --no-verify umgangen; dann prueft er gar nichts mehr. Darum:
 
-* **schnell** laeuft vor jedem Commit. Gate 1 nur, wenn wirklich C++ dabei
-  ist - wer nur ein Python-Werkzeug aendert, wartet nicht auf einen Compiler.
+* **schnell** laeuft vor jedem Commit und enthaelt nur, was zur
+  Release-Pipeline gehoert: Gate 0 immer, Gate 1 nur, wenn wirklich C++
+  dabei ist - wer nur ein Python-Werkzeug aendert, wartet nicht auf einen
+  Compiler.
 * **voll** laeuft vor dem PUSH. Dort ist die Wartezeit vertretbar, und nichts
   verlaesst den Rechner ungeprueft. Die Blockade wandert damit vom
   Paketieren an die Stelle, an der sie noch billig ist.
+
+DIE PYTHON-SUITEN LIEGEN AUF DER VOLLEN STUFE, und zwar aus zwei Gruenden:
+
+1. Sie waren 31 s von 32 s der schnellen Stufe. Alles andere dort kostet
+   zusammen eine Sekunde - der Hook bestand praktisch nur aus ihnen.
+2. Sie sind kein Gate der Release-Pipeline. build_release.ps1 faehrt Gate 0
+   bis 3 und ruft sie nirgends auf; vor dem Commit standen sie als Zugabe.
+
+Sie sind VERSCHOBEN, NICHT GESTRICHEN: build_release.cmd kennt sie nicht,
+darum faehrt die volle Stufe sie selbst. Nichts verlaesst den Rechner, ohne
+dass sie gelaufen sind.
 
 Notausgang: `git commit --no-verify` oder `WB_KEINE_GATES=1`. Er ist
 absichtlich da - ein Wachposten ohne Tuer wird eingerissen, nicht benutzt.
@@ -150,9 +163,24 @@ def gates_fahren(stufe, dateien):
     print("Gates vor dem Commit (Stufe: %s)" % stufe)
 
     lauf.fahre("Gate 0  Engine-Pfade", gate0_befehl(dateien))
-    lauf.fahre("Python-Suiten",
-               [sys.executable, "-m", "unittest", "discover",
-                "-s", "Tools", "-p", "test_*.py"])
+
+    # Die Python-Suiten gehoeren zur vollen Stufe, nicht vor jeden Commit.
+    #
+    # GEMESSEN am 21.09.2026: sie sind 31 s von 32 s der schnellen Stufe.
+    # Alles andere dort kostet zusammen eine Sekunde. Sie sind ausserdem
+    # KEIN Gate der Release-Pipeline - build_release.ps1 faehrt Gate 0 bis 3
+    # und ruft sie nirgends auf; vor dem Commit standen sie als Zugabe.
+    # Darum laufen sie jetzt dort, wo die langsamen Gates schon liegen.
+    #
+    # Sie laufen weiter, bevor etwas den Rechner verlaesst: der pre-push-Hook
+    # faehrt die volle Stufe. Verschoben, nicht gestrichen.
+    if stufe == "voll":
+        lauf.fahre("Python-Suiten",
+                   [sys.executable, "-m", "unittest", "discover",
+                    "-s", "Tools", "-p", "test_*.py"])
+    else:
+        lauf.ueberspringe("Python-Suiten",
+                          "Stufe schnell - sie laufen vor dem Push")
 
     if braucht_compiler(dateien):
         lauf.fahre("Gate 1  Kompilieren", r"Tools\build_gate1.cmd", shell_cmd=True)
