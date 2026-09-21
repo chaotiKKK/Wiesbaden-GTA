@@ -21,7 +21,7 @@
 # gesichert, damit eine schlechte Release umkehrbar ist.
 #
 # Aufruf:  Tools\build_release.cmd            (voll, inkl. Paket - dauert Stunden)
-#          Tools\build_release.cmd -GatesOnly (nur Gates 1-3, ~10-15 min, fuer vor
+#          Tools\build_release.cmd -GatesOnly (nur Gates 0-3, ~10-15 min, fuer vor
 #                                              dem Commit; ueberspringt NUR das
 #                                              Paket, KEIN Qualitaets-Gate)
 #          Tools\build_release.cmd -Rollback  (Sekunden: aktuelles <-> vorheriges
@@ -129,7 +129,30 @@ function Fail([string]$Gate, [string]$Detail, [string]$LogHint) {
 }
 
 Write-Host "======== Release-Pipeline WiesbadenReal ========"
-Write-Host ("Modus: {0}" -f ($(if ($GatesOnly) { "nur Gates 1-3 (-GatesOnly)" } else { "voll inkl. Paketierung" })))
+Write-Host ("Modus: {0}" -f ($(if ($GatesOnly) { "nur Gates 0-3 (-GatesOnly)" } else { "voll inkl. Paketierung" })))
+
+# ---- Gate 0: Engine-Pfade ------------------------------------------------
+#
+# Sekunden, und ganz vorn: dieses Gate haette den Lauf vom 21.09.2026 gespart.
+# Damals zeigte die Pipeline selbst auf die aeltere Engine-Kopie, und der
+# Build starb erst zehn Minuten spaeter in einem ENGINE-Header, der aussah,
+# als sei der Engine-Quelltext kaputt. Ein falscher Pfad soll hier auffallen,
+# nicht im Compiler.
+Section 0 "Engine-Pfade (Tools\pruefe_engine.py)"
+$EngineCheck = Join-Path $PSScriptRoot "pruefe_engine.py"
+if (Test-Path $EngineCheck) {
+    $prevEAP0 = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & python $EngineCheck | ForEach-Object { Write-Host ("  {0}" -f $_) }
+    $engineRc = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP0
+    if ($engineRc -ne 0) {
+        Fail "Gate 0 (Engine-Pfade)" ("Mindestens ein Werkzeug nennt eine andere Engine als {0}." -f $EngineRoot) ""
+    }
+    Write-Host "  Gate 0 gruen: alle Werkzeuge zeigen auf dieselbe Engine."
+} else {
+    Write-Host "  uebersprungen: pruefe_engine.py fehlt."
+}
 
 # ---- Gate 1: Kompilieren -------------------------------------------------
 Section 1 "Kompilieren (WiesbadenRealEditor Win64 Development)"

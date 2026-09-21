@@ -3622,3 +3622,65 @@ haelt einen laufenden Build fuer tot. Das Paket-Log liegt unter
 Alkis16 in 3,2 s geladen, 52.689 Schilder, 117.351 Spuren, 1.073 Ampeln,
 Sebbo-Hauptsitz 449 Bauteile, 31 Chunk-Actors (0 ohne Render-Geometrie),
 0 Fehlerzeilen.
+
+
+## Eine Engine fuer alle Werkzeuge - und ein Waechter davor (21.09.2026)
+
+Auf diesem Rechner liegen ZWEI Engines 5.8 nebeneinander. Sie heissen gleich,
+beide existieren, beide bauen - getrennt werden sie erst durch die
+PATCH-Nummer aus `Engine/Build/Build.version`:
+
+    C:\Program Files\Epic Games\UE_5.8          5.8.2   Build.bat 09.09.2026
+    C:\freebuff\WiesbadenReal_Sicherung\UE_5.8  5.8.1   Build.bat 11.08.2026
+
+**Die eine Quelle:** `Tools/engine.cmd` (setzt `WB_ENGINE`, `WB_BUILD_BAT`,
+`WB_EDITOR`, `WB_EDITOR_CMD`, `WB_RUNUAT`) und `Tools/engine.py`
+(`engine_wurzel()`, `build_bat()`, `editor_cmd()`, ...) - gebaut nach dem
+Vorbild von `Tools/karte.cmd`. `WB_ENGINE` in der Umgebung gewinnt. Die
+gewaehlte Engine wird gegen `EngineAssociation` des .uproject geprueft, der
+Ordnername entscheidet also NICHT.
+
+**Der Waechter:** `python Tools/pruefe_engine.py` durchsucht alle von git
+verfolgten Dateien und meldet jede Nennung einer anderen Engine - in
+Sekunden, bevor ein Compiler dasselbe in zehn Minuten und mit irrefuehrender
+Meldung tut. Er laeuft als **Gate 0** der Release-Pipeline, vor dem
+Kompilieren. Regel: **ein Kommentar darf jede Engine nennen** (er warnt ja
+vor ihr), **Code nicht**. Das ersetzte den groessten Teil der Ausnahmeliste -
+eine Liste von Dateinamen veraltet, eine Regel nicht. Uebrig: AGENTS.md
+(Fliesstext) und `Tools/fix_paths_neuer_pc.mjs` (Umzugstabelle, alter Pfad
+ist die Quellseite).
+
+**Gemessen:** 128 Nennungen in 109 Dateien. 14 Abweichler gefunden, nach der
+Kommentarregel blieben 6 echte:
+
+* `build_gate1_nouba.cmd`, `check_ka52_mats.cmd`, `import_ka52.cmd` rufen
+  jetzt `engine.cmd` und tragen gar keinen Pfad mehr.
+* `sweep_map_zoom.sh` auf die installierte Engine gezogen.
+* **`Tools/fix_paths_neuer_pc.mjs` bildete die INSTALLIERTE Engine auf die
+  Plattenkopie ab** - ein erneuter Lauf haette jeden richtigen Pfad auf die
+  veraltete 5.8.1 umgeschrieben. Beim Umzug war das richtig; ein einmaliges
+  Werkzeug veraltet nicht von selbst, es bleibt scharf liegen. Abbildung
+  umgedreht.
+
+**DREI EIGENE FEHLER beim Bau des Waechters, alle mit derselben Handschrift:
+er meldete "alles in Ordnung", weil er nichts fand.**
+
+1. Die Trenner-Zeichenklasse verlor durch die Shell eine Backslash-Ebene und
+   passte nur noch auf Vorwaerts-Schraegstriche - KEIN Windows-Pfad wurde
+   gefunden.
+2. Die Wortgrenze hinter `REM` wurde zu einem echten **Backspace-Byte
+   (0x08)**. `grep` zeigt das brav als "REM" an; sichtbar wurde es erst an
+   `repr(muster.pattern)`. Jede Kommentarzeile galt danach als Code.
+3. Der normalisierte Pfad behielt doppelte Trenner
+   (`C://Program Files//`), worauf der Waechter die KANONISCHE Engine als
+   Abweichler meldete.
+
+Konsequenz: im Waechter steht jetzt **kein einziger Backslash-Escape** mehr
+(Zeichenklassen aus `chr()`, Kommentarerkennung ohne Regex).
+
+**Und ein vierter, im TEST:** die erste Testfassung normalisierte die Zeile
+selbst und pruefte damit nur das Muster statt des Produktionswegs - nimmt man
+dem Waechter die Normalisierung weg, blieb sie gruen. `test_backslash_pfad_im
+_ECHTEN_weg` geht jetzt durch `abweichler()`. Gegengeprueft: alle drei
+Fehler oben faerben die Suite rot. 19 Tests in
+`Tools/test_pruefe_engine.py`.

@@ -1,7 +1,12 @@
 @echo off
+REM ENGINE kommt aus Tools\engine.cmd - kein fester Pfad mehr im Text.
+REM Frueher stand hier die Kopie unter C:\freebuff\...\UE_5.8 (5.8.1). Das
+REM Modul ist gegen den PCH der installierten Engine (5.8.2) gebaut; mischt
+REM man beide, stirbt der Lauf in einem Engine-Header.
 cd /d "%~dp0.."
-"C:\freebuff\WiesbadenReal_Sicherung\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" ^
-  "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject" ^
-  -run=pythonscript -script="C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/Tools/import_ka52.py" ^
-  -stdout -unattended -nopause -nosplash > Tools\import_ka52_log.txt 2>&1
-echo DONE >> Tools\import_ka52_log.txt
+call "%~dp0engine.cmd" || exit /b 1
+"%WB_EDITOR_CMD%" ^
+  "%~dp0..\WiesbadenReal.uproject" ^
+  -run=pythonscript -script="%~dp0import_ka52.py" ^
+  -stdout -unattended -nopause -nosplash > Tools${name}_log.txt 2>&1
+echo DONE >> Tools${name}_log.txt
