@@ -514,6 +514,16 @@ void AWiesbadenSebboHq::ProbeArrival() const
 	double AutoQuaderUnterkanteCm = 0.0;
 	double AutoBelagZCm = 0.0;
 	FString AutoBelagName = TEXT("-");
+	// GESETZT NUR DORT, WO ALLE VIER WERTE AUCH GEMESSEN WURDEN.
+	//
+	// `auto_treffer` hing bisher an `Wagenweg.bFrei`. Das war zu grob:
+	// von den vier Abbruchzweigen fuellt nur "versperrt durch %s" die
+	// Felder. Die drei anderen - kein Belag am Anfahrpunkt, Startpunkt
+	// steckt in der Geometrie, kein Belag bei x - brachen ab und liessen
+	// die Anfangswerte stehen; gemeldet wurde dann {"z_cm": 0, ...,
+	// "belag": "-"}, also genau die Nullen, die hier verschwinden
+	// sollten. Was diese Zweige wirklich wissen, steht in `woran`.
+	bool bAutoTrefferGemessen = false;
 	FWbAnkunftsweg Wagenweg;
 	{
 		const FCollisionShape Wagen = FCollisionShape::MakeBox(FVector(225.0, 100.0, 75.0));
@@ -621,6 +631,7 @@ void AWiesbadenSebboHq::ProbeArrival() const
 						*GetNameSafe(Treffer.GetComponent()));
 					AutoTrefferWeltZCm = Treffer.Location.Z;
 					AutoQuaderUnterkanteCm = Jetzt.Z - 75.0;
+					bAutoTrefferGemessen = true;
 					FHitResult Darunter;
 					const FVector Lot(Treffer.Location.X, Treffer.Location.Y,
 						Treffer.Location.Z + 3000.0);
@@ -936,11 +947,16 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		}
 	}
 	const double GelaendeMittelCm = GelaendePunkte > 0 ? GelaendeSummeCm / GelaendePunkte : 0.0;
-	if (GelaendePunkte == 0)
-	{
-		GelaendeMinCm = 0.0;
-		GelaendeMaxCm = 0.0;
-	}
+	// OHNE EINEN EINZIGEN GELAENDEPUNKT gibt es keine Spannweite und keinen
+	// Mittelwert. Hier wurden sie bisher auf 0 gesetzt - seit der Ring nur
+	// noch Landscape-Treffer zaehlt, ist dieser Fall erreichbar, und 0 waere
+	// wieder eine Hoehe, die niemand gemessen hat. `gelaendepunkte` und
+	// `von_punkten` bleiben Zahlen: die sind gezaehlt.
+	const FString GelaendeWerteJson = GelaendePunkte > 0
+		? FString::Printf(
+			TEXT("\"min_cm\": %.0f, \"max_cm\": %.0f, \"mittel_cm\": %.0f"),
+			GelaendeMinCm, GelaendeMaxCm, GelaendeMittelCm)
+		: FString(TEXT("\"min_cm\": null, \"max_cm\": null, \"mittel_cm\": null"));
 
 	// --- 4) Die Naht: erreicht der Weg auch das Zielvolumen? ------------------
 	//
@@ -1009,7 +1025,7 @@ void AWiesbadenSebboHq::ProbeArrival() const
 	// `auto_treffer` und `fuss_blocker` standen bei freiem Weg mit lauter
 	// Nullen in der Tabelle - vier Messwerte, die keine waren. Null ist eine
 	// Hoehe; "nicht gemessen" ist keine. Darum jetzt `null`.
-	const FString AutoTrefferJson = Wagenweg.bFrei
+	const FString AutoTrefferJson = !bAutoTrefferGemessen
 		? FString(TEXT("null"))
 		: FString::Printf(
 			TEXT("{\"z_cm\": %.0f, \"quader_unterkante_cm\": %.0f, ")
@@ -1044,7 +1060,7 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		TEXT(" \"fuss_blocker\": %s,\n")
 		TEXT(" \"auto_treffer\": %s,\n")
 		TEXT(" \"gelaende_ring\": { \"gelaendepunkte\": %d, \"von_punkten\": %d, ")
-		TEXT("\"min_cm\": %.0f, \"max_cm\": %.0f, \"mittel_cm\": %.0f },\n")
+		TEXT("%s },\n")
 		TEXT(" \"gelaende_schnitt\": [%s]\n}\n"),
 		JaNein(Wagenweg.bFrei), Wagenweg.WegCm, *Wagenweg.Woran,
 		JaNein(Fussweg.bFrei), Fussweg.WegCm, *Fussweg.Woran,
@@ -1064,6 +1080,6 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		*FussBlockerJson,
 		*AutoTrefferJson,
 		GelaendePunkte, RingPunkteGesamt,
-		GelaendeMinCm, GelaendeMaxCm, GelaendeMittelCm, *GelaendeSchnitt);
+		*GelaendeWerteJson, *GelaendeSchnitt);
 	FFileHelper::SaveStringToFile(Inhalt, *Pfad);
 }
