@@ -54,6 +54,17 @@ AUSNAHMEN = {
     # der Quellseite und wird gerade auf den kanonischen abgebildet.
     # (Die Abbildung zeigte bis zum 21.09.2026 in die falsche Richtung.)
     "Tools/fix_paths_neuer_pc.mjs": "Umzugstabelle: alter Pfad ist die Quelle",
+
+    # Pruefdaten. Dieser Test MUSS eine fremde Engine enthalten - sonst
+    # kann er nicht zeigen, dass der Waechter sie findet. Fiel selbst
+    # erst auf, nachdem er committet war: siehe verfolgte_dateien().
+    "Tools/test_pruefe_engine.py": "Testdaten: die fremde Engine ist der Pruefgegenstand",
+
+    # Die eine Quelle selbst. Ihr Docstring stellt BEIDE Engines
+    # nebeneinander - das ist der ganze Zweck der Datei. Ein Docstring
+    # ist kein Kommentar im Sinne von ist_kommentar(); er beginnt nicht
+    # mit einem Kommentarzeichen.
+    "Tools/engine.py": "die kanonische Quelle stellt beide Engines gegenueber",
 }
 
 # KEIN Backslash im Muster - die Zeile wird vor der Suche normalisiert.
@@ -112,8 +123,26 @@ def _norm(pfad):
 
 
 def verfolgte_dateien():
-    roh = subprocess.run(["git", "ls-files", "-z"], cwd=WURZEL, capture_output=True)
-    return [t.decode("utf-8", "surrogateescape") for t in roh.stdout.split(b"\0") if t]
+    """Verfolgte UND vorgemerkte Dateien.
+
+    `git ls-files` allein sieht nur, was schon versioniert ist. Eine NEUE
+    Datei faellt damit erst auf, NACHDEM sie committet wurde - dieser
+    Waechter meldete seine eigene Testdatei genau einen Commit zu spaet.
+    Fuer einen Pre-Commit-Hook waere das wertlos: er soll ja gerade das
+    pruefen, was gleich hineinwandert.
+    """
+    namen = []
+    for args in (["ls-files", "-z"], ["diff", "--cached", "--name-only", "-z"]):
+        roh = subprocess.run(["git", *args], cwd=WURZEL, capture_output=True)
+        namen += [t.decode("utf-8", "surrogateescape")
+                  for t in roh.stdout.split(bytes([0])) if t]
+    # Reihenfolge stabil halten, Doppelte entfernen.
+    gesehen, eindeutig = set(), []
+    for n in namen:
+        if n not in gesehen:
+            gesehen.add(n)
+            eindeutig.append(n)
+    return eindeutig
 
 
 def fundstellen(dateien=None):

@@ -58,11 +58,26 @@ class Fehler(Exception):
 # Git-Grundlagen
 # --------------------------------------------------------------------------
 
+def _ohne_git_umgebung():
+    """Umgebung ohne GIT_*.
+
+    Laeuft dieses Werkzeug aus einem git-Hook - oder aus einer Testsuite,
+    die ihrerseits aus einem Hook laeuft -, dann zeigt GIT_INDEX_FILE auf
+    den Index des LAUFENDEN Commits. Jedes "git add" hier schriebe dann
+    dorthin statt in das gemeinte Repo. Am 21.09.2026 stand so eine
+    Wegwerfdatei aus einem Test im Index eines echten Commits.
+
+    `cwd` allein genuegt NICHT: die Umgebungsvariable schlaegt das
+    Arbeitsverzeichnis.
+    """
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def git(*args, wurzel=None, pruefen=True):
     """Ruft git und liefert die Ausgabe. Fehlertext bleibt lesbar."""
     ergebnis = subprocess.run(
         ["git", *args], cwd=wurzel, capture_output=True, text=True,
-        encoding="utf-8", errors="replace")
+        encoding="utf-8", errors="replace", env=_ohne_git_umgebung())
     if pruefen and ergebnis.returncode != 0:
         raise Fehler("git %s fehlgeschlagen:\n%s%s"
                      % (" ".join(args), ergebnis.stdout, ergebnis.stderr))

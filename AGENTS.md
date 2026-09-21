@@ -3684,3 +3684,77 @@ dem Waechter die Normalisierung weg, blieb sie gruen. `test_backslash_pfad_im
 _ECHTEN_weg` geht jetzt durch `abweichler()`. Gegengeprueft: alle drei
 Fehler oben faerben die Suite rot. 19 Tests in
 `Tools/test_pruefe_engine.py`.
+
+
+## Die Release-Gates laufen jetzt vor dem Commit (21.09.2026)
+
+Die Gates gab es schon - aber erst in `build_release.cmd`, also erst wenn
+jemand ein Paket wollte. Ein Fehler von heute fiel damit Tage spaeter auf,
+verteilt ueber mehrere Commits, und blockierte ausgerechnet den Lauf, der
+Stunden dauert.
+
+**GEMESSENE Kosten - daraus folgt der Entwurf, nicht aus einer Meinung:**
+
+    Gate 0  Engine-Pfade        1 s
+    Python-Suiten              46 s
+    Gate 1  Kompilieren         2 s ohne C++-Aenderung, Minuten mit
+    Gate 2  Unit-Tests          Minuten (startet den Unreal-Editor)
+    Gate 3  Rauchtest           Minuten (mehrere Editor-Sitzungen)
+
+Ein Hook, der vor JEDEM Commit eine Viertelstunde braucht, wird binnen eines
+Tages mit `--no-verify` umgangen - und prueft dann gar nichts mehr. Darum
+ZWEI Stufen:
+
+* **pre-commit** (gemessen 48 s): Gate 0, alle Python-Suiten, Gate 1 **nur
+  wenn C++ vorgemerkt ist**. Wer ein Python-Werkzeug aendert, wartet nicht
+  auf einen Compiler.
+* **pre-push** (Minuten): zusaetzlich Gates 2 und 3. Dort ist die Wartezeit
+  vertretbar, und nichts verlaesst den Rechner ungeprueft. Die Blockade
+  wandert damit vom Paketieren an die Stelle, an der sie noch billig ist.
+
+Notausgang: `--no-verify` oder `WB_KEINE_GATES=1`. Absichtlich - ein
+Wachposten ohne Tuer wird eingerissen, nicht benutzt.
+
+**Die Hooks liegen unter `Tools/git-hooks/`, NICHT in `.git/hooks`** - der
+Ordner ist nicht versioniert und ueberlebt keinen frischen Klon. `core.hooks
+Path` zeigt dorthin; das ist eine LOKALE Einstellung und muss einmal je Klon
+gesetzt werden:
+
+    python Tools/hooks_einrichten.py            # einschalten
+    python Tools/hooks_einrichten.py --zeigen   # Stand
+    python Tools/hooks_einrichten.py --aus      # abschalten
+
+**EIN BLINDER FLECK, den erst dieser Umbau zeigte:** `pruefe_engine.py` sah
+nur, was `git ls-files` kennt - also nur VERFOLGTE Dateien. Eine neue Datei
+faellt damit erst auf, NACHDEM sie committet wurde. Der Waechter meldete
+seine eigene Testdatei und `Tools/engine.py` genau einen Commit zu spaet.
+Fuer einen Pre-Commit-Hook waere das wertlos: er soll ja pruefen, was gleich
+hineinwandert. `verfolgte_dateien()` nimmt jetzt auch `git diff --cached`
+dazu. (Beide Fundstellen sind begruendete Ausnahmen: Testdaten und die
+kanonische Quelle stellen beide Engines mit Absicht nebeneinander.)
+
+**Nachweis gegen ein echtes Wegwerf-Repo, nicht gegen eine Nachbildung:**
+rotes Gate -> 0 Commits, gruenes Gate -> 1 Commit, `--no-verify` -> 1 Commit.
+Ein Test, der nur die Hook-DATEI liest, wuerde jede Verdrahtungspanne
+uebersehen. 14 Tests in `Tools/test_vor_dem_commit.py`.
+
+**UND EIN FUND, DER FAST TEUER WURDE.** Der erste Lauf des frisch scharfen
+Hooks fiel rot aus - zu Recht, aber aus einem Grund, den ich nicht erwartet
+hatte: git setzt fuer `git commit --only` ein TEMPORAERES `GIT_INDEX_FILE`
+und vererbt es an JEDEN Unterprozess. Die Testsuiten legen Wegwerf-Repos an
+und rufen dort `git add -A` - das schrieb prompt in den Index des laufenden
+Commits. Nachgemessen: `datei.txt` aus einem Wegwerf-Repo stand im Index des
+echten Commits, und drei Suiten fielen um, weil sie plotzlich einen fremden
+Dateibestand sahen.
+
+Waeren die Gates gruen gewesen, waere die Wegwerfdatei mitgekommen.
+
+`cwd` allein schuetzt NICHT - die Umgebungsvariable schlaegt das
+Arbeitsverzeichnis. Abgedichtet an drei Stellen, jede mit eigenem Grund:
+`vor_dem_commit.py` startet alle Gates ohne `GIT_*` (eine Stelle, schuetzt
+jede Suite), `test_ausliefern.py` und `test_vor_dem_commit.py` saeubern ihre
+eigenen Wegwerf-Repo-Aufrufe (damit sie auch bei direktem Lauf stimmen), und
+`ausliefern.py` selbst (es koennte aus einem Hook gerufen werden).
+
+Belegt: Hook-Weg mit geerbtem Index -> alle Gates gruen, Index-Eintraege
+vorher 1604, nachher 1604, keine Fremddatei.

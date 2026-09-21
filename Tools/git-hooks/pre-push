@@ -1,0 +1,10 @@
+#!/bin/sh
+# Die vollen Release-Gates vor dem Push (Minuten, startet den Unreal-Editor).
+#
+# Hier ist die Wartezeit vertretbar: nichts verlaesst den Rechner ungeprueft.
+# Damit wandert die Blockade vom Paketieren - wo sie Stunden kostet und Tage
+# zu spaet kommt - an die Stelle, an der sie noch billig ist.
+#
+# Notausgang:  git push --no-verify   oder   WB_KEINE_GATES=1
+WURZEL=$(git rev-parse --show-toplevel)
+exec python "$WURZEL/Tools/vor_dem_commit.py" --stufe voll
