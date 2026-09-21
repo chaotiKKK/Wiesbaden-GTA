@@ -595,18 +595,28 @@ bool FSebboHqSchwellenrampeTest::RunTest(const FString& Parameters)
 	const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
 	const double BodenZ = SebboHq::GetAccessFloorCm(D);
 
-	// Bauteile VOR der Fassade auf Garagenhoehe: das ist die Rampe.
+	// Bauteile VOR der Fassade auf Garagenhoehe UND IN DER FAHRSPUR: das ist
+	// die Rampe. Die Boeschung darunter ist breiter als die Oeffnung und
+	// faellt in groben Lagen ab - sie ist Anschuettung, keine Fahrflaeche, und
+	// wuerde die Stufenpruefung unten sonst zu Recht reissen.
+	// Die Oeffnungsbreite steht nicht oeffentlich, wohl aber das Zielvolumen
+	// der Garage - es ist aus derselben Luecke gerechnet: halbe Breite
+	// abzueglich 30 cm Rand je Seite.
+	const double SpurBreiteCm = (Layout.GarageTarget.ExtentCm.Y + 30.0) * 2.0;
 	double TiefsteKanteCm = BodenZ;
 	int32 Stufen = 0;
+	TArray<double> Oberkanten;
 	for (const FHqPart& Teil : Layout.Parts)
 	{
 		const double Aussenkante = Teil.CenterCm.X + Teil.SizeCm.X * 0.5;
 		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
 		const bool bVorDerFassade = Aussenkante > Half + 1.0;
 		const bool bAufFahrhoehe = Oberkante <= BodenZ + 1.0 && Oberkante > BodenZ - 200.0;
-		if (bVorDerFassade && bAufFahrhoehe && Teil.CenterCm.Y < 0.0)
+		const bool bInDerSpur = Teil.SizeCm.Y <= SpurBreiteCm + 1.0;
+		if (bVorDerFassade && bAufFahrhoehe && bInDerSpur && Teil.CenterCm.Y < 0.0)
 		{
 			TiefsteKanteCm = FMath::Min(TiefsteKanteCm, Oberkante);
+			Oberkanten.Add(Oberkante);
 			++Stufen;
 		}
 	}
@@ -617,6 +627,52 @@ bool FSebboHqSchwellenrampeTest::RunTest(const FString& Parameters)
 	TestTrue(*FString::Printf(
 		TEXT("Die Rampe faellt weit genug (%.0f cm unter den Boden)"), BodenZ - TiefsteKanteCm),
 		BodenZ - TiefsteKanteCm >= 40.0);
+
+	// UND SIE MUSS ALS SCHRAEGE LESEN, nicht als Treppe.
+	//
+	// GESEHEN am 21.09.2026 auf Alkis17: mit 5 Stufen ueber denselben 60 cm
+	// zeichnete sich jede Kante einzeln ab - vor der Garage stand ein
+	// gestuftes Betonpodest, keine Zufahrtsschuerze. Der Weg war gemessen
+	// frei, das Bild trotzdem falsch; darum haelt der Vertrag jetzt auch die
+	// Stufenhoehe fest und nicht nur den Gesamtfall.
+	Oberkanten.Sort();
+	double GroessteStufeCm = 0.0;
+	for (int32 i = 1; i < Oberkanten.Num(); ++i)
+	{
+		GroessteStufeCm = FMath::Max(GroessteStufeCm, Oberkanten[i] - Oberkanten[i - 1]);
+	}
+	TestTrue(*FString::Printf(
+		TEXT("Keine Stufe steht als Kante heraus (groesste %.1f cm)"), GroessteStufeCm),
+		GroessteStufeCm <= 6.0);
+
+	// UND SIE DARF NICHT IN DER LUFT ENDEN.
+	//
+	// GESEHEN am 21.09.2026 auf Alkis17: das Gelaende faellt quer zur Zufahrt,
+	// die Schuerze ist waagerecht - ihre talseitige Ecke stand rund 1,5 m frei
+	// ueber der Wiese. Feine Stufen haben daran nichts geaendert; es blieb ein
+	// Betonpodest. Erst die Boeschung darunter laesst den Beton als Schraege
+	// ins Gelaende laufen.
+	double BoeschungFallCm = 0.0;
+	double BreitesteLageCm = 0.0;
+	for (const FHqPart& Teil : Layout.Parts)
+	{
+		const double Aussenkante = Teil.CenterCm.X + Teil.SizeCm.X * 0.5;
+		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
+		const bool bUnterDerRampe = Oberkante <= TiefsteKanteCm + 1.0;
+		if (Aussenkante > Half + 1.0 && bUnterDerRampe
+			&& Teil.SizeCm.Y > SpurBreiteCm + 1.0 && Teil.CenterCm.Y < 0.0)
+		{
+			BoeschungFallCm = FMath::Max(BoeschungFallCm, TiefsteKanteCm - Oberkante);
+			BreitesteLageCm = FMath::Max(BreitesteLageCm, Teil.SizeCm.Y);
+		}
+	}
+	TestTrue(*FString::Printf(
+		TEXT("Unter der Rampe steht eine Boeschung (%.0f cm tief)"), BoeschungFallCm),
+		BoeschungFallCm >= 100.0);
+	TestTrue(*FString::Printf(
+		TEXT("Sie greift ueber die Fahrspur hinaus (%.0f statt %.0f cm)"),
+		BreitesteLageCm, SpurBreiteCm),
+		BreitesteLageCm >= SpurBreiteCm + 200.0);
 
 	return true;
 }

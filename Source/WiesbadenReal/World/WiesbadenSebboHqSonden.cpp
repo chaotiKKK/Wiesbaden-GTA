@@ -469,6 +469,40 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		return true;
 	};
 
+	// SCHWELLENHOEHE - die Stufe, ueber die Rad und Fuss wirklich muessen.
+	//
+	// Hier stand `BodenZ - StrasseGarageZ`, also der Abstand zu dem Belag, den
+	// `StrasseUeberFuss` 8 m VOR der Fassade antastet. Das ergab
+	// "bordstein_garage_cm: 116" direkt neben einem Wagen, der die Garage
+	// gemessen ebenerdig erreicht - ein Widerspruch in derselben Tabelle.
+	// Beide Zahlen stimmten: 8 m draussen liegt die Wiese wirklich 116 cm
+	// tiefer, nur faehrt dort niemand ueber eine Kante. Die Schwelle liegt an
+	// der Fassade, und davor liegt die Schuerze.
+	//
+	// Darum wird an der Fassadenlinie getastet und der TURM NICHT ignoriert:
+	// die Schuerze IST der Belag, auf dem das Rad aufsetzt. Ein Lot, das sie
+	// wegblendet, misst den Boden unter der Rampe und meldet wieder eine
+	// Stufe, die es nicht gibt.
+	//
+	// Und sie meldet MIT, worauf sie getreten ist: "116" allein liess nicht
+	// erkennen, ob da Wiese, Fahrbahn oder ein Vordach unter dem Lot lag.
+	const auto SchwelleAn = [&](double Y, FString& OutBelag)
+	{
+		FCollisionQueryParams P(SCENE_QUERY_STAT(WbAnkunftProbeSchwelle), true);
+		// Von 2 m ueber dem Innenboden - das liegt noch in der lichten Hoehe der
+		// Oeffnung; ein Lot von weit oben traefe den Turm selbst.
+		const FVector Oben = NachWelt(FVector(Half + 50.0, Y, BodenZ + 200.0));
+		FHitResult Boden;
+		if (!World->LineTraceSingleByChannel(Boden, Oben,
+			Oben - FVector(0.0, 0.0, 6200.0), ECC_WorldStatic, P))
+		{
+			OutBelag = TEXT("nichts gefunden");
+			return TNumericLimits<double>::Lowest();   // unuebersehbar statt still 0
+		}
+		OutBelag = GetNameSafe(Boden.GetComponent());
+		return BodenZ - (Boden.Location.Z - Fuss.Z);
+	};
+
 	// Die Bodenhoehen ZUERST - beide Wege setzen darauf auf.
 	double StrasseGarageZ = 0.0;
 	double StrassePortalZ = 0.0;
@@ -476,8 +510,10 @@ void AWiesbadenSebboHq::ProbeArrival() const
 	const double PortalY = Layout.PedestrianTarget.CenterCm.Y;
 	const bool bStrasseGarage = StrasseUeberFuss(GarageY, StrasseGarageZ, BelagGarage);
 	const bool bStrassePortal = StrasseUeberFuss(PortalY, StrassePortalZ, BelagPortal);
-	const double StufeGarageCm = BodenZ - StrasseGarageZ;
-	const double StufePortalCm = BodenZ - StrassePortalZ;
+	FString SchwelleBelagGarage;
+	FString SchwelleBelagPortal;
+	const double StufeGarageCm = SchwelleAn(GarageY, SchwelleBelagGarage);
+	const double StufePortalCm = SchwelleAn(PortalY, SchwelleBelagPortal);
 
 	// --- 1) Auto: durch die Garagenoeffnung -----------------------------------
 	//
@@ -842,7 +878,7 @@ void AWiesbadenSebboHq::ProbeArrival() const
 
 	UE_LOG(LogWbSebboHq, Log,
 		TEXT("Ankunftsprobe: Auto %s (%s), Fuss %s (%s), Heli %s (%s). ")
-		TEXT("Bordstein Garage %.0f cm, Portal %.0f cm. ")
+		TEXT("Schwelle Garage %.0f cm, Portal %.0f cm. ")
 		TEXT("Volumen getroffen: Auto %s, Fuss %s, Heli %s; getrennt: %s."),
 		Wagenweg.bFrei ? TEXT("FREI") : TEXT("BLOCKIERT"), *Wagenweg.Woran,
 		Fussweg.bFrei ? TEXT("FREI") : TEXT("BLOCKIERT"), *Fussweg.Woran,
@@ -873,7 +909,8 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		TEXT("{\n \"auto\": { \"frei\": %s, \"weg_cm\": %.0f, \"woran\": \"%s\" },\n")
 		TEXT(" \"fuss\": { \"frei\": %s, \"weg_cm\": %.0f, \"woran\": \"%s\" },\n")
 		TEXT(" \"heli\": { \"frei\": %s, \"aufsetzhoehe_cm\": %.0f, \"woran\": \"%s\" },\n")
-		TEXT(" \"bordstein_garage_cm\": %.0f,\n \"bordstein_portal_cm\": %.0f,\n")
+		TEXT(" \"schwelle_garage_cm\": %.0f,\n \"schwelle_portal_cm\": %.0f,\n")
+		TEXT(" \"schwelle_belag\": { \"garage\": \"%s\", \"portal\": \"%s\" },\n")
 		TEXT(" \"belag_garage\": \"%s\",\n \"belag_portal\": \"%s\",\n")
 		TEXT(" \"strasse_gefunden\": { \"garage\": %s, \"portal\": %s },\n")
 		TEXT(" \"volumen_getroffen\": { \"auto\": %s, \"fuss\": %s, \"heli\": %s },\n")
@@ -891,7 +928,9 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		JaNein(Wagenweg.bFrei), Wagenweg.WegCm, *Wagenweg.Woran,
 		JaNein(Fussweg.bFrei), Fussweg.WegCm, *Fussweg.Woran,
 		JaNein(Heliweg.bFrei), Heliweg.WegCm, *Heliweg.Woran,
-		StufeGarageCm, StufePortalCm, *BelagGarage, *BelagPortal,
+		StufeGarageCm, StufePortalCm,
+		*SchwelleBelagGarage, *SchwelleBelagPortal,
+		*BelagGarage, *BelagPortal,
 		JaNein(bStrasseGarage), JaNein(bStrassePortal),
 		JaNein(bGarageTrifftVolumen), JaNein(bFussTrifftVolumen), JaNein(bHeliTrifftVolumen),
 		JaNein(bZieleGetrennt),

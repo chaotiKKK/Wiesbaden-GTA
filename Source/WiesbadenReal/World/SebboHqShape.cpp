@@ -332,7 +332,14 @@ FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(const FSebboHqDimensions& 
 	// bewusst weit nach unten: wo die Zufahrt schon hoeher liegt, verschwindet
 	// sie im Belag, statt als Podest darueber zu schweben.
 	{
-		constexpr int32 StufenZahl = 5;
+		// FEIN genug, dass es als Schraege liest und nicht als Treppe.
+		//
+		// GESEHEN am 21.09.2026 auf Alkis17 (Saved/Diagnose, Zufahrt von
+		// Westen): mit 5 Stufen zu je 12 cm zeichnete sich jede Kante einzeln
+		// ab - der Koerper las als gestuftes Betonpodest vor der Garage, nicht
+		// als Zufahrtsschuerze. 20 Stufen zu je 3 cm verschwinden auf jede
+		// normale Entfernung in der Flaeche.
+		constexpr int32 StufenZahl = 20;
 		constexpr double RampeLaengeCm = 300.0;
 		constexpr double RampeFallCm = 60.0;
 		for (int32 i = 0; i < StufenZahl; ++i)
@@ -343,6 +350,40 @@ FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(const FSebboHqDimensions& 
 			AddBetween(Layout.Parts, EHqMaterial::Concrete,
 				X0, X1, Openings.GarageY0, Openings.GarageY1,
 				Oben - 300.0, Oben);
+		}
+
+		// BOESCHUNG, damit die Schuerze im Gelaende endet und nicht in der Luft.
+		//
+		// GESEHEN am 21.09.2026 auf Alkis17: das Gelaende faellt quer zur
+		// Zufahrt (gemessen 48..87 cm auf 2 m Wagenbreite). Die Schuerze ist
+		// aber eine waagerechte Platte - ihre talseitige Ecke stand darum rund
+		// 1,5 m frei ueber der Wiese, als senkrechte Betonwand. Das las als
+		// Podest, nicht als Zufahrt, und die feineren Stufen allein haben
+		// daran nichts geaendert: die Kante war das Problem, nicht ihre Hoehe.
+		//
+		// Ein wirklicher Wirtschaftsweg bekommt an so einer Stelle eine
+		// Anschuettung. Genau die steht hier: Lagen, die nach unten hin breiter
+		// und laenger werden, sodass der Beton als Schraege in die Wiese
+		// laeuft. Wo das Gelaende hoeher liegt - zur Portalseite hin, dort
+		// gemessen 49 cm UEBER dem Innenboden - verschwinden die Lagen im
+		// Boden; sichtbar wird immer nur die Seite, die es braucht.
+		//
+		// Die oberste Lage beginnt unter dem Rampenfuss, damit sie die
+		// Fahrflaeche nicht ueberbaut.
+		// Und FEIN, aus demselben Grund wie die Rampe selbst: mit 6 Lagen zu
+		// 25 cm stand statt der Wand eine Freitreppe vor dem Haus. Dieselbe
+		// Schraege in 5-cm-Lagen liest als Boeschung.
+		constexpr int32 LagenZahl = 30;
+		constexpr double LagenHoeheCm = 5.0;
+		constexpr double AnzugCm = 8.0;       // Versatz je Lage = rund 32 Grad
+		for (int32 k = 0; k < LagenZahl; ++k)
+		{
+			const double Oben = FloorZ - RampeFallCm - LagenHoeheCm * k;
+			const double Breiter = AnzugCm * (k + 1);
+			AddBetween(Layout.Parts, EHqMaterial::Concrete,
+				Half, Half + RampeLaengeCm + Breiter,
+				Openings.GarageY0 - Breiter, Openings.GarageY1 + Breiter,
+				Oben - LagenHoeheCm, Oben);
 		}
 	}
 	AddBetween(Layout.Parts, EHqMaterial::Concrete,
