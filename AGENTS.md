@@ -3574,3 +3574,51 @@ Test: `WiesbadenReal.GIS.RoadFurniture.BankettOhneGehweg` - eigener Fussweg
 ohne Gehweg, vier Faelle (im Bankett bleibt es stehen, dahinter wird
 herangezogen, weit weg bleibt verworfen), und die Zahl der Andockungen als
 Mass dafuer, wie sehr die Regel die Kartierung noch verbiegt.
+
+
+## Release-Pipeline baute mit der FALSCHEN Engine (21.09.2026)
+
+`Tools/build_release.ps1` leitete den Engine-Pfad aus `$Root` ab:
+
+    $Engine = Join-Path $Root "UE_5.8\Engine"     # ALT, falsch
+
+Das ist die **Kopie vom 11.08.2026** unter `C:\freebuff\...\UE_5.8`.
+`Tools/build_gate1.cmd`, `Wiesbaden_spielen.cmd`, die Desktop-Verknuepfung und
+`package_game.cmd` benutzen dagegen die **installierte** Engine
+(`C:\Program Files\Epic Games\UE_5.8`, 07.09.2026). Das Projekt-Intermediate
+traegt deren Shared-PCH - der Pipeline-Build starb darum mitten in einem
+ENGINE-Header:
+
+    GenericPlatform.h(10,8): error C2953: "SelectIntPointerType":
+                              Klassenvorlage wurde bereits definiert
+
+Das sieht nach kaputtem Engine-Quelltext aus und ist keiner (dieselbe
+Signatur wie die bekannte SharedPCH-Korruption). **Der Beweis war der
+Vergleich:** `build_gate1.cmd` lief Minuten vorher am selben Baum GRUEN. Wenn
+zwei Kompilierwege am gleichen Quelltext verschieden ausgehen, liegt es nicht
+am Quelltext.
+
+**Warum kein Abbruch, sondern ein Compilerfehler:** die Pipeline prueft mit
+`Test-Path`, ob `Build.bat` existiert - und die alte Kopie existiert ja. Ein
+Pfad, der DA ist und trotzdem FALSCH ist, faellt keiner
+Vorhandenseins-Pruefung auf. Jetzt: eigener Parameter `-EngineRoot` mit der
+installierten Engine als Vorgabe.
+
+**Gate 3 fand eine echte Luecke:** `WbSpawnPursuer` ist `UFUNCTION(Exec)`,
+stand aber nicht in `docs/reference/wbdev-konsolenbefehle.md`. Die Pruefung
+(`Tools/check_wbdev_docs.ps1`) verlangt den Abschnitt UND die `UE_LOG`-Zeile
+woertlich. Nachgetragen; jetzt 14 Exec-Befehle gedeckt.
+
+**Gemessen:** Voller Release-Lauf 13,1 min (nicht die frueher notierten
+Stunden - der Cook lief inkrementell). Ergebnis: Paket 3,2 GB, EXE 21.09.
+02:45, Vorgaenger nach `Saved/Package_previous` gesichert,
+Desktop-Verknuepfung `Wiesbaden Real (Paket).lnk` nachgezogen.
+
+**Die EXE gestartet und belegt:** die 171-KB-`WiesbadenReal.exe` ist nur der
+Shim - der echte Prozess ist ein ZWEITER gleichen Namens (3,2 GB, Titel
+`WiesbadenReal (64-bit Development PCD3D_SM6)`). Wer nur den ersten misst,
+haelt einen laufenden Build fuer tot. Das Paket-Log liegt unter
+`Saved/Package/Windows/WiesbadenReal/Saved/Logs/`, NICHT in `%LOCALAPPDATA%`:
+Alkis16 in 3,2 s geladen, 52.689 Schilder, 117.351 Spuren, 1.073 Ampeln,
+Sebbo-Hauptsitz 449 Bauteile, 31 Chunk-Actors (0 ohne Render-Geometrie),
+0 Fehlerzeilen.

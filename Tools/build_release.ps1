@@ -34,13 +34,27 @@
 [CmdletBinding()]
 param(
     [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
+    [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8",
     [switch]$GatesOnly,
     [switch]$Rollback
 )
 
 $ErrorActionPreference = "Stop"
 
-$Engine  = Join-Path $Root "UE_5.8\Engine"
+# INSTALLIERTE Engine, NICHT die Kopie unter $Root.
+#
+# GEMESSEN am 21.09.2026: die Pipeline baute gegen
+# C:\freebuff\WiesbadenReal_Sicherung\UE_5.8 (Kopie vom 11.08.2026), waehrend
+# Tools\build_gate1.cmd, Wiesbaden_spielen.cmd und die Desktop-Verknuepfung
+# die installierte Engine (07.09.2026) benutzen. Das Projekt-Intermediate
+# traegt deren Shared-PCH; der Build starb darum in einem ENGINE-Header
+# (GenericPlatform.h: C2953 "SelectIntPointerType" bereits definiert) - das
+# sieht nach kaputtem Engine-Quelltext aus und ist keiner.
+#
+# Die Vorhandenseins-Pruefung weiter unten schlug NICHT an: die alte Kopie
+# existiert ja. Ein Pfad, der da ist und trotzdem falsch ist, faellt keiner
+# Test-Path-Pruefung auf - nur dem Vergleich mit dem, was sonst baut.
+$Engine  = Join-Path $EngineRoot "Engine"
 $BuildBat = Join-Path $Engine "Build\BatchFiles\Build.bat"
 $CmdExe   = Join-Path $Engine "Binaries\Win64\UnrealEditor-Cmd.exe"
 $ProjDir  = Join-Path $Root "WiesbadenReal"
