@@ -79,7 +79,28 @@ namespace
 		Openings.PortalY0 = Openings.PortalY1 - TuerbreiteCm;
 		Openings.PortalY0 = FMath::Max(-Half + 120.0, Openings.PortalY0);
 
-		Openings.ClearHeightCm = FMath::Min(Openings.ClearHeightCm, D.FloorHeightCm - D.SlabCm - 20.0);
+		// LICHTE HOEHE: der Fussgaenger muss MIT seiner Schritthoehe durchpassen.
+		//
+		// 270 cm standen hier mit dem Vermerk, die Oeffnung bleibe "frei fuer
+		// die reale Pawn-Kapsel". Das galt fuer eine STEHENDE Kapsel auf dem
+		// Innenboden: 60 + 180 = 240 cm. AWiesbadenFootPawn hebt die Kapsel
+		// aber vor JEDEM Schritt um MaxStepHeightCm = 40 cm an, und der Belag
+		// vor dem Portal liegt gemessen 107 cm ueber dem Plateau. Oberkante
+		// beim Anheben damit 107 + 180 + 40 = 327 cm - gegen eine
+		// Sturzunterkante von 270 cm.
+		//
+		// GEMESSEN am 21.09.2026 auf Alkis17: die Sonde blieb bei Schritt 8
+		// von 14 im Sturz stecken, oertlich (1670, -1430, 312), Groesse
+		// (60, 180, 85) - genau dieses Bauteil.
+		//
+		// Die Oeffnung nimmt jetzt, was das Geschoss hergibt. Der Sturz bleibt
+		// als Bauteil erhalten, nur schlanker.
+		//
+		// 20 cm Abstand zur Decke waren ein gegriffener Wert und genau 3 cm zu
+		// viel: mit 335 cm blieb die Sonde bei Schritt 11 von 14 haengen, weil
+		// der Belag am Tuerlauf auf 118 cm gestiegen war (118 + 180 + 40 = 338).
+		// 5 cm lassen dem Sturz noch eine Kante und dem Gehenden 12 cm Luft.
+		Openings.ClearHeightCm = D.FloorHeightCm - D.SlabCm - 5.0;
 		return Openings;
 	}
 
@@ -270,9 +291,21 @@ FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(const FSebboHqDimensions& 
 	Layout.GarageTarget.CenterCm = FVector(Half - 420.0,
 		(Openings.GarageY0 + Openings.GarageY1) * 0.5, 120.0);
 	Layout.GarageTarget.ExtentCm = FVector(350.0, (Openings.GarageY1 - Openings.GarageY0) * 0.5 - 30.0, 120.0);
+	// Das Portalziel nimmt die VOLLE lichte Hoehe des Durchgangs, nicht die
+	// Hoehe einer Person auf dem geplanten Innenboden.
+	//
+	// Vorher stand es bei 90 +- 90 cm, also 0..180 - berechnet fuer jemanden,
+	// der auf dem privaten Boden (60 cm) steht. GEMESSEN am 21.09.2026 liegt
+	// der Belag im Tuerlauf aber auf 146 cm: die Kapsel kam durch das Portal
+	// und endete mit 236 cm Mitte 56 cm UEBER dem Volumen. Der Weg war frei,
+	// die Ankunft wurde trotzdem nicht erkannt.
+	//
+	// Wer durch die Tuer geht, ist angekommen - unabhaengig davon, wie hoch
+	// der Belag dort gerade liegt. Darum deckt das Ziel den Durchgang ab.
 	Layout.PedestrianTarget.CenterCm = FVector(Half - 150.0,
-		(Openings.PortalY0 + Openings.PortalY1) * 0.5, 90.0);
-	Layout.PedestrianTarget.ExtentCm = FVector(110.0, (Openings.PortalY1 - Openings.PortalY0) * 0.5 - 10.0, 90.0);
+		(Openings.PortalY0 + Openings.PortalY1) * 0.5, Openings.ClearHeightCm * 0.5);
+	Layout.PedestrianTarget.ExtentCm = FVector(110.0,
+		(Openings.PortalY1 - Openings.PortalY0) * 0.5 - 10.0, Openings.ClearHeightCm * 0.5);
 	Layout.HelicopterTarget.CenterCm = FVector(GetHelipadOffsetCm(D), 0.0, GetHelipadHeightCm(D));
 	Layout.HelicopterTarget.ExtentCm = FVector(D.HelipadDiameterCm * 0.35,
 		D.HelipadDiameterCm * 0.35, 200.0);

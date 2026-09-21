@@ -436,7 +436,8 @@ namespace
 	 */
 	bool KapselSchritt(const UWorld* World, const AActor* /*Selbst*/,
 		const FVector& Von, const FVector& Richtung, double Weite,
-		double MaxStufeCm, FVector& OutNach, FString& OutGrund)
+		double MaxStufeCm, FVector& OutNach, FString& OutGrund,
+		UPrimitiveComponent** OutBlocker = nullptr)
 	{
 		OutNach = Von;
 		if (!World)
@@ -470,6 +471,7 @@ namespace
 		{
 			OutGrund = FString::Printf(TEXT("kein Kopfraum (%s)"),
 				*GetNameSafe(Treffer.GetActor()));
+			if (OutBlocker) { *OutBlocker = Treffer.GetComponent(); }
 			return false;
 		}
 
@@ -482,6 +484,7 @@ namespace
 			// ist die Frage, sobald die Sonde ausserhalb des Turms laeuft.
 			OutGrund = FString::Printf(TEXT("eine Wand quer im Weg (%s)"),
 				*GetNameSafe(Treffer.GetComponent()));
+			if (OutBlocker) { *OutBlocker = Treffer.GetComponent(); }
 			return false;
 		}
 
@@ -509,6 +512,7 @@ namespace
 			{
 				OutGrund = FString::Printf(TEXT("steckt in der Geometrie (%s)"),
 					*GetNameSafe(Treffer.GetComponent()));
+				if (OutBlocker) { *OutBlocker = Treffer.GetComponent(); }
 				return false;
 			}
 			OutNach = Treffer.Location;
@@ -909,6 +913,7 @@ void AWiesbadenSebboHq::ProbeArrival() const
 	// --- 2) Fuss: durch das Portal --------------------------------------------
 	FWbAnkunftsweg Fussweg;
 	FVector FussEnde = FVector::ZeroVector;
+	UPrimitiveComponent* FussBlocker = nullptr;
 	{
 		// AUF DER STRASSE starten, nicht auf dem privaten Boden. Der erste
 		// Lauf setzte die Kapsel auf Portalhoehe an, waehrend der Gehweg
@@ -925,7 +930,8 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		{
 			FVector Nach;
 			FString Grund;
-			if (!KapselSchritt(World, this, Jetzt, NachInnen, 40.0, MaxStufe, Nach, Grund))
+			if (!KapselSchritt(World, this, Jetzt, NachInnen, 40.0, MaxStufe, Nach, Grund,
+				&FussBlocker))
 			{
 				Fussweg.bFrei = false;
 				Fussweg.Woran = FString::Printf(TEXT("Schritt %d von %d - %s"),
@@ -1079,6 +1085,20 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		bHeliTrifftVolumen ? TEXT("ja") : TEXT("nein"),
 		bZieleGetrennt ? TEXT("ja") : TEXT("nein"));
 
+	// Das blockierende Bauteil in TURMKOORDINATEN - "StaticMeshComponent_448"
+	// ist eine Nummer, erst die oertliche Lage sagt, welcher Quader das ist.
+	FString BlockerName = TEXT("-");
+	FVector BlockerMitte = FVector::ZeroVector;
+	FVector BlockerGroesse = FVector::ZeroVector;
+	if (FussBlocker)
+	{
+		BlockerName = GetNameSafe(FussBlocker);
+		BlockerMitte = Drehung.UnrotateVector(FussBlocker->GetComponentLocation() - Fuss);
+		// Die Bauteile sind skalierte 100-cm-Wuerfel; die Skalierung IST die
+		// Kantenlaenge in Zentimetern.
+		BlockerGroesse = FussBlocker->GetComponentScale() * 100.0;
+	}
+
 	const FString Pfad = FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("ankunftsprobe.json");
 	const auto JaNein = [](bool b) { return b ? TEXT("true") : TEXT("false"); };
 	const FString Inhalt = FString::Printf(
@@ -1093,6 +1113,8 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		TEXT(" \"fuss_ende_welt\": [%.0f, %.0f, %.0f],\n")
 		TEXT(" \"portal_volumen\": {\"mitte\": [%.0f, %.0f, %.0f], \"halb\": [%.0f, %.0f, %.0f]},\n")
 		TEXT(" \"fuss_in_volumenkoordinaten\": [%.0f, %.0f, %.0f],\n")
+		TEXT(" \"fuss_blocker\": {\"name\": \"%s\", \"lokal_mitte\": [%.0f, %.0f, %.0f], ")
+		TEXT("\"lokal_groesse\": [%.0f, %.0f, %.0f]},\n")
 		TEXT(" \"auto_treffer\": {\"z_cm\": %.0f, \"quader_unterkante_cm\": %.0f, ")
 		TEXT("\"belag_z_cm\": %.0f, \"belag\": \"%s\"},\n")
 		TEXT(" \"gelaende_ring\": { \"punkte\": %d, \"min_cm\": %.0f, \"max_cm\": %.0f, \"mittel_cm\": %.0f },\n")
@@ -1108,6 +1130,8 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		PortalWeltMitte.X, PortalWeltMitte.Y, PortalWeltMitte.Z,
 		PortalHalb.X, PortalHalb.Y, PortalHalb.Z,
 		FussImVolumen.X, FussImVolumen.Y, FussImVolumen.Z,
+		*BlockerName, BlockerMitte.X, BlockerMitte.Y, BlockerMitte.Z,
+		BlockerGroesse.X, BlockerGroesse.Y, BlockerGroesse.Z,
 		AutoTrefferWeltZCm, AutoQuaderUnterkanteCm, AutoBelagZCm, *AutoBelagName,
 		GelaendePunkte, GelaendeMinCm, GelaendeMaxCm, GelaendeMittelCm, *GelaendeSchnitt);
 	FFileHelper::SaveStringToFile(Inhalt, *Pfad);

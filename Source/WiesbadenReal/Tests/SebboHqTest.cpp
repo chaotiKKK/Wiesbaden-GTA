@@ -523,3 +523,56 @@ bool FSebboHqEineZufahrtsbuchtTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqPortalDurchgangTest,
+	"WiesbadenReal.World.SebboHq.PortalDurchgang",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboHqPortalDurchgangTest::RunTest(const FString& Parameters)
+{
+	// Die lichte Hoehe muss den GEHENDEN Fussgaenger durchlassen, nicht den
+	// stehenden. AWiesbadenFootPawn hebt die Kapsel vor jedem Schritt um
+	// MaxStepHeightCm an; unter dem Sturz braucht es darum
+	// Kapselhoehe + Schritthoehe ueber dem Belag.
+	//
+	// Gemessen am 21.09.2026: mit 270 cm blieb die Sonde im Sturz stecken.
+	const FSebboHqDimensions D;
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
+
+	constexpr double KapselHoeheCm = 180.0;    // 2 x 90, wie AWiesbadenFootPawn
+	constexpr double SchritthoeheCm = 40.0;    // MaxStepHeightCm
+	// Der Belag STEIGT zum Tuerlauf hin an: 107 cm vor dem Portal, 118 cm
+	// am Durchgang selbst (gemessen 21.09.2026). Massgeblich ist der hoehere.
+	constexpr double BelagCm = 118.0;
+
+	// Der Sturz ist das unterste Metallteil ueber der Portaloeffnung.
+	double SturzUnterkanteCm = TNumericLimits<double>::Max();
+	for (const FHqPart& Teil : Layout.Parts)
+	{
+		const bool bUeberDemPortal = Teil.Material == EHqMaterial::Metal
+			&& Teil.CenterCm.X > D.FootprintCm * 0.4
+			&& Teil.SizeCm.Z < 150.0;
+		if (bUeberDemPortal)
+		{
+			SturzUnterkanteCm = FMath::Min(SturzUnterkanteCm,
+				Teil.CenterCm.Z - Teil.SizeCm.Z * 0.5);
+		}
+	}
+	TestTrue(TEXT("Ueber dem Portal liegt ein Sturz"),
+		SturzUnterkanteCm < TNumericLimits<double>::Max());
+
+	// Und das Ankunftsziel muss den Durchgang abdecken: wer hindurchgeht, ist
+	// angekommen, auch wenn der Belag dort hoeher liegt als der Innenboden.
+	TestTrue(*FString::Printf(
+		TEXT("Das Portalziel deckt die lichte Hoehe ab (%.0f cm hoch)"),
+		Layout.PedestrianTarget.ExtentCm.Z * 2.0),
+		Layout.PedestrianTarget.ExtentCm.Z * 2.0 >= SturzUnterkanteCm - 1.0);
+
+	const double GebrauchtCm = BelagCm + KapselHoeheCm + SchritthoeheCm;
+	TestTrue(*FString::Printf(
+		TEXT("Der Sturz laesst den gehenden Fussgaenger durch (%.0f cm frei, %.0f gebraucht)"),
+		SturzUnterkanteCm, GebrauchtCm),
+		SturzUnterkanteCm >= GebrauchtCm);
+
+	return true;
+}
