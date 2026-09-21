@@ -429,45 +429,24 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		return Fuss + Drehung.RotateVector(Oertlich);
 	};
 
-	// Strassenhoehe VOR dem Haus. Der Turm sitzt auf dem Bodenpunkt seiner
-	// Mitte; die Platter Strasse liegt nicht zwingend auf derselben Hoehe.
+	// HIER STAND `StrasseUeberFuss`. Ersatzlos gestrichen, mit allem, was
+	// daran hing: `belag_garage`, `belag_portal` und `strasse_gefunden`.
 	//
-	// NUR 4 m ueber dem Fusspunkt ansetzen, nicht 200. Von ganz oben trifft
-	// das Lot das erste Beste - im ersten Lauf ein Dach 5,7 m UEBER dem
-	// Fusspunkt, woraus ein Bordstein von -510 cm wurde. Gesucht ist der
-	// Belag, auf dem ein Wagen steht, also das, was unter Wagenhoehe liegt.
-	FString BelagGarage;
-	FString BelagPortal;
-	const auto StrasseUeberFuss = [&](double Y, double& OutZ, FString& OutBelag)
-	{
-		FCollisionQueryParams P(SCENE_QUERY_STAT(WbAnkunftProbeBoden), true);
-		P.AddIgnoredActor(this);   // hier IST das Ignorieren richtig: gesucht ist der Belag
-
-		// Von 4 m ueber dem Fusspunkt, und wenn dort nichts liegt, noch einmal
-		// von 40 m. Das Gelaende steigt zur Garagenseite an: die enge Sonde
-		// startete UNTER dem Belag und meldete "nichts gefunden", die weite
-		// allein traf zuerst ein Nachbardach.
-		FHitResult Boden;
-		bool bGetroffen = false;
-		for (const double StartHoehe : { 400.0, 4000.0 })
-		{
-			const FVector Oben = NachWelt(FVector(Half + 800.0, Y, StartHoehe));
-			if (World->LineTraceSingleByChannel(Boden, Oben,
-				Oben - FVector(0.0, 0.0, StartHoehe + 6000.0), ECC_WorldStatic, P))
-			{
-				bGetroffen = true;
-				break;
-			}
-		}
-		if (!bGetroffen)
-		{
-			OutBelag = TEXT("nichts gefunden");
-			return false;
-		}
-		OutZ = Boden.Location.Z - Fuss.Z;
-		OutBelag = GetNameSafe(Boden.GetActor());
-		return true;
-	};
+	// Die Groesse hat einmal gebraucht, was sie mass - die Bodenhoehe fuer den
+	// Startpunkt der Fusssonde. Seit die ihren Belag am eigenen Startpunkt
+	// tastet, war der Hoehenwert toter Code, und uebrig blieben zwei Namen,
+	// die nicht hielten, was sie versprachen:
+	//
+	//   strasse_gefunden  hiess in Wahrheit "das Lot hat IRGENDETWAS
+	//     getroffen". Zuletzt gemeldet: `portal: true` neben einem
+	//     `belag_portal: Landscape_...` - "Strasse gefunden" ueber einer Wiese.
+	//   belag_*           war der ACTOR-Name des Getroffenen. Bei einer
+	//     Stadtkachel ist das `WiesbadenCityChunk_...` und sagt gerade nicht,
+	//     ob dort Fahrbahn oder Hauswand liegt - erst die Komponente sagt es.
+	//
+	// Und beide tasteten 8 m vor der Fassade, wo weder jemand geht noch faehrt.
+	// Was dort zaehlt, misst `schwelle_*_cm` an der Schwelle und nennt die
+	// getroffene Komponente dazu.
 
 	// SCHWELLENHOEHE - die Stufe, ueber die Rad und Fuss wirklich muessen.
 	//
@@ -504,12 +483,8 @@ void AWiesbadenSebboHq::ProbeArrival() const
 	};
 
 	// Die Bodenhoehen ZUERST - beide Wege setzen darauf auf.
-	double StrasseGarageZ = 0.0;
-	double StrassePortalZ = 0.0;
 	const double GarageY = Layout.GarageTarget.CenterCm.Y;
 	const double PortalY = Layout.PedestrianTarget.CenterCm.Y;
-	const bool bStrasseGarage = StrasseUeberFuss(GarageY, StrasseGarageZ, BelagGarage);
-	const bool bStrassePortal = StrasseUeberFuss(PortalY, StrassePortalZ, BelagPortal);
 	FString SchwelleBelagGarage;
 	FString SchwelleBelagPortal;
 	const double StufeGarageCm = SchwelleAn(GarageY, SchwelleBelagGarage);
@@ -730,6 +705,7 @@ void AWiesbadenSebboHq::ProbeArrival() const
 	FString FussProfilJson;
 	double GroessterAbsatzCm = 0.0;
 	double AbsatzBeiXCm = 0.0;
+	bool bAbsatzImDurchgang = false;
 	{
 		FCollisionQueryParams P(SCENE_QUERY_STAT(WbAnkunftFussProfil), true);
 		int32 N = 0;
@@ -765,6 +741,11 @@ void AWiesbadenSebboHq::ProbeArrival() const
 				{
 					GroessterAbsatzCm = Absatz;
 					AbsatzBeiXCm = X;
+					// WO er liegt, ist die halbe Aussage. Der groesste Absatz des
+					// letzten Laufs war die Bordkante der Wolkenbruch, 1,9 m VOR
+					// dem Haus - unter dem Namen "portal_absatz" las sich das wie
+					// eine Stufe in der Tuer.
+					bAbsatzImDurchgang = X <= Half;
 				}
 			}
 			VorigesZ = ZUeberFuss;
@@ -845,6 +826,7 @@ void AWiesbadenSebboHq::ProbeArrival() const
 	// der Luftraum darueber frei? Ein Lot allein beantwortet nur die erste.
 	FWbAnkunftsweg Heliweg;
 	double PadHoeheCm = 0.0;
+	bool bPadGefunden = false;
 	{
 		const double PadSoll = SebboHq::GetHelipadHeightCm(Dimensions);
 		const FVector Mitte = Layout.HelicopterTarget.CenterCm;
@@ -854,7 +836,11 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		FHitResult Lot;
 		const bool bPad = World->LineTraceSingleByChannel(Lot, Oben,
 			NachWelt(FVector(Mitte.X, Mitte.Y, -1000.0)), ECC_WorldStatic, P);
-		PadHoeheCm = bPad ? (Lot.Location.Z - Fuss.Z) : -1.0;
+		// -1 WAERE KEINE HOEHE, sondern ein Merkzettel. Fehlt der Aufsetzpunkt,
+		// sagt das Feld das auch (null); eine Zahl steht nur da, wo gemessen
+		// wurde.
+		bPadGefunden = bPad;
+		PadHoeheCm = bPad ? (Lot.Location.Z - Fuss.Z) : 0.0;
 
 		// Anflug mit Rotorradius statt mit einem Strich.
 		FHitResult Anflug;
@@ -884,10 +870,19 @@ void AWiesbadenSebboHq::ProbeArrival() const
 	// Zwei Punkte (Garage, Portal) sagen, DASS es nicht passt. Ein Plateau
 	// braucht die ganze Verteilung: wieviel muss abgegraben, wieviel
 	// aufgefuellt werden, und auf welcher Hoehe wird beides am kleinsten.
+	//
+	// UND WIRKLICH NUR GELAENDE. Das Lot trifft, was zuerst kommt: im
+	// gemessenen Ring waren 3 von 24 Punkten das Dach eines Nachbarhauses
+	// (WiesbadenCityActor_0 auf +400 cm). Die standen als "max_cm: 400" in der
+	// Abnahmetabelle und zogen auch den Mittelwert hoch - eine Hausecke als
+	// Gelaendehoehe. Gezaehlt wird darum nur, was auf dem Landscape liegt; der
+	// Schnitt zeigt weiterhin JEDEN Punkt samt Kennzeichen, damit die
+	// Auslassung nachpruefbar bleibt.
 	double GelaendeMinCm = TNumericLimits<double>::Max();
 	double GelaendeMaxCm = -TNumericLimits<double>::Max();
 	double GelaendeSummeCm = 0.0;
 	int32 GelaendePunkte = 0;
+	int32 RingPunkteGesamt = 0;
 	FString GelaendeSchnitt;
 	{
 		constexpr int32 Schritte = 24;
@@ -918,9 +913,22 @@ void AWiesbadenSebboHq::ProbeArrival() const
 			// Der ganze Schnitt, nicht nur seine Spannweite: aus Min/Max
 			// allein ist ein Strassenanschnitt nicht von einer gleichmaessigen
 			// Hangneigung zu unterscheiden.
-			GelaendeSchnitt += FString::Printf(TEXT("%s{\"grad\": %.0f, \"cm\": %.0f, \"was\": \"%s\"}"),
-				GelaendePunkte > 0 ? TEXT(", ") : TEXT(""),
-				FMath::RadiansToDegrees(Winkel), H, *GetNameSafe(Boden.GetActor()));
+			// Und die KOMPONENTE, nicht der Actor: eine Stadtkachel heisst
+			// immer WiesbadenCityChunk_..., ob dort Fahrbahn oder Hauswand
+			// liegt, sagt erst der Komponentenname.
+			const bool bGelaende = Boden.GetComponent()
+				&& Boden.GetComponent()->IsA<ULandscapeHeightfieldCollisionComponent>();
+			GelaendeSchnitt += FString::Printf(
+				TEXT("%s{\"grad\": %.0f, \"cm\": %.0f, \"was\": \"%s\", \"gelaende\": %s}"),
+				RingPunkteGesamt > 0 ? TEXT(", ") : TEXT(""),
+				FMath::RadiansToDegrees(Winkel), H,
+				*GetNameSafe(Boden.GetComponent()),
+				bGelaende ? TEXT("true") : TEXT("false"));
+			++RingPunkteGesamt;
+			if (!bGelaende)
+			{
+				continue;   // ein Dach ist keine Gelaendehoehe
+			}
 			GelaendeMinCm = FMath::Min(GelaendeMinCm, H);
 			GelaendeMaxCm = FMath::Max(GelaendeMaxCm, H);
 			GelaendeSummeCm += H;
@@ -992,35 +1000,58 @@ void AWiesbadenSebboHq::ProbeArrival() const
 
 	const FString Pfad = FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("ankunftsprobe.json");
 	const auto JaNein = [](bool b) { return b ? TEXT("true") : TEXT("false"); };
+	const FString AufsetzhoeheJson = bPadGefunden
+		? FString::Printf(TEXT("%.0f"), PadHoeheCm)
+		: FString(TEXT("null"));
+
+	// Ein Treffer, den es nicht gab, wird NICHT als Null gemeldet.
+	//
+	// `auto_treffer` und `fuss_blocker` standen bei freiem Weg mit lauter
+	// Nullen in der Tabelle - vier Messwerte, die keine waren. Null ist eine
+	// Hoehe; "nicht gemessen" ist keine. Darum jetzt `null`.
+	const FString AutoTrefferJson = Wagenweg.bFrei
+		? FString(TEXT("null"))
+		: FString::Printf(
+			TEXT("{\"z_cm\": %.0f, \"quader_unterkante_cm\": %.0f, ")
+			TEXT("\"belag_z_cm\": %.0f, \"belag\": \"%s\"}"),
+			AutoTrefferWeltZCm, AutoQuaderUnterkanteCm, AutoBelagZCm, *AutoBelagName);
+	const FString FussBlockerJson = FussBlocker
+		? FString::Printf(
+			TEXT("{\"name\": \"%s\", \"lokal_mitte\": [%.0f, %.0f, %.0f], ")
+			TEXT("\"lokal_groesse\": [%.0f, %.0f, %.0f]}"),
+			*BlockerName, BlockerMitte.X, BlockerMitte.Y, BlockerMitte.Z,
+			BlockerGroesse.X, BlockerGroesse.Y, BlockerGroesse.Z)
+		: FString(TEXT("null"));
+
 	const FString Inhalt = FString::Printf(
 		TEXT("{\n \"auto\": { \"frei\": %s, \"weg_cm\": %.0f, \"woran\": \"%s\" },\n")
 		TEXT(" \"fuss\": { \"frei\": %s, \"weg_cm\": %.0f, \"woran\": \"%s\" },\n")
-		TEXT(" \"heli\": { \"frei\": %s, \"aufsetzhoehe_cm\": %.0f, \"woran\": \"%s\" },\n")
+		TEXT(" \"heli\": { \"frei\": %s, \"aufsetzhoehe_cm\": %s, \"woran\": \"%s\" },\n")
+		// OHNE DIE BEZUGSLINIE sind alle x_lokal der beiden Profile nicht zu
+		// lesen: "x 1887" heisst erst etwas, wenn die Fassade bekannt ist.
+		TEXT(" \"fassade_x_lokal\": %.0f,\n")
 		TEXT(" \"schwelle_garage_cm\": %.0f,\n \"schwelle_portal_cm\": %.0f,\n")
 		TEXT(" \"schwelle_belag\": { \"garage\": \"%s\", \"portal\": \"%s\" },\n")
-		TEXT(" \"belag_garage\": \"%s\",\n \"belag_portal\": \"%s\",\n")
-		TEXT(" \"strasse_gefunden\": { \"garage\": %s, \"portal\": %s },\n")
 		TEXT(" \"volumen_getroffen\": { \"auto\": %s, \"fuss\": %s, \"heli\": %s },\n")
 		TEXT(" \"volumen_getrennt\": %s,\n")
 		TEXT(" \"fuss_ende_welt\": [%.0f, %.0f, %.0f],\n")
 		TEXT(" \"portal_volumen\": {\"mitte\": [%.0f, %.0f, %.0f], \"halb\": [%.0f, %.0f, %.0f]},\n")
 		TEXT(" \"fuss_in_volumenkoordinaten\": [%.0f, %.0f, %.0f],\n")
 		TEXT(" \"auto_profil\": [\n  %s\n ],\n")
-		TEXT(" \"portal_absatz\": {\"groesster_cm\": %.0f, \"bei_x_lokal\": %.0f},\n")
+		TEXT(" \"groesster_absatz_im_fussweg\": {\"cm\": %.0f, \"bei_x_lokal\": %.0f, ")
+		TEXT("\"im_durchgang\": %s},\n")
 		TEXT(" \"fuss_profil\": [\n  %s\n ],\n")
-		TEXT(" \"fuss_blocker\": {\"name\": \"%s\", \"lokal_mitte\": [%.0f, %.0f, %.0f], ")
-		TEXT("\"lokal_groesse\": [%.0f, %.0f, %.0f]},\n")
-		TEXT(" \"auto_treffer\": {\"z_cm\": %.0f, \"quader_unterkante_cm\": %.0f, ")
-		TEXT("\"belag_z_cm\": %.0f, \"belag\": \"%s\"},\n")
-		TEXT(" \"gelaende_ring\": { \"punkte\": %d, \"min_cm\": %.0f, \"max_cm\": %.0f, \"mittel_cm\": %.0f },\n")
+		TEXT(" \"fuss_blocker\": %s,\n")
+		TEXT(" \"auto_treffer\": %s,\n")
+		TEXT(" \"gelaende_ring\": { \"gelaendepunkte\": %d, \"von_punkten\": %d, ")
+		TEXT("\"min_cm\": %.0f, \"max_cm\": %.0f, \"mittel_cm\": %.0f },\n")
 		TEXT(" \"gelaende_schnitt\": [%s]\n}\n"),
 		JaNein(Wagenweg.bFrei), Wagenweg.WegCm, *Wagenweg.Woran,
 		JaNein(Fussweg.bFrei), Fussweg.WegCm, *Fussweg.Woran,
-		JaNein(Heliweg.bFrei), Heliweg.WegCm, *Heliweg.Woran,
+		JaNein(Heliweg.bFrei), *AufsetzhoeheJson, *Heliweg.Woran,
+		Half,
 		StufeGarageCm, StufePortalCm,
 		*SchwelleBelagGarage, *SchwelleBelagPortal,
-		*BelagGarage, *BelagPortal,
-		JaNein(bStrasseGarage), JaNein(bStrassePortal),
 		JaNein(bGarageTrifftVolumen), JaNein(bFussTrifftVolumen), JaNein(bHeliTrifftVolumen),
 		JaNein(bZieleGetrennt),
 		FussEnde.X, FussEnde.Y, FussEnde.Z,
@@ -1028,11 +1059,11 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		PortalHalb.X, PortalHalb.Y, PortalHalb.Z,
 		FussImVolumen.X, FussImVolumen.Y, FussImVolumen.Z,
 		*AutoProfilJson,
-		GroessterAbsatzCm, AbsatzBeiXCm,
+		GroessterAbsatzCm, AbsatzBeiXCm, JaNein(bAbsatzImDurchgang),
 		*FussProfilJson,
-		*BlockerName, BlockerMitte.X, BlockerMitte.Y, BlockerMitte.Z,
-		BlockerGroesse.X, BlockerGroesse.Y, BlockerGroesse.Z,
-		AutoTrefferWeltZCm, AutoQuaderUnterkanteCm, AutoBelagZCm, *AutoBelagName,
-		GelaendePunkte, GelaendeMinCm, GelaendeMaxCm, GelaendeMittelCm, *GelaendeSchnitt);
+		*FussBlockerJson,
+		*AutoTrefferJson,
+		GelaendePunkte, RingPunkteGesamt,
+		GelaendeMinCm, GelaendeMaxCm, GelaendeMittelCm, *GelaendeSchnitt);
 	FFileHelper::SaveStringToFile(Inhalt, *Pfad);
 }
