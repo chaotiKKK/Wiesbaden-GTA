@@ -13,10 +13,14 @@ Eine PROZEDURALE Ziegel-/Schiefer-Struktur - Kachelreihen im Laeuferverband,
 je Kachel eine leichte Verwitterung, dunklere Fugen und ein Verlauf je Kachel
 (Pfannen-Schatten). Das liest sich aus jeder Entfernung als gedecktes Dach.
 
-Drei Deckungen statt zwei, je 14-m-Region gewuerfelt:
-  * Terrakotta-Pfanne (warmes Rot)   ~40 %  - das Wohnhaus-Dach
-  * Schiefer (blaugrau)              ~40 %  - Gruenderzeit, Kirchen
-  * Zink/Blech (grau, leicht metall) ~20 %  - Anbauten, Moderne
+Fuenf Deckungen, je Gebaeude aus der Dach-Vertexfarbe (R) gelesen:
+  * Terrakotta-Pfanne (warmes Rot)      - das Wohnhaus-Dach
+  * Schiefer (blaugrau)                 - Gruenderzeit, Civic, Uni
+  * Zink/Blech (grau, leicht metall)    - Anbauten, Moderne, Flachdach
+  * Kupfergruen/Patina (verdigris)      - Kirche/Wahrzeichen mit Kuppel/Turmhelm
+  * dunkler Schiefer (fast schwarz)     - Kirche/Wahrzeichen sonst
+Aeltere Bakes (R=255 = Legacy) fallen auf die alte 14-m-Regionswuerfelung
+(Terrakotta/Schiefer/Zink) zurueck und regredieren nicht.
 
 KEINE TEXTUR: Das Muster ist reine Shader-Mathematik. Damit gibt es die
 ">2 Textur-Samples fallen auf Schiefer zurueck"-Falle nicht mehr (der Grund,
@@ -159,6 +163,23 @@ def vmin(a, b, x, y, ao="", bo=""):
     return binop(unreal.MaterialExpressionMin, a, b, x, y, ao, bo)
 
 
+def vmax(a, b, x, y, ao="", bo=""):
+    return binop(unreal.MaterialExpressionMax, a, b, x, y, ao, bo)
+
+
+def absn(a, x, y, ao=""):
+    n = E(unreal.MaterialExpressionAbs, x, y)
+    link(a, ao, n, "")
+    return n
+
+
+def clamp01(a, x, y, ao=""):
+    # Ueber Min/Max (A/B-Pins) statt Clamp-Knoten - dessen Eingangspin heisst
+    # "Input", der Link-Helfer trifft ihn mit "" nicht zuverlaessig.
+    lo = vmax(a, C1(0.0, x - 150, y + 40), x - 20, y, ao=ao)
+    return vmin(lo, C1(1.0, x - 150, y + 120), x + 120, y)
+
+
 def mask2(a, ch_r, ch_g, x, y, ao=""):
     n = E(unreal.MaterialExpressionComponentMask, x, y)
     n.set_editor_property("r", ch_r)
@@ -191,23 +212,17 @@ mZinc = floor(add(hB, C1(0.22, -1420, 480), -1300, 380), -1180, 380)      # ~22 
 
 # ---- Deckung je GEBAEUDE aus der Vertexfarbe (R) ---------------------------
 #
-# BuildRoof schreibt die Deckung in R (0/85/170 = Terrakotta/Schiefer/Zink);
-# 255 (Weiss) bedeutet "Legacy" -> aeltere Bakes (Dach-Verts weiss) fallen auf
-# die Regionswahl zurueck und regredieren nicht. So traegt ein neu gebackenes
-# Gebaeude GENAU EINE typgerechte Deckung statt einer 14-m-Wuerfelung.
+# BuildRoof schreibt die Deckung in R (0/51/102/153/204 = Terrakotta / Schiefer /
+# Zink / Kupfergruen / dunkler Schiefer; Schritt 51 = 255/5, fuenf Deckungen auf
+# ganzen Stufen). 255 (Weiss) bedeutet "Legacy" -> aeltere Bakes (Dach-Verts
+# weiss) fallen auf die Regionswahl (mSlate/mZinc) zurueck und regredieren nicht.
+# Kirchen/Wahrzeichen tragen dabei Kupfergruen (Kuppel/Turmhelm) bzw. dunklen
+# Schiefer - eine markante Deckung, die sie aus der Dachlandschaft heraushebt.
 vc = E(unreal.MaterialExpressionVertexColor, -2000, 700)
 vcR = mask2(vc, True, False, -1850, 700)   # nur R-Kanal
-vcIdx = floor(add(mul(vcR, C1(3.0, -1780, 820), -1640, 760),
-                  C1(0.5, -1780, 900), -1500, 760), -1360, 760)   # 0/1/2
-vcZinc = floor(add(mul(vcIdx, C1(0.5, -1780, 1000), -1640, 960),
-                   C1(0.25, -1780, 1060), -1500, 960), -1360, 960)  # idx==2
-vcSlate = floor(add(mul(vcIdx, C1(0.5, -1780, 1160), -1640, 1120),
-                    C1(0.75, -1780, 1220), -1500, 1120), -1360, 1120)  # idx>=1
 bLegacy = floor(add(vcR, C1(0.1, -1780, 1300), -1640, 1280), -1500, 1280)  # 1 wenn R>=0.9
-
-# Legacy (Weiss) -> Regionswahl (mSlate/mZinc), sonst -> Vertexfarbe je Gebaeude.
-mSlateF = lerp(vcSlate, mSlate, bLegacy, -1200, 760)
-mZincF = lerp(vcZinc, mZinc, bLegacy, -1200, 960)
+vcIdx = floor(add(mul(vcR, C1(5.0, -1780, 820), -1640, 760),
+                  C1(0.5, -1780, 900), -1500, 760), -1360, 760)   # 0..4 (Legacy: 5)
 
 # ---- Per-Gebaeude-Tonvariation aus der Vertexfarbe (G) ---------------------
 #
@@ -225,18 +240,56 @@ tone = add(C1(1.0 - TONE_AMP, -1700, 1520),
            -1380, 1480)                       # 1-AMP .. 1+AMP, Mitte 1.0
 toneApplied = lerp(tone, C1(1.0, -1380, 1620), bLegacy, -1200, 1500)
 
-# ---- Deckungsfarben + Materialwerte ---------------------------------------
-terra = C3(0.52, 0.205, 0.115, -1000, -520)
-slate = C3(0.150, 0.165, 0.200, -1000, -400)
-zinc = C3(0.335, 0.350, 0.360, -1000, -280)
+# ---- Deckungsfarben + Materialwerte je Deckung ----------------------------
+terra = C3(0.52, 0.205, 0.115, -1150, -560)
+slate = C3(0.150, 0.165, 0.200, -1150, -480)
+zinc = C3(0.335, 0.350, 0.360, -1150, -400)
+copper = C3(0.190, 0.450, 0.390, -1150, -320)   # Kupfer-Patina (verdigris)
+dslate = C3(0.075, 0.085, 0.105, -1150, -240)   # dunkler Schiefer
 
-colS = lerp(terra, slate, mSlateF, -800, -440)
-baseCol0 = lerp(colS, zinc, mZincF, -640, -400)
-baseCol = mul(baseCol0, toneApplied, -480, -420)   # Ton je Gebaeude
 
-roughTS = lerp(C1(0.82, -1000, -120), C1(0.60, -1000, -40), mSlateF, -800, -120)
-baseRough = lerp(roughTS, C1(0.45, -1000, 60), mZincF, -640, -80)
-metal = mul(mZincF, C1(0.40, -1000, 200), -800, 200)
+# Auswahl je Index: sel_i = clamp01(1 - |vcIdx - i|) ist 1 GENAU bei Index i,
+# sonst 0. Die gewichtete Summe waehlt so ohne Verzweigung eine Deckung. Ohne
+# das clamp01 wuerden entfernte Indizes NEGATIV beitragen (Farbe abziehen).
+def sel(i, y):
+    d = absn(sub(vcIdx, C1(float(i), -1060, y + 30), -900, y), -760, y)
+    return clamp01(sub(C1(1.0, -1060, y - 30), d, -620, y), -470, y)
+
+
+s0 = sel(0, -560)
+s1 = sel(1, -470)
+s2 = sel(2, -380)
+s3 = sel(3, -290)
+s4 = sel(4, -200)
+
+
+def wsum(pairs, x0, y0):
+    acc = mul(pairs[0][0], pairs[0][1], x0, y0)
+    for k, (val, s) in enumerate(pairs[1:], 1):
+        acc = add(acc, mul(val, s, x0, y0 + 70 * k), x0 + 180, y0 + 70 * k)
+    return acc
+
+
+vcCol = wsum([(terra, s0), (slate, s1), (zinc, s2), (copper, s3), (dslate, s4)],
+             -260, -560)
+vcRough = wsum([(C1(0.82, -430, 40), s0), (C1(0.60, -430, 110), s1),
+                (C1(0.45, -430, 180), s2), (C1(0.55, -430, 250), s3),
+                (C1(0.62, -430, 320), s4)], -260, 40)
+vcMetal = add(mul(C1(0.40, -430, 470), s2, -260, 470),
+              mul(C1(0.10, -430, 550), s3, -260, 550), -80, 510)
+
+# Legacy: Regionswahl wie bisher (Terrakotta/Schiefer/Zink je 14-m-Zelle).
+legColS = lerp(terra, slate, mSlate, -260, -160)
+legCol = lerp(legColS, zinc, mZinc, -100, -140)
+legRoughTS = lerp(C1(0.82, -430, 640), C1(0.60, -430, 710), mSlate, -260, 660)
+legRough = lerp(legRoughTS, C1(0.45, -430, 780), mZinc, -80, 700)
+legMetal = mul(mZinc, C1(0.40, -430, 860), -100, 840)
+
+# Nicht-Legacy -> Vertexfarb-Deckung je Gebaeude, Legacy -> Region.
+baseCol0 = lerp(vcCol, legCol, bLegacy, 120, -300)
+baseCol = mul(baseCol0, toneApplied, 300, -320)   # Ton je Gebaeude
+baseRough = lerp(vcRough, legRough, bLegacy, 120, 60)
+metal = lerp(vcMetal, legMetal, bLegacy, 120, 500)
 
 # ---- Prozedurales Kachelmuster --------------------------------------------
 u = divc(X, TILE_W, -2000, -60)
@@ -288,8 +341,9 @@ MEL.connect_material_property(metal, "", MP.MP_METALLIC)
 
 MEL.recompile_material(mat)
 EAL.save_loaded_asset(mat)
-log("FERTIG: M_WbBuildingRoof - prozedurale Ziegel/Schiefer/Zink-Deckung, "
-    "Kachel %gx%g cm, Region %g cm, Ton je Gebaeude +-%g%% (VC.G)."
+log("FERTIG: M_WbBuildingRoof - 5 Deckungen je Gebaeude (Terrakotta/Schiefer/"
+    "Zink/Kupfergruen/dunkler Schiefer, VC.R), Kachel %gx%g cm, Legacy-Region "
+    "%g cm, Ton je Gebaeude +-%g%% (VC.G)."
     % (TILE_W, TILE_H, CELL_CM, TONE_AMP * 100.0))
 
 if unreal.SystemLibrary.get_command_line().find("-unattended") >= 0:

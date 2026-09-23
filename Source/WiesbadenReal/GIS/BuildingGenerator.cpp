@@ -306,8 +306,36 @@ int32 UBuildingGenerator::SelectMaterialVariant(const TMap<FName, FString>& Tags
 	return Pick({ { Facade_Plaster, 45 }, { Facade_Sandstone, 35 }, { Facade_Brick, 20 } });
 }
 
-int32 UBuildingGenerator::RoofCoveringIndex(int32 MaterialVariant, EOSMRoofShape Shape)
+int32 UBuildingGenerator::RoofCoveringIndex(int32 MaterialVariant, EOSMRoofShape Shape,
+	EOSMBuildingType BuildingType, bool bIsLandmark)
 {
+	// Kirchen und Wahrzeichen bekommen eine EIGENE, markante Deckung - nicht die
+	// allgemeine Sandstein->Schiefer-Regel, die sie in der Dachlandschaft
+	// untergehen liesse. Die kupfergruene Patina (verdigris) ist das Wahrzeichen
+	// der Wiesbadener Turmhelme und Kuppeln; Langhaus/Kirchendaecher tragen
+	// schweren, dunklen Schiefer. Der Vorrang steht bewusst VOR der Flachdach-
+	// Regel: viele Kirchen-/Landmarken-Grundrisse haben kein roof:shape-Tag und
+	// gaelten sonst als "flach" und wuerden faelschlich als Zink gedeckt.
+	if (BuildingType == EOSMBuildingType::Church || bIsLandmark)
+	{
+		// Kuppeln und Turmhelme (Kuppel-/Zeltdach) tragen IMMER die kupfergruene
+		// Patina - egal ob Kirche oder buergerliches Wahrzeichen.
+		if (Shape == EOSMRoofShape::Dome || Shape == EOSMRoofShape::Pyramidal)
+		{
+			return 3;   // Kupfergruen/Patina
+		}
+		// Kirchen sind in Wiesbaden mit dunklem Schiefer gedeckt (Marktkirche,
+		// Bergkirche, Ringkirche). Die grossen buergerlichen Wahrzeichen (Kurhaus,
+		// Rathaus, Staatstheater, Thermen ...) dagegen mit kupfergruener Patina.
+		// So heben sich BEIDE klar von der Wohn-Dachlandschaft ab und tragen je
+		// eine ortsgerechte, markante Deckung.
+		if (BuildingType == EOSMBuildingType::Church)
+		{
+			return 4;   // dunkler Schiefer
+		}
+		return 3;       // Nicht-Kirchen-Wahrzeichen -> Kupfergruen
+	}
+
 	// Flachdaecher sind nie gedeckt - Bitumen/Kies/Blech. Als Zink-Grau (2)
 	// dargestellt, unabhaengig von der Fassade: ein flaches Buero- wie ein
 	// flaches Wohnhaus-Dach traegt keine Pfannen.
@@ -317,9 +345,9 @@ int32 UBuildingGenerator::RoofCoveringIndex(int32 MaterialVariant, EOSMRoofShape
 	}
 
 	// Geneigte Daecher folgen der Bauweise (dieselbe Variante wie die Fassade):
-	//   Sandstein  = Gruenderzeit, Kirchen, Civic  -> Schiefer (historisch)
-	//   Glas/Beton = Buero, Industrie, Parkhaus    -> Zink/Blech
-	//   Rest (Putz/Backstein/Fachwerk = Wohnbau)   -> Terrakotta-Pfanne
+	//   Sandstein  = Gruenderzeit, Civic, Uni       -> Schiefer (historisch)
+	//   Glas/Beton = Buero, Industrie, Parkhaus     -> Zink/Blech
+	//   Rest (Putz/Backstein/Fachwerk = Wohnbau)    -> Terrakotta-Pfanne
 	switch (MaterialVariant)
 	{
 	case Facade_Sandstone:
@@ -1111,7 +1139,7 @@ bool UBuildingGenerator::BuildSingleBuilding(
 
 	if (Settings.bGenerateRoofs)
 	{
-		BuildRoof(Ring, Holes, EavesZ, OutBuilding.RoofShape, RoofHeightCm, MaterialVariant, SourceId, FacadeOverrideKey, Settings.RoofOverhangMeters, *OutMeshData);
+		BuildRoof(Ring, Holes, EavesZ, OutBuilding.RoofShape, RoofHeightCm, MaterialVariant, OutBuilding.BuildingType, OutBuilding.bIsLandmark, SourceId, FacadeOverrideKey, Settings.RoofOverhangMeters, *OutMeshData);
 	}
 
 	return true;
@@ -1243,6 +1271,8 @@ void UBuildingGenerator::BuildRoof(
 	EOSMRoofShape Shape,
 	double RoofHeightCm,
 	int32 MaterialVariant,
+	EOSMBuildingType BuildingType,
+	bool bIsLandmark,
 	int64 SourceId,
 	const FString& FacadeOverrideKey,
 	double RoofOverhangMeters,
@@ -1257,12 +1287,14 @@ void UBuildingGenerator::BuildRoof(
 		OutMeshData, EBuildingMeshChannel::Roof, MaterialVariant, FacadeOverrideKey);
 	FBuildingMeshSection& Section = OutMeshData.Sections[SectionIndex];
 
-	// Dachdeckung als Vertexfarbe: R traegt die Deckung (0/85/170 =
-	// Terrakotta/Schiefer/Zink), damit das Dachmaterial EINE typgerechte
-	// Deckung je Gebaeude liest statt einer Weltregion zu wuerfeln. Der Wert
-	// R=255 (Weiss) bleibt bewusst UNGENUTZT und bedeutet im Material "Legacy" -
-	// so bleiben aeltere Bakes (Dach-Verts = FColor::White) auf der alten
-	// Regionswahl und regredieren nicht.
+	// Dachdeckung als Vertexfarbe: R traegt die Deckung (0/51/102/153/204 =
+	// Terrakotta/Schiefer/Zink/Kupfergruen/dunkler Schiefer), damit das
+	// Dachmaterial EINE typgerechte Deckung je Gebaeude liest statt einer
+	// Weltregion zu wuerfeln. Schrittweite 51 = 255/5, sodass fuenf Deckungen
+	// exakt auf ganze Stufen (Index * 0,2) fallen. Der Wert R=255 (Weiss) bleibt
+	// bewusst UNGENUTZT und bedeutet im Material "Legacy" - so bleiben aeltere
+	// Bakes (Dach-Verts = FColor::White) auf der alten Regionswahl und
+	// regredieren nicht.
 	//
 	// G traegt eine deterministische Tonstufe je Gebaeude-Id: das Material
 	// verschiebt damit die Deckungsfarbe leicht (+-~9 %), sodass eine Reihe
@@ -1270,9 +1302,9 @@ void UBuildingGenerator::BuildRoof(
 	// unberuehrt. Legacy-Bakes tragen G=255; das Material wertet den Ton nur im
 	// Nicht-Legacy-Pfad aus, ein Ton-Byte von 255 in einem neuen Bake bleibt
 	// also folgenlos.
-	const int32 CoveringIndex = RoofCoveringIndex(MaterialVariant, Shape);
+	const int32 CoveringIndex = RoofCoveringIndex(MaterialVariant, Shape, BuildingType, bIsLandmark);
 	const FColor RoofVertexColor(
-		static_cast<uint8>(CoveringIndex * 85), RoofToneByte(SourceId), 255, 255);
+		static_cast<uint8>(CoveringIndex * 51), RoofToneByte(SourceId), 255, 255);
 
 	// Dach-UVs GEBAeUDE-LOKAL statt weltbezogen. Die georeferenzierten
 	// Weltkoordinaten sind in Wiesbaden riesig (Tausende Meter). Als per-Vertex-
