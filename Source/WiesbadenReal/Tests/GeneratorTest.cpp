@@ -782,6 +782,74 @@ bool FRoadLaneAttributesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FServiceLaneCountTest,
+	"WiesbadenReal.GIS.RoadNetworkGenerator.ServiceLaneCounts",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FServiceLaneCountTest::RunTest(const FString& Parameters)
+{
+	URoadTypeLibrary* Lib = NewObject<URoadTypeLibrary>();
+	Lib->ApplyBuiltInDefaults();
+
+	auto Counts = [Lib](const TMap<FName, FString>& Tags, EOSMOnewayType Oneway,
+		int32& Fwd, int32& Bwd)
+	{
+		FOSMWay Way;
+		Way.Id = 1;
+		for (const TPair<FName, FString>& Tag : Tags)
+		{
+			Way.Tags.Add(Tag.Key, Tag.Value);
+		}
+		Lib->ResolveLaneCounts(Way, EOSMHighwayType::Service, Oneway, Fwd, Bwd);
+	};
+
+	// --- Zufahrt: einspurig (eine Spur, keine Gegenspur) --------------------
+	// Der Klassendefault waere 1+1 = 5 m breit; eine Zufahrt ist ~2,5 m.
+	{
+		int32 Fwd = -1, Bwd = -1;
+		Counts({ { TEXT("highway"), TEXT("service") }, { TEXT("service"), TEXT("driveway") } },
+			EOSMOnewayType::No, Fwd, Bwd);
+		TestEqual(TEXT("Zufahrt: eine Fahrspur"), Fwd, 1);
+		TestEqual(TEXT("Zufahrt: keine Gegenspur"), Bwd, 0);
+	}
+
+	// --- Gasse: ebenso einspurig -------------------------------------------
+	{
+		int32 Fwd = -1, Bwd = -1;
+		Counts({ { TEXT("highway"), TEXT("service") }, { TEXT("service"), TEXT("alley") } },
+			EOSMOnewayType::No, Fwd, Bwd);
+		TestEqual(TEXT("Gasse: eine Fahrspur"), Fwd, 1);
+		TestEqual(TEXT("Gasse: keine Gegenspur"), Bwd, 0);
+	}
+
+	// --- Parkplatzgasse: NICHT verengt (oft zweispurig befahren) ------------
+	{
+		int32 Fwd = -1, Bwd = -1;
+		Counts({ { TEXT("highway"), TEXT("service") }, { TEXT("service"), TEXT("parking_aisle") } },
+			EOSMOnewayType::No, Fwd, Bwd);
+		TestEqual(TEXT("Parkplatzgasse: bleibt 1+1"), Fwd + Bwd, 2);
+	}
+
+	// --- service ohne Untertyp: unveraendert -------------------------------
+	{
+		int32 Fwd = -1, Bwd = -1;
+		Counts({ { TEXT("highway"), TEXT("service") } }, EOSMOnewayType::No, Fwd, Bwd);
+		TestEqual(TEXT("service ohne Untertyp: bleibt 1+1"), Fwd + Bwd, 2);
+	}
+
+	// --- Zufahrt MIT explizitem lanes-Tag: Vermessung schlaegt Default -----
+	// Eine getaggte Spuranordnung ist eine Aussage ueber die Wirklichkeit und
+	// darf nicht von der Konvention ueberschrieben werden.
+	{
+		int32 Fwd = -1, Bwd = -1;
+		Counts({ { TEXT("highway"), TEXT("service") }, { TEXT("service"), TEXT("driveway") },
+			{ TEXT("lanes"), TEXT("2") } }, EOSMOnewayType::No, Fwd, Bwd);
+		TestEqual(TEXT("Zufahrt mit lanes=2: zwei Spuren"), Fwd + Bwd, 2);
+	}
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoadEdgeLineMarkingTest,
 	"WiesbadenReal.GIS.RoadNetworkGenerator.EdgeLines",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
