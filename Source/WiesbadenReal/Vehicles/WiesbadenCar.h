@@ -176,6 +176,50 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.1"))
 	float SuspensionResponse = 16.0f;
 
+	// -- Gewichtsverlagerung (rein visuell an der Karosserie) -----------------
+	//
+	// Der Wagen folgte bisher nur der Gelaendeneigung und blieb sonst brettl-
+	// eben: kein Eintauchen beim Bremsen, kein Aufstellen beim Beschleunigen,
+	// kein Legen in die Kurve. Das laesst jede Fahrt leblos wirken. Die
+	// Karosserie (BodyMesh) nickt und wankt jetzt aus den Beschleunigungen -
+	// die Raeder (an SceneRoot) bleiben am Boden, die Kollision unberuehrt.
+
+	/** Nicken der Karosserie je m/s^2 Laengsbeschleunigung (Grad). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
+	float BodyPitchPerMeterPerS2 = 0.40f;
+
+	/** Wanken je m/s^2 Querbeschleunigung (Grad) - der Wagen legt sich in die Kurve. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
+	float BodyRollPerMeterPerS2 = 0.70f;
+
+	/** Groesstes Nicken (Grad). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
+	float BodyMaxPitchDeg = 4.0f;
+
+	/** Groesstes Wanken (Grad). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
+	float BodyMaxRollDeg = 6.0f;
+
+	/** Wie schnell die Karosserie der Zielneigung folgt (hoeher = straffer). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.1"))
+	float BodyTiltResponse = 8.0f;
+
+	/**
+	 * Zielneigung der Karosserie aus den Beschleunigungen bilden und weich
+	 * nachfuehren (datenrein, ohne Welt pruefbar: Vehicles.Physics.BodyTilt).
+	 *
+	 * Nicken: + Laengsbeschleunigung -> Nase hebt sich (Heck taucht ein),
+	 * - (Bremsen) -> Nase taucht. Wanken: + Querbeschleunigung (Rechtskurve)
+	 * -> Wagen legt sich nach aussen. Beide mit Anschlag und exponentieller,
+	 * rahmenratenunabhaengiger Glaettung.
+	 */
+	static void ComputeBodyTilt(
+		float LongAccelMs2, float LatAccelMs2,
+		float PitchPerMs2, float RollPerMs2,
+		float MaxPitchDeg, float MaxRollDeg,
+		float Response, float Dt,
+		float& InOutPitchDeg, float& InOutRollDeg);
+
 	/** Flughoehe ueber dem Gebaeude beim Ueberflug, in cm. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Ueberflug", meta = (ClampMin = "100.0"))
 	float FlyOverClearanceCm = 1000.0f;
@@ -291,6 +335,13 @@ private:
 
 	/** Akkumulierte Rad-Drehung um die Querachse (Grad, auf 360 normalisiert). */
 	float WheelRotationPitch = 0.0f;
+
+	/** Grundausrichtung der Karosserie (Mesh-Orientierung ohne Neigung). */
+	FRotator BodyBaseRotation = FRotator::ZeroRotator;
+
+	/** Aktuelle visuelle Karosserie-Neigung (Grad), weich nachgefuehrt. */
+	float BodyPitchDeg = 0.0f;
+	float BodyRollDeg = 0.0f;
 
 	/** Aktuelle Fallgeschwindigkeit (cm/s), wenn kein Boden unter dem Wagen liegt. */
 	float FallSpeedCmS = 0.0f;

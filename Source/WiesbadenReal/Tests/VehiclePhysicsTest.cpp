@@ -526,3 +526,65 @@ bool FVehicleSlipTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleBodyTiltTest,
+	"WiesbadenReal.Vehicles.Physics.BodyTilt",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FVehicleBodyTiltTest::RunTest(const FString& Parameters)
+{
+	// Parameter wie am Fahrzeug voreingestellt.
+	const float PitchPer = 0.35f, RollPer = 0.55f, MaxP = 3.5f, MaxR = 5.0f, Resp = 8.0f;
+
+	auto Settle = [&](float LongA, float LatA, float& P, float& R)
+	{
+		P = 0.0f; R = 0.0f;
+		for (int32 i = 0; i < 200; ++i)
+		{
+			AWiesbadenCar::ComputeBodyTilt(LongA, LatA, PitchPer, RollPer, MaxP, MaxR, Resp, 0.02f, P, R);
+		}
+	};
+
+	// -- Bremsen: Nase taucht (negatives Nicken) --
+	{
+		float P, R; Settle(-6.0f, 0.0f, P, R);
+		TestTrue(FString::Printf(TEXT("Bremsen: Nase taucht (%.2f < 0)"), P), P < -0.5f);
+		TestTrue(TEXT("Bremsen: kein Wanken"), FMath::IsNearlyZero(R, 0.01f));
+	}
+
+	// -- Beschleunigen: Nase hebt sich (positives Nicken) --
+	{
+		float P, R; Settle(3.0f, 0.0f, P, R);
+		TestTrue(FString::Printf(TEXT("Beschleunigen: Nase hebt sich (%.2f > 0)"), P), P > 0.5f);
+	}
+
+	// -- Kurve: Wanken, Richtung folgt der Querbeschleunigung --
+	{
+		float PR, RR, PL, RL;
+		Settle(0.0f, 5.0f, PR, RR);
+		Settle(0.0f, -5.0f, PL, RL);
+		TestTrue(FString::Printf(TEXT("Kurve erzeugt Wanken (%.2f)"), RR), FMath::Abs(RR) > 0.5f);
+		TestTrue(TEXT("Wanken kehrt mit der Querbeschleunigung die Richtung"),
+			FMath::Sign(RR) != FMath::Sign(RL));
+	}
+
+	// -- Anschlag haelt auch bei extremer Beschleunigung --
+	{
+		float P, R; Settle(-50.0f, 50.0f, P, R);
+		TestTrue(FString::Printf(TEXT("Nicken am Anschlag (%.2f ~ -%.1f)"), P, MaxP),
+			FMath::IsNearlyEqual(P, -MaxP, 0.05f));
+		TestTrue(FString::Printf(TEXT("Wanken am Anschlag (%.2f ~ %.1f)"), R, MaxR),
+			FMath::IsNearlyEqual(R, MaxR, 0.05f));
+	}
+
+	// -- Glaettung: kein Sprung im ersten Bild --
+	{
+		float P = 0.0f, R = 0.0f;
+		AWiesbadenCar::ComputeBodyTilt(-6.0f, 0.0f, PitchPer, RollPer, MaxP, MaxR, Resp, 0.016f, P, R);
+		const float Target = -6.0f * PitchPer;   // -2,1
+		TestTrue(FString::Printf(TEXT("Erstes Bild nur ein Bruchteil des Ziels (%.3f vs %.2f)"), P, Target),
+			FMath::Abs(P) < FMath::Abs(Target) * 0.5f);
+	}
+
+	return true;
+}
