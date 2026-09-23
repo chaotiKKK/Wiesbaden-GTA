@@ -2894,3 +2894,74 @@ bool FRoofCoveringTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoofToneTest,
+	"WiesbadenReal.GIS.RoofTone",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRoofToneTest::RunTest(const FString& Parameters)
+{
+	// RoofToneByte(SourceId): deterministische Tonstufe je Gebaeude aus der
+	// OSM-Id. Landet als G-Kanal der Dach-Vertexfarbe und verschiebt die
+	// Deckungsfarbe leicht - die Deckung SELBST (R-Kanal) bleibt unberuehrt.
+	auto Tone = [](int64 Id) { return UBuildingGenerator::RoofToneByte(Id); };
+
+	// -- Deterministisch: gleiche Id -> gleicher Ton ------------------------
+	for (int64 Id : {int64(0), int64(1), int64(42), int64(123456789), int64(-7),
+		int64(4200000000LL)})
+	{
+		TestEqual(*FString::Printf(TEXT("Deterministisch fuer Id %lld"), (long long)Id),
+			Tone(Id), Tone(Id));
+	}
+
+	// -- Gleichverteilt: 1024 fortlaufende Ids fuellen fast alle 256 Stufen,
+	// keine Stufe haeuft sich, und benachbarte Ids tragen fast nie denselben
+	// Ton (eine Reihe fortlaufend nummerierter Nachbarhaeuser wirkt so nicht
+	// gebaendert). Schwellen weit von den Erwartungswerten (distinct ~254,
+	// max je Stufe ~4, Nachbar-Kollisionen ~4) entfernt -> nicht flaky.
+	const int64 Start = 1000000;
+	const int32 N = 1024;
+	int32 Counts[256] = {0};
+	int32 NeighbourEqual = 0;
+	uint8 Prev = Tone(Start);
+	for (int32 i = 0; i < N; ++i)
+	{
+		const uint8 T = Tone(Start + i);
+		++Counts[T];
+		if (i > 0 && T == Prev)
+		{
+			++NeighbourEqual;
+		}
+		Prev = T;
+	}
+
+	int32 Distinct = 0;
+	int32 MaxBucket = 0;
+	for (int32 b = 0; b < 256; ++b)
+	{
+		if (Counts[b] > 0) { ++Distinct; }
+		MaxBucket = FMath::Max(MaxBucket, Counts[b]);
+	}
+
+	TestTrue(*FString::Printf(TEXT("Viele Tonstufen belegt (%d/256 >= 200)"), Distinct),
+		Distinct >= 200);
+	TestTrue(*FString::Printf(TEXT("Keine Tonstufe haeuft sich (max %d <= 20)"), MaxBucket),
+		MaxBucket <= 20);
+	TestTrue(*FString::Printf(TEXT("Nachbar-Ids kaum gleich (%d von %d < 40)"),
+		NeighbourEqual, N - 1), NeighbourEqual < 40);
+
+	// -- Byte 128 (0.5) ist die neutrale Mitte im Material - der Wertebereich
+	// deckt beide Haelften ab (heller/dunkler als neutral kommen vor).
+	bool bBelowMid = false;
+	bool bAboveMid = false;
+	for (int32 i = 0; i < N; ++i)
+	{
+		const uint8 T = Tone(Start + i);
+		bBelowMid |= (T < 128);
+		bAboveMid |= (T > 128);
+	}
+	TestTrue(TEXT("Toene unter der Mitte kommen vor"), bBelowMid);
+	TestTrue(TEXT("Toene ueber der Mitte kommen vor"), bAboveMid);
+
+	return true;
+}

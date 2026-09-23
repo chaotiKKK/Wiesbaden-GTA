@@ -332,6 +332,23 @@ int32 UBuildingGenerator::RoofCoveringIndex(int32 MaterialVariant, EOSMRoofShape
 	}
 }
 
+uint8 UBuildingGenerator::RoofToneByte(int64 SourceId)
+{
+	// Deterministische, gleichverteilte Tonstufe je Gebaeude aus der OSM-Id.
+	// Eigene Mischung (nicht die der Fassaden-/Deckungswahl in Zeile ~105 und
+	// SelectMaterialVariant), damit der Farbton NICHT mit der gewuerfelten
+	// Fassaden- oder Deckungsart korreliert: zwei gleichtypige Nachbarhaeuser
+	// bekommen unabhaengige Toene. Ganzzahl-Finalizer im Stil von Murmur3 -
+	// benachbarte Ids (typisch fortlaufend im OSM) landen weit auseinander,
+	// die oberen 8 Bit sind am staerksten durchmischt.
+	uint32 H = static_cast<uint32>(SourceId) ^ static_cast<uint32>(static_cast<uint64>(SourceId) >> 32);
+	H *= 0x9E3779B1u;
+	H ^= H >> 15;
+	H *= 0x85EBCA77u;
+	H ^= H >> 13;
+	return static_cast<uint8>(H >> 24);
+}
+
 FString UBuildingGenerator::NormalizeAddressForMatch(const FString& Address)
 {
 	// ToLower ist in UE ASCII-only: Grossbuchstaben-Umlaute (Ae/Oe/Ue) und das
@@ -1094,7 +1111,7 @@ bool UBuildingGenerator::BuildSingleBuilding(
 
 	if (Settings.bGenerateRoofs)
 	{
-		BuildRoof(Ring, Holes, EavesZ, OutBuilding.RoofShape, RoofHeightCm, MaterialVariant, FacadeOverrideKey, Settings.RoofOverhangMeters, *OutMeshData);
+		BuildRoof(Ring, Holes, EavesZ, OutBuilding.RoofShape, RoofHeightCm, MaterialVariant, SourceId, FacadeOverrideKey, Settings.RoofOverhangMeters, *OutMeshData);
 	}
 
 	return true;
@@ -1226,6 +1243,7 @@ void UBuildingGenerator::BuildRoof(
 	EOSMRoofShape Shape,
 	double RoofHeightCm,
 	int32 MaterialVariant,
+	int64 SourceId,
 	const FString& FacadeOverrideKey,
 	double RoofOverhangMeters,
 	FBuildingMeshData& OutMeshData) const
@@ -1242,12 +1260,19 @@ void UBuildingGenerator::BuildRoof(
 	// Dachdeckung als Vertexfarbe: R traegt die Deckung (0/85/170 =
 	// Terrakotta/Schiefer/Zink), damit das Dachmaterial EINE typgerechte
 	// Deckung je Gebaeude liest statt einer Weltregion zu wuerfeln. Der Wert
-	// 255 (Weiss) bleibt bewusst UNGENUTZT und bedeutet im Material "Legacy" -
+	// R=255 (Weiss) bleibt bewusst UNGENUTZT und bedeutet im Material "Legacy" -
 	// so bleiben aeltere Bakes (Dach-Verts = FColor::White) auf der alten
 	// Regionswahl und regredieren nicht.
+	//
+	// G traegt eine deterministische Tonstufe je Gebaeude-Id: das Material
+	// verschiebt damit die Deckungsfarbe leicht (+-~9 %), sodass eine Reihe
+	// gleichtypiger Haeuser nicht identisch wirkt - die DeckungsART (R) bleibt
+	// unberuehrt. Legacy-Bakes tragen G=255; das Material wertet den Ton nur im
+	// Nicht-Legacy-Pfad aus, ein Ton-Byte von 255 in einem neuen Bake bleibt
+	// also folgenlos.
 	const int32 CoveringIndex = RoofCoveringIndex(MaterialVariant, Shape);
 	const FColor RoofVertexColor(
-		static_cast<uint8>(CoveringIndex * 85), 255, 255, 255);
+		static_cast<uint8>(CoveringIndex * 85), RoofToneByte(SourceId), 255, 255);
 
 	// Dach-UVs GEBAeUDE-LOKAL statt weltbezogen. Die georeferenzierten
 	// Weltkoordinaten sind in Wiesbaden riesig (Tausende Meter). Als per-Vertex-
