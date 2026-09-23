@@ -14,6 +14,7 @@
 class UWiesbadenCitySubsystem;
 class AWiesbadenStoreMerchant;
 struct FWiesbadenRoadClearance;
+struct FWiesbadenBuildingClearance;
 
 /**
  * GameMode des Wiesbaden-Core-Moduls.
@@ -126,7 +127,7 @@ public:
 		double OwnDiscCm, double LegacyDiscCm, double OwnLengthCm, double LegacyLengthCm);
 
 	/**
-	 * Standplaetze fuer das Standstueck, in der Reihenfolge des Vorzugs
+	 * Standplaetze fuer eine Maschine, in der Reihenfolge des Vorzugs
 	 * (datenrein, ohne Welt pruefbar: WiesbadenReal.Vehicles.HeliStandplaetze).
 	 *
 	 * Der erste Eintrag ist der bisherige Platz - geradeaus vor dem Spielerheli
@@ -182,7 +183,7 @@ protected:
 	bool SpawnHelicopterNearStart();
 
 	/**
-	 * Das ALTE Heli-Modell als Standstueck neben den Spielerheli stellen.
+	 * Den ZWEITEN fliegbaren Hubschrauber neben den ersten stellen.
 	 *
 	 * Der Spielerheli traegt seit dem Ka-52-Neubau (17.09.2026) das importierte
 	 * Modell; das frueher benutzte Landmarken-Modell steht daneben als Ansicht -
@@ -201,7 +202,7 @@ protected:
 	 * True, wenn an dieser Stelle KEINE Fahrbahn liegt und der Boden traegt.
 	 *
 	 * Die Fahrbahn kommt aus dem STRASSENNETZ, nicht aus der Kollision: das
-	 * Standstueck wird im ersten Bild gesetzt, da ist noch keine Stadtkachel
+	 * Platz wird im ersten Bild vergeben, da ist noch keine Stadtkachel
 	 * gestreamt und ein Lot trifft nur die Landschaft. Die Hoehe kommt weiterhin
 	 * aus dem Lot. Abgetastet wird der ganze RUMPF-Grundriss, nicht nur die
 	 * Mitte - sonst steht die Maschine mit der Nase auf der Strasse.
@@ -213,7 +214,30 @@ protected:
 	 */
 	bool IsHelicopterStandFree(
 		const FVector& Point, double FootprintCm,
-		const FWiesbadenRoadClearance& Carriageway, double& OutGroundZ) const;
+		const FWiesbadenRoadClearance& Carriageway,
+		const FWiesbadenBuildingClearance& Buildings, double& OutGroundZ) const;
+
+	/**
+	 * Sucht den ersten freien Standplatz aus einer Vorzugsliste.
+	 *
+	 * Fuer BEIDE Hubschrauber. Der Ka-52 hatte bisher gar keine Pruefung - er
+	 * wurde vor das Auto gesetzt, ein Lot fuer die Hoehe, fertig. Dass er
+	 * heute frei steht, ist Glueck und keine Zusage: dieselbe Rechnung setzt
+	 * ihn an einer anderen Startadresse in eine Wand.
+	 *
+	 * Geprueft wird gegen Fahrbahn UND Gebaeude. Beide Indizes stammen aus
+	 * serialisierten Daten am WorldBuilder, nicht aus der Kollision - im
+	 * ersten Bild ist noch keine Stadtkachel gestreamt.
+	 *
+	 * @param Candidates   Standplaetze in der Reihenfolge des Vorzugs.
+	 * @param FootprintCm  Grundriss-Radius der Maschine.
+	 * @param Wofuer       Name fuer das Protokoll.
+	 * @param OutLocation  Gewaehlter Platz samt Bodenhoehe (Z aus dem Lot).
+	 * @param OutIndex     Welcher Kandidat es wurde (Diagnose).
+	 */
+	bool FindFreeHelicopterStand(
+		const TArray<FVector>& Candidates, double FootprintCm,
+		const TCHAR* Wofuer, FVector& OutLocation, int32& OutIndex) const;
 
 	/**
 	 * Wechselt zwischen Fahrzeug und zu Fuss (Taste F).
@@ -278,13 +302,13 @@ protected:
 	 * Helikopter beim Start absetzen.
 	 *
 	 * Der Spielerheli ist das Ka-52-Modell (AWiesbadenHelicopter, seit dem Neubau
-	 * 17.09.2026); das alte Landmarken-Modell steht daneben als Standstueck
+	 * 17.09.2026); das alte Landmarken-Modell steht daneben und ist ebenso fliegbar
 	 * (AWiesbadenLegacyHelicopter).
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Spieler")
 	bool bSpawnHelicopter = true;
 
-	/** Standstueck (altes Heli-Modell) neben den Spielerheli stellen. */
+	/** Den zweiten Hubschrauber (altes Modell) neben den ersten stellen. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Spieler")
 	bool bSpawnLegacyHelicopter = true;
 
@@ -322,7 +346,7 @@ private:
 	UPROPERTY(Transient)
 	class AWiesbadenHelicopter* PlayerHelicopter = nullptr;
 
-	/** Standstueck: das alte Heli-Modell neben dem Spielerheli. */
+	/** Der zweite fliegbare Hubschrauber: das alte Modell. */
 	UPROPERTY(Transient)
 	class AWiesbadenLegacyHelicopter* LegacyHelicopter = nullptr;
 

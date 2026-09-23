@@ -154,20 +154,38 @@ void AWiesbadenPlayerController::WbCam(int32 Modus)
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbCam %d gesetzt (0=Follow,1=Orbit,2=Cockpit)."), ModusClamped);
 }
 
-void AWiesbadenPlayerController::WbHeli()
+void AWiesbadenPlayerController::WbHeli(int32 Index)
 {
 	UWorld* World = GetWorld();
 	if (!World)
 	{
 		return;
 	}
+
+	// Erst sammeln, dann waehlen. Die Reihenfolge des Iterators ist nicht
+	// zugesichert, darum nennt das Protokoll jede Maschine samt Klasse - sonst
+	// weiss hinterher niemand, welche der beiden im Bild ist.
+	TArray<AWiesbadenHelicopter*> Helis;
 	for (TActorIterator<AWiesbadenHelicopter> It(World); It; ++It)
 	{
-		Possess(*It);
-		UE_LOG(LogWbCore, Log, TEXT("WbDev: WbHeli - Helikopter %s uebernommen."), *It->GetName());
+		Helis.Add(*It);
+	}
+
+	if (!Helis.IsValidIndex(Index))
+	{
+		UE_LOG(LogWbCore, Warning,
+			TEXT("WbDev: WbHeli %d - es gibt %d Helikopter in der Welt."),
+			Index, Helis.Num());
 		return;
 	}
-	UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbHeli - kein Helikopter in der Welt."));
+
+	Possess(Helis[Index]);
+	UE_LOG(LogWbCore, Log,
+		TEXT("WbDev: WbHeli %d von %d - %s (%s) uebernommen, steht bei (%.0f, %.0f, %.0f)."),
+		Index, Helis.Num(), *Helis[Index]->GetName(),
+		*Helis[Index]->GetClass()->GetName(),
+		Helis[Index]->GetActorLocation().X, Helis[Index]->GetActorLocation().Y,
+		Helis[Index]->GetActorLocation().Z);
 }
 
 void AWiesbadenPlayerController::WbNudge(int32 NickGrad, int32 RollGrad)

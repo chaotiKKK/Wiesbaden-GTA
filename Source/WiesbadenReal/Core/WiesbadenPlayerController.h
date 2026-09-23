@@ -54,9 +54,13 @@ public:
 	UFUNCTION(Exec)
 	void WbCam(int32 Modus);
 
-	// Uebernimmt den naechsten Helikopter der Welt (Dev-Hilfe zum Testen).
+	// Uebernimmt einen Helikopter der Welt (Dev-Hilfe zum Testen).
+	//
+	// Der INDEX ist noetig, seit es zwei fliegbare Maschinen gibt: ohne ihn
+	// erwischte man immer dieselbe, und die zweite waere fuer jede Pruefung
+	// unerreichbar. 0 = der erste gefundene, 1 = der zweite.
 	UFUNCTION(Exec)
-	void WbHeli();
+	void WbHeli(int32 Index = 0);
 
 	// Kippt das besessene Fahrzeug um Nick/Roll (Grad) - Testhilfe, um das
 	// Aufrichten (WbResetVehicle) sichtbar vorzufuehren.
