@@ -113,6 +113,31 @@ namespace WiesbadenOptions
 	WIESBADENREAL_API int32 NextRow(int32 Current, int32 Count, int32 Direction);
 
 	/**
+	 * Auswahl in die Liste klemmen.
+	 *
+	 * Die Zeilenzahl haengt davon ab, welche Systeme es gerade gibt - ohne
+	 * Mischpult fallen sieben Zeilen weg, waehrend das Fenster offen ist. Eine
+	 * Auswahl, die von vorher stehengeblieben ist, zeigt dann auf nichts.
+	 */
+	WIESBADENREAL_API int32 ClampRow(int32 Current, int32 Count);
+
+	/**
+	 * Flankenerkennung: hat die Taste GERADE angeschlagen?
+	 *
+	 * Dieselbe Mechanik, die das Pausemenue seit jeher benutzt - und seit
+	 * dieser Fassung buchstaeblich dieselbe FUNKTION, nicht nur dieselben vier
+	 * Zeilen zweimal geschrieben. Wer sie aendert, aendert beide Menues.
+	 *
+	 * Ohne sie wuerde eine gehaltene Taste in jedem Bild einen Schritt machen:
+	 * ein Tastendruck haette die Lautstaerke in einem Wimpernschlag von 0 auf
+	 * 100 gezogen.
+	 *
+	 * @param bIsDown  Ist die Taste JETZT unten?
+	 * @param bHeld    Der Merker des Aufrufers; wird fortgeschrieben.
+	 */
+	WIESBADENREAL_API bool EdgePressed(bool bIsDown, bool& bHeld);
+
+	/**
 	 * Ist der geschriebene Wert beim Besitzer wirklich angekommen?
 	 *
 	 * Die Toleranz muss zur GENAUIGKEIT DES BESITZERS passen, nicht zu der des
