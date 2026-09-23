@@ -227,6 +227,18 @@ double WiesbadenOptions::BarFraction(EWbOptionKind Kind, double Value)
 	return FMath::Clamp((Value - R.Min) / Spanne, 0.0, 1.0);
 }
 
+int32 WiesbadenOptions::ClampRow(int32 Current, int32 Count)
+{
+	return (Count <= 0) ? 0 : FMath::Clamp(Current, 0, Count - 1);
+}
+
+bool WiesbadenOptions::EdgePressed(bool bIsDown, bool& bHeld)
+{
+	const bool bPressed = bIsDown && !bHeld;
+	bHeld = bIsDown;
+	return bPressed;
+}
+
 bool WiesbadenOptions::ValueArrived(double Written, double ReadBack)
 {
 	// Relativ, damit die Toleranz mit der Groesse mitwaechst - eine

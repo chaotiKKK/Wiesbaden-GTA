@@ -174,6 +174,71 @@ bool FWiesbadenOptionsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("leere Liste bleibt bei 0"), NextRow(0, 0, +1), 0);
 	}
 
+	// -- FLANKENERKENNUNG: ein Druck ist ein Schritt, nicht dreissig ---------
+	//
+	// Dieselbe Funktion bedient Pausemenue UND Optionsfenster. Ohne sie wuerde
+	// eine gehaltene Taste in jedem Bild einen Schritt machen - die
+	// Lautstaerke ginge in einem Wimpernschlag von 0 auf 100.
+	{
+		bool bHeld = false;
+
+		TestTrue(TEXT("der erste Druck zaehlt"), EdgePressed(true, bHeld));
+		TestTrue(TEXT("und merkt sich, dass sie unten ist"), bHeld);
+
+		TestFalse(TEXT("gehalten zaehlt NICHT nochmal"), EdgePressed(true, bHeld));
+		TestFalse(TEXT("auch beim dritten Bild nicht"), EdgePressed(true, bHeld));
+
+		TestFalse(TEXT("das Loslassen selbst ist kein Schritt"), EdgePressed(false, bHeld));
+		TestFalse(TEXT("und merkt sich, dass sie oben ist"), bHeld);
+
+		TestTrue(TEXT("nach dem Loslassen zaehlt der naechste Druck wieder"),
+			EdgePressed(true, bHeld));
+
+		// Aus der Ruhe heraus loslassen aendert nichts - sonst haette ein
+		// Fenster, das mit gedrueckter Taste aufgeht, einen Geisterschritt.
+		bool bRuhe = false;
+		TestFalse(TEXT("losgelassen aus der Ruhe zaehlt nicht"), EdgePressed(false, bRuhe));
+		TestFalse(TEXT("und bleibt oben"), bRuhe);
+	}
+
+	// -- AUSWAHLKLEMMUNG: die Zeilenzahl kann sich unter der Auswahl aendern --
+	//
+	// Faellt das Mischpult weg, waehrend das Fenster offen ist, verschwinden
+	// sieben Zeilen. Eine Auswahl von vorher zeigte dann ins Leere.
+	{
+		TestEqual(TEXT("mitten drin bleibt sie"), ClampRow(3, 16), 3);
+		TestEqual(TEXT("ueber dem Ende faellt sie auf die letzte"), ClampRow(15, 9), 8);
+		TestEqual(TEXT("unter null faellt sie auf die erste"), ClampRow(-4, 9), 0);
+		TestEqual(TEXT("die letzte Zeile bleibt gueltig"), ClampRow(8, 9), 8);
+		TestEqual(TEXT("ohne Zeilen bleibt 0"), ClampRow(5, 0), 0);
+		TestEqual(TEXT("auch bei negativer Zahl"), ClampRow(5, -1), 0);
+	}
+
+	// -- SCHRITTWEITE je Wertart, ausdruecklich --------------------------------
+	//
+	// Die Schrittweite ist das, was man beim Tippen spuert. Zu gross, und man
+	// trifft den gewuenschten Wert nie; zu klein, und man haelt die Taste.
+	{
+		TestEqual(TEXT("Qualitaet eine Stufe"),
+			Step(EWbOptionKind::Qualitaet, 1.0, +1), 2.0);
+		TestEqual(TEXT("Lautstaerke 5 Prozent"),
+			Step(EWbOptionKind::Lautstaerke, 0.50, +1), 0.55, 1e-9);
+		TestEqual(TEXT("Anteil 10 Prozent"),
+			Step(EWbOptionKind::Anteil, 0.50, +1), 0.60, 1e-9);
+		TestEqual(TEXT("Faktor ein Viertel"),
+			Step(EWbOptionKind::Faktor, 1.00, +1), 1.25, 1e-9);
+		TestEqual(TEXT("Tageszeit eine Stunde"),
+			Step(EWbOptionKind::Tageszeit, 12.0, +1), 13.0);
+		TestEqual(TEXT("Schalter kippt"),
+			Step(EWbOptionKind::Schalter, 0.0, +1), 1.0);
+
+		// Und in die Gegenrichtung genauso gross.
+		TestEqual(TEXT("Lautstaerke rueckwaerts 5 Prozent"),
+			Step(EWbOptionKind::Lautstaerke, 0.50, -1), 0.45, 1e-9);
+		TestEqual(TEXT("Anteil rueckwaerts 10 Prozent"),
+			Step(EWbOptionKind::Anteil, 0.50, -1), 0.40, 1e-9);
+	}
+
 	// -- Der Ruecklese-Waechter: Rundungsrauschen ja, echte Fehlschlaege nein -
 	//
 	// GEMESSEN: der Waechter lief mit FMath::IsNearlyEqual und der Vorgabe fuer

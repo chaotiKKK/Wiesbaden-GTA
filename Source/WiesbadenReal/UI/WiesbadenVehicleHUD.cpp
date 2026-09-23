@@ -1096,12 +1096,13 @@ void AWiesbadenVehicleHUD::UpdatePauseMenu()
 		return;
 	}
 
+	// Flanke ueber WiesbadenOptions::EdgePressed - DIESELBE Funktion, die das
+	// Optionsfenster benutzt. Vorher stand die Mechanik hier und dort je
+	// einmal; dass beide gleich sind, war eine Behauptung. Jetzt ist es eine
+	// Tatsache, die der Uebersetzer haelt.
 	auto Edge = [PC](const FKey& Key, bool& bHeld) -> bool
 	{
-		const bool bDown = PC->IsInputKeyDown(Key);
-		const bool bPressed = bDown && !bHeld;
-		bHeld = bDown;
-		return bPressed;
+		return WiesbadenOptions::EdgePressed(PC->IsInputKeyDown(Key), bHeld);
 	};
 
 	// Escape oder Start am Gamepad schaltet um.
@@ -1748,12 +1749,12 @@ void AWiesbadenVehicleHUD::UpdateOptions()
 
 	// Ein Schritt je Tastendruck (Flanke ueber ZWEI Tasten): links/rechts sollen
 	// nudgen, nicht bei gehaltener Taste in einem Bild von 0 auf 100 springen.
+	// Zwei Tasten je Richtung (Pfeile UND WASD), sonst dieselbe Flanke wie im
+	// Pausemenue - buchstaeblich dieselbe Funktion.
 	auto Edge = [PC](const FKey& KeyA, const FKey& KeyB, bool& bHeld) -> bool
 	{
-		const bool bDown = PC->IsInputKeyDown(KeyA) || PC->IsInputKeyDown(KeyB);
-		const bool bPressed = bDown && !bHeld;
-		bHeld = bDown;
-		return bPressed;
+		return WiesbadenOptions::EdgePressed(
+			PC->IsInputKeyDown(KeyA) || PC->IsInputKeyDown(KeyB), bHeld);
 	};
 
 	TArray<FWbOptionRow> Rows;
@@ -1762,7 +1763,7 @@ void AWiesbadenVehicleHUD::UpdateOptions()
 	{
 		return;
 	}
-	OptionSelection = FMath::Clamp(OptionSelection, 0, Rows.Num() - 1);
+	OptionSelection = WiesbadenOptions::ClampRow(OptionSelection, Rows.Num());
 
 	// EINMAL JE OEFFNEN MELDEN, DASS ES HIER ANKOMMT. Vorher konnte das
 	// Fenster gezeichnet sein, waehrend diese Funktion nie lief - die Zeile
