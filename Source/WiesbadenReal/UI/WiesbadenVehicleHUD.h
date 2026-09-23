@@ -100,14 +100,6 @@ public:
 		bool bShown, float ElapsedSeconds, float LegendSeconds);
 
 	/**
-	 * Banner der Erstkontakt-Hilfe - datenrein.
-	 *
-	 * Ohne Untertitel (kein Missionsziel in der Naehe = Normalfall) darf kein
-	 * Gedankenstrich stehenbleiben.
-	 */
-	static FString ComposeFirstRunBanner(const FString& Title, const FString& Subtitle);
-
-	/**
 	 * Waehlt den Handlungshinweis zu Fuss (datenrein, testbar).
 	 *
 	 * Negative Entfernung heisst "nichts dieser Art in der Welt".
@@ -443,23 +435,19 @@ private:
 		float ExpiresAt = -1000.0f;          // world time when the prompt should
 											// stop nagging even if still idle
 		FVector2D ArmWorldPos = FVector2D::ZeroVector; // planar arm position for drift + distance
-		FString Title;                       // e.g. 'Platter Strasse'
-		FString Subtitle;                    // e.g. 'zum Ziel Haltestelle Nerobergbahn 120 m'
 		bool bModeSpecificHintShown = false; // 'W gasen ...' / 'F einsteigen ...' / etc.
 		EFirstRunContext Context = EFirstRunContext::Unknown;
 	};
 
 	FFirstRunPrompt FirstRun;
 
-	bool IsFirstRunPromptArmed() const;
-
 	// --- First-Run-Fuehrung (aus DrawHUD herausgezogen) --------------------
-	// DrawHUD zeichnet, diese Methoden entscheiden: verdienen -> komponieren
-	// -> zeigen -> ehrlich zuruecknehmen.
+	// DrawHUD zeichnet, diese Methoden entscheiden: verdienen -> zeigen ->
+	// ehrlich zuruecknehmen. Gezeigt wird nur noch der Steuerungshinweis;
+	// das Ortsbanner ist ersatzlos entfallen.
 	void UpdateFirstRunOnboarding();
 	void ArmFirstRunPrompt(const UWorld& World,
 		const UWiesbadenCitySubsystem* City, bool bPlayerIdle);
-	void ComposeFirstRunText(const UWorld* HudWorld);
 	void ShowFirstRunContextHintOnce();
 	FString ResolveMerchantCue() const;
 	EFirstRunContext ResolveFirstRunContext() const;

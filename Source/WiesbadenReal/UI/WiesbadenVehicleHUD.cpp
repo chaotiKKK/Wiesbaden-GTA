@@ -1033,16 +1033,6 @@ bool AWiesbadenVehicleHUD::ToggleControlLegendVisible(
 	return !bVisible;
 }
 
-FString AWiesbadenVehicleHUD::ComposeFirstRunBanner(
-	const FString& Title, const FString& Subtitle)
-{
-	if (Subtitle.IsEmpty())
-	{
-		return Title;
-	}
-	return FString::Printf(TEXT("%s — %s"), *Title, *Subtitle);
-}
-
 void AWiesbadenVehicleHUD::DrawControlLegend(bool bInVehicle, float X, float Y)
 {
 	TArray<FString> Lines;
@@ -2296,20 +2286,6 @@ void AWiesbadenVehicleHUD::DrawVehicleBanner(float CenterX, float Y)
 	DrawText(VehicleBannerText, Fg, CenterX - TextWidth * 0.5f, Y, Font, 1.0f);
 }
 
-bool AWiesbadenVehicleHUD::IsFirstRunPromptArmed() const
-{
-	if (!FirstRun.bArmed)
-	{
-		return false;
-	}
-	const UWorld* W = GetWorld();
-	if (!W)
-	{
-		return false;
-	}
-	return W->GetTimeSeconds() < FirstRun.ExpiresAt;
-}
-
 namespace
 {
 	/** Planarer Abstand (XY) in cm - Drift-, Ziel- und Naehe-Rechnungen. */
@@ -2384,21 +2360,20 @@ void AWiesbadenVehicleHUD::UpdateFirstRunOnboarding()
 		ArmFirstRunPrompt(*HudWorld, City, bPlayerIdle);
 	}
 
-	if (FirstRun.bArmed && FirstRun.Title.IsEmpty())
-	{
-		ComposeFirstRunText(HudWorld);
-	}
-
-	// Zeigen, solange verdient und nicht zurueckgenommen.
-	if (FirstRun.bArmed && !FirstRun.Title.IsEmpty())
+	// HIER STAND DAS ERSTKONTAKT-BANNER MIT DEM STRASSENNAMEN.
+	//
+	// Beim Start blendete das HUD mittig "Marktstrasse" ein - den Namen der
+	// Strasse, auf der die Scharfschaltung zufaellig geschah. Es sagte nichts,
+	// was das HUD nicht ohnehin dauerhaft oben anzeigt, und es veraltete: der
+	// Name wurde EINMAL beim Scharfschalten genommen und danach nicht mehr
+	// nachgefuehrt. Ersatzlos entfernt, zusammen mit ComposeFirstRunText und
+	// ComposeFirstRunBanner, die nur dafuer da waren.
+	//
+	// Der Steuerungshinweis bleibt - er nennt keinen Ort, sondern die Tasten,
+	// und haengt jetzt allein an der Scharfschaltung statt an einem Titel.
+	if (FirstRun.bArmed)
 	{
 		ShowFirstRunContextHintOnce();
-
-		// Der Untertitel ist "bewusst leer", wenn kein Missionsziel in der Naehe
-		// liegt - das ist der Normalfall. Trotzdem wurde fest "%s — %s"
-		// formatiert: der erste Satz, den ein neuer Spieler sieht, war
-		// "Marktstrasse — " mit haengendem Gedankenstrich.
-		ShowTransientHint(ComposeFirstRunBanner(FirstRun.Title, FirstRun.Subtitle));
 	}
 
 	// Ehrlich zuruecknehmen: abgelaufen, nicht mehr im Leerlauf oder abgedriftet.
@@ -2408,12 +2383,8 @@ void AWiesbadenVehicleHUD::UpdateFirstRunOnboarding()
 
 		// Und dann WIRKLICH vorbei: ohne diesen Merker griff oben sofort wieder
 		// ArmFirstRunPrompt (Bedingung ist nur "Stadt fertig + Leerlauf"), der
-		// Hinweis kam bei jedem Halt zurueck - mit dem Strassennamen der ersten
-		// Scharfschaltung. Nach einer Fahrt quer durch die Stadt stand im Wagen
-		// weiter "Marktstrasse", waehrend das HUD "Nerotal" anzeigte.
+		// Hinweis kam sonst bei jedem Halt zurueck.
 		FirstRun.bConsumed = true;
-		FirstRun.Title.Reset();
-		FirstRun.Subtitle.Reset();
 	}
 }
 
@@ -2439,30 +2410,6 @@ void AWiesbadenVehicleHUD::ArmFirstRunPrompt(
 	}
 
 	FirstRun.Context = ResolveFirstRunContext();
-}
-
-void AWiesbadenVehicleHUD::ComposeFirstRunText(const UWorld* HudWorld)
-{
-	FirstRun.Title = CurrentStreetName.IsEmpty()
-		? FString(TEXT("Wiesbaden"))
-		: CurrentStreetName;
-
-	// Untertitel: nahes aktives Missionsziel, sonst bewusst leer.
-	const UWiesbadenMissionSubsystem* Missions =
-		HudWorld ? HudWorld->GetSubsystem<UWiesbadenMissionSubsystem>() : nullptr;
-	const FMissionObjective* Objective = Missions ? Missions->GetCurrentObjective() : nullptr;
-	if (!Objective || Objective->Location.IsZero() || FirstRun.ArmWorldPos.IsZero())
-	{
-		return;
-	}
-
-	const FVector2D ObjectivePos(Objective->Location.X, Objective->Location.Y);
-	const double FlatCm = WbPlanarDistanceCm(ObjectivePos, FirstRun.ArmWorldPos);
-	if (FlatCm <= 50000.0)
-	{
-		FirstRun.Subtitle = FString::Printf(
-			TEXT("zum Ziel %s %.0f m"), *Objective->Label, FlatCm / 100.0);
-	}
 }
 
 void AWiesbadenVehicleHUD::ShowFirstRunContextHintOnce()
