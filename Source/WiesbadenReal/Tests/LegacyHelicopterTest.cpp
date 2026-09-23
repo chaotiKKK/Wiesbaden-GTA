@@ -13,13 +13,14 @@
 #include "Vehicles/WiesbadenLegacyHelicopter.h"
 
 /**
- * Das ALTE Heli-Modell als Standstueck neben dem Spielerheli.
+ * Der ZWEITE fliegbare Hubschrauber - altes Modell, dieselbe Flugmechanik.
  *
- * Geprueft werden die vier Dinge, die am alten Modell tatsaechlich gemessen
- * werden mussten und die man im Spiel nicht als Fehler sieht: die Mesh-Pfade
- * (ein Tippfehler laesst nur ein leeres Standstueck stehen), die Mastachse
- * (ohne die gemessenen Nabenversaetze kreisen die Rotoren neben dem Mast), die
- * Hoehen (345 / 300 cm) und die Materialien (Rumpf-Tarnung, dunkle Rotoren).
+ * Geprueft werden die Dinge, die man im Spiel nicht als Fehler SIEHT: dass er
+ * ueberhaupt ein Fluggeraet ist (als blosser Actor liess er sich nie
+ * uebernehmen), dass er den Spieler beim Aufstellen nicht an sich reisst, die
+ * Mesh-Pfade (ein Tippfehler laesst nur einen leeren Rumpf stehen), die
+ * Mastachse (ohne die gemessenen Nabenversaetze kreisen die Rotoren neben dem
+ * Mast), die Hoehen (345 / 300 cm) und die Lackierung.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLegacyHelicopterModelTest,
 	"WiesbadenReal.Vehicles.LegacyHelicopterModell",
@@ -34,9 +35,22 @@ bool FLegacyHelicopterModelTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// Ein Standstueck darf nicht ticken - sonst laufen Rotordrehzahl, Schwerkraft
-	// oder Audio darauf an, und es bewegt sich irgendwann von selbst.
-	TestFalse(TEXT("Standstueck tickt nicht"), CDO->PrimaryActorTick.bCanEverTick);
+	// -- Fliegbar ------------------------------------------------------------
+	//
+	// Hier stand das Gegenteil: "Ein Standstueck darf nicht ticken". Genau
+	// daran lag es - ohne Tick keine Flugmechanik, und als AActor statt Pawn
+	// konnte ihn ohnehin niemand uebernehmen. FindNearbyVehicle sucht Pawns.
+	TestTrue(TEXT("ist ein Hubschrauber, kein Standstueck"),
+		CDO->IsA<AWiesbadenHelicopter>());
+	TestTrue(TEXT("tickt - sonst gibt es keine Flugmechanik"),
+		CDO->PrimaryActorTick.bCanEverTick);
+
+	// Aber er darf sich den Spieler NICHT selbst nehmen. Die Basisklasse steht
+	// auf Player0; bliebe das stehen, risse der zweite Hubschrauber den
+	// Spieler beim Aufstellen aus dem Auto - man startete in der Luft.
+	TestEqual(TEXT("uebernimmt den Spieler nicht von selbst"),
+		static_cast<int32>(CDO->AutoPossessPlayer.GetValue()),
+		static_cast<int32>(EAutoReceiveInput::Disabled));
 
 	// -- Netze ---------------------------------------------------------------
 	UStaticMeshComponent* Fuselage = CDO->GetFuselageMesh();
@@ -74,13 +88,16 @@ bool FLegacyHelicopterModelTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("Rumpf-Material"), Fuselage->GetMaterial(0));
 	if (Fuselage->GetMaterial(0))
 	{
-		TestEqual(TEXT("Rumpf traegt die alte Zell-Tarnung"),
-			Fuselage->GetMaterial(0)->GetName(), FString(TEXT("M_WbHelicopter")));
+		// Eigene Lackierung, nicht die des Ka-52 und nicht der graue
+		// Platzhalter: M_WbHelicopter war eine flache Farbe mit Rauschen,
+		// M_HeliRotorBase das glTF-Standardmaterial des Imports (weiss).
+		TestEqual(TEXT("Rumpf traegt die zivile Lackierung"),
+			Fuselage->GetMaterial(0)->GetName(), FString(TEXT("M_WbHeliCivil")));
 	}
 	if (Upper && Upper->GetMaterial(0))
 	{
-		TestEqual(TEXT("Rotor traegt das Rotor-Material"),
-			Upper->GetMaterial(0)->GetName(), FString(TEXT("M_HeliRotorBase")));
+		TestEqual(TEXT("Rotor traegt das dunkle Rotorblatt-Material"),
+			Upper->GetMaterial(0)->GetName(), FString(TEXT("M_WbHeliRotor")));
 	}
 
 	// -- Mastachse und Nabenhoehen -------------------------------------------
