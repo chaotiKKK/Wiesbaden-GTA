@@ -2844,3 +2844,53 @@ bool FJunctionSidewalkRingTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoofCoveringTest,
+	"WiesbadenReal.GIS.RoofCovering",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRoofCoveringTest::RunTest(const FString& Parameters)
+{
+	// Fassaden-Varianten (EFacadeVariant, .cpp-lokal): 0 Putz, 1 Backstein,
+	// 2 Sandstein, 3 Glas, 4 Beton, 5 Fachwerk. Deckung: 0 Terrakotta,
+	// 1 Schiefer, 2 Zink.
+	auto Cov = [](int32 Variant, EOSMRoofShape Shape)
+	{
+		return UBuildingGenerator::RoofCoveringIndex(Variant, Shape);
+	};
+
+	// -- Flachdach ist IMMER Zink, egal welche Fassade -----------------------
+	for (int32 V = 0; V <= 5; ++V)
+	{
+		TestEqual(*FString::Printf(TEXT("Flachdach Variante %d -> Zink"), V),
+			Cov(V, EOSMRoofShape::Flat), 2);
+	}
+
+	// -- Geneigt: Sandstein (Gruenderzeit/Kirche) -> Schiefer ----------------
+	TestEqual(TEXT("Sattel + Sandstein -> Schiefer"),
+		Cov(2, EOSMRoofShape::Gabled), 1);
+	TestEqual(TEXT("Walm + Sandstein -> Schiefer"),
+		Cov(2, EOSMRoofShape::Hipped), 1);
+
+	// -- Geneigt: Glas/Beton (Buero/Industrie) -> Zink -----------------------
+	TestEqual(TEXT("Sattel + Glas -> Zink"), Cov(3, EOSMRoofShape::Gabled), 2);
+	TestEqual(TEXT("Sattel + Beton -> Zink"), Cov(4, EOSMRoofShape::Gabled), 2);
+
+	// -- Geneigt: Wohnbau (Putz/Backstein/Fachwerk) -> Terrakotta ------------
+	TestEqual(TEXT("Sattel + Putz -> Terrakotta"), Cov(0, EOSMRoofShape::Gabled), 0);
+	TestEqual(TEXT("Sattel + Backstein -> Terrakotta"), Cov(1, EOSMRoofShape::Gabled), 0);
+	TestEqual(TEXT("Zelt + Fachwerk -> Terrakotta"), Cov(5, EOSMRoofShape::Pyramidal), 0);
+
+	// -- Ergebnis ist immer eine gueltige Deckung (0..2) ---------------------
+	for (int32 V = 0; V <= 5; ++V)
+	{
+		for (int32 S = 0; S < static_cast<int32>(EOSMRoofShape::MAX); ++S)
+		{
+			const int32 C = Cov(V, static_cast<EOSMRoofShape>(S));
+			TestTrue(*FString::Printf(TEXT("Deckung 0..2 (V%d S%d -> %d)"), V, S, C),
+				C >= 0 && C <= 2);
+		}
+	}
+
+	return true;
+}

@@ -479,6 +479,20 @@ public:
 	static int32 SelectMaterialVariant(const TMap<FName, FString>& Tags, EOSMBuildingType Type,
 		int64 SeedId);
 
+	/**
+	 * Dachdeckung aus Fassaden-Variante und Dachform - EINE Deckung je Gebaeude.
+	 *
+	 * 0 = Terrakotta-Pfanne (Wohnbau: Putz/Backstein/Fachwerk),
+	 * 1 = Schiefer (Gruenderzeit/Kirche/Civic: Sandstein-Fassade),
+	 * 2 = Zink/Blech (Moderne/Buero/Industrie ODER jedes Flachdach).
+	 *
+	 * Loest die alte Regionswuerfelung im Dachmaterial ab: die Deckung folgt
+	 * jetzt dem Gebaeudetyp (ueber dieselbe Variante wie die Fassade), nicht
+	 * einer 14-m-Weltzelle - so traegt ein grosses Dach nicht mehr mehrere
+	 * Deckungen nebeneinander. Datenrein pruefbar (Test GIS.RoofCovering).
+	 */
+	static int32 RoofCoveringIndex(int32 MaterialVariant, EOSMRoofShape Shape);
+
 public:
 	/**
 	 * Liefert den Per-Adress-Override-Schluessel (die kanonische Schreibweise
