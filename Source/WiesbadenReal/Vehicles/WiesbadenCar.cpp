@@ -153,6 +153,11 @@ AWiesbadenCar::AWiesbadenCar()
 		break;
 	}
 
+	// Grundausrichtung der Karosserie merken (identisch, ausser Herbie-Voll:
+	// 90 Grad). Die Gewichtsverlagerung legt Nicken/Wanken im FAHRZEUG-Rahmen
+	// darauf - unabhaengig davon, wie das jeweilige Mesh orientiert ist.
+	BodyBaseRotation = BodyMesh->GetRelativeRotation();
+
 	// Radpositionen, am Modell vermessen (Reifenmitten, cm im Fahrzeug-
 	// Lokalsystem: +X vorwaerts, +Y rechts, Z = Radradius ueber der Strasse).
 	//
@@ -585,6 +590,25 @@ float AWiesbadenCar::AdvanceFallSpeedCmS(float CurrentCmS, float GravityCmS2, fl
 	return FMath::Min(Next, 20000.0f);
 }
 
+void AWiesbadenCar::ComputeBodyTilt(
+	float LongAccelMs2, float LatAccelMs2,
+	float PitchPerMs2, float RollPerMs2,
+	float MaxPitchDeg, float MaxRollDeg,
+	float Response, float Dt,
+	float& InOutPitchDeg, float& InOutRollDeg)
+{
+	// Ziel-Neigung aus den Beschleunigungen, an den Anschlag geklemmt.
+	const float TargetPitch = FMath::Clamp(LongAccelMs2 * PitchPerMs2, -MaxPitchDeg, MaxPitchDeg);
+	const float TargetRoll = FMath::Clamp(LatAccelMs2 * RollPerMs2, -MaxRollDeg, MaxRollDeg);
+
+	// Exponentielle Glaettung, rahmenratenunabhaengig: die Federung braucht
+	// einen Moment, bis die Karosserie steht - ein sofortiger Sprung saehe
+	// nach Ruck statt nach Masse aus.
+	const float Alpha = 1.0f - FMath::Exp(-FMath::Max(Response, 0.0f) * FMath::Max(Dt, 0.0f));
+	InOutPitchDeg = FMath::Lerp(InOutPitchDeg, TargetPitch, Alpha);
+	InOutRollDeg = FMath::Lerp(InOutRollDeg, TargetRoll, Alpha);
+}
+
 void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 {
 	FWiesbadenVehiclePhysicsInput Input;
@@ -605,6 +629,24 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 	// Licht und Klang direkt aus dem Physikergebnis speisen, damit Bremslicht
 	// und Motordrehzahl im selben Frame stimmen wie die Bewegung.
 	UpdateLightsAndAudio(Output);
+
+	// Gewichtsverlagerung: die Karosserie nickt und wankt aus den
+	// Beschleunigungen. Querbeschleunigung = v * Gierrate (Zentripetalanteil).
+	// Rein visuell an der BodyMesh - die Raeder haengen an SceneRoot und
+	// bleiben am Boden, die Actor-Kollision bleibt unberuehrt.
+	const float LateralAccelMs2 = Output.ForwardSpeedMetersPerS * Output.YawRateRadPerS;
+	ComputeBodyTilt(
+		Output.ForwardAccelerationMetersPerS2, LateralAccelMs2,
+		BodyPitchPerMeterPerS2, BodyRollPerMeterPerS2,
+		BodyMaxPitchDeg, BodyMaxRollDeg, BodyTiltResponse, DeltaSeconds,
+		BodyPitchDeg, BodyRollDeg);
+	if (BodyMesh)
+	{
+		// Neigung im FAHRZEUG-Rahmen VOR die Grundausrichtung des Meshes legen
+		// (Quat-Reihenfolge: erst kippen, dann die Mesh-Eigenorientierung).
+		const FQuat Tilt = FRotator(BodyPitchDeg, 0.0f, BodyRollDeg).Quaternion();
+		BodyMesh->SetRelativeRotation(Tilt * BodyBaseRotation.Quaternion());
+	}
 
 	// Geschwindigkeit (m/s) -> Weltbewegung (cm/s) entlang der Fahrzeug-X-Achse.
 	const FVector Forward = GetActorForwardVector();
