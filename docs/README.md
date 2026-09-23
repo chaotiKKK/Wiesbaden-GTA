@@ -42,6 +42,10 @@ Lernreise.*
 - [Stadt-Inhalt in einem frischen Klon holen](reference/stadtinhalt-holen.md)
   - Release-Assets holen, SHA-256 pruefen, entpacken und den gebackenen
     Stadtstand fuer einen frischen Klon verifizieren.
+- [Projekt-Gesamtstand, offene Punkte und Vorschlaege](reference/projekt-gesamtstand.md)
+  - Was je Thema laeuft, was fehlt und welcher Blocker davorsteht - aus
+    Gedaechtnis, AGENTS.md, Spezifikationen und Git-Historie zusammengefuehrt,
+    mit priorisierten Vorschlaegen am Ende.
 
 ## Explanation
 
