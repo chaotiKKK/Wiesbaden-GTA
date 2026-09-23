@@ -278,6 +278,30 @@ void URoadTypeLibrary::ResolveLaneCounts(
 		break;
 	}
 
+	// Einspurige Zufahrten und Gassen. `service=driveway` und `service=alley`
+	// sind per Definition schmale Erschliessungswege: einspurig befahren, auch
+	// wenn Gegenverkehr sich abwechselt. Der Klassendefault (1+1 Spuren) baute
+	// sie 5 m breit wie eine Wohnstrasse - gemessen an der gebackenen Karte
+	// betraf das 4.808 der 14.158 service-Wege (4.619 driveway, 189 alley),
+	// von denen nur 2 % ueberhaupt ein lanes-Tag tragen. Eine echte
+	// Spuranordnung (lanes*) schlaegt das weiterhin: dann faellt die Zeile
+	// durch und die uebliche Aufloesung greift.
+	if (Type == EOSMHighwayType::Service)
+	{
+		const FString ServiceKind = Way.GetTag(TEXT("service")).ToLower();
+		const bool bSingleTrackKind =
+			(ServiceKind == TEXT("driveway") || ServiceKind == TEXT("alley"));
+		const bool bHasExplicitLanes = Way.HasTag(TEXT("lanes"))
+			|| Way.HasTag(TEXT("lanes:forward"))
+			|| Way.HasTag(TEXT("lanes:backward"));
+		if (bSingleTrackKind && !bHasExplicitLanes)
+		{
+			OutForwardLanes = 1;
+			OutBackwardLanes = 0;
+			return;
+		}
+	}
+
 	const FRoadTypeDefinition& Def = GetDefinition(Type);
 
 	const bool bIsOneway = (Oneway == EOSMOnewayType::Forward)
