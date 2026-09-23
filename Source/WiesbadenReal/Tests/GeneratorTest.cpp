@@ -2853,42 +2853,90 @@ bool FRoofCoveringTest::RunTest(const FString& Parameters)
 {
 	// Fassaden-Varianten (EFacadeVariant, .cpp-lokal): 0 Putz, 1 Backstein,
 	// 2 Sandstein, 3 Glas, 4 Beton, 5 Fachwerk. Deckung: 0 Terrakotta,
-	// 1 Schiefer, 2 Zink.
-	auto Cov = [](int32 Variant, EOSMRoofShape Shape)
+	// 1 Schiefer, 2 Zink, 3 Kupfergruen, 4 dunkler Schiefer.
+	auto Cov = [](int32 Variant, EOSMRoofShape Shape, EOSMBuildingType Type, bool bLandmark)
 	{
-		return UBuildingGenerator::RoofCoveringIndex(Variant, Shape);
+		return UBuildingGenerator::RoofCoveringIndex(Variant, Shape, Type, bLandmark);
+	};
+	// Gewoehnliches Gebaeude (weder Kirche noch Wahrzeichen).
+	auto Plain = [&Cov](int32 Variant, EOSMRoofShape Shape)
+	{
+		return Cov(Variant, Shape, EOSMBuildingType::Generic, false);
 	};
 
-	// -- Flachdach ist IMMER Zink, egal welche Fassade -----------------------
+	// -- Flachdach ist Zink fuer NICHT-Kirche/Wahrzeichen, egal welche Fassade
 	for (int32 V = 0; V <= 5; ++V)
 	{
 		TestEqual(*FString::Printf(TEXT("Flachdach Variante %d -> Zink"), V),
-			Cov(V, EOSMRoofShape::Flat), 2);
+			Plain(V, EOSMRoofShape::Flat), 2);
 	}
 
-	// -- Geneigt: Sandstein (Gruenderzeit/Kirche) -> Schiefer ----------------
+	// -- Geneigt: Sandstein (Gruenderzeit/Civic/Uni) -> Schiefer -------------
 	TestEqual(TEXT("Sattel + Sandstein -> Schiefer"),
-		Cov(2, EOSMRoofShape::Gabled), 1);
+		Plain(2, EOSMRoofShape::Gabled), 1);
 	TestEqual(TEXT("Walm + Sandstein -> Schiefer"),
-		Cov(2, EOSMRoofShape::Hipped), 1);
+		Plain(2, EOSMRoofShape::Hipped), 1);
 
 	// -- Geneigt: Glas/Beton (Buero/Industrie) -> Zink -----------------------
-	TestEqual(TEXT("Sattel + Glas -> Zink"), Cov(3, EOSMRoofShape::Gabled), 2);
-	TestEqual(TEXT("Sattel + Beton -> Zink"), Cov(4, EOSMRoofShape::Gabled), 2);
+	TestEqual(TEXT("Sattel + Glas -> Zink"), Plain(3, EOSMRoofShape::Gabled), 2);
+	TestEqual(TEXT("Sattel + Beton -> Zink"), Plain(4, EOSMRoofShape::Gabled), 2);
 
 	// -- Geneigt: Wohnbau (Putz/Backstein/Fachwerk) -> Terrakotta ------------
-	TestEqual(TEXT("Sattel + Putz -> Terrakotta"), Cov(0, EOSMRoofShape::Gabled), 0);
-	TestEqual(TEXT("Sattel + Backstein -> Terrakotta"), Cov(1, EOSMRoofShape::Gabled), 0);
-	TestEqual(TEXT("Zelt + Fachwerk -> Terrakotta"), Cov(5, EOSMRoofShape::Pyramidal), 0);
+	TestEqual(TEXT("Sattel + Putz -> Terrakotta"), Plain(0, EOSMRoofShape::Gabled), 0);
+	TestEqual(TEXT("Sattel + Backstein -> Terrakotta"), Plain(1, EOSMRoofShape::Gabled), 0);
+	TestEqual(TEXT("Zelt + Fachwerk -> Terrakotta"), Plain(5, EOSMRoofShape::Pyramidal), 0);
 
-	// -- Ergebnis ist immer eine gueltige Deckung (0..2) ---------------------
+	// -- Civic/Uni (ebenfalls Sandstein) bleiben SCHIEFER, NICHT Kupfer ------
+	// Nur Kirche + Wahrzeichen bekommen die markante Deckung, nicht jeder
+	// Sandsteinbau.
+	TestEqual(TEXT("Civic + Sandstein + Sattel -> Schiefer"),
+		Cov(2, EOSMRoofShape::Gabled, EOSMBuildingType::Civic, false), 1);
+	TestEqual(TEXT("Uni + Sandstein + Kuppel -> Schiefer (kein Kupfer)"),
+		Cov(2, EOSMRoofShape::Dome, EOSMBuildingType::University, false), 1);
+
+	// -- KIRCHE: Kuppel/Turmhelm -> Kupfergruen, sonst -> dunkler Schiefer ---
+	// (Wiesbadener Kirchen sind schiefergedeckt; nur Kuppeln/Helme patinieren.)
+	TestEqual(TEXT("Kirche + Kuppel -> Kupfergruen"),
+		Cov(2, EOSMRoofShape::Dome, EOSMBuildingType::Church, false), 3);
+	TestEqual(TEXT("Kirche + Zeltdach -> Kupfergruen"),
+		Cov(2, EOSMRoofShape::Pyramidal, EOSMBuildingType::Church, false), 3);
+	TestEqual(TEXT("Kirche + Sattel -> dunkler Schiefer"),
+		Cov(2, EOSMRoofShape::Gabled, EOSMBuildingType::Church, false), 4);
+	TestEqual(TEXT("Kirche + Walm -> dunkler Schiefer"),
+		Cov(2, EOSMRoofShape::Hipped, EOSMBuildingType::Church, false), 4);
+	// Untaggte Kirchen sind oft "flach" - trotzdem markant (dunkler Schiefer),
+	// NICHT Zink: der Kirchen-Vorrang steht vor der Flachdach-Regel.
+	TestEqual(TEXT("Kirche + (ungetaggt) Flach -> dunkler Schiefer"),
+		Cov(2, EOSMRoofShape::Flat, EOSMBuildingType::Church, false), 4);
+	// Kirche, die zugleich Wahrzeichen ist (Marktkirche): bleibt dunkler
+	// Schiefer - der Kirchentyp entscheidet, nicht die Landmarke.
+	TestEqual(TEXT("Kirche+Wahrzeichen + Sattel -> dunkler Schiefer"),
+		Cov(2, EOSMRoofShape::Gabled, EOSMBuildingType::Church, true), 4);
+
+	// -- BUERGERLICHES WAHRZEICHEN (keine Kirche) -> Kupfergruen -------------
+	TestEqual(TEXT("Wahrzeichen + Kuppel -> Kupfergruen"),
+		Cov(0, EOSMRoofShape::Dome, EOSMBuildingType::Civic, true), 3);
+	TestEqual(TEXT("Wahrzeichen + Sattel -> Kupfergruen"),
+		Cov(0, EOSMRoofShape::Gabled, EOSMBuildingType::Generic, true), 3);
+	TestEqual(TEXT("Wahrzeichen + Flach -> Kupfergruen"),
+		Cov(3, EOSMRoofShape::Flat, EOSMBuildingType::Office, true), 3);
+
+	// -- Ergebnis ist immer eine gueltige Deckung (0..4) ---------------------
 	for (int32 V = 0; V <= 5; ++V)
 	{
 		for (int32 S = 0; S < static_cast<int32>(EOSMRoofShape::MAX); ++S)
 		{
-			const int32 C = Cov(V, static_cast<EOSMRoofShape>(S));
-			TestTrue(*FString::Printf(TEXT("Deckung 0..2 (V%d S%d -> %d)"), V, S, C),
-				C >= 0 && C <= 2);
+			const EOSMRoofShape Shape = static_cast<EOSMRoofShape>(S);
+			for (int32 T = 0; T < static_cast<int32>(EOSMBuildingType::MAX); ++T)
+			{
+				const EOSMBuildingType Type = static_cast<EOSMBuildingType>(T);
+				for (bool bLm : {false, true})
+				{
+					const int32 C = Cov(V, Shape, Type, bLm);
+					TestTrue(*FString::Printf(TEXT("Deckung 0..4 (V%d S%d T%d L%d -> %d)"),
+						V, S, T, bLm ? 1 : 0, C), C >= 0 && C <= 4);
+				}
+			}
 		}
 	}
 

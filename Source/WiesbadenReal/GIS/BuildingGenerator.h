@@ -431,6 +431,8 @@ private:
 		EOSMRoofShape Shape,
 		double RoofHeightCm,
 		int32 MaterialVariant,
+		EOSMBuildingType BuildingType,
+		bool bIsLandmark,
 		int64 SourceId,
 		const FString& FacadeOverrideKey,
 		double RoofOverhangMeters,
@@ -481,18 +483,29 @@ public:
 		int64 SeedId);
 
 	/**
-	 * Dachdeckung aus Fassaden-Variante und Dachform - EINE Deckung je Gebaeude.
+	 * Dachdeckung aus Fassaden-Variante, Dachform, Gebaeudetyp und Landmarke -
+	 * EINE Deckung je Gebaeude.
 	 *
 	 * 0 = Terrakotta-Pfanne (Wohnbau: Putz/Backstein/Fachwerk),
-	 * 1 = Schiefer (Gruenderzeit/Kirche/Civic: Sandstein-Fassade),
-	 * 2 = Zink/Blech (Moderne/Buero/Industrie ODER jedes Flachdach).
+	 * 1 = Schiefer (Gruenderzeit/Civic/Uni: Sandstein-Fassade),
+	 * 2 = Zink/Blech (Moderne/Buero/Industrie ODER jedes Flachdach),
+	 * 3 = Kupfergruen/Patina (buergerliche Wahrzeichen + jede Kuppel/Turmhelm),
+	 * 4 = dunkler Schiefer (Kirchen).
+	 *
+	 * Kirchen (EOSMBuildingType::Church) und Wahrzeichen (bIsLandmark) tragen
+	 * eine EIGENE, markante Deckung statt der allgemeinen Sandstein->Schiefer-
+	 * Regel: Kirchen dunklen Schiefer (ortsgerecht - Marktkirche/Bergkirche/
+	 * Ringkirche), buergerliche Wahrzeichen (Kurhaus, Rathaus, Theater ...) die
+	 * kupfergruene Patina, und jede Kuppel/jedes Zeltdach ebenfalls Kupfergruen.
+	 * Alle uebrigen Sandstein-Bauten (Civic/Uni/Gruenderzeit) bleiben beim
+	 * normalen Schiefer.
 	 *
 	 * Loest die alte Regionswuerfelung im Dachmaterial ab: die Deckung folgt
-	 * jetzt dem Gebaeudetyp (ueber dieselbe Variante wie die Fassade), nicht
-	 * einer 14-m-Weltzelle - so traegt ein grosses Dach nicht mehr mehrere
-	 * Deckungen nebeneinander. Datenrein pruefbar (Test GIS.RoofCovering).
+	 * dem Gebaeudetyp, nicht einer 14-m-Weltzelle. Datenrein pruefbar (Test
+	 * GIS.RoofCovering).
 	 */
-	static int32 RoofCoveringIndex(int32 MaterialVariant, EOSMRoofShape Shape);
+	static int32 RoofCoveringIndex(int32 MaterialVariant, EOSMRoofShape Shape,
+		EOSMBuildingType BuildingType, bool bIsLandmark);
 
 	/**
 	 * Deterministische Tonstufe (0-255) je Gebaeude aus der OSM-Id.
