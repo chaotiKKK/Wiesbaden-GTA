@@ -338,6 +338,7 @@ public:
 	UFUNCTION(Exec)
 	void WbOption(int32 Zeile, int32 Schritte);
 
+
 private:
 	/** True, solange das Spiel pausiert ist. */
 	bool bPaused = false;
@@ -351,11 +352,37 @@ private:
 	/** Ausgewaehlter Eintrag. */
 	int32 PauseSelection = 0;
 
-	/** True, solange das Optionsfenster im Pausemenue offen ist. */
-	bool bOptionsOpen = false;
+	/**
+	 * WAS GERADE UEBER DEM SPIEL LIEGT - ein Zustand, ein Eigentuemer.
+	 *
+	 * Vorher gab es zwei Schalter: `bPaused` entschied, ob Tasten ausgewertet
+	 * werden, `bOptionsOpen`, ob das Optionsfenster gezeichnet wird. Beide
+	 * konnten auseinanderlaufen, und genau das taten sie: ein Fenster war zu
+	 * sehen, waehrend die Pfeiltasten ins Leere gingen. Jetzt entscheidet
+	 * DIESELBE Groesse ueber Zeichnen UND Eingabe - sichtbar heisst damit
+	 * bedienbar, ohne dass jemand daran denken muss.
+	 */
+	enum class EWbPauseView : uint8
+	{
+		Aus,        // nichts liegt ueber dem Spiel
+		Menue,      // Pausemenue
+		Optionen,   // Optionsfenster
+	};
+
+	EWbPauseView PauseView = EWbPauseView::Aus;
 
 	/** Ausgewaehlte Zeile im Optionsfenster. */
 	int32 OptionSelection = 0;
+
+	/**
+	 * Einmal je Oeffnen: die Tastenauswertung hat sich gemeldet.
+	 *
+	 * Das ist der Nachweis der Reparatur. Vorher entschieden zwei Schalter
+	 * ueber Zeichnen und Eingabe; stand das Fenster ohne Pause, lief
+	 * UpdateOptions NIE. Die Zeile im Protokoll sagt, dass es laeuft, solange
+	 * das Fenster zu sehen ist.
+	 */
+	bool bOptionInputAnnounced = false;
 
 	/**
 	 * Maus-Empfindlichkeit als FAKTOR auf die eingebauten Werte (1,00 = wie

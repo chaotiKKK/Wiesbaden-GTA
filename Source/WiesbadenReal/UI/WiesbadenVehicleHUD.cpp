@@ -637,18 +637,15 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	// Pausemenue zuerst: es liegt ueber allem und haelt die Zeit an.
 	UpdatePauseMenu();
 
-	// DAS OPTIONSFENSTER HAENGT AN SEINEM EIGENEN SCHALTER, nicht an der Pause.
-	// Im Spiel oeffnet es sich aus dem Pausemenue, ist also ohnehin angehalten.
-	// Getrennt sind beide, weil der Entwicklerbefehl WbOptionen NICHT pausieren
-	// darf: eine Pause ab Bild 0 haelt den Welt-Takt an, die Stadt wird nie
-	// fertig gestreamt - und ein Lauf, der das Menue fotografieren soll, kaeme
-	// nie so weit.
-	if (bOptionsOpen)
+	// WAS GEZEICHNET WIRD, ENTSCHEIDET DIESELBE GROESSE WIE DIE EINGABE
+	// (UpdatePauseMenu unten). Vorher waren es zwei Schalter, und ein
+	// gezeichnetes Optionsfenster konnte taub sein.
+	if (PauseView == EWbPauseView::Optionen)
 	{
 		DrawOptions(Width, Height);
 		return;
 	}
-	if (bPaused)
+	if (PauseView == EWbPauseView::Menue)
 	{
 		DrawPauseMenu(Width, Height);
 		return;
@@ -1111,15 +1108,19 @@ void AWiesbadenVehicleHUD::UpdatePauseMenu()
 	if (Edge(EKeys::Escape, bPauseKeyHeld)
 		|| PC->IsInputKeyDown(EKeys::Gamepad_Special_Right))
 	{
-		if (bOptionsOpen)
+		if (PauseView == EWbPauseView::Optionen)
 		{
-			// Aus dem Ton-Unterfenster nur eine Ebene zurueck ins Pausemenue,
-			// nicht gleich das Spiel fortsetzen.
-			bOptionsOpen = false;
+			// Aus den Optionen nur eine Ebene zurueck ins Pausemenue, nicht
+			// gleich das Spiel fortsetzen.
+			PauseView = EWbPauseView::Menue;
+			PauseSelection = 0;
 		}
 		else
 		{
-			bPaused = !bPaused;
+			PauseView = (PauseView == EWbPauseView::Aus)
+				? EWbPauseView::Menue
+				: EWbPauseView::Aus;
+			bPaused = (PauseView != EWbPauseView::Aus);
 			PauseSelection = 0;
 
 			// Die Zeit wirklich anhalten. Ein Menue, hinter dem der Verkehr
@@ -1130,13 +1131,14 @@ void AWiesbadenVehicleHUD::UpdatePauseMenu()
 		}
 	}
 
-	if (!bPaused)
+	if (PauseView == EWbPauseView::Aus)
 	{
 		return;
 	}
 
-	// Ton-Unterfenster hat Vorrang: eigene Tastenauswertung (Bus + Lautstaerke).
-	if (bOptionsOpen)
+	// Das Optionsfenster hat Vorrang und wertet seine Tasten selbst aus. Die
+	// Bedingung ist DIESELBE, die oben ueber das Zeichnen entscheidet.
+	if (PauseView == EWbPauseView::Optionen)
 	{
 		UpdateOptions();
 		return;
@@ -1170,6 +1172,7 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 
 	auto Unpause = [this, PC]()
 	{
+		PauseView = EWbPauseView::Aus;
 		bPaused = false;
 		PC->SetPause(false);
 		PC->bShowMouseCursor = false;
@@ -1190,8 +1193,9 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 	case 2:
 		// Ton-Unterfenster oeffnen - NICHT entpausieren: die Lautstaerke wird im
 		// angehaltenen Spiel geregelt, Escape fuehrt zurueck ins Pausemenue.
-		bOptionsOpen = true;
+		PauseView = EWbPauseView::Optionen;
 		OptionSelection = 0;
+		bOptionInputAnnounced = false;
 		break;
 
 	case 3:
@@ -1324,23 +1328,27 @@ void AWiesbadenVehicleHUD::WbOptionen()
 		return;
 	}
 
-	// OHNE PAUSE, anders als der Weg ueber das Pausemenue: eine Pause ab
-	// Bild 0 haelt den Welt-Takt an, die Stadt wird nie fertig, und der Lauf
-	// koennte weder ein Bild machen noch eine Wirkung zeigen.
-	bOptionsOpen = !bOptionsOpen;
-	if (bOptionsOpen)
+	// Setzt DENSELBEN Zustand wie der Weg ueber das Pausemenue - damit ist das
+	// Fenster auch hier bedienbar, nicht nur sichtbar. Angehalten wird dabei
+	// bewusst NICHT: eine Pause ab Bild 0 haelt den Welt-Takt an, die Stadt
+	// wird nie fertig gestreamt, und der Lauf koennte weder ein Bild machen
+	// noch eine Wirkung zeigen.
+	const bool bOeffnen = (PauseView != EWbPauseView::Optionen);
+	PauseView = bOeffnen ? EWbPauseView::Optionen : EWbPauseView::Aus;
+	if (bOeffnen)
 	{
 		OptionSelection = 0;
+		bOptionInputAnnounced = false;
 	}
 
 	TArray<FWbOptionRow> Rows;
 	BuildOptionRows(Rows);
 	UE_LOG(LogWbCore, Log, TEXT("WbOptionen: Fenster %s, %d Zeilen."),
-		bOptionsOpen ? TEXT("offen") : TEXT("zu"), Rows.Num());
+		bOeffnen ? TEXT("offen") : TEXT("zu"), Rows.Num());
 
 	// Die ganze Liste einmal ins Protokoll - damit ist nachlesbar, welcher
 	// Index zu welcher Zeile gehoert, ohne das Bild zu brauchen.
-	if (bOptionsOpen)
+	if (bOeffnen)
 	{
 		for (int32 i = 0; i < Rows.Num(); ++i)
 		{
@@ -1383,7 +1391,8 @@ void AWiesbadenVehicleHUD::WbOption(int32 Zeile, int32 Schritte)
 		*WiesbadenOptions::FormatValue(Row.Kind, Vorher),
 		*WiesbadenOptions::FormatValue(Row.Kind, Wert),
 		*WiesbadenOptions::FormatValue(Row.Kind, Nachher),
-		FMath::IsNearlyEqual(Wert, Nachher) ? TEXT("") : TEXT("  ACHTUNG: NICHT ANGEKOMMEN"));
+		WiesbadenOptions::ValueArrived(Wert, Nachher)
+			? TEXT("") : TEXT("  ACHTUNG: NICHT ANGEKOMMEN"));
 }
 
 void AWiesbadenVehicleHUD::BuildOptionRows(TArray<FWbOptionRow>& OutRows) const
@@ -1754,6 +1763,17 @@ void AWiesbadenVehicleHUD::UpdateOptions()
 		return;
 	}
 	OptionSelection = FMath::Clamp(OptionSelection, 0, Rows.Num() - 1);
+
+	// EINMAL JE OEFFNEN MELDEN, DASS ES HIER ANKOMMT. Vorher konnte das
+	// Fenster gezeichnet sein, waehrend diese Funktion nie lief - die Zeile
+	// belegt, dass Zeichnen und Eingabe jetzt an derselben Groesse haengen.
+	if (!bOptionInputAnnounced)
+	{
+		bOptionInputAnnounced = true;
+		UE_LOG(LogWbCore, Log,
+			TEXT("Optionen: Tastenauswertung laeuft (%d Zeilen, Auswahl %d)."),
+			Rows.Num(), OptionSelection);
+	}
 
 	if (Edge(EKeys::Up, EKeys::W, bMenuUpHeld))
 	{

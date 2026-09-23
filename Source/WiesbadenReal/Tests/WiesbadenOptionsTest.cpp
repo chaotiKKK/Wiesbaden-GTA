@@ -174,6 +174,32 @@ bool FWiesbadenOptionsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("leere Liste bleibt bei 0"), NextRow(0, 0, +1), 0);
 	}
 
+	// -- Der Ruecklese-Waechter: Rundungsrauschen ja, echte Fehlschlaege nein -
+	//
+	// GEMESSEN: der Waechter lief mit FMath::IsNearlyEqual und der Vorgabe fuer
+	// double (1e-8). TrafficDensity ist ein float - die geschriebene 0,6 kam
+	// als 0,60000002384 zurueck und wurde als "NICHT ANGEKOMMEN" gemeldet,
+	// obwohl sie angekommen war.
+	{
+		// Genau der Fall aus dem Spiel: float-Rundung auf die 0,6.
+		const double AlsFloat = static_cast<double>(static_cast<float>(0.6));
+		TestTrue(TEXT("float-Rundung gilt als angekommen"),
+			ValueArrived(0.6, AlsFloat));
+		TestTrue(TEXT("auch bei grossen Werten"),
+			ValueArrived(144.0, static_cast<double>(static_cast<float>(144.0))));
+		TestTrue(TEXT("und bei null"), ValueArrived(0.0, 0.0));
+
+		// GEGENPROBE: ein wirklich verschluckter Wert faellt weiter auf. Der
+		// kleinste echte Schritt des Menues ist 0,05 (Lautstaerke) - alles
+		// darunter waere kein Schritt, alles darueber ein Fehlschlag.
+		TestFalse(TEXT("ein geklemmter Wert faellt auf"),
+			ValueArrived(0.6, 0.5));
+		TestFalse(TEXT("ein kleinster Schritt faellt auf"),
+			ValueArrived(0.55, 0.50));
+		TestFalse(TEXT("eine verschluckte Qualitaetsstufe faellt auf"),
+			ValueArrived(4.0, 3.0));
+	}
+
 	// -- Jede Gruppe hat eine Ueberschrift ----------------------------------
 	{
 		for (int32 i = 0; i < static_cast<int32>(EWbOptionGroup::MAX); ++i)
