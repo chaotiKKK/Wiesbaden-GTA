@@ -2,6 +2,12 @@
 
 #include "UI/WiesbadenVehicleHUD.h"
 
+#include "UI/WiesbadenOptions.h"
+#include "GameFramework/GameUserSettings.h"
+#include "Vehicles/WiesbadenFootPawn.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
+#include "Misc/ConfigCacheIni.h"
+
 #include "WiesbadenReal.h"
 
 #include "Audio/WiesbadenAudioSubsystem.h"
@@ -623,20 +629,28 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	// vorher inline hier und machte DrawHUD zur halben State-Machine.
 	UpdateFirstRunOnboarding();
 
+	// Gespeicherte Optionen anwenden. Im Sekundentakt, weil Spielfigur und
+	// Fahrzeugkamera beim Ein-/Aussteigen neu entstehen und sonst wieder mit
+	// der eingebauten Maus-Empfindlichkeit liefen.
+	ApplyPersistentOptions();
+
 	// Pausemenue zuerst: es liegt ueber allem und haelt die Zeit an.
 	UpdatePauseMenu();
+
+	// DAS OPTIONSFENSTER HAENGT AN SEINEM EIGENEN SCHALTER, nicht an der Pause.
+	// Im Spiel oeffnet es sich aus dem Pausemenue, ist also ohnehin angehalten.
+	// Getrennt sind beide, weil der Entwicklerbefehl WbOptionen NICHT pausieren
+	// darf: eine Pause ab Bild 0 haelt den Welt-Takt an, die Stadt wird nie
+	// fertig gestreamt - und ein Lauf, der das Menue fotografieren soll, kaeme
+	// nie so weit.
+	if (bOptionsOpen)
+	{
+		DrawOptions(Width, Height);
+		return;
+	}
 	if (bPaused)
 	{
-		// Das Ton-Unterfenster liegt IM Pausemenue (eigener Zustand); es wird
-		// statt der Eintragsliste gezeichnet, solange es offen ist.
-		if (bAudioSettingsOpen)
-		{
-			DrawAudioSettings(Width, Height);
-		}
-		else
-		{
-			DrawPauseMenu(Width, Height);
-		}
+		DrawPauseMenu(Width, Height);
 		return;
 	}
 
@@ -1064,7 +1078,7 @@ void AWiesbadenVehicleHUD::GetPauseMenuEntries(TArray<FString>& OutEntries)
 	OutEntries.Reset();
 	OutEntries.Add(TEXT("Weiterspielen"));
 	OutEntries.Add(TEXT("Steuerung einblenden"));
-	OutEntries.Add(TEXT("Ton / Lautstaerke"));
+	OutEntries.Add(TEXT("Optionen"));
 	OutEntries.Add(TEXT("Karte zeigen / verbergen (M)"));
 	// Entwicklerbefehle. Ohne sie kostet jede Pruefung eine Fahrt quer durch
 	// die Stadt - der Weg zur Platter Strasse dauert im Spiel Minuten.
@@ -1097,11 +1111,11 @@ void AWiesbadenVehicleHUD::UpdatePauseMenu()
 	if (Edge(EKeys::Escape, bPauseKeyHeld)
 		|| PC->IsInputKeyDown(EKeys::Gamepad_Special_Right))
 	{
-		if (bAudioSettingsOpen)
+		if (bOptionsOpen)
 		{
 			// Aus dem Ton-Unterfenster nur eine Ebene zurueck ins Pausemenue,
 			// nicht gleich das Spiel fortsetzen.
-			bAudioSettingsOpen = false;
+			bOptionsOpen = false;
 		}
 		else
 		{
@@ -1122,9 +1136,9 @@ void AWiesbadenVehicleHUD::UpdatePauseMenu()
 	}
 
 	// Ton-Unterfenster hat Vorrang: eigene Tastenauswertung (Bus + Lautstaerke).
-	if (bAudioSettingsOpen)
+	if (bOptionsOpen)
 	{
-		UpdateAudioSettings();
+		UpdateOptions();
 		return;
 	}
 
@@ -1176,8 +1190,8 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 	case 2:
 		// Ton-Unterfenster oeffnen - NICHT entpausieren: die Lautstaerke wird im
 		// angehaltenen Spiel geregelt, Escape fuehrt zurueck ins Pausemenue.
-		bAudioSettingsOpen = true;
-		AudioSelection = 0;
+		bOptionsOpen = true;
+		OptionSelection = 0;
 		break;
 
 	case 3:
@@ -1302,7 +1316,420 @@ FString AWiesbadenVehicleHUD::FormatVolumePercent(float Slider01)
 	return FString::Printf(TEXT("%d %%"), Pct);
 }
 
-void AWiesbadenVehicleHUD::UpdateAudioSettings()
+void AWiesbadenVehicleHUD::WbOptionen()
+{
+	APlayerController* PC = GetOwningPlayerController();
+	if (!PC)
+	{
+		return;
+	}
+
+	// OHNE PAUSE, anders als der Weg ueber das Pausemenue: eine Pause ab
+	// Bild 0 haelt den Welt-Takt an, die Stadt wird nie fertig, und der Lauf
+	// koennte weder ein Bild machen noch eine Wirkung zeigen.
+	bOptionsOpen = !bOptionsOpen;
+	if (bOptionsOpen)
+	{
+		OptionSelection = 0;
+	}
+
+	TArray<FWbOptionRow> Rows;
+	BuildOptionRows(Rows);
+	UE_LOG(LogWbCore, Log, TEXT("WbOptionen: Fenster %s, %d Zeilen."),
+		bOptionsOpen ? TEXT("offen") : TEXT("zu"), Rows.Num());
+
+	// Die ganze Liste einmal ins Protokoll - damit ist nachlesbar, welcher
+	// Index zu welcher Zeile gehoert, ohne das Bild zu brauchen.
+	if (bOptionsOpen)
+	{
+		for (int32 i = 0; i < Rows.Num(); ++i)
+		{
+			UE_LOG(LogWbCore, Log, TEXT("  [%2d] %-22s %s = %s"),
+				i, *WiesbadenOptions::GroupLabel(Rows[i].Group), *Rows[i].Label,
+				*WiesbadenOptions::FormatValue(Rows[i].Kind, ReadOptionValue(Rows[i])));
+		}
+	}
+}
+
+void AWiesbadenVehicleHUD::WbOption(int32 Zeile, int32 Schritte)
+{
+	TArray<FWbOptionRow> Rows;
+	BuildOptionRows(Rows);
+	if (!Rows.IsValidIndex(Zeile))
+	{
+		UE_LOG(LogWbCore, Warning,
+			TEXT("WbOption: Zeile %d gibt es nicht (%d Zeilen)."), Zeile, Rows.Num());
+		return;
+	}
+
+	OptionSelection = Zeile;
+	const FWbOptionRow& Row = Rows[Zeile];
+	const double Vorher = ReadOptionValue(Row);
+
+	double Wert = Vorher;
+	const int32 Richtung = (Schritte >= 0) ? 1 : -1;
+	for (int32 i = 0; i < FMath::Abs(Schritte); ++i)
+	{
+		Wert = WiesbadenOptions::Step(Row.Kind, Wert, Richtung);
+	}
+	WriteOptionValue(Row, Wert);
+
+	// ZURUECKGELESEN, nicht behauptet: was hier steht, hat das besitzende
+	// System wirklich angenommen.
+	const double Nachher = ReadOptionValue(Row);
+	UE_LOG(LogWbCore, Log,
+		TEXT("WbOption: %s  %s -> %s (gesetzt: %s)%s"),
+		*Row.Label,
+		*WiesbadenOptions::FormatValue(Row.Kind, Vorher),
+		*WiesbadenOptions::FormatValue(Row.Kind, Wert),
+		*WiesbadenOptions::FormatValue(Row.Kind, Nachher),
+		FMath::IsNearlyEqual(Wert, Nachher) ? TEXT("") : TEXT("  ACHTUNG: NICHT ANGEKOMMEN"));
+}
+
+void AWiesbadenVehicleHUD::BuildOptionRows(TArray<FWbOptionRow>& OutRows) const
+{
+	// KEINE ZEILE, DEREN SYSTEM ES NICHT GIBT. Ein Regler ohne Mischpult oder
+	// ein Verkehrsregler ohne Stadt waere genau die Option, die nichts tut.
+	TArray<FString> BusLabels;
+	int32 BusCount = 0;
+	if (const APlayerController* PC = GetOwningPlayerController())
+	{
+		if (const UGameInstance* GI = PC->GetGameInstance())
+		{
+			if (GI->GetSubsystem<UWiesbadenAudioSubsystem>())
+			{
+				GetAudioBusLabels(BusLabels);
+				BusCount = BusLabels.Num();
+			}
+		}
+	}
+
+	WiesbadenOptions::BuildRows(BusCount, BusLabels, OutRows);
+
+	// Ohne Stadt-Subsystem faellt die Gruppe Spielwelt weg.
+	const UWorld* HudWorld = GetWorld();
+	const UWiesbadenCitySubsystem* City =
+		HudWorld ? HudWorld->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+	if (!City)
+	{
+		OutRows.RemoveAll([](const FWbOptionRow& Row)
+		{
+			return Row.Group == EWbOptionGroup::Spielwelt;
+		});
+	}
+
+	// Ohne GameUserSettings faellt die Gruppe Grafik weg.
+	if (!GEngine || !GEngine->GetGameUserSettings())
+	{
+		OutRows.RemoveAll([](const FWbOptionRow& Row)
+		{
+			return Row.Group == EWbOptionGroup::Grafik;
+		});
+	}
+}
+
+double AWiesbadenVehicleHUD::ReadOptionValue(const FWbOptionRow& Row) const
+{
+	// --- Ton: beim Mischpult ------------------------------------------------
+	if (Row.Group == EWbOptionGroup::Ton && Row.BusIndex >= 0)
+	{
+		if (const APlayerController* PC = GetOwningPlayerController())
+		{
+			if (const UGameInstance* GI = PC->GetGameInstance())
+			{
+				if (UWiesbadenAudioSubsystem* Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>())
+				{
+					return Audio->GetBusVolume(static_cast<EWbAudioBus>(Row.BusIndex));
+				}
+			}
+		}
+		return 1.0;
+	}
+
+	// --- Grafik: bei den GameUserSettings -----------------------------------
+	if (Row.Group == EWbOptionGroup::Grafik)
+	{
+		UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		if (!Settings)
+		{
+			return 0.0;
+		}
+		if (Row.Label == TEXT("Sichtweite"))      { return Settings->GetViewDistanceQuality(); }
+		if (Row.Label == TEXT("Schatten"))        { return Settings->GetShadowQuality(); }
+		if (Row.Label == TEXT("Effekte"))         { return Settings->GetVisualEffectQuality(); }
+		if (Row.Label == TEXT("Texturen"))        { return Settings->GetTextureQuality(); }
+		if (Row.Label == TEXT("Bildratengrenze")) { return Settings->GetFrameRateLimit(); }
+		return 0.0;
+	}
+
+	// --- Steuerung ----------------------------------------------------------
+	if (Row.Group == EWbOptionGroup::Steuerung)
+	{
+		if (Row.Kind == EWbOptionKind::Faktor)
+		{
+			return MouseSensitivityFactor;
+		}
+		return bShowControlLegend ? 1.0 : 0.0;
+	}
+
+	// --- Spielwelt: bei der Stadt -------------------------------------------
+	const UWorld* HudWorld = GetWorld();
+	const UWiesbadenCitySubsystem* City =
+		HudWorld ? HudWorld->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+	if (!City)
+	{
+		return 0.0;
+	}
+	if (Row.Label == TEXT("Verkehrsdichte"))
+	{
+		return City->TrafficSimulation.Settings.TrafficDensity;
+	}
+	if (Row.Label == TEXT("Tageszeit"))
+	{
+		// Gelesen wird die QUELLE, nicht die Uhr: bei Systemzeit laeuft die
+		// Stunde weiter, und die Zeile wuerde im Menue vor sich hin zaehlen.
+		return (City->Weather.Settings.TimeSource == EWiesbadenTimeSource::SystemClock)
+			? -1.0
+			: FMath::RoundToDouble(City->Weather.Settings.FixedHours);
+	}
+	return 0.0;
+}
+
+void AWiesbadenVehicleHUD::WriteOptionValue(const FWbOptionRow& Row, double Value)
+{
+	// --- Ton ----------------------------------------------------------------
+	if (Row.Group == EWbOptionGroup::Ton && Row.BusIndex >= 0)
+	{
+		if (APlayerController* PC = GetOwningPlayerController())
+		{
+			if (UGameInstance* GI = PC->GetGameInstance())
+			{
+				if (UWiesbadenAudioSubsystem* Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>())
+				{
+					// SetBusVolume wendet sofort an UND speichert selbst.
+					Audio->SetBusVolume(static_cast<EWbAudioBus>(Row.BusIndex),
+						static_cast<float>(Value));
+				}
+			}
+		}
+		return;
+	}
+
+	// --- Grafik -------------------------------------------------------------
+	if (Row.Group == EWbOptionGroup::Grafik)
+	{
+		UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		if (!Settings)
+		{
+			return;
+		}
+		const int32 Stufe = FMath::Clamp(FMath::RoundToInt(Value), 0, 4);
+		if (Row.Label == TEXT("Sichtweite"))      { Settings->SetViewDistanceQuality(Stufe); }
+		else if (Row.Label == TEXT("Schatten"))   { Settings->SetShadowQuality(Stufe); }
+		else if (Row.Label == TEXT("Effekte"))    { Settings->SetVisualEffectQuality(Stufe); }
+		else if (Row.Label == TEXT("Texturen"))   { Settings->SetTextureQuality(Stufe); }
+		else if (Row.Label == TEXT("Bildratengrenze"))
+		{
+			Settings->SetFrameRateLimit(static_cast<float>(Value));
+		}
+
+		// ApplyNonResolutionSettings, NICHT ApplySettings: letzteres fasst auch
+		// Aufloesung und Fenstermodus an und laesst das Fenster flackern, ohne
+		// dass jemand daran gedreht haette.
+		Settings->ApplyNonResolutionSettings();
+		Settings->SaveSettings();
+		return;
+	}
+
+	// --- Steuerung ----------------------------------------------------------
+	if (Row.Group == EWbOptionGroup::Steuerung)
+	{
+		if (Row.Kind == EWbOptionKind::Faktor)
+		{
+			MouseSensitivityFactor = static_cast<float>(Value);
+			GConfig->SetFloat(TEXT("WiesbadenReal.Optionen"),
+				TEXT("MausEmpfindlichkeit"), MouseSensitivityFactor, GGameUserSettingsIni);
+		}
+		else
+		{
+			bShowControlLegend = (Value >= 0.5);
+			// Dauerhaft eingeblendet heisst: der Verblass-Zaehler darf nicht
+			// weiterlaufen, sonst ist die Hilfe nach ein paar Sekunden wieder weg.
+			ElapsedSeconds = 0.0f;
+			GConfig->SetBool(TEXT("WiesbadenReal.Optionen"),
+				TEXT("Steuerungshilfe"), bShowControlLegend, GGameUserSettingsIni);
+		}
+		GConfig->Flush(false, GGameUserSettingsIni);
+		return;
+	}
+
+	// --- Spielwelt ----------------------------------------------------------
+	UWorld* HudWorld = GetWorld();
+	UWiesbadenCitySubsystem* City =
+		HudWorld ? HudWorld->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+	if (!City)
+	{
+		return;
+	}
+	if (Row.Label == TEXT("Verkehrsdichte"))
+	{
+		City->TrafficSimulation.Settings.TrafficDensity = static_cast<float>(Value);
+		GConfig->SetFloat(TEXT("WiesbadenReal.Optionen"),
+			TEXT("Verkehrsdichte"), static_cast<float>(Value), GGameUserSettingsIni);
+	}
+	else if (Row.Label == TEXT("Tageszeit"))
+	{
+		if (Value < 0.0)
+		{
+			City->Weather.SetTimeSource(EWiesbadenTimeSource::SystemClock);
+		}
+		else
+		{
+			City->Weather.SetTimeSource(EWiesbadenTimeSource::FixedHour,
+				static_cast<float>(Value));
+		}
+		// Sofort nachziehen, sonst steht die Sonne bis zum naechsten Takt falsch.
+		City->Weather.UpdateClock(FDateTime::UtcNow(), FDateTime::Now());
+		StoredTimeOfDay = static_cast<float>(Value);
+		GConfig->SetFloat(TEXT("WiesbadenReal.Optionen"),
+			TEXT("Tageszeit"), static_cast<float>(Value), GGameUserSettingsIni);
+	}
+	GConfig->Flush(false, GGameUserSettingsIni);
+}
+
+void AWiesbadenVehicleHUD::LoadPersistentOptions()
+{
+	// NUR WAS WIRKLICH IN DER DATEI STEHT. Fehlt ein Schluessel, hat niemand
+	// daran gedreht - dann bleibt der Wert, den das Spiel selbst mitbringt
+	// (etwa eine Verkehrsdichte aus dem Stadt-Prompt). Blind Vorgaben zu
+	// schreiben hiesse, die Einstellung eines anderen zu ueberfahren.
+	float Faktor = 1.0f;
+	if (GConfig->GetFloat(TEXT("WiesbadenReal.Optionen"),
+		TEXT("MausEmpfindlichkeit"), Faktor, GGameUserSettingsIni))
+	{
+		MouseSensitivityFactor = FMath::Clamp(Faktor, 0.25f, 3.0f);
+	}
+
+	bool bLegende = true;
+	if (GConfig->GetBool(TEXT("WiesbadenReal.Optionen"),
+		TEXT("Steuerungshilfe"), bLegende, GGameUserSettingsIni))
+	{
+		bShowControlLegend = bLegende;
+	}
+
+	UWorld* HudWorld = GetWorld();
+	UWiesbadenCitySubsystem* City =
+		HudWorld ? HudWorld->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+	if (!City)
+	{
+		return;
+	}
+
+	float Dichte = 0.0f;
+	if (GConfig->GetFloat(TEXT("WiesbadenReal.Optionen"),
+		TEXT("Verkehrsdichte"), Dichte, GGameUserSettingsIni))
+	{
+		City->TrafficSimulation.Settings.TrafficDensity = FMath::Clamp(Dichte, 0.0f, 1.0f);
+	}
+
+	// Die Tageszeit wird hier nur GEMERKT, nicht gesetzt - siehe
+	// StoredTimeOfDay: das Stadt-Subsystem wuerde sie gleich wieder
+	// ueberschreiben. Angewendet wird sie im Takt von ApplyPersistentOptions.
+	//
+	// -WbTime hat Vorrang: wer die Stunde auf der Befehlszeile erzwingt, will
+	// genau die - nicht die zuletzt im Menue gewaehlte.
+	float Erzwungen = -1.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("WbTime="), Erzwungen))
+	{
+		return;
+	}
+	float Stunde = -1.0f;
+	if (GConfig->GetFloat(TEXT("WiesbadenReal.Optionen"),
+		TEXT("Tageszeit"), Stunde, GGameUserSettingsIni))
+	{
+		StoredTimeOfDay = Stunde;
+	}
+}
+
+void AWiesbadenVehicleHUD::ApplyPersistentOptions()
+{
+	UWorld* HudWorld = GetWorld();
+	if (!HudWorld)
+	{
+		return;
+	}
+
+	if (!bOptionsLoaded)
+	{
+		bOptionsLoaded = true;
+		LoadPersistentOptions();
+	}
+
+	const float Now = HudWorld->GetTimeSeconds();
+	if (Now < NextOptionApplyAt)
+	{
+		return;
+	}
+	NextOptionApplyAt = Now + 1.0f;
+
+	// Die gespeicherte Tageszeit nachziehen. Einmal setzen genuegt nicht: das
+	// Stadt-Subsystem setzt seine Zeitquelle in seinem ersten Takt und hat den
+	// geladenen Wert dabei ueberschrieben (gemessen: gespeicherte 22 Uhr kam
+	// als heller Tag zurueck). Geschrieben wird nur, wenn es wirklich abweicht.
+	if (StoredTimeOfDay > -1.5f)
+	{
+		if (UWiesbadenCitySubsystem* City = HudWorld->GetSubsystem<UWiesbadenCitySubsystem>())
+		{
+			const bool bSollSystem = (StoredTimeOfDay < 0.0f);
+			const bool bIstSystem =
+				(City->Weather.Settings.TimeSource == EWiesbadenTimeSource::SystemClock);
+			const bool bStundeWeicht = !bSollSystem
+				&& !FMath::IsNearlyEqual(City->Weather.Settings.FixedHours, StoredTimeOfDay);
+
+			if (bSollSystem != bIstSystem || bStundeWeicht)
+			{
+				if (bSollSystem)
+				{
+					City->Weather.SetTimeSource(EWiesbadenTimeSource::SystemClock);
+				}
+				else
+				{
+					City->Weather.SetTimeSource(EWiesbadenTimeSource::FixedHour, StoredTimeOfDay);
+				}
+				City->Weather.UpdateClock(FDateTime::UtcNow(), FDateTime::Now());
+			}
+		}
+	}
+
+	// Die Empfindlichkeit muss NACHGEZOGEN werden: Spielfigur und
+	// Fahrzeugkamera entstehen beim Ein- und Aussteigen neu und braechten sonst
+	// wieder ihre eingebauten Werte mit.
+	APlayerController* PC = GetOwningPlayerController();
+	APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+	if (!Pawn)
+	{
+		return;
+	}
+
+	// Die Grundwerte stehen in den Klassen selbst (WiesbadenFootPawn.h: 1,0;
+	// WiesbadenVehicleCameraComponent.h: 2,2). Sie sind verschieden, weil sich
+	// zu Fuss und im Wagen unterschiedlich schnell umsehen laesst - darum ist
+	// die Option ein Faktor darauf und kein absoluter Wert.
+	constexpr float FussGrundwert = 1.0f;
+	constexpr float WagenGrundwert = 2.2f;
+
+	if (AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(Pawn))
+	{
+		Foot->MouseSensitivity = FussGrundwert * MouseSensitivityFactor;
+	}
+	if (UWiesbadenVehicleCameraComponent* Cam =
+		Pawn->FindComponentByClass<UWiesbadenVehicleCameraComponent>())
+	{
+		Cam->MouseSensitivity = WagenGrundwert * MouseSensitivityFactor;
+	}
+}
+
+void AWiesbadenVehicleHUD::UpdateOptions()
 {
 	APlayerController* PC = GetOwningPlayerController();
 	if (!PC)
@@ -1311,8 +1738,7 @@ void AWiesbadenVehicleHUD::UpdateAudioSettings()
 	}
 
 	// Ein Schritt je Tastendruck (Flanke ueber ZWEI Tasten): links/rechts sollen
-	// die Lautstaerke nudgen, nicht bei gehaltener Taste in einem Bild von 0 auf
-	// 100 springen.
+	// nudgen, nicht bei gehaltener Taste in einem Bild von 0 auf 100 springen.
 	auto Edge = [PC](const FKey& KeyA, const FKey& KeyB, bool& bHeld) -> bool
 	{
 		const bool bDown = PC->IsInputKeyDown(KeyA) || PC->IsInputKeyDown(KeyB);
@@ -1321,122 +1747,162 @@ void AWiesbadenVehicleHUD::UpdateAudioSettings()
 		return bPressed;
 	};
 
-	TArray<FString> Labels;
-	GetAudioBusLabels(Labels);
-	const int32 Count = Labels.Num();
-	if (Count <= 0)
+	TArray<FWbOptionRow> Rows;
+	BuildOptionRows(Rows);
+	if (Rows.IsEmpty())
 	{
 		return;
 	}
+	OptionSelection = FMath::Clamp(OptionSelection, 0, Rows.Num() - 1);
 
 	if (Edge(EKeys::Up, EKeys::W, bMenuUpHeld))
 	{
-		AudioSelection = (AudioSelection + Count - 1) % Count;
+		OptionSelection = WiesbadenOptions::NextRow(OptionSelection, Rows.Num(), -1);
 	}
 	if (Edge(EKeys::Down, EKeys::S, bMenuDownHeld))
 	{
-		AudioSelection = (AudioSelection + 1) % Count;
+		OptionSelection = WiesbadenOptions::NextRow(OptionSelection, Rows.Num(), 1);
 	}
 
-	// Lautstaerke live und dauerhaft ueber das Mischpult stellen: SetBusVolume
-	// wendet sofort an und speichert in die GameUserSettings. Fehlt das
-	// Subsystem/die Assets, bleibt das Fenster bedienbar, nur ohne Wirkung.
-	UWiesbadenAudioSubsystem* Audio = nullptr;
-	if (UGameInstance* GI = PC->GetGameInstance())
+	int32 Richtung = 0;
+	if (Edge(EKeys::Left, EKeys::A, bMenuLeftHeld))
 	{
-		Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>();
+		Richtung -= 1;
 	}
-	if (!Audio)
+	if (Edge(EKeys::Right, EKeys::D, bMenuRightHeld))
+	{
+		Richtung += 1;
+	}
+	if (Richtung == 0)
 	{
 		return;
 	}
 
-	constexpr float VolumeStep = 0.05f;   // 5 % je Druck - fein genug, nicht zaeh
-	float Delta = 0.0f;
-	if (Edge(EKeys::Left, EKeys::A, bMenuLeftHeld))
+	const FWbOptionRow& Row = Rows[OptionSelection];
+	const double Alt = ReadOptionValue(Row);
+	const double Neu = WiesbadenOptions::Step(Row.Kind, Alt, Richtung);
+	if (!FMath::IsNearlyEqual(Alt, Neu))
 	{
-		Delta -= VolumeStep;
-	}
-	if (Edge(EKeys::Right, EKeys::D, bMenuRightHeld))
-	{
-		Delta += VolumeStep;
-	}
+		WriteOptionValue(Row, Neu);
 
-	if (!FMath::IsNearlyZero(Delta))
-	{
-		const EWbAudioBus Bus = static_cast<EWbAudioBus>(AudioSelection);
-		const float NewVol = FMath::Clamp(Audio->GetBusVolume(Bus) + Delta, 0.0f, 1.0f);
-		Audio->SetBusVolume(Bus, NewVol);
+		// MIT NACHWEIS: was angekommen ist, wird zurueckgelesen und gemeldet.
+		// Eine Option, die nichts bewirkt, faellt damit im Protokoll auf,
+		// nicht erst im Bild.
+		UE_LOG(LogWbCore, Log,
+			TEXT("Optionen: %s %s -> %s (gesetzt: %s)"),
+			*Row.Label,
+			*WiesbadenOptions::FormatValue(Row.Kind, Alt),
+			*WiesbadenOptions::FormatValue(Row.Kind, Neu),
+			*WiesbadenOptions::FormatValue(Row.Kind, ReadOptionValue(Row)));
 	}
 }
 
-void AWiesbadenVehicleHUD::DrawAudioSettings(float Width, float Height)
+void AWiesbadenVehicleHUD::DrawOptions(float Width, float Height)
 {
-	TArray<FString> Labels;
-	GetAudioBusLabels(Labels);
+	TArray<FWbOptionRow> Rows;
+	BuildOptionRows(Rows);
 
-	UWiesbadenAudioSubsystem* Audio = nullptr;
-	if (APlayerController* PC = GetOwningPlayerController())
+	constexpr float LineHeight = 26.0f;
+	constexpr float GroupGap = 20.0f;
+	constexpr float BoxWidth = 760.0f;
+
+	// Hoehe aus dem Inhalt: Zeilen plus je eine Zwischenueberschrift.
+	int32 GroupCount = 0;
 	{
-		if (UGameInstance* GI = PC->GetGameInstance())
+		EWbOptionGroup Last = EWbOptionGroup::MAX;
+		for (const FWbOptionRow& Row : Rows)
 		{
-			Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>();
+			if (Row.Group != Last)
+			{
+				++GroupCount;
+				Last = Row.Group;
+			}
 		}
 	}
-
-	constexpr float LineHeight = 30.0f;
-	constexpr float BoxWidth = 580.0f;
-	const float BoxHeight = Labels.Num() * LineHeight + 132.0f;
+	const float BoxHeight = Rows.Num() * LineHeight + GroupCount * GroupGap + 150.0f;
 
 	const float X = (Width - BoxWidth) * 0.5f;
-	const float Y = (Height - BoxHeight) * 0.5f;
+	const float Y = FMath::Max(20.0f, (Height - BoxHeight) * 0.5f);
 
-	// Wie das Pausemenue: ganzen Schirm abdunkeln, dann die Tafel.
-	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f), 0.0f, 0.0f, Width, Height);
-	DrawRect(DialBackground, X, Y, BoxWidth, BoxHeight);
+	// Ganzen Schirm abdunkeln, dann die Tafel - und die DECKEND.
+	//
+	// DialBackground ist mit Alpha 0,55 fuer Instrumente gedacht, durch die man
+	// die Strasse noch sehen soll. Fuer eine Werteliste ist das falsch: im
+	// ersten Bild schien der Kaefer durch die Lautstaerkeregler, und die Zahlen
+	// waren schwer zu lesen. Eine Tafel, auf der etwas ABGELESEN wird, deckt.
+	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.72f), 0.0f, 0.0f, Width, Height);
+	DrawRect(FLinearColor(0.03f, 0.035f, 0.045f, 0.97f), X, Y, BoxWidth, BoxHeight);
 
-	DrawText(TEXT("TON / LAUTSTAERKE"), DialText, X + 24.0f, Y + 20.0f,
+	// Schmaler heller Rand, damit die Tafel eine Kante hat.
+	const FLinearColor Rand(0.30f, 0.62f, 0.80f, 0.85f);
+	DrawRect(Rand, X, Y, BoxWidth, 2.0f);
+	DrawRect(Rand, X, Y + BoxHeight - 2.0f, BoxWidth, 2.0f);
+	DrawRect(Rand, X, Y, 2.0f, BoxHeight);
+	DrawRect(Rand, X + BoxWidth - 2.0f, Y, 2.0f, BoxHeight);
+
+	DrawText(TEXT("OPTIONEN"), DialText, X + 24.0f, Y + 18.0f,
 		GEngine->GetLargeFont(), 1.0f);
 
-	const float LabelX = X + 24.0f;
-	const float BarX = X + 210.0f;
-	const float BarW = 280.0f;
-	const float BarH = 14.0f;
+	const float LabelX = X + 30.0f;
+	const float ValueX = X + 300.0f;
+	const float BarX = X + 470.0f;
+	const float BarW = 250.0f;
+	const float BarH = 12.0f;
 	const FLinearColor BarBack(0.14f, 0.15f, 0.17f, 0.9f);
 	const FLinearColor BarFill(0.20f, 0.70f, 0.95f, 0.95f);
 
-	for (int32 Index = 0; Index < Labels.Num(); ++Index)
+	float RowY = Y + 58.0f;
+	EWbOptionGroup LastGroup = EWbOptionGroup::MAX;
+
+	for (int32 Index = 0; Index < Rows.Num(); ++Index)
 	{
-		const bool bSelected = (Index == AudioSelection);
-		const float RowY = Y + 62.0f + Index * LineHeight;
+		const FWbOptionRow& Row = Rows[Index];
 
-		const FString Name = (bSelected ? TEXT("> ") : TEXT("  ")) + Labels[Index];
-		DrawText(Name, bSelected ? IndicatorOn : DialScale, LabelX, RowY,
-			GEngine->GetMediumFont(), 1.0f);
-
-		const float Vol = Audio
-			? FMath::Clamp(Audio->GetBusVolume(static_cast<EWbAudioBus>(Index)), 0.0f, 1.0f)
-			: 1.0f;
-
-		const float BarY = RowY + 4.0f;
-		DrawRect(BarBack, BarX, BarY, BarW, BarH);
-		if (Vol > 0.0f)
+		if (Row.Group != LastGroup)
 		{
-			DrawRect(BarFill, BarX, BarY, BarW * Vol, BarH);
+			LastGroup = Row.Group;
+			RowY += GroupGap * 0.4f;
+			DrawText(WiesbadenOptions::GroupLabel(Row.Group), IndicatorOn,
+				LabelX, RowY, GEngine->GetSmallFont(), 1.0f);
+			RowY += GroupGap * 0.8f;
 		}
 
-		DrawText(FormatVolumePercent(Vol), bSelected ? DialText : DialScale,
-			BarX + BarW + 14.0f, RowY, GEngine->GetSmallFont(), 1.0f);
+		const bool bSelected = (Index == OptionSelection);
+		const double Value = ReadOptionValue(Row);
+
+		DrawText((bSelected ? TEXT("> ") : TEXT("  ")) + Row.Label,
+			bSelected ? IndicatorOn : DialScale,
+			LabelX + 14.0f, RowY, GEngine->GetMediumFont(), 1.0f);
+
+		// DER WERT STEHT IMMER DA - auch bei der nicht gewaehlten Zeile. Wer
+		// erst auswaehlen muss, um zu sehen, was eingestellt ist, sucht.
+		DrawText(WiesbadenOptions::FormatValue(Row.Kind, Value),
+			bSelected ? DialText : DialScale,
+			ValueX, RowY, GEngine->GetMediumFont(), 1.0f);
+
+		const double Fraction = WiesbadenOptions::BarFraction(Row.Kind, Value);
+		if (Fraction >= 0.0)
+		{
+			const float BarY = RowY + 4.0f;
+			DrawRect(BarBack, BarX, BarY, BarW, BarH);
+			if (Fraction > 0.0)
+			{
+				DrawRect(BarFill, BarX, BarY, BarW * static_cast<float>(Fraction), BarH);
+			}
+		}
+
+		RowY += LineHeight;
 	}
 
-	if (!Audio)
+	// Fusszeile: was die gewaehlte Zeile bewirkt, und die Tasten.
+	const float FootY = Y + BoxHeight - 52.0f;
+	if (Rows.IsValidIndex(OptionSelection))
 	{
-		DrawText(TEXT("Mischpult inaktiv - Mix-Assets fehlen (Content/Audio/Mix)."),
-			TellTaleOff, LabelX, Y + BoxHeight - 46.0f, GEngine->GetSmallFont(), 1.0f);
+		DrawText(Rows[OptionSelection].Hinweis, DialScale,
+			LabelX, FootY, GEngine->GetSmallFont(), 1.0f);
 	}
-
-	DrawText(TEXT("Pfeile waehlen   Links/Rechts leiser/lauter   Esc zurueck"),
-		TellTaleOff, LabelX, Y + BoxHeight - 26.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(TEXT("Hoch/Runter waehlen   Links/Rechts verstellen   Esc zurueck   (gespeichert)"),
+		TellTaleOff, LabelX, FootY + 22.0f, GEngine->GetSmallFont(), 1.0f);
 }
 
 const FRoadNetwork* AWiesbadenVehicleHUD::FindRoadNetwork()

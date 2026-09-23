@@ -920,7 +920,7 @@ bool FVehicleHUDAudioSettingsTest::RunTest(const FString& Parameters)
 
 		TestTrue(TEXT("mind. 10 Eintraege"), Entries.Num() >= 10);
 		TestEqual(TEXT("Index 0 = Weiterspielen"), Entries[0], FString(TEXT("Weiterspielen")));
-		TestEqual(TEXT("Index 2 = Ton / Lautstaerke"), Entries[2], FString(TEXT("Ton / Lautstaerke")));
+		TestEqual(TEXT("Index 2 = Optionen"), Entries[2], FString(TEXT("Optionen")));
 		TestEqual(TEXT("Index 3 = Karte"), Entries[3], FString(TEXT("Karte zeigen / verbergen (M)")));
 		TestEqual(TEXT("letzter Eintrag = Spiel beenden"),
 			Entries.Last(), FString(TEXT("Spiel beenden")));
