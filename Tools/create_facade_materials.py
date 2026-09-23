@@ -85,14 +85,17 @@ def add_facade_windows(mat, wall_color, wall_out=""):
     sill = mul(mat, band(mat, bay, 0.255, 0.745, -1560, 1160),
                     band(mat, floor_pos, 0.245, 0.305, -1560, 1260), -1180, 1200)
 
-    # Gesims: schmales Schattenband am Geschossuebergang - gliedert die Fassade
-    # horizontal auch dort, wo keine Fenster sitzen.
-    cornice = band(mat, floor_pos, 0.895, 0.99, -1560, 1440)
+    # Gesims: schmaler Schattenstrich am Geschossuebergang - gliedert die
+    # Fassade horizontal auch dort, wo keine Fenster sitzen. AUS DER NAEHE
+    # nachjustiert: das alte Band (0,895..0,99, fast schwarz) las sich als
+    # dicker schwarzer Streifen statt als Gesims. Jetzt schmaler und deutlich
+    # heller - ein weicher Schattenstrich, keine Teerfuge.
+    cornice = band(mat, floor_pos, 0.915, 0.975, -1560, 1440)
 
     glass_c = c3(mat, 0.020, 0.028, 0.038, -720, 460)     # dunkles Glas
     frame_c = c3(mat, 0.865, 0.845, 0.795, -720, 640)     # heller Rahmen (gestrichen)
     sill_c = c3(mat, 0.700, 0.680, 0.640, -720, 1160)     # steinerne Bank
-    cornice_c = c3(mat, 0.050, 0.047, 0.043, -720, 1440)  # Schattenfuge
+    cornice_c = c3(mat, 0.205, 0.195, 0.180, -720, 1440)  # weicher Schattenstrich
 
     # Zeichen-Reihenfolge: Wand -> Gesims -> Bank -> Rahmen(Oeffnung) -> Glas.
     # Das Glas ueberschreibt die Mitte der Oeffnung, der Rahmen bleibt als Ring.
