@@ -306,6 +306,32 @@ int32 UBuildingGenerator::SelectMaterialVariant(const TMap<FName, FString>& Tags
 	return Pick({ { Facade_Plaster, 45 }, { Facade_Sandstone, 35 }, { Facade_Brick, 20 } });
 }
 
+int32 UBuildingGenerator::RoofCoveringIndex(int32 MaterialVariant, EOSMRoofShape Shape)
+{
+	// Flachdaecher sind nie gedeckt - Bitumen/Kies/Blech. Als Zink-Grau (2)
+	// dargestellt, unabhaengig von der Fassade: ein flaches Buero- wie ein
+	// flaches Wohnhaus-Dach traegt keine Pfannen.
+	if (Shape == EOSMRoofShape::Flat)
+	{
+		return 2;
+	}
+
+	// Geneigte Daecher folgen der Bauweise (dieselbe Variante wie die Fassade):
+	//   Sandstein  = Gruenderzeit, Kirchen, Civic  -> Schiefer (historisch)
+	//   Glas/Beton = Buero, Industrie, Parkhaus    -> Zink/Blech
+	//   Rest (Putz/Backstein/Fachwerk = Wohnbau)   -> Terrakotta-Pfanne
+	switch (MaterialVariant)
+	{
+	case Facade_Sandstone:
+		return 1;
+	case Facade_Glass:
+	case Facade_Concrete:
+		return 2;
+	default:
+		return 0;
+	}
+}
+
 FString UBuildingGenerator::NormalizeAddressForMatch(const FString& Address)
 {
 	// ToLower ist in UE ASCII-only: Grossbuchstaben-Umlaute (Ae/Oe/Ue) und das
@@ -1213,6 +1239,16 @@ void UBuildingGenerator::BuildRoof(
 		OutMeshData, EBuildingMeshChannel::Roof, MaterialVariant, FacadeOverrideKey);
 	FBuildingMeshSection& Section = OutMeshData.Sections[SectionIndex];
 
+	// Dachdeckung als Vertexfarbe: R traegt die Deckung (0/85/170 =
+	// Terrakotta/Schiefer/Zink), damit das Dachmaterial EINE typgerechte
+	// Deckung je Gebaeude liest statt einer Weltregion zu wuerfeln. Der Wert
+	// 255 (Weiss) bleibt bewusst UNGENUTZT und bedeutet im Material "Legacy" -
+	// so bleiben aeltere Bakes (Dach-Verts = FColor::White) auf der alten
+	// Regionswahl und regredieren nicht.
+	const int32 CoveringIndex = RoofCoveringIndex(MaterialVariant, Shape);
+	const FColor RoofVertexColor(
+		static_cast<uint8>(CoveringIndex * 85), 255, 255, 255);
+
 	// Dach-UVs GEBAeUDE-LOKAL statt weltbezogen. Die georeferenzierten
 	// Weltkoordinaten sind in Wiesbaden riesig (Tausende Meter). Als per-Vertex-
 	// float32 gespeichert und ueber das Dreieck interpoliert verlieren so grosse
@@ -1258,7 +1294,7 @@ void UBuildingGenerator::BuildRoof(
 			Section.Vertices.Add(FVector(Point.X, Point.Y, CapZ));
 			Section.Normals.Add(FVector::UpVector);
 			Section.UVs.Add(RoofUV(Point.X, Point.Y));
-			Section.VertexColors.Add(FColor::White);
+			Section.VertexColors.Add(RoofVertexColor);
 			Section.Tangents.Add(FProcMeshTangent(1.0f, 0.0f, 0.0f));
 		}
 
@@ -1313,7 +1349,7 @@ void UBuildingGenerator::BuildRoof(
 			for (int32 Corner = 0; Corner < 3; ++Corner)
 			{
 				Section.Normals.Add(FaceNormal);
-				Section.VertexColors.Add(FColor::White);
+				Section.VertexColors.Add(RoofVertexColor);
 				Section.Tangents.Add(FProcMeshTangent((VB - VA).GetSafeNormal(), false));
 			}
 
@@ -1486,7 +1522,7 @@ void UBuildingGenerator::BuildRoof(
 		for (int32 Corner = 0; Corner < 4; ++Corner)
 		{
 			Section.Normals.Add(FaceNormal);
-			Section.VertexColors.Add(FColor::White);
+			Section.VertexColors.Add(RoofVertexColor);
 			Section.Tangents.Add(FProcMeshTangent((EaveB - EaveA).GetSafeNormal(), false));
 		}
 

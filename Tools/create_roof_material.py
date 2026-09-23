@@ -189,17 +189,37 @@ dB = mul(dB0, C1(1.7, -1700, 500), -1560, 380)
 hB = frac(dB, -1420, 380)
 mZinc = floor(add(hB, C1(0.22, -1420, 480), -1300, 380), -1180, 380)      # ~22 %
 
+# ---- Deckung je GEBAEUDE aus der Vertexfarbe (R) ---------------------------
+#
+# BuildRoof schreibt die Deckung in R (0/85/170 = Terrakotta/Schiefer/Zink);
+# 255 (Weiss) bedeutet "Legacy" -> aeltere Bakes (Dach-Verts weiss) fallen auf
+# die Regionswahl zurueck und regredieren nicht. So traegt ein neu gebackenes
+# Gebaeude GENAU EINE typgerechte Deckung statt einer 14-m-Wuerfelung.
+vc = E(unreal.MaterialExpressionVertexColor, -2000, 700)
+vcR = mask2(vc, True, False, -1850, 700)   # nur R-Kanal
+vcIdx = floor(add(mul(vcR, C1(3.0, -1780, 820), -1640, 760),
+                  C1(0.5, -1780, 900), -1500, 760), -1360, 760)   # 0/1/2
+vcZinc = floor(add(mul(vcIdx, C1(0.5, -1780, 1000), -1640, 960),
+                   C1(0.25, -1780, 1060), -1500, 960), -1360, 960)  # idx==2
+vcSlate = floor(add(mul(vcIdx, C1(0.5, -1780, 1160), -1640, 1120),
+                    C1(0.75, -1780, 1220), -1500, 1120), -1360, 1120)  # idx>=1
+bLegacy = floor(add(vcR, C1(0.1, -1780, 1300), -1640, 1280), -1500, 1280)  # 1 wenn R>=0.9
+
+# Legacy (Weiss) -> Regionswahl (mSlate/mZinc), sonst -> Vertexfarbe je Gebaeude.
+mSlateF = lerp(vcSlate, mSlate, bLegacy, -1200, 760)
+mZincF = lerp(vcZinc, mZinc, bLegacy, -1200, 960)
+
 # ---- Deckungsfarben + Materialwerte ---------------------------------------
 terra = C3(0.52, 0.205, 0.115, -1000, -520)
 slate = C3(0.150, 0.165, 0.200, -1000, -400)
 zinc = C3(0.335, 0.350, 0.360, -1000, -280)
 
-colS = lerp(terra, slate, mSlate, -800, -440)
-baseCol = lerp(colS, zinc, mZinc, -640, -400)
+colS = lerp(terra, slate, mSlateF, -800, -440)
+baseCol = lerp(colS, zinc, mZincF, -640, -400)
 
-roughTS = lerp(C1(0.82, -1000, -120), C1(0.60, -1000, -40), mSlate, -800, -120)
-baseRough = lerp(roughTS, C1(0.45, -1000, 60), mZinc, -640, -80)
-metal = mul(mZinc, C1(0.40, -1000, 200), -800, 200)
+roughTS = lerp(C1(0.82, -1000, -120), C1(0.60, -1000, -40), mSlateF, -800, -120)
+baseRough = lerp(roughTS, C1(0.45, -1000, 60), mZincF, -640, -80)
+metal = mul(mZincF, C1(0.40, -1000, 200), -800, 200)
 
 # ---- Prozedurales Kachelmuster --------------------------------------------
 u = divc(X, TILE_W, -2000, -60)
