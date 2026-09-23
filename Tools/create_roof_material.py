@@ -209,13 +209,30 @@ bLegacy = floor(add(vcR, C1(0.1, -1780, 1300), -1640, 1280), -1500, 1280)  # 1 w
 mSlateF = lerp(vcSlate, mSlate, bLegacy, -1200, 760)
 mZincF = lerp(vcZinc, mZinc, bLegacy, -1200, 960)
 
+# ---- Per-Gebaeude-Tonvariation aus der Vertexfarbe (G) ---------------------
+#
+# BuildRoof legt in G eine deterministische Tonstufe je Gebaeude-Id (0..255,
+# UBuildingGenerator::RoofToneByte). Sie verschiebt die Deckungsfarbe leicht
+# (+-TONE_AMP), damit eine Reihe gleichtypiger Haeuser nicht identisch wirkt;
+# die DeckungsART (R) bleibt unberuehrt. G=0.5 (Byte 128) ist neutral (Faktor
+# 1.0). Nur im NICHT-Legacy-Pfad wirksam: Legacy-Bakes tragen G=255, dort
+# liefert lerp mit bLegacy den neutralen Faktor 1.0 zurueck - so bleiben
+# aeltere Bakes unveraendert.
+TONE_AMP = 0.09
+vcG = mask2(vc, False, True, -1850, 1440)   # nur G-Kanal (-> r-Ausgang)
+tone = add(C1(1.0 - TONE_AMP, -1700, 1520),
+           mul(vcG, C1(2.0 * TONE_AMP, -1700, 1620), -1540, 1460),
+           -1380, 1480)                       # 1-AMP .. 1+AMP, Mitte 1.0
+toneApplied = lerp(tone, C1(1.0, -1380, 1620), bLegacy, -1200, 1500)
+
 # ---- Deckungsfarben + Materialwerte ---------------------------------------
 terra = C3(0.52, 0.205, 0.115, -1000, -520)
 slate = C3(0.150, 0.165, 0.200, -1000, -400)
 zinc = C3(0.335, 0.350, 0.360, -1000, -280)
 
 colS = lerp(terra, slate, mSlateF, -800, -440)
-baseCol = lerp(colS, zinc, mZincF, -640, -400)
+baseCol0 = lerp(colS, zinc, mZincF, -640, -400)
+baseCol = mul(baseCol0, toneApplied, -480, -420)   # Ton je Gebaeude
 
 roughTS = lerp(C1(0.82, -1000, -120), C1(0.60, -1000, -40), mSlateF, -800, -120)
 baseRough = lerp(roughTS, C1(0.45, -1000, 60), mZincF, -640, -80)
@@ -272,7 +289,8 @@ MEL.connect_material_property(metal, "", MP.MP_METALLIC)
 MEL.recompile_material(mat)
 EAL.save_loaded_asset(mat)
 log("FERTIG: M_WbBuildingRoof - prozedurale Ziegel/Schiefer/Zink-Deckung, "
-    "Kachel %gx%g cm, Region %g cm." % (TILE_W, TILE_H, CELL_CM))
+    "Kachel %gx%g cm, Region %g cm, Ton je Gebaeude +-%g%% (VC.G)."
+    % (TILE_W, TILE_H, CELL_CM, TONE_AMP * 100.0))
 
 if unreal.SystemLibrary.get_command_line().find("-unattended") >= 0:
     unreal.SystemLibrary.quit_editor()

@@ -431,6 +431,7 @@ private:
 		EOSMRoofShape Shape,
 		double RoofHeightCm,
 		int32 MaterialVariant,
+		int64 SourceId,
 		const FString& FacadeOverrideKey,
 		double RoofOverhangMeters,
 		FBuildingMeshData& OutMeshData) const;
@@ -492,6 +493,19 @@ public:
 	 * Deckungen nebeneinander. Datenrein pruefbar (Test GIS.RoofCovering).
 	 */
 	static int32 RoofCoveringIndex(int32 MaterialVariant, EOSMRoofShape Shape);
+
+	/**
+	 * Deterministische Tonstufe (0-255) je Gebaeude aus der OSM-Id.
+	 *
+	 * BuildRoof legt den Wert in den G-Kanal der Dach-Vertexfarbe; das Material
+	 * verschiebt damit die Deckungsfarbe leicht (+-~9 %), sodass eine Reihe
+	 * gleichtypiger Haeuser nicht identisch wirkt - die DeckungsART (R-Kanal,
+	 * RoofCoveringIndex) bleibt davon unberuehrt. Eigene Mischkonstante, damit
+	 * der Ton NICHT mit der Fassaden-/Deckungswahl korreliert. Datenrein
+	 * pruefbar (Test GIS.RoofTone): gleiche Id -> gleicher Ton, benachbarte Ids
+	 * -> unterschiedliche Toene, gleichverteilt.
+	 */
+	static uint8 RoofToneByte(int64 SourceId);
 
 public:
 	/**
