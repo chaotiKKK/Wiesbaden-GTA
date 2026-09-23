@@ -52,6 +52,8 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 | `WbHeliGoto` | `WbHeliGoto <dx> <dy> <dz>` | Helikopter besessen | Autopilot fliegt dx/dy/dz m relativ, haelt |
 | `WbHeliHover` | `WbHeliHover` | Helikopter besessen | Autopilot haelt aktuelle Position |
 | `WbHeliOff` | `WbHeliOff` | Helikopter besessen | Autopilot aus, Steuerung zurueck an Eingabe |
+| `WbOptionen` | `WbOptionen` | HUD vorhanden | Optionsfenster auf/zu; protokolliert alle Zeilen mit Index und Wert |
+| `WbOption` | `WbOption <Zeile> <Schritte>` | HUD vorhanden | Eine Zeile des Optionsfensters verstellen (Vorzeichen = Richtung) |
 
 ---
 
@@ -236,6 +238,41 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
   gemessen - der Verfolger steht dann bei (4000, 0).
 - **Log-Nachweis:**
   - `WbDev: WbSpawnPursuer - Verfolger %s bei (%.0f, %.0f).`
+
+---
+
+## WbOptionen
+
+- **Signatur:** `WbOptionen`
+- **Wirkung:** Oeffnet oder schliesst das Optionsfenster und schreibt beim
+  Oeffnen die GANZE Zeilenliste ins Protokoll - Index, Gruppe, Beschriftung und
+  aktueller Wert. Damit laesst sich `WbOption` ansteuern, ohne das Bild zu
+  brauchen.
+- **Voraussetzung:** ein HUD (`AWiesbadenVehicleHUD`). Die Exec-Kette erreicht
+  es, darum sitzt der Befehl dort und nicht auf dem PlayerController.
+- **ER PAUSIERT NICHT**, anders als der Weg ueber das Pausemenue. Eine Pause ab
+  Bild 0 haelt den Welt-Takt an; die Stadt wuerde nie fertig streamen, und ein
+  Lauf, der das Menue fotografieren soll, kaeme nie so weit.
+- **Log-Nachweis:**
+  - `WbOptionen: Fenster offen, %d Zeilen.` und je Zeile
+    `  [%2d] GRUPPE  Beschriftung = Wert`
+
+---
+
+## WbOption
+
+- **Signatur:** `WbOption <Zeile> <Schritte>`
+- **Wirkung:** Waehlt die Zeile und verstellt sie um `Schritte` Schritte; das
+  Vorzeichen ist die Richtung. Die Schrittweite gehoert zur Wertart (Qualitaet
+  eine Stufe, Lautstaerke 5 %, Verkehrsdichte 10 %, Tageszeit eine Stunde).
+- **Voraussetzung:** ein HUD. Die Indizes stehen im Protokoll von `WbOptionen`.
+- **Log-Nachweis (mit Rueckgelesenem):**
+  - `WbOption: %s  %s -> %s (gesetzt: %s)` - der letzte Wert kommt aus einem
+    erneuten Lesen beim besitzenden System. Weicht er ab, haengt
+    `ACHTUNG: NICHT ANGEKOMMEN` dahinter. Eine Einstellung, die nichts
+    bewirkt, faellt damit im Protokoll auf und nicht erst im Bild.
+- **Beispiel:** `-ExecCmds="WbOptionen,WbOption 1 -4,WbOption 15 23"` setzt die
+  Schatten auf die unterste Stufe und die Tageszeit auf 22 Uhr.
 
 ---
 
