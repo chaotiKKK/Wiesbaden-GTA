@@ -78,10 +78,11 @@ void WiesbadenOptions::BuildRows(int32 AudioBusCount,
 {
 	OutRows.Reset();
 
-	auto Add = [&OutRows](EWbOptionGroup Group, EWbOptionKind Kind,
+	auto Add = [&OutRows](EWbOptionId Id, EWbOptionGroup Group, EWbOptionKind Kind,
 		const TCHAR* Label, const TCHAR* Hinweis, int32 BusIndex = -1)
 	{
 		FWbOptionRow Row;
+		Row.Id = Id;
 		Row.Group = Group;
 		Row.Kind = Kind;
 		Row.Label = Label;
@@ -93,15 +94,15 @@ void WiesbadenOptions::BuildRows(int32 AudioBusCount,
 	// --- Grafik -------------------------------------------------------------
 	// Alle vier Stufen sitzen auf den Skalierbarkeits-Gruppen der Engine; sie
 	// greifen sofort und speichern sich in die GameUserSettings.
-	Add(EWbOptionGroup::Grafik, EWbOptionKind::Qualitaet, TEXT("Sichtweite"),
+	Add(EWbOptionId::Sichtweite, EWbOptionGroup::Grafik, EWbOptionKind::Qualitaet, TEXT("Sichtweite"),
 		TEXT("Wie weit Gebaeude, Baeume und Strassenmoebel gezeichnet werden."));
-	Add(EWbOptionGroup::Grafik, EWbOptionKind::Qualitaet, TEXT("Schatten"),
+	Add(EWbOptionId::Schatten, EWbOptionGroup::Grafik, EWbOptionKind::Qualitaet, TEXT("Schatten"),
 		TEXT("Aufloesung und Reichweite der Schlagschatten. Auf der untersten Stufe fallen sie ganz weg."));
-	Add(EWbOptionGroup::Grafik, EWbOptionKind::Qualitaet, TEXT("Effekte"),
+	Add(EWbOptionId::Effekte, EWbOptionGroup::Grafik, EWbOptionKind::Qualitaet, TEXT("Effekte"),
 		TEXT("Partikel, Spiegelungen und Nachbearbeitung - dazu gehoert der Niederschlag."));
-	Add(EWbOptionGroup::Grafik, EWbOptionKind::Qualitaet, TEXT("Texturen"),
+	Add(EWbOptionId::Texturen, EWbOptionGroup::Grafik, EWbOptionKind::Qualitaet, TEXT("Texturen"),
 		TEXT("Aufloesung der Oberflaechen. Kostet vor allem Grafikspeicher."));
-	Add(EWbOptionGroup::Grafik, EWbOptionKind::Bildrate, TEXT("Bildratengrenze"),
+	Add(EWbOptionId::Bildratengrenze, EWbOptionGroup::Grafik, EWbOptionKind::Bildrate, TEXT("Bildratengrenze"),
 		TEXT("Obergrenze der Bilder je Sekunde. Ohne Grenze laeuft die Karte so schnell sie kann."));
 
 	// --- Ton ----------------------------------------------------------------
@@ -113,6 +114,7 @@ void WiesbadenOptions::BuildRows(int32 AudioBusCount,
 			: FString::Printf(TEXT("Bus %d"), Bus + 1);
 
 		FWbOptionRow Row;
+		Row.Id = EWbOptionId::TonBus;
 		Row.Group = EWbOptionGroup::Ton;
 		Row.Kind = EWbOptionKind::Lautstaerke;
 		Row.Label = Name;
@@ -124,20 +126,20 @@ void WiesbadenOptions::BuildRows(int32 AudioBusCount,
 	}
 
 	// --- Steuerung ----------------------------------------------------------
-	Add(EWbOptionGroup::Steuerung, EWbOptionKind::Faktor, TEXT("Maus-Empfindlichkeit"),
+	Add(EWbOptionId::MausEmpfindlichkeit, EWbOptionGroup::Steuerung, EWbOptionKind::Faktor, TEXT("Maus-Empfindlichkeit"),
 		TEXT("Wie schnell die Kamera der Maus folgt - zu Fuss und im Fahrzeug."));
-	Add(EWbOptionGroup::Steuerung, EWbOptionKind::Schalter, TEXT("Steuerungshilfe"),
+	Add(EWbOptionId::Steuerungshilfe, EWbOptionGroup::Steuerung, EWbOptionKind::Schalter, TEXT("Steuerungshilfe"),
 		TEXT("Die Tastenbelegung dauerhaft unten links einblenden."));
 
 	// --- Spielwelt ----------------------------------------------------------
-	Add(EWbOptionGroup::Spielwelt, EWbOptionKind::Anteil, TEXT("Verkehrsdichte"),
+	Add(EWbOptionId::Verkehrsdichte, EWbOptionGroup::Spielwelt, EWbOptionKind::Anteil, TEXT("Verkehrsdichte"),
 		TEXT("Wie viele Fahrzeuge je Spurkilometer fahren. Auf 0 bleiben die Strassen leer."));
 	// KEINE ZEILE FUER DIE FUSSGAENGERDICHTE. Sie waere die naheliegende
 	// Nachbarin der Verkehrsdichte - aber FWiesbadenPedestrianSimulation haelt
 	// ihre Settings PRIVAT und bietet nur GetDensity() an, keinen Setter. Ein
 	// Regler dafuer liesse sich zeichnen und wuerde nichts bewegen. Erst wenn
 	// die Fussgaenger-Sim einen Setter bekommt, gehoert die Zeile hierher.
-	Add(EWbOptionGroup::Spielwelt, EWbOptionKind::Tageszeit, TEXT("Tageszeit"),
+	Add(EWbOptionId::Tageszeit, EWbOptionGroup::Spielwelt, EWbOptionKind::Tageszeit, TEXT("Tageszeit"),
 		TEXT("Der Uhr des Rechners folgen oder eine Stunde festhalten. Die Sonne steht dann echt fuer diese Stunde."));
 }
 

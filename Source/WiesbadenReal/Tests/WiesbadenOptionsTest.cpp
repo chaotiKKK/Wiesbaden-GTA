@@ -174,6 +174,90 @@ bool FWiesbadenOptionsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("leere Liste bleibt bei 0"), NextRow(0, 0, +1), 0);
 	}
 
+	// -- KENNUNGEN: woran Lesen und Schreiben eine Zeile erkennen ------------
+	//
+	// Die Bindung hing frueher an der deutschen Beschriftung. Wer eine
+	// umbenannt haette, haette die Zeile lautlos vom System getrennt: sie
+	// stuende weiter im Menue, liesse sich verstellen und bewirkte nichts.
+	{
+		TArray<FString> BusLabels = { TEXT("Gesamt"), TEXT("Musik"), TEXT("Effekte") };
+		TArray<FWbOptionRow> Rows;
+		BuildRows(BusLabels.Num(), BusLabels, Rows);
+
+		// (a) Keine Zeile ohne Kennung. MAX heisst "nicht vergeben" - eine
+		// solche Zeile faende im HUD keinen Zweig.
+		TSet<EWbOptionId> Gesehen;
+		for (const FWbOptionRow& Row : Rows)
+		{
+			TestTrue(*FString::Printf(TEXT("Zeile '%s' hat eine Kennung"), *Row.Label),
+				Row.Id != EWbOptionId::MAX);
+			Gesehen.Add(Row.Id);
+		}
+
+		// (b) Umgekehrt: jede erklaerte Kennung kommt auch wirklich vor. Eine
+		// Kennung ohne Zeile waere ein Zweig im HUD, den nie jemand erreicht.
+		for (int32 i = 0; i < static_cast<int32>(EWbOptionId::MAX); ++i)
+		{
+			const EWbOptionId Id = static_cast<EWbOptionId>(i);
+			TestTrue(*FString::Printf(TEXT("Kennung %d hat eine Zeile"), i),
+				Gesehen.Contains(Id));
+		}
+
+		// (c) Eindeutig - ausser TonBus, der absichtlich mehrfach vorkommt und
+		// sich ueber BusIndex unterscheidet.
+		TMap<EWbOptionId, int32> Zahl;
+		for (const FWbOptionRow& Row : Rows)
+		{
+			Zahl.FindOrAdd(Row.Id)++;
+		}
+		for (const TPair<EWbOptionId, int32>& Paar : Zahl)
+		{
+			if (Paar.Key == EWbOptionId::TonBus)
+			{
+				continue;
+			}
+			TestEqual(*FString::Printf(TEXT("Kennung %d genau einmal"),
+				static_cast<int32>(Paar.Key)), Paar.Value, 1);
+		}
+
+		// (d) Ton-Zeilen tragen TonBus und einen gueltigen Bus - daran und nur
+		// daran erkennt das Mischpult sie.
+		TSet<int32> Busse;
+		for (const FWbOptionRow& Row : Rows)
+		{
+			if (Row.Group != EWbOptionGroup::Ton)
+			{
+				continue;
+			}
+			TestEqual(TEXT("Ton-Zeile traegt TonBus"),
+				static_cast<int32>(Row.Id), static_cast<int32>(EWbOptionId::TonBus));
+			TestTrue(TEXT("Ton-Zeile hat einen Bus"),
+				Row.BusIndex >= 0 && Row.BusIndex < BusLabels.Num());
+			TestFalse(TEXT("jeder Bus nur einmal"), Busse.Contains(Row.BusIndex));
+			Busse.Add(Row.BusIndex);
+		}
+
+		// (e) Der eigentliche Punkt: die Beschriftung ist jetzt FREI. "Effekte"
+		// heisst schon heute zweierlei - die Grafikstufe und ein Ton-Bus. Zwei
+		// Zeilen mit demselben Namen muessen verschiedene Kennungen haben,
+		// sonst haette der alte Vergleich die falsche erwischt.
+		for (const FWbOptionRow& A : Rows)
+		{
+			for (const FWbOptionRow& B : Rows)
+			{
+				if (&A == &B || A.Label != B.Label)
+				{
+					continue;
+				}
+				const bool bUnterscheidbar =
+					(A.Id != B.Id) || (A.BusIndex != B.BusIndex);
+				TestTrue(*FString::Printf(
+					TEXT("gleichnamige Zeilen '%s' bleiben unterscheidbar"), *A.Label),
+					bUnterscheidbar);
+			}
+		}
+	}
+
 	// -- FLANKENERKENNUNG: ein Druck ist ein Schritt, nicht dreissig ---------
 	//
 	// Dieselbe Funktion bedient Pausemenue UND Optionsfenster. Ohne sie wuerde

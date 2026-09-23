@@ -42,9 +42,45 @@ enum class EWbOptionKind : uint8
 	MAX
 };
 
+/**
+ * Feste Kennung einer Zeile - WORAN Lesen und Schreiben sie erkennen.
+ *
+ * Vorher hing die Bindung an der deutschen Beschriftung: ReadOptionValue und
+ * WriteOptionValue verglichen Row.Label gegen TEXT("Sichtweite") und so fort.
+ * Wer eine Beschriftung umbenannt haette, haette die Bindung lautlos
+ * zerrissen - die Zeile waere weiter im Menue gestanden, haette sich
+ * verstellen lassen und nichts mehr bewirkt. Genau die Option, die es hier
+ * nicht geben soll.
+ *
+ * Dass das keine ausgedachte Gefahr ist, zeigt die Liste selbst: "Effekte"
+ * heisst sowohl die Grafikstufe als auch ein Ton-Bus. Bisher ging das nur
+ * deshalb gut, weil die Ton-Zeilen VOR dem Beschriftungsvergleich abgefangen
+ * wurden - eine Reihenfolge, auf die niemand beim Umbenennen achtet.
+ *
+ * Die Beschriftung ist jetzt frei: sie steht nur noch im Bild.
+ */
+enum class EWbOptionId : uint8
+{
+	Sichtweite,
+	Schatten,
+	Effekte,
+	Texturen,
+	Bildratengrenze,
+	/** Eine Zeile je Bus des Mischpults - WELCHER, sagt FWbOptionRow::BusIndex. */
+	TonBus,
+	MausEmpfindlichkeit,
+	Steuerungshilfe,
+	Verkehrsdichte,
+	Tageszeit,
+	MAX
+};
+
 /** Eine Zeile des Menues. Traegt KEINEN Wert - nur, was sie ist. */
 struct WIESBADENREAL_API FWbOptionRow
 {
+	/** Woran ihr System sie erkennt. Ueberlebt jede Umbenennung. */
+	EWbOptionId Id = EWbOptionId::MAX;
+
 	EWbOptionGroup Group = EWbOptionGroup::Grafik;
 	EWbOptionKind Kind = EWbOptionKind::Qualitaet;
 
