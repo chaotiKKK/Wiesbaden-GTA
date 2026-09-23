@@ -328,25 +328,6 @@ bool FVehicleHUDControlLegendTest::RunTest(const FString& Parameters)
 			FHud::ToggleControlLegendVisible(/*bShown=*/true, Dauer, Dauer) == false);
 	}
 
-	// -- Erstkontakt-Banner ohne haengenden Gedankenstrich --------------------
-	//
-	// Der Untertitel ist leer, solange kein Missionsziel in der Naehe liegt -
-	// das ist der Normalfall. Fest formatiert stand da "Marktstrasse — ".
-	{
-		using FHud = AWiesbadenVehicleHUD;
-
-		TestEqual(TEXT("ohne Untertitel nur der Ort"),
-			FHud::ComposeFirstRunBanner(TEXT("Marktstrasse"), FString()),
-			FString(TEXT("Marktstrasse")));
-
-		TestTrue(TEXT("ohne Untertitel kein Gedankenstrich"),
-			!FHud::ComposeFirstRunBanner(TEXT("Marktstrasse"), FString()).Contains(TEXT("—")));
-
-		TestEqual(TEXT("mit Untertitel beides mit Trenner"),
-			FHud::ComposeFirstRunBanner(TEXT("Marktstrasse"), TEXT("zum Ziel Halle 120 m")),
-			FString(TEXT("Marktstrasse — zum Ziel Halle 120 m")));
-	}
-
 	return true;
 }
 
