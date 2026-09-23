@@ -1438,107 +1438,172 @@ void AWiesbadenVehicleHUD::BuildOptionRows(TArray<FWbOptionRow>& OutRows) const
 	}
 }
 
-double AWiesbadenVehicleHUD::ReadOptionValue(const FWbOptionRow& Row) const
+namespace
 {
-	// --- Ton: beim Mischpult ------------------------------------------------
-	if (Row.Group == EWbOptionGroup::Ton && Row.BusIndex >= 0)
+	/**
+	 * Die vier Qualitaetsstufen - Lesen UND Schreiben in EINER Zeile.
+	 *
+	 * Hier lagen zwei spiegelbildliche Kaskaden: viermal ein
+	 * Beschriftungsvergleich mit einem Getter, und gleich darunter noch einmal
+	 * derselbe Vergleich mit dem passenden Setter. Zwei Listen, die
+	 * zusammenpassen mussten, ohne dass irgendetwas das erzwungen haette.
+	 *
+	 * Jetzt steht jedes Paar einmal da. Ein Getter ohne seinen Setter ist
+	 * nicht mehr aufschreibbar.
+	 */
+	struct FWbQualitaetsBindung
 	{
-		if (const APlayerController* PC = GetOwningPlayerController())
+		EWbOptionId Id;
+		int32 (UGameUserSettings::*Lesen)() const;
+		void  (UGameUserSettings::*Schreiben)(int32);
+	};
+
+	const FWbQualitaetsBindung QualitaetsBindungen[] =
+	{
+		{ EWbOptionId::Sichtweite, &UGameUserSettings::GetViewDistanceQuality,
+		                           &UGameUserSettings::SetViewDistanceQuality },
+		{ EWbOptionId::Schatten,   &UGameUserSettings::GetShadowQuality,
+		                           &UGameUserSettings::SetShadowQuality },
+		{ EWbOptionId::Effekte,    &UGameUserSettings::GetVisualEffectQuality,
+		                           &UGameUserSettings::SetVisualEffectQuality },
+		{ EWbOptionId::Texturen,   &UGameUserSettings::GetTextureQuality,
+		                           &UGameUserSettings::SetTextureQuality },
+	};
+
+	const FWbQualitaetsBindung* FindeQualitaet(EWbOptionId Id)
+	{
+		for (const FWbQualitaetsBindung& B : QualitaetsBindungen)
 		{
-			if (const UGameInstance* GI = PC->GetGameInstance())
+			if (B.Id == Id)
 			{
-				if (UWiesbadenAudioSubsystem* Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>())
-				{
-					return Audio->GetBusVolume(static_cast<EWbAudioBus>(Row.BusIndex));
-				}
+				return &B;
 			}
 		}
-		return 1.0;
+		return nullptr;
 	}
 
-	// --- Grafik: bei den GameUserSettings -----------------------------------
-	if (Row.Group == EWbOptionGroup::Grafik)
+	/**
+	 * Eine Kennung, die an kein System gebunden ist.
+	 *
+	 * Das darf es nicht geben - eine solche Zeile stuende im Menue, liesse
+	 * sich verstellen und bewirkte nichts. Darum schlaegt sie hier an, statt
+	 * still eine 0 zurueckzugeben.
+	 */
+	void MeldeUnversorgt(const FWbOptionRow& Row)
 	{
-		UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
-		if (!Settings)
-		{
-			return 0.0;
-		}
-		if (Row.Label == TEXT("Sichtweite"))      { return Settings->GetViewDistanceQuality(); }
-		if (Row.Label == TEXT("Schatten"))        { return Settings->GetShadowQuality(); }
-		if (Row.Label == TEXT("Effekte"))         { return Settings->GetVisualEffectQuality(); }
-		if (Row.Label == TEXT("Texturen"))        { return Settings->GetTextureQuality(); }
-		if (Row.Label == TEXT("Bildratengrenze")) { return Settings->GetFrameRateLimit(); }
-		return 0.0;
+		ensureMsgf(false,
+			TEXT("Optionszeile %s (Kennung %d) ist an kein System gebunden - ")
+			TEXT("sie braucht einen Zweig in ReadOptionValue UND WriteOptionValue."),
+			*Row.Label, static_cast<int32>(Row.Id));
 	}
 
-	// --- Steuerung ----------------------------------------------------------
-	if (Row.Group == EWbOptionGroup::Steuerung)
+	// Tripwire: eine neue Kennung faellt hier auf, bevor sie im Menue steht.
+	// Wer sie hinzufuegt, muss beide Richtungen bedienen und diese Zahl
+	// nachziehen - der Uebersetzer laesst ihn sonst nicht durch.
+	static_assert(static_cast<int32>(EWbOptionId::MAX) == 10,
+		"Neue Optionskennung: sie braucht einen Zweig in ReadOptionValue UND "
+		"in WriteOptionValue. Danach diese Zahl nachziehen.");
+}
+
+UWiesbadenCitySubsystem* AWiesbadenVehicleHUD::FindCity() const
+{
+	UWorld* HudWorld = GetWorld();
+	return HudWorld ? HudWorld->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+}
+
+UWiesbadenAudioSubsystem* AWiesbadenVehicleHUD::FindAudio() const
+{
+	const APlayerController* PC = GetOwningPlayerController();
+	const UGameInstance* GI = PC ? PC->GetGameInstance() : nullptr;
+	return GI ? GI->GetSubsystem<UWiesbadenAudioSubsystem>() : nullptr;
+}
+
+double AWiesbadenVehicleHUD::ReadOptionValue(const FWbOptionRow& Row) const
+{
+	switch (Row.Id)
 	{
-		if (Row.Kind == EWbOptionKind::Faktor)
+	case EWbOptionId::Sichtweite:
+	case EWbOptionId::Schatten:
+	case EWbOptionId::Effekte:
+	case EWbOptionId::Texturen:
+	{
+		const UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		const FWbQualitaetsBindung* Bindung = FindeQualitaet(Row.Id);
+		return (Settings && Bindung)
+			? static_cast<double>((Settings->*(Bindung->Lesen))())
+			: 0.0;
+	}
+
+	case EWbOptionId::Bildratengrenze:
+	{
+		const UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		return Settings ? Settings->GetFrameRateLimit() : 0.0;
+	}
+
+	case EWbOptionId::TonBus:
+	{
+		if (Row.BusIndex < 0)
 		{
-			return MouseSensitivityFactor;
+			break;
 		}
+		const UWiesbadenAudioSubsystem* Audio = FindAudio();
+		return Audio ? Audio->GetBusVolume(static_cast<EWbAudioBus>(Row.BusIndex)) : 1.0;
+	}
+
+	case EWbOptionId::MausEmpfindlichkeit:
+		return MouseSensitivityFactor;
+
+	case EWbOptionId::Steuerungshilfe:
 		return bShowControlLegend ? 1.0 : 0.0;
+
+	case EWbOptionId::Verkehrsdichte:
+	{
+		const UWiesbadenCitySubsystem* City = FindCity();
+		return City ? City->TrafficSimulation.Settings.TrafficDensity : 0.0;
 	}
 
-	// --- Spielwelt: bei der Stadt -------------------------------------------
-	const UWorld* HudWorld = GetWorld();
-	const UWiesbadenCitySubsystem* City =
-		HudWorld ? HudWorld->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
-	if (!City)
-	{
-		return 0.0;
-	}
-	if (Row.Label == TEXT("Verkehrsdichte"))
-	{
-		return City->TrafficSimulation.Settings.TrafficDensity;
-	}
-	if (Row.Label == TEXT("Tageszeit"))
+	case EWbOptionId::Tageszeit:
 	{
 		// Gelesen wird die QUELLE, nicht die Uhr: bei Systemzeit laeuft die
 		// Stunde weiter, und die Zeile wuerde im Menue vor sich hin zaehlen.
+		const UWiesbadenCitySubsystem* City = FindCity();
+		if (!City)
+		{
+			return 0.0;
+		}
 		return (City->Weather.Settings.TimeSource == EWiesbadenTimeSource::SystemClock)
 			? -1.0
 			: FMath::RoundToDouble(City->Weather.Settings.FixedHours);
 	}
+
+	case EWbOptionId::MAX:
+		break;
+	}
+
+	MeldeUnversorgt(Row);
 	return 0.0;
 }
 
 void AWiesbadenVehicleHUD::WriteOptionValue(const FWbOptionRow& Row, double Value)
 {
-	// --- Ton ----------------------------------------------------------------
-	if (Row.Group == EWbOptionGroup::Ton && Row.BusIndex >= 0)
+	switch (Row.Id)
 	{
-		if (APlayerController* PC = GetOwningPlayerController())
-		{
-			if (UGameInstance* GI = PC->GetGameInstance())
-			{
-				if (UWiesbadenAudioSubsystem* Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>())
-				{
-					// SetBusVolume wendet sofort an UND speichert selbst.
-					Audio->SetBusVolume(static_cast<EWbAudioBus>(Row.BusIndex),
-						static_cast<float>(Value));
-				}
-			}
-		}
-		return;
-	}
-
-	// --- Grafik -------------------------------------------------------------
-	if (Row.Group == EWbOptionGroup::Grafik)
+	case EWbOptionId::Sichtweite:
+	case EWbOptionId::Schatten:
+	case EWbOptionId::Effekte:
+	case EWbOptionId::Texturen:
+	case EWbOptionId::Bildratengrenze:
 	{
 		UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
 		if (!Settings)
 		{
 			return;
 		}
-		const int32 Stufe = FMath::Clamp(FMath::RoundToInt(Value), 0, 4);
-		if (Row.Label == TEXT("Sichtweite"))      { Settings->SetViewDistanceQuality(Stufe); }
-		else if (Row.Label == TEXT("Schatten"))   { Settings->SetShadowQuality(Stufe); }
-		else if (Row.Label == TEXT("Effekte"))    { Settings->SetVisualEffectQuality(Stufe); }
-		else if (Row.Label == TEXT("Texturen"))   { Settings->SetTextureQuality(Stufe); }
-		else if (Row.Label == TEXT("Bildratengrenze"))
+		if (const FWbQualitaetsBindung* Bindung = FindeQualitaet(Row.Id))
+		{
+			(Settings->*(Bindung->Schreiben))(FMath::Clamp(FMath::RoundToInt(Value), 0, 4));
+		}
+		else
 		{
 			Settings->SetFrameRateLimit(static_cast<float>(Value));
 		}
@@ -1551,44 +1616,59 @@ void AWiesbadenVehicleHUD::WriteOptionValue(const FWbOptionRow& Row, double Valu
 		return;
 	}
 
-	// --- Steuerung ----------------------------------------------------------
-	if (Row.Group == EWbOptionGroup::Steuerung)
+	case EWbOptionId::TonBus:
 	{
-		if (Row.Kind == EWbOptionKind::Faktor)
+		if (Row.BusIndex < 0)
 		{
-			MouseSensitivityFactor = static_cast<float>(Value);
-			GConfig->SetFloat(TEXT("WiesbadenReal.Optionen"),
-				TEXT("MausEmpfindlichkeit"), MouseSensitivityFactor, GGameUserSettingsIni);
+			break;
 		}
-		else
+		if (UWiesbadenAudioSubsystem* Audio = FindAudio())
 		{
-			bShowControlLegend = (Value >= 0.5);
-			// Dauerhaft eingeblendet heisst: der Verblass-Zaehler darf nicht
-			// weiterlaufen, sonst ist die Hilfe nach ein paar Sekunden wieder weg.
-			ElapsedSeconds = 0.0f;
-			GConfig->SetBool(TEXT("WiesbadenReal.Optionen"),
-				TEXT("Steuerungshilfe"), bShowControlLegend, GGameUserSettingsIni);
+			// SetBusVolume wendet sofort an UND speichert selbst.
+			Audio->SetBusVolume(static_cast<EWbAudioBus>(Row.BusIndex),
+				static_cast<float>(Value));
 		}
+		return;
+	}
+
+	case EWbOptionId::MausEmpfindlichkeit:
+		MouseSensitivityFactor = static_cast<float>(Value);
+		GConfig->SetFloat(TEXT("WiesbadenReal.Optionen"),
+			TEXT("MausEmpfindlichkeit"), MouseSensitivityFactor, GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+		return;
+
+	case EWbOptionId::Steuerungshilfe:
+		bShowControlLegend = (Value >= 0.5);
+		// Dauerhaft eingeblendet heisst: der Verblass-Zaehler darf nicht
+		// weiterlaufen, sonst ist die Hilfe nach ein paar Sekunden wieder weg.
+		ElapsedSeconds = 0.0f;
+		GConfig->SetBool(TEXT("WiesbadenReal.Optionen"),
+			TEXT("Steuerungshilfe"), bShowControlLegend, GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+		return;
+
+	case EWbOptionId::Verkehrsdichte:
+	{
+		UWiesbadenCitySubsystem* City = FindCity();
+		if (!City)
+		{
+			return;
+		}
+		City->TrafficSimulation.Settings.TrafficDensity = static_cast<float>(Value);
+		GConfig->SetFloat(TEXT("WiesbadenReal.Optionen"),
+			TEXT("Verkehrsdichte"), static_cast<float>(Value), GGameUserSettingsIni);
 		GConfig->Flush(false, GGameUserSettingsIni);
 		return;
 	}
 
-	// --- Spielwelt ----------------------------------------------------------
-	UWorld* HudWorld = GetWorld();
-	UWiesbadenCitySubsystem* City =
-		HudWorld ? HudWorld->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
-	if (!City)
+	case EWbOptionId::Tageszeit:
 	{
-		return;
-	}
-	if (Row.Label == TEXT("Verkehrsdichte"))
-	{
-		City->TrafficSimulation.Settings.TrafficDensity = static_cast<float>(Value);
-		GConfig->SetFloat(TEXT("WiesbadenReal.Optionen"),
-			TEXT("Verkehrsdichte"), static_cast<float>(Value), GGameUserSettingsIni);
-	}
-	else if (Row.Label == TEXT("Tageszeit"))
-	{
+		UWiesbadenCitySubsystem* City = FindCity();
+		if (!City)
+		{
+			return;
+		}
 		if (Value < 0.0)
 		{
 			City->Weather.SetTimeSource(EWiesbadenTimeSource::SystemClock);
@@ -1603,8 +1683,15 @@ void AWiesbadenVehicleHUD::WriteOptionValue(const FWbOptionRow& Row, double Valu
 		StoredTimeOfDay = static_cast<float>(Value);
 		GConfig->SetFloat(TEXT("WiesbadenReal.Optionen"),
 			TEXT("Tageszeit"), static_cast<float>(Value), GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+		return;
 	}
-	GConfig->Flush(false, GGameUserSettingsIni);
+
+	case EWbOptionId::MAX:
+		break;
+	}
+
+	MeldeUnversorgt(Row);
 }
 
 void AWiesbadenVehicleHUD::LoadPersistentOptions()

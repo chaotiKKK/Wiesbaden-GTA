@@ -271,6 +271,12 @@ private:
 	/** Baut die Zeilenliste aus den Systemen, die es GERADE gibt. */
 	void BuildOptionRows(TArray<FWbOptionRow>& OutRows) const;
 
+	/** Das Stadt-Subsystem, wenn es die Welt gerade gibt - sonst nullptr. */
+	class UWiesbadenCitySubsystem* FindCity() const;
+
+	/** Das Mischpult, wenn es die Spielinstanz gerade gibt - sonst nullptr. */
+	class UWiesbadenAudioSubsystem* FindAudio() const;
+
 	/**
 	 * Der aktuelle Wert einer Zeile - gelesen bei dem System, dem er gehoert.
 	 *
