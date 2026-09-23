@@ -227,6 +227,16 @@ double WiesbadenOptions::BarFraction(EWbOptionKind Kind, double Value)
 	return FMath::Clamp((Value - R.Min) / Spanne, 0.0, 1.0);
 }
 
+bool WiesbadenOptions::ValueArrived(double Written, double ReadBack)
+{
+	// Relativ, damit die Toleranz mit der Groesse mitwaechst - eine
+	// Bildratengrenze von 144 rundet anders als eine Lautstaerke von 0,6.
+	constexpr double RelativeToleranz = 1e-6;
+	const double Toleranz = FMath::Max(
+		RelativeToleranz, FMath::Abs(Written) * RelativeToleranz);
+	return FMath::Abs(Written - ReadBack) <= Toleranz;
+}
+
 int32 WiesbadenOptions::NextRow(int32 Current, int32 Count, int32 Direction)
 {
 	if (Count <= 0)

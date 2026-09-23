@@ -111,4 +111,22 @@ namespace WiesbadenOptions
 
 	/** Nachster/voriger auswaehlbarer Index - Ueberschriften gibt es hier nicht. */
 	WIESBADENREAL_API int32 NextRow(int32 Current, int32 Count, int32 Direction);
+
+	/**
+	 * Ist der geschriebene Wert beim Besitzer wirklich angekommen?
+	 *
+	 * Die Toleranz muss zur GENAUIGKEIT DES BESITZERS passen, nicht zu der des
+	 * Menues. Hier stand FMath::IsNearlyEqual mit der Vorgabe fuer double
+	 * (1e-8). `FWiesbadenTrafficSettings::TrafficDensity` ist aber ein float:
+	 * die geschriebene 0,6 kommt als 0,60000002384 zurueck, 2,4e-8 daneben -
+	 * und der Waechter meldete "NICHT ANGEKOMMEN" bei einer Einstellung, die
+	 * angekommen war. Ein Waechter, der bei Gesunden Alarm schlaegt, bringt
+	 * einem das Wegsehen bei.
+	 *
+	 * 1e-6 relativ liegt bequem ueber dem Rundungsrauschen eines float (rund
+	 * 1,2e-7 relativ) und weit unter dem kleinsten echten Schritt des Menues
+	 * (0,05 bei der Lautstaerke). Ein wirklich verschluckter oder geklemmter
+	 * Wert faellt damit weiterhin auf.
+	 */
+	WIESBADENREAL_API bool ValueArrived(double Written, double ReadBack);
 }
