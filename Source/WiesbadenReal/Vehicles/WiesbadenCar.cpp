@@ -530,7 +530,13 @@ int32 AWiesbadenCar::GetGear() const
 
 float AWiesbadenCar::GetEngineRpm() const
 {
-	return VehiclePhysics.EngineRpm;
+	// Angezeigte Drehzahl = Basis + Radspin-Flare: beim Durchdrehen dreht der
+	// Motor hoch, waehrend die Fahrt kaum zunimmt (siehe WheelSpinFlare). Die
+	// interne EngineRpm (Schalten/Drehmoment) bleibt davon unberuehrt.
+	return FMath::Clamp(
+		VehiclePhysics.EngineRpm + VehiclePhysics.WheelSpinFlare,
+		VehiclePhysics.Powertrain.IdleRpm * 0.5f,
+		VehiclePhysics.Powertrain.MaxRpm * 1.15f);
 }
 
 float AWiesbadenCar::GetAnalogAxis(const FKey& Key)

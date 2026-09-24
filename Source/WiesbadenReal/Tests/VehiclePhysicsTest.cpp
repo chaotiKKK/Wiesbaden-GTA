@@ -1250,3 +1250,98 @@ bool FVehicleLoadStiffnessTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleWheelSpinFlareTest,
+	"WiesbadenReal.Vehicles.Physics.WheelSpinFlare",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Drehzahlflare bei Radspin: beim Durchdrehen entkoppeln die Antriebsraeder von
+ * der Strasse, der unbelastete Motor dreht hoch - die ANGEZEIGTE/gehoerte
+ * Drehzahl flart ueber die geschwindigkeitsabgeleitete Basis, waehrend der
+ * Antrieb (Schalten/Drehmoment/Tempo) unberuehrt bleibt.
+ */
+bool FVehicleWheelSpinFlareTest::RunTest(const FString& Parameters)
+{
+	using Phys = FWiesbadenVehiclePhysics;
+
+	// -- Datenreine Kennlinie ------------------------------------------------
+	{
+		constexpr float Max = 2500.0f, Rise = 9000.0f, Decay = 5000.0f, Dt = 0.01f;
+
+		// Spin: der Flare steigt (ein Schritt = Rise*Dt).
+		const float Up1 = Phys::AdvanceWheelSpinFlare(true, 1.0f, 0.0f, Max, Rise, Decay, Dt);
+		TestTrue(TEXT("Spin -> Flare steigt"), Up1 > 0.0f);
+		TestTrue(TEXT("Anstieg = Rate*Dt"), FMath::IsNearlyEqual(Up1, Rise * Dt, 1e-2f));
+
+		// Er klemmt am Ziel (Max*Throttle), nicht darueber.
+		float F = 0.0f;
+		for (int32 i = 0; i < 200; ++i) { F = Phys::AdvanceWheelSpinFlare(true, 1.0f, F, Max, Rise, Decay, Dt); }
+		TestTrue(TEXT("Flare klemmt am Ziel"), FMath::IsNearlyEqual(F, Max, 1.0f));
+
+		// Ohne Spin faellt er auf 0 und klemmt dort (nicht negativ).
+		float D = Max;
+		for (int32 i = 0; i < 400; ++i) { D = Phys::AdvanceWheelSpinFlare(false, 0.0f, D, Max, Rise, Decay, Dt); }
+		TestTrue(TEXT("kein Spin -> Flare faellt auf 0"), D == 0.0f);
+
+		// Gaspedal skaliert das Ziel (halbes Gas -> halber Flare).
+		float H = 0.0f;
+		for (int32 i = 0; i < 200; ++i) { H = Phys::AdvanceWheelSpinFlare(true, 0.5f, H, Max, Rise, Decay, Dt); }
+		TestTrue(TEXT("halbes Gas -> halbes Ziel"), FMath::IsNearlyEqual(H, Max * 0.5f, 1.0f));
+
+		// Ausbrechen schneller als Beruhigen (Rise > Decay).
+		const float StepUp = Phys::AdvanceWheelSpinFlare(true, 1.0f, 1000.0f, Max, Rise, Decay, Dt) - 1000.0f;
+		const float StepDn = 1000.0f - Phys::AdvanceWheelSpinFlare(false, 0.0f, 1000.0f, Max, Rise, Decay, Dt);
+		TestTrue(TEXT("Ausbrechen schneller als Beruhigen"), StepUp > StepDn);
+	}
+
+	// -- Im Fahrzeug: Vollgas-Start flart die AUSGABE ueber die Basis --------
+	{
+		FWiesbadenVehiclePhysics Vehicle; Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput In; In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+
+		bool bFlared = false;
+		for (int32 Step = 0; Step < 60; ++Step)   // ~0,6 s Anfahren
+		{
+			Vehicle.Tick(In, VehicleDt, Out);
+			if (Out.bWheelSpin)
+			{
+				// Ausgabe-Drehzahl liegt beim Spin ueber der internen Basis-Drehzahl.
+				bFlared = bFlared || (Out.EngineRpm > Vehicle.EngineRpm + 50.0f);
+			}
+		}
+		TestTrue(TEXT("Radspin flart die Ausgabe-Drehzahl ueber die Basis"), bFlared);
+		TestTrue(TEXT("Flare-Zustand aktiv"), Vehicle.WheelSpinFlare > 0.0f);
+	}
+
+	// -- Marschfahrt (kein Spin): Ausgabe == Basis, kein Flare ---------------
+	{
+		FWiesbadenVehiclePhysics Vehicle; Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput In; In.Throttle = 1.0f;
+		Simulate(Vehicle, In, 12.0f);   // auf Tempo, kein Radspin mehr
+		FWiesbadenVehiclePhysicsOutput Out;
+		Vehicle.Tick(In, VehicleDt, Out);
+		TestFalse(TEXT("Bei Fahrt kein Radspin"), Out.bWheelSpin);
+		TestTrue(TEXT("Flare abgeklungen"), Vehicle.WheelSpinFlare < 1.0f);
+		TestTrue(TEXT("Ausgabe-Drehzahl = Basis (kein Flare)"),
+			FMath::IsNearlyEqual(Out.EngineRpm, Vehicle.EngineRpm, 1.0f));
+	}
+
+	// -- Der Flare veraendert die FAHRT NICHT (reine Anzeige) ----------------
+	// Zwei identische Laeufe, einer mit Flare (Standard), einer mit MaxFlare = 0.
+	// Tempo UND Gang nach 12 s Vollgas muessen exakt gleich sein.
+	{
+		FWiesbadenVehiclePhysics A; A.Reset();
+		FWiesbadenVehiclePhysics B; B.Reset(); B.MaxWheelSpinFlareRpm = 0.0f;
+		FWiesbadenVehiclePhysicsInput In; In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput OutA, OutB;
+		SimulateTo(A, In, 12.0f, OutA);
+		SimulateTo(B, In, 12.0f, OutB);
+		TestTrue(TEXT("Flare aendert Tempo nicht"),
+			FMath::IsNearlyEqual(OutA.SpeedKmh, OutB.SpeedKmh, 0.01f));
+		TestEqual(TEXT("Flare aendert Gang nicht"), OutA.Gear, OutB.Gear);
+	}
+
+	return true;
+}

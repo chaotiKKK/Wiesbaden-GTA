@@ -317,9 +317,12 @@ void UWiesbadenVehicleTestHarness::TickDriveProfile(float DeltaTime)
 		DriveLastSecond = Second;
 		// Kursaenderung wrap-sicher gegen den Startkurs (FindDeltaAngle: -180..180).
 		const float HeadingDelta = FMath::FindDeltaAngleDegrees(DriveStartYaw, Owner->GetActorRotation().Yaw);
+		// Drehzahl mitloggen: beim Anfahr-Radspin flart sie ueber die aus dem Tempo
+		// abgeleitete Basis (Antriebsschlupf-Drehzahlflare) - im Log als hohe U/min
+		// bei noch niedrigem Tempo sichtbar.
 		UE_LOG(LogWbVehicles, Log,
-			TEXT("WbDev Fahrt t=%.0f: Tempo %.0f km/h, Kursaenderung %+.0f Grad, Gang %d."),
-			DriveElapsed, Ctrl->GetSpeedKmh(), HeadingDelta, Ctrl->GetGear());
+			TEXT("WbDev Fahrt t=%.0f: Tempo %.0f km/h, Drehzahl %.0f U/min, Kursaenderung %+.0f Grad, Gang %d."),
+			DriveElapsed, Ctrl->GetSpeedKmh(), Ctrl->GetEngineRpm(), HeadingDelta, Ctrl->GetGear());
 	}
 	if (DriveElapsed >= DriveDuration)
 	{
