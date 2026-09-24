@@ -1,6 +1,7 @@
 """Baut eine bessere Fussgaenger-Figur (Low-Poly, ~175 cm) in FUENF Material-
 zonen (0 Haut, 1 Hemd, 2 Hose, 3 Haare, 4 Schuhe) und exportiert sie in VIER
-Gangphasen als glTF (SM_WbPed2_0..3). Die Zonen erlauben spaeter pro-Instanz
+Gangphasen als glTF, fuer DREI Koerpertypen (SM_WbPed2_N schlank, SM_WbPed2B_N
+breit, SM_WbPed2C_N Kind; siehe BODIES). Die Zonen erlauben pro-Instanz
 verschiedene Kleidungsfarben (Custom Data im Material).
 
 Konvention wie die alten Posen (in UE gemessen): +X = Gehrichtung (Beine/Arme
@@ -73,30 +74,31 @@ def box(bm, cx, cy, cz, hx, hy, hz, mi, pivot_z=None, pitch_deg=0.0):
         except ValueError:
             pass
 
-def build_person(bm, leg_deg, arm_deg):
-    """leg_deg: rechtes Bein nach vorn (+), linkes nach hinten. arm_deg
-    gegenlaeufig zu den Beinen (rechter Arm zurueck, wenn rechtes Bein vor)."""
-    # Masse in cm. Hueften bei z=88, Schultern bei z=145, Kopf bis 175.
-    HIP_Z, SHO_Z = 88.0, 145.0
-    # Beine (Hose): Mitte zwischen Huefte und Boden, um die Huefte geneigt.
-    box(bm, 0, 9.0, HIP_Z*0.5, 8.0, 7.0, HIP_Z*0.5, TROUSER, pivot_z=HIP_Z, pitch_deg= leg_deg)   # rechtes Bein (+Y)
-    box(bm, 0, -9.0, HIP_Z*0.5, 8.0, 7.0, HIP_Z*0.5, TROUSER, pivot_z=HIP_Z, pitch_deg=-leg_deg)   # linkes Bein
-    # Schuhe an den Beinenden (leicht nach vorn); grob unter der Huefte, geneigt.
-    box(bm, 0, 9.0, 5.0, 12.0, 8.0, 5.0, SHOE, pivot_z=HIP_Z, pitch_deg= leg_deg*0.6)
-    box(bm, 0, -9.0, 5.0, 12.0, 8.0, 5.0, SHOE, pivot_z=HIP_Z, pitch_deg=-leg_deg*0.6)
+def build_person(bm, leg_deg, arm_deg, hs=1.0, ws=1.0, head_mul=1.0):
+    """Figur in einer Gangphase. hs skaliert die HOEHE (Kind < 1), ws die BREITE
+    (breiter Erwachsener > 1), head_mul den Kopf (Kind = groesserer Kopf).
+    leg_deg: rechtes Bein vor (+); arm_deg gegenlaeufig."""
+    HIP_Z, SHO_Z = 88.0*hs, 145.0*hs
+    # Beine (Hose)
+    box(bm, 0, 9.0*ws, HIP_Z*0.5, 8.0*ws, 7.0*ws, HIP_Z*0.5, TROUSER, pivot_z=HIP_Z, pitch_deg= leg_deg)
+    box(bm, 0, -9.0*ws, HIP_Z*0.5, 8.0*ws, 7.0*ws, HIP_Z*0.5, TROUSER, pivot_z=HIP_Z, pitch_deg=-leg_deg)
+    # Schuhe
+    box(bm, 0, 9.0*ws, 5.0*hs, 12.0*ws, 8.0*ws, 5.0*hs, SHOE, pivot_z=HIP_Z, pitch_deg= leg_deg*0.6)
+    box(bm, 0, -9.0*ws, 5.0*hs, 12.0*ws, 8.0*ws, 5.0*hs, SHOE, pivot_z=HIP_Z, pitch_deg=-leg_deg*0.6)
     # Rumpf (Hemd)
-    box(bm, 0, 0, (HIP_Z+SHO_Z)*0.5, 11.0, 17.0, (SHO_Z-HIP_Z)*0.5 + 4.0, SHIRT)
+    box(bm, 0, 0, (HIP_Z+SHO_Z)*0.5, 11.0*ws, 17.0*ws, (SHO_Z-HIP_Z)*0.5 + 4.0*hs, SHIRT)
     # Arme (Hemd), an den Schultern geneigt (gegenlaeufig zu den Beinen)
-    ARM_LEN = 52.0
-    box(bm, 0, 22.0, SHO_Z-ARM_LEN*0.5, 6.0, 6.0, ARM_LEN*0.5, SHIRT, pivot_z=SHO_Z, pitch_deg=-arm_deg)  # rechter Arm
-    box(bm, 0, -22.0, SHO_Z-ARM_LEN*0.5, 6.0, 6.0, ARM_LEN*0.5, SHIRT, pivot_z=SHO_Z, pitch_deg= arm_deg)  # linker Arm
-    # Haende (Haut) an den Armenden
-    box(bm, 0, 22.0, SHO_Z-ARM_LEN, 6.5, 6.5, 6.0, SKIN, pivot_z=SHO_Z, pitch_deg=-arm_deg)
-    box(bm, 0, -22.0, SHO_Z-ARM_LEN, 6.5, 6.5, 6.0, SKIN, pivot_z=SHO_Z, pitch_deg= arm_deg)
-    # Hals (Haut) + Kopf (Haut) + Haare (Kappe oben)
-    box(bm, 0, 0, SHO_Z+5.0, 5.0, 5.0, 5.0, SKIN)
-    box(bm, 0, 0, 163.0, 9.0, 9.0, 9.0, SKIN)        # Kopf
-    box(bm, 0, 0, 171.0, 9.5, 9.5, 4.0, HAIR)         # Haare oben
+    ARM_LEN = 52.0*hs
+    box(bm, 0, 22.0*ws, SHO_Z-ARM_LEN*0.5, 6.0*ws, 6.0*ws, ARM_LEN*0.5, SHIRT, pivot_z=SHO_Z, pitch_deg=-arm_deg)
+    box(bm, 0, -22.0*ws, SHO_Z-ARM_LEN*0.5, 6.0*ws, 6.0*ws, ARM_LEN*0.5, SHIRT, pivot_z=SHO_Z, pitch_deg= arm_deg)
+    # Haende (Haut)
+    box(bm, 0, 22.0*ws, SHO_Z-ARM_LEN, 6.5*ws, 6.5*ws, 6.0*hs, SKIN, pivot_z=SHO_Z, pitch_deg=-arm_deg)
+    box(bm, 0, -22.0*ws, SHO_Z-ARM_LEN, 6.5*ws, 6.5*ws, 6.0*hs, SKIN, pivot_z=SHO_Z, pitch_deg= arm_deg)
+    # Hals + Kopf + Haare
+    box(bm, 0, 0, SHO_Z+5.0*hs, 5.0*ws, 5.0*ws, 5.0*hs, SKIN)
+    hh = 9.0 * head_mul
+    box(bm, 0, 0, 163.0*hs, hh*ws, hh*ws, hh*hs, SKIN)                 # Kopf
+    box(bm, 0, 0, (163.0*hs + hh*hs*0.9), (hh+0.5)*ws, (hh+0.5)*ws, 4.0*hs, HAIR)  # Haare oben
 
 MATS = [
     ("Skin",    (0.80, 0.62, 0.50, 1.0)),
@@ -116,19 +118,38 @@ def export(obj, path):
                               use_selection=True, export_yup=True, export_apply=True)
     print("###PED### %s" % path)
 
+# Koerpertypen (Schluessel = Namenszusatz): "" = A schlanker Erwachsener
+# (SM_WbPed2_N), "B" breiter Erwachsener, "C" Kind (kleiner, Kopf relativ gross).
+# Nur einen Typ neu bauen: -- <outdir> <tag>, z. B. "-- <outdir> C".
+BODIES = {
+    "":  dict(hs=1.0, ws=1.0,  head_mul=1.0),
+    "B": dict(hs=1.0, ws=1.30, head_mul=1.0),
+    "C": dict(hs=0.68, ws=0.82, head_mul=1.40),
+}
+
+def only_tags():
+    a = sys.argv
+    rest = a[a.index("--")+1:] if "--" in a else []
+    return set(rest[1:]) if len(rest) > 1 else None
+
 def main():
     d = out_dir(); os.makedirs(d, exist_ok=True)
-    for phase, (leg, arm) in enumerate(PHASES):
-        reset()
-        mats = [mat(n, c) for n, c in MATS]
-        me = bpy.data.meshes.new("SM_WbPed2_%d" % phase)
-        bm = bmesh.new()
-        build_person(bm, leg, arm)
-        bm.to_mesh(me); bm.free()
-        obj = bpy.data.objects.new(me.name, me)
-        for m in mats: obj.data.materials.append(m)
-        bpy.context.collection.objects.link(obj)
-        export(obj, os.path.join(d, "SM_WbPed2_%d.glb" % phase))
+    wanted = only_tags()
+    for tag, spec in BODIES.items():
+        if wanted is not None and tag not in wanted:
+            continue
+        for phase, (leg, arm) in enumerate(PHASES):
+            reset()
+            mats = [mat(n, c) for n, c in MATS]
+            name = "SM_WbPed2%s_%d" % (tag, phase)
+            me = bpy.data.meshes.new(name)
+            bm = bmesh.new()
+            build_person(bm, leg, arm, **spec)
+            bm.to_mesh(me); bm.free()
+            obj = bpy.data.objects.new(name, me)
+            for m in mats: obj.data.materials.append(m)
+            bpy.context.collection.objects.link(obj)
+            export(obj, os.path.join(d, name + ".glb"))
     print("###PED### FERTIG")
 
 main()

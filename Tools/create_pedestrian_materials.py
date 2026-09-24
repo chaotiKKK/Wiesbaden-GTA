@@ -96,7 +96,7 @@ def sm_of(name):
     return EAL.load_asset(p) if EAL.does_asset_exist(p) else None
 
 log = []
-for n in ["SM_WbPed2_0", "SM_WbPed2_1", "SM_WbPed2_2", "SM_WbPed2_3"]:
+for n in [f"SM_WbPed2{t}_{i}" for t in ["","B","C"] for i in range(4)]:
     sm = sm_of(n)
     if not sm:
         log.append("MISSING %s" % n); continue
