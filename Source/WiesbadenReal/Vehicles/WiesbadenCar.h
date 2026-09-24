@@ -7,6 +7,7 @@
 #include "InputCoreTypes.h"
 
 #include "Vehicles/WiesbadenCarAudioComponent.h"
+#include "Vehicles/WiesbadenTireEffectsComponent.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "Vehicles/WiesbadenVehicleControl.h"
@@ -292,6 +293,10 @@ protected:
 	/** Motorklang, synthetisiert aus Drehzahl und Last. */
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
 	UWiesbadenCarAudioComponent* EngineAudio = nullptr;
+
+	/** Reifen-Effekte: Quietschen + Bremsspuren aus dem Schlupf-Zustand. */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	UWiesbadenTireEffectsComponent* TireEffects = nullptr;
 
 private:
 	void ReadInput(float DeltaSeconds);

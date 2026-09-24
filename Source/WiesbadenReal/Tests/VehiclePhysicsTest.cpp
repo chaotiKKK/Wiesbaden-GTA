@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "Vehicles/WiesbadenCar.h"
+#include "Vehicles/WiesbadenTireEffectsComponent.h"
 #include "Vehicles/WiesbadenVehiclePhysics.h"
 
 namespace
@@ -901,6 +902,45 @@ bool FVehicleBodyTiltTest::RunTest(const FString& Parameters)
 		TestTrue(FString::Printf(TEXT("Erstes Bild nur ein Bruchteil des Ziels (%.3f vs %.2f)"), P, Target),
 			FMath::Abs(P) < FMath::Abs(Target) * 0.5f);
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleTireEffectsTest,
+	"WiesbadenReal.Vehicles.TireEffects",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Reifen-Quietsch-Intensitaet aus dem Schlupf-Zustand (datenrein). Macht die
+ * bisher nur getesteten Flags produktiv: Radspin quietscht auch langsam,
+ * Blockieren/Drift erst mit Fahrt, ruhige Fahrt bleibt still.
+ */
+bool FVehicleTireEffectsTest::RunTest(const FString& Parameters)
+{
+	auto I = [](bool Spin, bool Lock, float SlipDeg, float Kmh)
+	{
+		return UWiesbadenTireEffectsComponent::ComputeSquealIntensity(Spin, Lock, SlipDeg, Kmh);
+	};
+
+	// Ruhige Fahrt: kein Quietschen.
+	TestTrue(TEXT("Kein Schlupf -> still"), FMath::IsNearlyZero(I(false, false, 0.0f, 50.0f)));
+
+	// Radspin quietscht auch bei geringem Tempo (durchdrehendes Rad).
+	TestTrue(TEXT("Radspin quietscht auch langsam"), I(true, false, 0.0f, 5.0f) > 0.5f);
+	// ... sogar im Stand (Burnout).
+	TestTrue(TEXT("Radspin quietscht im Stand"), I(true, false, 0.0f, 0.0f) > 0.5f);
+
+	// Blockieren quietscht mit Fahrt, aber NICHT im Stand (stehendes Rad rutscht nicht).
+	TestTrue(TEXT("Blockieren + Fahrt quietscht"), I(false, true, 0.0f, 50.0f) > 0.5f);
+	TestTrue(TEXT("Blockieren im Stand still"), FMath::IsNearlyZero(I(false, true, 0.0f, 0.0f)));
+
+	// Drift: grosser Schwimmwinkel quietscht, kleiner nicht.
+	TestTrue(TEXT("Grosser Schwimmwinkel quietscht"), I(false, false, 20.0f, 50.0f) > 0.3f);
+	TestTrue(TEXT("Kleiner Schwimmwinkel still"), FMath::IsNearlyZero(I(false, false, 3.0f, 50.0f)));
+
+	// Wertebereich bleibt 0..1.
+	TestTrue(TEXT("Intensitaet in [0,1]"),
+		I(true, true, 45.0f, 120.0f) <= 1.0f && I(true, true, 45.0f, 120.0f) >= 0.0f);
 
 	return true;
 }

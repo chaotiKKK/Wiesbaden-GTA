@@ -293,18 +293,22 @@ void UWiesbadenVehicleTestHarness::TickDriveProfile(float DeltaTime)
 		return;
 	}
 
-	// Fahrprofil in zwei Phasen ueber die echte Fahrphysik:
-	//   Beschleunigen (0-45 %): Vollgas geradeaus -> Tempo steigt
-	//   Lenken (45-100 %): Vollgas + Lenk-Sweep rechts, dann links -> Kurs aendert sich
-	// So weist der Rauchtest BEIDES nach - Laengsdynamik und Lenkung - ohne Tastatur.
+	// Fahrprofil in vier Phasen ueber die echte Fahrphysik:
+	//   Beschleunigen (0-40 %): Vollgas geradeaus -> Tempo (und Anfahr-Radspin)
+	//   Lenken re (40-60 %):    Vollgas + Lenk-Sweep rechts
+	//   Lenken li (60-80 %):    Vollgas + Lenk-Sweep links
+	//   Bremsen (80-100 %):     Gas weg, voll bremsen -> Blockieren
+	// So weist der Rauchtest Laengsdynamik UND Lenkung nach (Max ueber den Lauf);
+	// die Bremsphase macht Radspin/Blockieren fuer die Reifen-Effekte (Quietschen
+	// + Bremsspuren) im Fahrlauf sicht- und hoerbar.
 	DriveElapsed += DeltaTime;
 	const float Frac = DriveElapsed / DriveDuration;
 
 	FWiesbadenCarControl Control;
-	Control.Throttle = 1.0f;
-	if (Frac < 0.45f)      { Control.Steering = 0.0f; }
-	else if (Frac < 0.72f) { Control.Steering = 0.6f; }
-	else                   { Control.Steering = -0.6f; }
+	if (Frac < 0.40f)      { Control.Throttle = 1.0f; Control.Steering = 0.0f; }
+	else if (Frac < 0.60f) { Control.Throttle = 1.0f; Control.Steering = 0.6f; }
+	else if (Frac < 0.80f) { Control.Throttle = 1.0f; Control.Steering = -0.6f; }
+	else                   { Control.Throttle = 0.0f; Control.Brake = 1.0f; Control.Steering = 0.0f; }
 	Ctrl->SetExternalControl(Control);
 
 	const int32 Second = FMath::CeilToInt(DriveElapsed);
