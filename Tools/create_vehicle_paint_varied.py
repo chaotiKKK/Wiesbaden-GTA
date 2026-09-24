@@ -20,6 +20,7 @@ if EAL.does_asset_exist(p):
     EAL.delete_asset(p)
 m = TOOLS.create_asset(name, DIR, unreal.Material, unreal.MaterialFactoryNew())
 m.set_editor_property("used_with_instanced_static_meshes", True)
+m.set_editor_property("used_with_nanite", True)
 
 def cd(idx, y):
     n = MEL.create_material_expression(m, unreal.MaterialExpressionPerInstanceCustomData, -700, y)
