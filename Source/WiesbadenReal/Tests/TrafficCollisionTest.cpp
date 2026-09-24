@@ -292,3 +292,54 @@ bool FTrafficVehicleTypeTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficVehicleColorTest,
+	"WiesbadenReal.Vehicles.Traffic.VehicleColor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Deterministische Lackfarbe je Fahrzeug-Id: gleiche Id -> gleiche Farbe (kein
+ * Flackern), ueber viele Ids wird die Palette breit genutzt, und Farbe und Typ
+ * korrelieren nicht (verschiedene Hashes).
+ */
+bool FTrafficVehicleColorTest::RunTest(const FString& Parameters)
+{
+	using Spawner = UTrafficVehicleSpawnerComponent;
+
+	// -- Determinismus -------------------------------------------------------
+	for (int32 Id : {0, 1, 2, 42, 1000, -7, 999999})
+	{
+		TestTrue(TEXT("gleiche Id -> gleiche Farbe"),
+			Spawner::SelectVehicleColor(Id) == Spawner::SelectVehicleColor(Id));
+	}
+
+	// -- Palette wird breit genutzt (mind. 8 verschiedene Farben ueber viele Ids)
+	{
+		TSet<FString> Colors;
+		for (int32 Id = 0; Id < 5000; ++Id)
+		{
+			Colors.Add(Spawner::SelectVehicleColor(Id).ToString());
+		}
+		TestTrue(FString::Printf(TEXT("viele Lackfarben (%d)"), Colors.Num()), Colors.Num() >= 8);
+	}
+
+	// -- Farbe und Typ korrelieren nicht: fuer einen festen Typ kommen viele
+	// Farben vor (sonst waeren alle Busse gleich lackiert).
+	{
+		const TArray<float> W = {55.0f, 15.0f, 25.0f, 5.0f};
+		TSet<FString> BusColors;
+		int32 BusCount = 0;
+		for (int32 Id = 0; Id < 20000 && BusCount < 300; ++Id)
+		{
+			if (Spawner::SelectVehicleType(Id, W) == 3)   // Bus
+			{
+				++BusCount;
+				BusColors.Add(Spawner::SelectVehicleColor(Id).ToString());
+			}
+		}
+		TestTrue(FString::Printf(TEXT("Busse tragen verschiedene Farben (%d bei %d Bussen)"),
+			BusColors.Num(), BusCount), BusColors.Num() >= 5);
+	}
+
+	return true;
+}

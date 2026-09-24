@@ -73,6 +73,15 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Verkehr")
 	TArray<float> VehicleTypeWeights;
 
+	/** Je Typ: bekommt sein Slot-0-Lack eine pro-Instanz-Farbe (Custom Data)?
+	 *  Der texturierte Kaefer nein, die Flach-Lack-Typen ja. */
+	UPROPERTY(Transient)
+	TArray<bool> VehicleTypeVariedPaint;
+
+	/** Lackmaterial mit pro-Instanz-Farbe (M_VehPaintVaried) fuer die neuen Typen. */
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> VariedPaintMaterial = nullptr;
+
 	/**
 	 * Waehlt den Fahrzeugtyp (Index in die Gewichte) deterministisch aus der
 	 * Fahrzeug-Id, gewichtet. Datenrein/statisch, ohne Welt pruefbar
@@ -80,6 +89,13 @@ public:
 	 * Typ, und ueber viele Ids naehert sich die Verteilung den Gewichten an.
 	 */
 	static int32 SelectVehicleType(int32 VehicleId, const TArray<float>& Weights);
+
+	/**
+	 * Lackfarbe eines Fahrzeugs DETERMINISTISCH aus seiner Id (feste Auto-Palette).
+	 * Gleiche Id -> gleiche Farbe (kein Flackern), ueber viele Ids breit gestreut.
+	 * Datenrein/testbar (Test Vehicles.Traffic.VehicleColor).
+	 */
+	static FLinearColor SelectVehicleColor(int32 VehicleId);
 
 	/** Basismaterial; je Palette-Farbe wird eine MID erzeugt. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Verkehr")

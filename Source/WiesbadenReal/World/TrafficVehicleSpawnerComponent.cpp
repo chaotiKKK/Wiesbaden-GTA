@@ -56,18 +56,28 @@ UTrafficVehicleSpawnerComponent::UTrafficVehicleSpawnerComponent()
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> MeshBus(
 		TEXT("/Game/Vehicles/Traffic/SM_TrafficBus/StaticMeshes/SM_TrafficBus.SM_TrafficBus"));
 
+	// Lack mit pro-Instanz-Farbe (Custom Data) fuer die neuen Typen.
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> PaintVaried(
+		TEXT("/Game/Vehicles/Traffic/Mats/M_VehPaintVaried.M_VehPaintVaried"));
+	VariedPaintMaterial = PaintVaried.Succeeded() ? PaintVaried.Object : nullptr;
+
 	// Typ 0 IMMER der Kaefer (auch als Bounds-Fallback). Neue Typen nur, wenn ihr
-	// Mesh geladen wurde - Gewichte laufen index-gleich mit.
+	// Mesh geladen wurde - Gewichte laufen index-gleich mit. Der Kaefer ist voll
+	// texturiert (Farbe im Albedo) -> KEINE Instanzfarbe; die neuen Typen tragen
+	// einen Flach-Lack auf Slot 0 und bekommen deshalb pro Instanz eine Lackfarbe.
 	VehicleTypeMeshes.Reset();
 	VehicleTypeWeights.Reset();
+	VehicleTypeVariedPaint.Reset();
 	VehicleTypeMeshes.Add(VehicleMesh);
 	VehicleTypeWeights.Add(55.0f);
+	VehicleTypeVariedPaint.Add(false);
 	auto AddType = [this](UStaticMesh* Mesh, float Weight)
 	{
 		if (Mesh)
 		{
 			VehicleTypeMeshes.Add(Mesh);
 			VehicleTypeWeights.Add(Weight);
+			VehicleTypeVariedPaint.Add(true);
 		}
 	};
 	AddType(MeshTransporter.Succeeded() ? MeshTransporter.Object : nullptr, 15.0f);
@@ -160,6 +170,15 @@ void UTrafficVehicleSpawnerComponent::EnsureInstancePools()
 		{
 			Instances->SetMaterial(0, VehicleMaterial);
 		}
+		// Neue (flach lackierte) Typen: Slot 0 auf den Instanzfarben-Lack legen und
+		// drei Custom-Data-Floats (RGB) je Instanz vorsehen. Der texturierte Kaefer
+		// bleibt unangetastet.
+		else if (VehicleTypeVariedPaint.IsValidIndex(t) && VehicleTypeVariedPaint[t]
+			&& VariedPaintMaterial)
+		{
+			Instances->SetMaterial(0, VariedPaintMaterial);
+			Instances->NumCustomDataFloats = 3;
+		}
 
 		VehicleInstances.Add(Instances);
 	}
@@ -200,6 +219,31 @@ int32 UTrafficVehicleSpawnerComponent::SelectVehicleType(int32 VehicleId, const 
 		}
 	}
 	return Weights.Num() - 1;
+}
+
+FLinearColor UTrafficVehicleSpawnerComponent::SelectVehicleColor(int32 VehicleId)
+{
+	// Gaengige Auto-Lackfarben (keine Neonwerte).
+	static const FLinearColor Palette[] = {
+		FLinearColor(0.72f, 0.73f, 0.75f),  // Silber
+		FLinearColor(0.88f, 0.88f, 0.90f),  // Weiss
+		FLinearColor(0.06f, 0.06f, 0.07f),  // Schwarz
+		FLinearColor(0.55f, 0.13f, 0.12f),  // Rot
+		FLinearColor(0.13f, 0.22f, 0.45f),  // Dunkelblau
+		FLinearColor(0.30f, 0.33f, 0.36f),  // Anthrazit
+		FLinearColor(0.16f, 0.32f, 0.24f),  // Dunkelgruen
+		FLinearColor(0.62f, 0.58f, 0.50f),  // Beige
+		FLinearColor(0.20f, 0.42f, 0.55f),  // Stahlblau
+		FLinearColor(0.42f, 0.16f, 0.16f),  // Bordeaux
+	};
+	constexpr int32 N = UE_ARRAY_COUNT(Palette);
+
+	// Anderer Hash als die Typwahl, damit Farbe und Typ nicht korrelieren.
+	uint32 H = static_cast<uint32>(VehicleId) * 2246822519u;
+	H ^= (H >> 13);
+	H *= 3266489917u;
+	H ^= (H >> 16);
+	return Palette[H % N];
 }
 
 void UTrafficVehicleSpawnerComponent::GetTypeBounds(
@@ -606,12 +650,15 @@ void UTrafficVehicleSpawnerComponent::UpdateVehicles(
 	// Instanzen je FAHRZEUGTYP neu aufbauen (nur die sichtbaren). Der Typ folgt
 	// deterministisch aus der Fahrzeug-Id (gewichtet), nicht aus dem Farbindex.
 	TArray<TArray<FTransform>> TransformsByPool;
+	TArray<TArray<int32>> IdsByPool;   // parallel zu TransformsByPool (fuer die Lackfarbe)
 	TransformsByPool.SetNum(VehicleInstances.Num());
+	IdsByPool.SetNum(VehicleInstances.Num());
 	for (const FPlacedTrafficVehicle& P : Placed)
 	{
 		const int32 Type = FMath::Clamp(
 			SelectVehicleType(P.VehicleId, VehicleTypeWeights), 0, VehicleInstances.Num() - 1);
 		TransformsByPool[Type].Add(P.Transform);
+		IdsByPool[Type].Add(P.VehicleId);
 	}
 
 	for (int32 i = 0; i < VehicleInstances.Num(); ++i)
@@ -626,6 +673,19 @@ void UTrafficVehicleSpawnerComponent::UpdateVehicles(
 		if (TransformsByPool[i].Num() > 0)
 		{
 			Instances->AddInstances(TransformsByPool[i], /*bWorldSpace=*/true);
+
+			// Pro-Instanz-Lackfarbe (Custom Data RGB) fuer die flach lackierten
+			// Typen - Instanzreihenfolge = Reihenfolge der Transforms.
+			if (Instances->NumCustomDataFloats == 3)
+			{
+				for (int32 j = 0; j < IdsByPool[i].Num(); ++j)
+				{
+					const FLinearColor C = SelectVehicleColor(IdsByPool[i][j]);
+					const TArray<float> CD = { C.R, C.G, C.B };
+					Instances->SetCustomData(j, CD, /*bMarkRenderStateDirty=*/false);
+				}
+				Instances->MarkRenderStateDirty();
+			}
 		}
 	}
 
