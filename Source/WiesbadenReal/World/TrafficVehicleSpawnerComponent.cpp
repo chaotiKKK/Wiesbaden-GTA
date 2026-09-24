@@ -46,6 +46,34 @@ UTrafficVehicleSpawnerComponent::UTrafficVehicleSpawnerComponent()
 		VehicleMesh = TrafficBeetle.Object;
 	}
 
+	// Zusaetzliche Verkehrstypen (Blender-Low-Poly, glTF-Import): Transporter,
+	// Kombi, Bus. Ein ISM-Pool je Typ; der Typ folgt aus der Fahrzeug-Id
+	// (SelectVehicleType), gewichtet - der Kaefer dominiert, der Bus ist selten.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> MeshTransporter(
+		TEXT("/Game/Vehicles/Traffic/SM_TrafficTransporter/StaticMeshes/SM_TrafficTransporter.SM_TrafficTransporter"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> MeshKombi(
+		TEXT("/Game/Vehicles/Traffic/SM_TrafficKombi/StaticMeshes/SM_TrafficKombi.SM_TrafficKombi"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> MeshBus(
+		TEXT("/Game/Vehicles/Traffic/SM_TrafficBus/StaticMeshes/SM_TrafficBus.SM_TrafficBus"));
+
+	// Typ 0 IMMER der Kaefer (auch als Bounds-Fallback). Neue Typen nur, wenn ihr
+	// Mesh geladen wurde - Gewichte laufen index-gleich mit.
+	VehicleTypeMeshes.Reset();
+	VehicleTypeWeights.Reset();
+	VehicleTypeMeshes.Add(VehicleMesh);
+	VehicleTypeWeights.Add(55.0f);
+	auto AddType = [this](UStaticMesh* Mesh, float Weight)
+	{
+		if (Mesh)
+		{
+			VehicleTypeMeshes.Add(Mesh);
+			VehicleTypeWeights.Add(Weight);
+		}
+	};
+	AddType(MeshTransporter.Succeeded() ? MeshTransporter.Object : nullptr, 15.0f);
+	AddType(MeshKombi.Succeeded() ? MeshKombi.Object : nullptr, 25.0f);
+	AddType(MeshBus.Succeeded() ? MeshBus.Object : nullptr, 5.0f);
+
 	// Lampenkoerper: der Engine-Wuerfel, klein skaliert. Ein eigenes Mesh
 	// dafuer waere ein Asset mehr ohne jeden Gewinn - aus Fahrerabstand ist
 	// eine Lampe ein Lichtpunkt, keine Form.
@@ -98,39 +126,100 @@ void UTrafficVehicleSpawnerComponent::EnsureInstancePools()
 	VehicleInstances.Reset();
 	InstanceMaterials.Reset();
 
-	if (!VehicleMesh)
+	// Ein ISM-Pool je Fahrzeugtyp (Kaefer, Transporter, Kombi, Bus). Fallback:
+	// mindestens der Kaefer, falls die Typ-Liste leer geblieben ist.
+	if (VehicleTypeMeshes.Num() == 0 && VehicleMesh)
+	{
+		VehicleTypeMeshes.Add(VehicleMesh);
+		VehicleTypeWeights.Add(1.0f);
+	}
+	if (VehicleTypeMeshes.Num() == 0)
 	{
 		return;
 	}
 
-	const int32 PoolCount = FMath::Max(ColorPalette.Num(), 1);
-	for (int32 i = 0; i < PoolCount; ++i)
+	for (int32 t = 0; t < VehicleTypeMeshes.Num(); ++t)
 	{
+		UStaticMesh* TypeMesh = VehicleTypeMeshes[t];
+		if (!TypeMesh)
+		{
+			VehicleInstances.Add(nullptr);
+			continue;
+		}
 		UInstancedStaticMeshComponent* Instances = NewObject<UInstancedStaticMeshComponent>(this);
 		Instances->SetupAttachment(this);
 		Instances->RegisterComponent();
-		Instances->SetStaticMesh(VehicleMesh);
+		Instances->SetStaticMesh(TypeMesh);
 		Instances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		Instances->SetCastShadow(true);
 
-		// Farbvariation: je Palette-Eintrag eine MID (falls ein Material und
-		// der Parameter existieren; sonst rendert das Basis-Material).
-		if (VehicleMaterial && ColorPalette.Num() > 0)
-		{
-			if (UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(VehicleMaterial, this))
-			{
-				MID->SetVectorParameterValue(VehicleColorParameterName, ColorPalette[i]);
-				Instances->SetMaterial(0, MID);
-				InstanceMaterials.Add(MID);
-			}
-		}
-		else if (VehicleMaterial)
+		// Die Fahrzeuge tragen ihre eigenen (importierten) Materialien - Lack,
+		// Glas, Reifen. Ein optionales VehicleMaterial ueberschreibt Slot 0
+		// (Lack) fuer alle Typen, falls je eines gesetzt wird.
+		if (VehicleMaterial)
 		{
 			Instances->SetMaterial(0, VehicleMaterial);
 		}
 
 		VehicleInstances.Add(Instances);
 	}
+}
+
+int32 UTrafficVehicleSpawnerComponent::SelectVehicleType(int32 VehicleId, const TArray<float>& Weights)
+{
+	if (Weights.Num() == 0)
+	{
+		return 0;
+	}
+	float Total = 0.0f;
+	for (float W : Weights)
+	{
+		Total += FMath::Max(0.0f, W);
+	}
+	if (Total <= 0.0f)
+	{
+		return 0;
+	}
+
+	// Deterministische Streuung der Id ueber [0, Total): ein Ganzzahl-Hash bricht
+	// die Korrelation "Id mod N" auf, sodass benachbarte Ids verschiedene Typen
+	// bekommen und die Verteilung ueber viele Ids den Gewichten folgt.
+	uint32 H = static_cast<uint32>(VehicleId) * 2654435761u;
+	H ^= (H >> 15);
+	H *= 2246822519u;
+	H ^= (H >> 13);
+	const float Pick = (static_cast<float>(H % 1000000u) / 1000000.0f) * Total;
+
+	float Acc = 0.0f;
+	for (int32 i = 0; i < Weights.Num(); ++i)
+	{
+		Acc += FMath::Max(0.0f, Weights[i]);
+		if (Pick < Acc)
+		{
+			return i;
+		}
+	}
+	return Weights.Num() - 1;
+}
+
+void UTrafficVehicleSpawnerComponent::GetTypeBounds(
+	int32 Type, FVector& OutOrigin, FVector& OutExtent) const
+{
+	const UStaticMesh* Mesh = VehicleTypeMeshes.IsValidIndex(Type) ? VehicleTypeMeshes[Type] : nullptr;
+	if (!Mesh)
+	{
+		Mesh = VehicleMesh;
+	}
+	if (Mesh)
+	{
+		const FBoxSphereBounds B = Mesh->GetBounds();
+		OutOrigin = B.Origin;
+		OutExtent = B.BoxExtent;
+		return;
+	}
+	// Letzter Fallback: Kaefer-Nennmass.
+	OutOrigin = FVector(0.0, 0.0, 77.0);
+	OutExtent = FVector(207.0, 77.0, 77.0);
 }
 
 FVector UTrafficVehicleSpawnerComponent::GetObserverLocation() const
@@ -308,9 +397,19 @@ void UTrafficVehicleSpawnerComponent::UpdateCollisionProxies(const TArray<FTraff
 		{
 			const FTrafficVehicle& Vehicle = Vehicles[Nearest[i]];
 
+			// Kollisionsbox in der Groesse des TYPS (ein Bus ist laenger/hoeher
+			// als ein Kaefer). Mass aus dem Typ-Mesh; Fallback VehicleCollisionExtent.
+			FVector TypeOrigin, TypeExtent;
+			GetTypeBounds(SelectVehicleType(Vehicle.VehicleId, VehicleTypeWeights), TypeOrigin, TypeExtent);
+			if (TypeExtent.IsNearlyZero())
+			{
+				TypeExtent = VehicleCollisionExtent;
+			}
+			Box->SetBoxExtent(TypeExtent, /*bUpdateOverlaps=*/false);
+
 			// Der Koerper sitzt auf halber Fahrzeughoehe ueber der Fahrbahn,
 			// weil die Fahrzeugposition der Radaufstandspunkt ist.
-			const FVector Center = Vehicle.Location + FVector(0.0, 0.0, VehicleCollisionExtent.Z);
+			const FVector Center = Vehicle.Location + FVector(0.0, 0.0, TypeExtent.Z);
 
 			Box->SetWorldLocationAndRotation(Center, Vehicle.Forward.Rotation());
 
@@ -416,10 +515,6 @@ void UTrafficVehicleSpawnerComponent::UpdateLamps(
 
 	enum ELampPool { Brake = 0, Indicator = 1, Head = 2, Tail = 3 };
 
-	const FBoxSphereBounds MeshBounds = VehicleMesh->GetBounds();
-	const FVector Origin = MeshBounds.Origin;
-	const FVector Extent = MeshBounds.BoxExtent;
-
 	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 
 	TArray<TArray<FTransform>> ByPool;
@@ -427,6 +522,11 @@ void UTrafficVehicleSpawnerComponent::UpdateLamps(
 
 	for (const FPlacedTrafficVehicle& P : Placed)
 	{
+		// Lampenmasse je TYP: ein Bus setzt seine Leuchten weiter aussen als der
+		// Kaefer. Bounds kommen aus dem jeweiligen Typ-Mesh.
+		FVector Origin, Extent;
+		GetTypeBounds(SelectVehicleType(P.VehicleId, VehicleTypeWeights), Origin, Extent);
+
 		FTransform RearLeft, RearRight, FrontLeft, FrontRight;
 		ComputeLampTransforms(P.Transform, Origin, Extent, /*bFront=*/false, RearLeft, RearRight);
 		ComputeLampTransforms(P.Transform, Origin, Extent, /*bFront=*/true, FrontLeft, FrontRight);
@@ -503,13 +603,15 @@ void UTrafficVehicleSpawnerComponent::UpdateVehicles(
 		VehicleInstances.Num(),
 		Placed);
 
-	// Instanzen je Farb-Gruppe neu aufbauen (nur die sichtbaren).
+	// Instanzen je FAHRZEUGTYP neu aufbauen (nur die sichtbaren). Der Typ folgt
+	// deterministisch aus der Fahrzeug-Id (gewichtet), nicht aus dem Farbindex.
 	TArray<TArray<FTransform>> TransformsByPool;
 	TransformsByPool.SetNum(VehicleInstances.Num());
 	for (const FPlacedTrafficVehicle& P : Placed)
 	{
-		const int32 Pool = FMath::Clamp(P.ColorIndex, 0, VehicleInstances.Num() - 1);
-		TransformsByPool[Pool].Add(P.Transform);
+		const int32 Type = FMath::Clamp(
+			SelectVehicleType(P.VehicleId, VehicleTypeWeights), 0, VehicleInstances.Num() - 1);
+		TransformsByPool[Type].Add(P.Transform);
 	}
 
 	for (int32 i = 0; i < VehicleInstances.Num(); ++i)
