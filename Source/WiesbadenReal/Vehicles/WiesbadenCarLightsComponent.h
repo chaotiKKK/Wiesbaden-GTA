@@ -9,6 +9,7 @@
 
 class USpotLightComponent;
 class UPointLightComponent;
+class UMaterialInstanceDynamic;
 
 /** Schaltstufen des Fahrlichts (StVZO-Reihenfolge). */
 UENUM(BlueprintType)
@@ -38,10 +39,9 @@ enum class EWiesbadenIndicatorMode : uint8
  * Umfasst Fahrlicht (Stand/Abblend/Fern), Bremslicht, Rueckfahrlicht und die
  * Fahrtrichtungsanzeiger einschliesslich Warnblinkanlage.
  *
- * Die Leuchten sind echte Lichtquellen, keine Emissive-Materialien: das Modell
- * ist ein Platzhalter ohne dafuer vorbereitete Materialslots, und nur echte
- * Scheinwerfer leuchten die Strasse tatsaechlich aus - was fuer eine
- * Nachtfahrt durch die Stadt der eigentliche Zweck ist.
+ * Scheinwerfer werfen gestaffelte breite/enge Lichtkegel auf die Strasse.
+ * Kleine emissive Linsen machen Schluss- und Bremslicht auch von hinten
+ * sichtbar, ohne einen roten Lichtball auf der Fahrbahn zu erzeugen.
  *
  * Die Blinkfrequenz betraegt 1,5 Hz. Das ist kein gegriffener Wert: die StVZO
  * schreibt 1,5 Hz +/- 0,5 vor, und eine abweichende Frequenz faellt sofort als
@@ -164,16 +164,16 @@ public:
 	// Alle Angaben in cm im Fahrzeug-Lokalsystem: +X vorwaerts, +Y rechts.
 
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Licht|Einbau")
-	FVector HeadlightOffset = FVector(178.0, 58.0, 74.0);
+	FVector HeadlightOffset = FVector(170.0, 50.0, 80.0);
 
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Licht|Einbau")
-	FVector TailLightOffset = FVector(-196.0, 56.0, 82.0);
+	FVector TailLightOffset = FVector(-190.0, 50.0, 74.0);
 
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Licht|Einbau")
-	FVector FrontIndicatorOffset = FVector(196.0, 62.0, 56.0);
+	FVector FrontIndicatorOffset = FVector(145.0, 66.0, 67.0);
 
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Licht|Einbau")
-	FVector RearIndicatorOffset = FVector(-198.0, 60.0, 74.0);
+	FVector RearIndicatorOffset = FVector(-190.0, 50.0, 87.0);
 
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Licht|Einbau")
 	FVector ReverseLightOffset = FVector(-200.0, 30.0, 62.0);
@@ -258,9 +258,23 @@ private:
 
 	USpotLightComponent* MakeSpotLight(const TCHAR* Name, const FVector& Offset, const FRotator& Rotation);
 	UPointLightComponent* MakePointLight(const TCHAR* Name, const FVector& Offset, const FColor& Color);
+	UMaterialInstanceDynamic* MakeLens(const TCHAR* Name, const FVector& Offset,
+		const FVector& Scale, const FLinearColor& Color);
 
 	UPROPERTY(Transient)
 	TArray<USpotLightComponent*> Headlights;
+	UPROPERTY(Transient)
+	TArray<USpotLightComponent*> FocusedBeams;
+	UPROPERTY(Transient)
+	TArray<USpotLightComponent*> HighBeams;
+	UPROPERTY(Transient)
+	TArray<UMaterialInstanceDynamic*> HeadlightLenses;
+	UPROPERTY(Transient)
+	TArray<UMaterialInstanceDynamic*> TailLenses;
+	UPROPERTY(Transient)
+	TArray<UMaterialInstanceDynamic*> LeftIndicatorLenses;
+	UPROPERTY(Transient)
+	TArray<UMaterialInstanceDynamic*> RightIndicatorLenses;
 
 	UPROPERTY(Transient)
 	TArray<UPointLightComponent*> ParkingLights;

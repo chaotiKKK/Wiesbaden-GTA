@@ -50,6 +50,18 @@ FBeetleAssembly AWiesbadenCar::ChooseBeetleAssembly(
 	return Choice;
 }
 
+FRotator AWiesbadenCar::WheelVisualRotation(float ForwardRollDegrees,
+	float SteeringDegrees, bool bLeftSide)
+{
+	// Das einzige Rad-Mesh stammt vom rechten Vorderrad; dort zeigt die Felge
+	// nach +Y. Links dreht eine halbe Gierumdrehung die Felge nach aussen.
+	// UE-Pitch dreht bei positivem Wert den unteren Reifenpunkt nach +X.
+	// Beim Vorwaertsrollen muss dieser Punkt nach -X laufen. Die um 180 Grad
+	// gedrehte linke Seite braucht dafuer das entgegengesetzte Pitch-Vorzeichen.
+	return FRotator(bLeftSide ? ForwardRollDegrees : -ForwardRollDegrees,
+		SteeringDegrees + (bLeftSide ? 180.0f : 0.0f), 0.0f);
+}
+
 AWiesbadenCar::AWiesbadenCar()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -66,18 +78,20 @@ AWiesbadenCar::AWiesbadenCar()
 	// Die Box sitzt so hoch, dass ihre Unterkante auf Radaufstandshoehe liegt.
 	CollisionBox = CreateDefaultSubobject<UBoxComponent>(TEXT("CollisionBox"));
 	CollisionBox->SetupAttachment(SceneRoot);
+
+	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
+	VisualRoot->SetupAttachment(SceneRoot);
+	VisualRoot->SetRelativeLocation(FVector(0.0f, 0.0f, -GroundClearanceCm));
 	CollisionBox->SetBoxExtent(FVector(204.0f, 78.0f, 75.0f));
 	CollisionBox->SetRelativeLocation(FVector(0.0f, 0.0f, 75.0f));
 	CollisionBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	CollisionBox->SetCollisionResponseToAllChannels(ECR_Block);
 
-	// Karosserie: VW Kaefer 1969 als Platzhaltermodell. Faellt auf den
-	// Engine-Basis-Cube zurueck, solange das Asset nicht importiert ist -
-	// ohne diesen Rueckfall waere das Fahrzeug im Level unsichtbar und der
-	// Fehler schwer zu erkennen.
-	// Herbie: vollstaendiges VW-Kaefer-Modell (Kotfluegel, Chrom, Raeder,
-	// Scheiben) - loest den kaputten Platzhalter-Body ab. Faellt auf das alte
-	// Beetle-Mesh und zuletzt den Cube zurueck.
+	// Geschlossene, neu aufgebaute Karosserie mit Lack, Scheiben und Leuchten.
+	// Der gescannte Body hat Luecken und verblichene UV-Inseln; er bleibt nur
+	// als Asset-Rueckfall erhalten. Die vier separaten Reifen drehen weiter.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> RestoredMesh(
+		TEXT("/Game/Vehicles/Beetle/Restored/restored_beetle_body/StaticMeshes/SM_VWBeetle1969_Restored.SM_VWBeetle1969_Restored"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> HerbieMesh(
 		TEXT("/Game/Vehicles/Beetle/SM_Herbie.SM_Herbie"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> BeetleMesh(
@@ -105,7 +119,8 @@ AWiesbadenCar::AWiesbadenCar()
 
 	UStaticMesh* Cube = CubeMesh.Object;
 	UStaticMesh* Herbie = HerbieMesh.Succeeded() ? HerbieMesh.Object : nullptr;
-	UStaticMesh* Beetle = BeetleMesh.Succeeded() ? BeetleMesh.Object : nullptr;
+	UStaticMesh* Beetle = RestoredMesh.Succeeded() ? RestoredMesh.Object
+		: (BeetleMesh.Succeeded() ? BeetleMesh.Object : nullptr);
 	UStaticMesh* BeetleWheel = BeetleWheelMesh.Succeeded() ? BeetleWheelMesh.Object : nullptr;
 
 	// Karosserie + Rad-Darstellung aus den verfuegbaren Meshes waehlen (rein/
@@ -117,7 +132,7 @@ AWiesbadenCar::AWiesbadenCar()
 	const bool bBodyIncludesWheels = !Assembly.bSeparateWheels;
 
 	BodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BodyMesh"));
-	BodyMesh->SetupAttachment(SceneRoot);
+	BodyMesh->SetupAttachment(VisualRoot);
 
 	switch (Assembly.Body)
 	{
@@ -127,12 +142,16 @@ AWiesbadenCar::AWiesbadenCar()
 		BodyMesh->SetStaticMesh(Beetle);
 		BodyMesh->SetRelativeLocation(FVector::ZeroVector);
 		BodyMesh->SetRelativeScale3D(FVector::OneVector);
-		// Herbie-Lackierung auf die Karosserie legen (auf diese UVs gebacken).
-		for (int32 Slot = 0; Slot < 4; ++Slot)
+		// Die neue Karosserie besitzt eigene Materialslots fuer den intakten
+		// Lack. Die alten vier UV-Kacheln passen nur auf den Scan-Rueckfall.
+		if (!RestoredMesh.Succeeded())
 		{
-			if (HerbieMats[Slot])
+			for (int32 Slot = 0; Slot < 4; ++Slot)
 			{
-				BodyMesh->SetMaterial(Slot, HerbieMats[Slot]);
+				if (HerbieMats[Slot])
+				{
+					BodyMesh->SetMaterial(Slot, HerbieMats[Slot]);
+				}
 			}
 		}
 		break;
@@ -190,7 +209,7 @@ AWiesbadenCar::AWiesbadenCar()
 	for (int32 Index = 0; Index < 4; ++Index)
 	{
 		UStaticMeshComponent* Wheel = Wheels[Index];
-		Wheel->SetupAttachment(SceneRoot);
+		Wheel->SetupAttachment(VisualRoot);
 		Wheel->SetRelativeLocation(WheelPositions[Index]);
 		Wheel->SetRelativeScale3D(WheelScale);
 
@@ -255,7 +274,7 @@ AWiesbadenCar::AWiesbadenCar()
 	// BeginPlay auf - im Konstruktor gibt es weder eine Welt noch ein
 	// Audiogeraet, an das sie sich haengen koennten.
 	Lights = CreateDefaultSubobject<UWiesbadenCarLightsComponent>(TEXT("Lights"));
-	Lights->SetupAttachment(SceneRoot);
+	Lights->SetupAttachment(VisualRoot);
 
 	EngineAudio = CreateDefaultSubobject<UWiesbadenCarAudioComponent>(TEXT("EngineAudio"));
 	EngineAudio->SetupAttachment(SceneRoot);
@@ -284,6 +303,13 @@ float AWiesbadenCar::ComputeSurfaceGripScale(float RainIntensity)
 void AWiesbadenCar::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Pro Instanz geaenderte Bodenfreiheit nachziehen (Konstruktor kennt nur
+	// den Vorgabewert): die sichtbaren Teile stehen immer auf der Fahrbahn.
+	if (VisualRoot)
+	{
+		VisualRoot->SetRelativeLocation(FVector(0.0f, 0.0f, -GroundClearanceCm));
+	}
 
 	// Dev-Override der Belags-Griffigkeit: -WbSurfaceGrip=0.5 erzwingt einen festen
 	// Wert (Test/Debug, Vorrang vor dem Wetter). Ohne das Flag kommt der Grip zur
@@ -1051,10 +1077,10 @@ void AWiesbadenCar::UpdateWheels(float DeltaSeconds)
 	// Lenkeinschlag der Vorderraeder (visuell, aus dem Physik-Modul).
 	const float SteerDegrees = SteeringInput * VehiclePhysics.MaxSteerAngleDeg;
 
-	FrontLeftWheel->SetRelativeRotation(FRotator(WheelRotationPitch, SteerDegrees, 0.0f));
-	FrontRightWheel->SetRelativeRotation(FRotator(WheelRotationPitch, SteerDegrees, 0.0f));
-	RearLeftWheel->SetRelativeRotation(FRotator(WheelRotationPitch, 0.0f, 0.0f));
-	RearRightWheel->SetRelativeRotation(FRotator(WheelRotationPitch, 0.0f, 0.0f));
+	FrontLeftWheel->SetRelativeRotation(WheelVisualRotation(WheelRotationPitch, SteerDegrees, true));
+	FrontRightWheel->SetRelativeRotation(WheelVisualRotation(WheelRotationPitch, SteerDegrees, false));
+	RearLeftWheel->SetRelativeRotation(WheelVisualRotation(WheelRotationPitch, 0.0f, true));
+	RearRightWheel->SetRelativeRotation(WheelVisualRotation(WheelRotationPitch, 0.0f, false));
 }
 
 bool AWiesbadenCar::SweepVehicle(const FVector& Delta, FHitResult& OutHit) const

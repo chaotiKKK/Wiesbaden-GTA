@@ -67,6 +67,11 @@ public:
 	static FBeetleAssembly ChooseBeetleAssembly(
 		bool bBodyMeshAvailable, bool bWheelMeshAvailable, bool bHerbieMeshAvailable);
 
+	/** Das rechte Spender-Rad links nach aussen drehen und beide Seiten in
+	 *  Fahrtrichtung rollen lassen (+X vorwaerts, +Y rechts). */
+	static FRotator WheelVisualRotation(float ForwardRollDegrees,
+		float SteeringDegrees, bool bLeftSide);
+
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void PossessedBy(AController* NewController) override;
@@ -188,7 +193,7 @@ public:
 	// eben: kein Eintauchen beim Bremsen, kein Aufstellen beim Beschleunigen,
 	// kein Legen in die Kurve. Das laesst jede Fahrt leblos wirken. Die
 	// Karosserie (BodyMesh) nickt und wankt jetzt aus den Beschleunigungen -
-	// die Raeder (an SceneRoot) bleiben am Boden, die Kollision unberuehrt.
+	// die Raeder (am VisualRoot, ungeneigt) bleiben am Boden, die Kollision unberuehrt.
 
 	/** Nicken der Karosserie je m/s^2 Laengsbeschleunigung (Grad). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
@@ -257,6 +262,20 @@ public:
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
 	USceneComponent* SceneRoot = nullptr;
+
+	/**
+	 * Traeger aller SICHTBAREN Teile (Karosserie, Raeder, Leuchten), um
+	 * GroundClearanceCm unter die Wurzel gesetzt.
+	 *
+	 * Die Wurzel schwebt bewusst GroundClearanceCm ueber der Fahrbahn: dort
+	 * beginnt die Kollisionsbox, und Bordsteine rutschen unter ihr durch. Die
+	 * Meshes haben ihren Ursprung aber am Reifenaufstand - an der Wurzel
+	 * befestigt, stand der Kaefer darum 35 cm ueber dem Boden (sichtbar am
+	 * Schatten, und der Grund fuer die "grosse Projektionstiefe" der
+	 * Reifenspur-Decals).
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	USceneComponent* VisualRoot = nullptr;
 
 	/**
 	 * Kollisionskoerper in echten Fahrzeugmassen.

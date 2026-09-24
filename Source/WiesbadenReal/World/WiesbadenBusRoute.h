@@ -7,6 +7,7 @@
 #include "World/WiesbadenBusInterior.h"
 #include "World/WiesbadenBusLine.h"
 #include "World/WiesbadenBusLineFile.h"
+#include "World/WiesbadenBusDrive.h"
 #include "World/WiesbadenRailTransport.h"
 #include "WiesbadenBusRoute.generated.h"
 
@@ -184,6 +185,8 @@ private:
 	// Setzt Bus + Zielschild in Slot k auf den uebergebenen Fahrzustand
 	// (oder versteckt beides, wenn dort gerade kein Boden gestreamt ist).
 	void PlaceBusAt(int32 SlotIndex, const WiesbadenBusLine::FBusState& St, bool bLog);
+	void AdvanceAndPlaceBus(int32 SlotIndex, const WiesbadenBusLine::FBusState& St,
+		float DeltaSeconds, bool bLog);
 	void HideBusSlot(int32 SlotIndex);
 
 	// Ampel-Kopplung: einmalig die Ampeln entlang der Linie als "Gates" (Bogenlaenge
@@ -253,7 +256,11 @@ private:
 	UPROPERTY(Transient) USceneComponent* Root = nullptr;
 	UPROPERTY(Transient) UGeoCoordinateConverter* Converter = nullptr;
 	UPROPERTY(Transient) UStaticMesh* BusMesh = nullptr;
+	UPROPERTY(Transient) UStaticMesh* BusWheelMesh = nullptr;
 	UPROPERTY(Transient) TArray<UStaticMeshComponent*> Buses;
+	/** Sechs Raeder je Bus in der Reihenfolge vorne/mittig/hinten, links/rechts. */
+	UPROPERTY(Transient) TArray<UStaticMeshComponent*> BusWheels;
+	TArray<WiesbadenBusDrive::FState> DriveStates;
 
 	// Zielanzeige (Blind): authentische Punktmatrix-Texturen (Bernstein-LEDs) auf
 	// unlit Quads. Front + rechte (Tuer-)Seite zeigen Liniennummer + Ziel (Material
