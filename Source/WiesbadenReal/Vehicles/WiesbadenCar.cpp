@@ -626,22 +626,6 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 	FWiesbadenVehiclePhysicsOutput Output;
 	VehiclePhysics.Tick(Input, DeltaSeconds, Output);
 
-	// Radschlupf-Diagnose (WbDev): nur bei Zustandswechsel eine Zeile, damit ein
-	// Fahrlauf den Anfahr-Radspin und das Bremsen-Blockieren belegt, ohne das
-	// Protokoll zu fluten. Reine Diagnose - keine Wirkung auf die Fahrphysik.
-	if (Output.bWheelSpin != bDevLoggedWheelSpin)
-	{
-		bDevLoggedWheelSpin = Output.bWheelSpin;
-		UE_LOG(LogWbVehicles, Log, TEXT("WbDev Schlupf: Antriebs-Radspin %s bei %.0f km/h."),
-			bDevLoggedWheelSpin ? TEXT("EIN") : TEXT("aus"), Output.SpeedKmh);
-	}
-	if (Output.bWheelLock != bDevLoggedWheelLock)
-	{
-		bDevLoggedWheelLock = Output.bWheelLock;
-		UE_LOG(LogWbVehicles, Log, TEXT("WbDev Schlupf: Bremse blockiert %s bei %.0f km/h."),
-			bDevLoggedWheelLock ? TEXT("EIN") : TEXT("aus"), Output.SpeedKmh);
-	}
-
 	// Licht und Klang direkt aus dem Physikergebnis speisen, damit Bremslicht
 	// und Motordrehzahl im selben Frame stimmen wie die Bewegung.
 	UpdateLightsAndAudio(Output);
