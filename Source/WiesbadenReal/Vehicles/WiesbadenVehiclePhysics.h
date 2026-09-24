@@ -173,6 +173,18 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "100.0"))
 	float ShiftDownRpm = 1800.0f;
 
+	/**
+	 * Schaltdauer beim HOCHschalten (s) - Zugkraftunterbrechung.
+	 *
+	 * Fuer diese Zeit trennt die Kupplung den Kraftschluss: Antriebsmoment UND
+	 * Motorbremse fallen weg, der Wagen rollt kurz, dann greift der neue Gang.
+	 * Das gibt dem Antrieb sein mechanisches Gefuehl (die kleine Delle bei jedem
+	 * Gangwechsel). ~0,35 s ist eine zuegige, aber spuerbare Handschaltung. 0 =
+	 * instantan (altes Verhalten). Nur Hochschalten; Runterschalten bleibt sofort.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
+	float UpshiftDurationSeconds = 0.35f;
+
 	/** Radradius (m). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.1"))
 	float WheelRadiusM = 0.343f;
@@ -375,6 +387,10 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	/** Aktueller Gang (1..N; -1 = Rueckwaerts). */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
 	int32 Gear = 1;
+
+	/** Restliche Schaltunterbrechung (s, >0 = Kupplung offen beim Hochschalten). */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float ShiftTimeRemaining = 0.0f;
 
 	/** Aktuelle Motordrehzahl (U/min). */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
