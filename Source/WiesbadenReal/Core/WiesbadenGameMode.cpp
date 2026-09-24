@@ -44,6 +44,7 @@
 #include "World/WiesbadenWeatherFX.h"
 #include "World/WiesbadenParkFeatures.h"
 #include "World/WiesbadenPlatterParking.h"
+#include "World/WiesbadenDennoShop.h"
 #include "NPC/WiesbadenSylvia.h"
 
 AWiesbadenGameMode::AWiesbadenGameMode()
@@ -222,6 +223,12 @@ void AWiesbadenGameMode::BeginPlay()
 
 		PlatterParking = LandmarkWorld->SpawnActor<AWiesbadenPlatterParking>(
 			AWiesbadenPlatterParking::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
+
+		// Dennos Laden (Cafe + Friseur) im Erdgeschoss von Sedanplatz 5 -
+		// oeffnet die gebackene Fassade zur Laufzeit, kein Re-Bake.
+		LandmarkWorld->SpawnActor<AWiesbadenDennoShop>(
+			AWiesbadenDennoShop::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
 
 		// Sylvia steht als reine Runtime-Szene vor Platter Strasse 144. Der
