@@ -341,11 +341,25 @@ private:
 	/**
 	 * Belags-Griffigkeit als Dev-Override (-WbSurfaceGrip=X, 1 = trocken).
 	 *
-	 * Speist FWiesbadenVehiclePhysicsInput.SurfaceGripScale. Bis der Belag aus
-	 * dem Strassenmaterial gelesen wird, ist das der einzige Weg, griffarmen
-	 * Untergrund (nass/Pflaster) fuer Messfahrten zu erzwingen.
+	 * Test-/Debug-Hook: erzwingt einen festen Wert und HAT VORRANG vor der
+	 * Welt-Ableitung (Wetter). Nur wirksam, wenn per Kommandozeile gesetzt
+	 * (bSurfaceGripOverridden) - sonst kommt der Wert aus dem Wetter.
 	 */
 	float SurfaceGripOverride = 1.0f;
+
+	/** True, wenn -WbSurfaceGrip gesetzt wurde (Override statt Welt-Ableitung). */
+	bool bSurfaceGripOverridden = false;
+
+public:
+	/**
+	 * Belags-Griffigkeit (0..1) aus der Wetter-Naesse. Trocken = 1; bei Regen
+	 * faellt der Grip linear bis zu WetGripLoss bei vollem Niederschlag (nasser
+	 * Asphalt haelt deutlich weniger). Datenrein und statisch, damit die
+	 * Belag->Scale-Ableitung ohne Welt pruefbar ist (Test SurfaceGripFromWorld).
+	 */
+	static float ComputeSurfaceGripScale(float RainIntensity);
+
+private:
 
 	/** Akkumulierte Rad-Drehung um die Querachse (Grad, auf 360 normalisiert). */
 	float WheelRotationPitch = 0.0f;
