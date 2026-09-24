@@ -311,6 +311,18 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.1", ClampMax = "0.9"))
 	float FrontWeightFraction = 0.42f;
 
+	/**
+	 * Schwerpunkthoehe ueber Grund (m) - Hebel der Laengs-Radlastverlagerung.
+	 *
+	 * Bremsen und Beschleunigen kippen Last zwischen den Achsen: die
+	 * uebertragene Last ist m * a_x * h / L. Ein Kaefer 1302 hat einen tiefen,
+	 * hecklastigen Schwerpunkt bei rund 0,45 m. Ohne diesen Hebel blieben die
+	 * Achslasten statisch und die Kurvenbalance reagierte NICHT auf die Pedale -
+	 * genau das fehlte fuer ein glaubwuerdiges Fahrgefuehl.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.1"))
+	float CgHeightM = 0.45f;
+
 	/** Unterhalb dieser Geschwindigkeit kinematisch lenken (m/s). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.5"))
 	float LowSpeedBlendMetersPerS = 3.0f;
@@ -379,6 +391,25 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	 */
 	static float ComputeAvailableLateralAccel(
 		float MuTraction, float GravityMetersPerS2, float LongitudinalAccelMetersPerS2);
+
+	/**
+	 * Dynamischer Vorderachs-Lastanteil (0..1) nach Laengs-Radlastverlagerung.
+	 *
+	 * Beim Bremsen (a_x < 0) kippt Last nach VORN (Anteil steigt), beim
+	 * Beschleunigen nach HINTEN (Anteil faellt). Uebertragener Anteil =
+	 * a_x * h / (g * L). Das macht die Kurvenbalance pedalabhaengig: geladene
+	 * Vorderachse beisst beim Einlenken/Trail-Braking, entlastete Hinterachse
+	 * kommt (Lastwechsel-Uebersteuern des Heckmotor-Kaefers); unter Gas ist es
+	 * umgekehrt (stabil, leichtes Untersteuern).
+	 *
+	 * Oeffentlich und datenrein, damit die Kennlinie ohne Fahrzeug pruefbar ist
+	 * (Test Vehicles.Physics.LoadTransfer). Auf [0,08 .. 0,92] geklemmt, damit
+	 * keine Achse rechnerisch voellig entlastet (ein 4-Rad-Fahrzeug hebt beim
+	 * Bremsen/Gasgeben keine Achse ganz ab).
+	 */
+	static float ComputeDynamicFrontLoadFraction(
+		float StaticFrontFraction, float LongitudinalAccelMetersPerS2,
+		float GravityMetersPerS2, float CgHeightM, float WheelbaseM);
 
 	void Tick(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds, FWiesbadenVehiclePhysicsOutput& Out);
 

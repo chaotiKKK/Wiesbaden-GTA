@@ -346,6 +346,76 @@ bool FVehicleFrictionCircleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleLoadTransferTest,
+	"WiesbadenReal.Vehicles.Physics.LoadTransfer",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Laengs-Radlastverlagerung: die Achslasten reagieren auf Gas und Bremse.
+ *
+ * Bremsen kippt Last nach vorn (Anteil steigt), Beschleunigen nach hinten
+ * (Anteil faellt). Ohne diesen Hebel blieb die Kurvenbalance statisch - der
+ * groesste fehlende Beitrag zum glaubwuerdigen Fahrgefuehl. Die uebertragene
+ * Last ist a_x * h / (g * L).
+ */
+bool FVehicleLoadTransferTest::RunTest(const FString& Parameters)
+{
+	constexpr float Static = 0.42f;   // Kaefer hecklastig
+	constexpr float G = 9.81f;
+	constexpr float H = 0.45f;
+	constexpr float L = 2.7f;
+
+	auto Front = [&](float Ax)
+	{
+		return FWiesbadenVehiclePhysics::ComputeDynamicFrontLoadFraction(Static, Ax, G, H, L);
+	};
+
+	// Ohne Laengsbeschleunigung bleibt es beim statischen Anteil.
+	TestTrue(FString::Printf(TEXT("Neutral = statisch (%.3f)"), Front(0.0f)),
+		FMath::IsNearlyEqual(Front(0.0f), Static, 0.001f));
+
+	// Bremsen (a_x < 0) laedt die Vorderachse.
+	const float Braking = Front(-6.0f);
+	TestTrue(FString::Printf(TEXT("Bremsen laedt vorn (%.3f > %.3f)"), Braking, Static),
+		Braking > Static + 0.02f);
+
+	// Beschleunigen (a_x > 0) entlastet die Vorderachse.
+	const float Accel = Front(4.0f);
+	TestTrue(FString::Printf(TEXT("Gas entlastet vorn (%.3f < %.3f)"), Accel, Static),
+		Accel < Static - 0.02f);
+
+	// Betrag stimmt mit a_x * h / (g * L) ueberein.
+	const float Expected = Static - (-6.0f) * H / (G * L);
+	TestTrue(FString::Printf(TEXT("Betrag der Verlagerung (%.3f ~ %.3f)"), Braking, Expected),
+		FMath::IsNearlyEqual(Braking, Expected, 0.005f));
+
+	// Extremwerte werden geklemmt - keine Achse hebt rechnerisch ganz ab.
+	TestTrue(TEXT("Vollbremsung klemmt bei 0,92"),
+		FMath::IsNearlyEqual(Front(-50.0f), 0.92f, 0.001f));
+	TestTrue(TEXT("Vollgas klemmt bei 0,08"),
+		FMath::IsNearlyEqual(Front(50.0f), 0.08f, 0.001f));
+
+	// Im Fahrzeug: Bremsen in eine Kurve bleibt beherrschbar (kein Ausbrechen
+	// durch die entlastete Hinterachse - der Schwimmwinkel bleibt endlich und
+	// begrenzt).
+	FWiesbadenVehiclePhysics Vehicle;
+	Vehicle.Reset();
+	FWiesbadenVehiclePhysicsInput In;
+	In.Throttle = 1.0f;
+	Simulate(Vehicle, In, 6.0f);
+
+	FWiesbadenVehiclePhysicsInput TrailBrake;
+	TrailBrake.Steering = 1.0f;
+	TrailBrake.Brake = 0.6f;
+	FWiesbadenVehiclePhysicsOutput Out;
+	SimulateTo(Vehicle, TrailBrake, 1.5f, Out);
+
+	TestTrue(FString::Printf(TEXT("Trail-Braking bleibt endlich (%.2f Grad)"), Out.SlipAngleDeg),
+		FMath::IsFinite(Out.SlipAngleDeg) && FMath::Abs(Out.SlipAngleDeg) < 45.0f);
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleEngineBrakeTest,
 	"WiesbadenReal.Vehicles.Physics.EngineBrake",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
