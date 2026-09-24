@@ -1164,3 +1164,89 @@ bool FVehicleSurfaceGripFromWorldTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleLoadStiffnessTest,
+	"WiesbadenReal.Vehicles.Physics.LoadStiffness",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Lastabhaengige Schraeglaufsteifigkeit: Lastwechsel verschiebt die Kurvenbalance
+ * schon im linearen Bereich pedalabhaengig (Bremsen -> Front-Biss, Gas -> Heck
+ * laedt). A/B ueber MaxStiffnessLoadShift; stationaere Kurve und Geradeaus
+ * bleiben unveraendert, und das Modell bleibt stabil (kein Aufschwingen).
+ */
+bool FVehicleLoadStiffnessTest::RunTest(const FString& Parameters)
+{
+	// Manoever: Tempo aufbauen, moderat einlenken, dann Pedal - Gierrate messen.
+	auto Run = [](float Shift, float AccelSeconds, float Throttle, float Brake,
+		int32 Steps, float& OutYaw, float& OutMaxAbs, bool& OutFinite)
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		V.MaxStiffnessLoadShift = Shift;
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(V, In, AccelSeconds);
+		// Sanft einlenken: die Gierrate bleibt UNTER dem Seitenkraftlimit
+		// (MaxYaw), sonst maskiert die Klemmung die Steifigkeits-Wirkung.
+		In.Steering = 0.25f;
+		Simulate(V, In, 0.5f);
+		In.Throttle = Throttle;
+		In.Brake = Brake;
+		FWiesbadenVehiclePhysicsOutput Out;
+		float MaxAbs = 0.0f;
+		for (int32 i = 0; i < Steps; ++i)
+		{
+			V.Tick(In, VehicleDt, Out);
+			MaxAbs = FMath::Max(MaxAbs, FMath::Abs(Out.YawRateRadPerS));
+		}
+		OutYaw = Out.YawRateRadPerS;
+		OutMaxAbs = MaxAbs;
+		OutFinite = FMath::IsFinite(Out.YawRateRadPerS);
+	};
+
+	float Y = 0.0f, Mx = 0.0f; bool Fin = false;
+	float Y0 = 0.0f;
+
+	// -- Bremsen in der Kurve: mit vs. ohne Lastkopplung messbar verschieden --
+	Run(0.2f, 6.0f, 0.0f, 0.3f, 40, Y, Mx, Fin);
+	Run(0.0f, 6.0f, 0.0f, 0.3f, 40, Y0, Mx, Fin);
+	const float BrakeDiff = Y - Y0;
+	TestTrue(FString::Printf(TEXT("Bremsen verschiebt die Balance (%.4f)"), BrakeDiff),
+		FMath::Abs(BrakeDiff) > 0.002f);
+
+	// -- Gas in der Kurve: verschiebt in die GEGENrichtung (Heck laedt) -------
+	float Yt = 0.0f, Yt0 = 0.0f;
+	Run(0.2f, 6.0f, 1.0f, 0.0f, 40, Yt, Mx, Fin);
+	Run(0.0f, 6.0f, 1.0f, 0.0f, 40, Yt0, Mx, Fin);
+	const float ThrDiff = Yt - Yt0;
+	TestTrue(FString::Printf(TEXT("Gas verschiebt die Balance (%.4f)"), ThrDiff),
+		FMath::Abs(ThrDiff) > 0.002f);
+	TestTrue(FString::Printf(TEXT("Pedalabhaengig: Bremsen vs Gas entgegengesetzt (%.4f / %.4f)"),
+		BrakeDiff, ThrDiff), BrakeDiff * ThrDiff < 0.0f);
+
+	// -- Stationaere Kurve (a_x~0 bei Hoechsttempo): UNVERAENDERT ------------
+	float Ys = 0.0f, Ys0 = 0.0f;
+	Run(0.2f, 14.0f, 1.0f, 0.0f, 100, Ys, Mx, Fin);
+	Run(0.0f, 14.0f, 1.0f, 0.0f, 100, Ys0, Mx, Fin);
+	TestTrue(FString::Printf(TEXT("Stationaere Kurve unveraendert (%.4f ~ %.4f)"), Ys, Ys0),
+		FMath::IsNearlyEqual(Ys, Ys0, 0.01f));
+
+	// -- Geradeaus: unveraendert (keine Seitenkraft, egal welche Steifigkeit) -
+	{
+		FWiesbadenVehiclePhysics A; A.Reset(); A.MaxStiffnessLoadShift = 0.2f;
+		FWiesbadenVehiclePhysics B; B.Reset(); B.MaxStiffnessLoadShift = 0.0f;
+		FWiesbadenVehiclePhysicsInput In; In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput OA, OB;
+		SimulateTo(A, In, 8.0f, OA);
+		SimulateTo(B, In, 8.0f, OB);
+		TestTrue(TEXT("Geradeaus unveraendert (Tempo)"), FMath::IsNearlyEqual(OA.SpeedKmh, OB.SpeedKmh, 0.01f));
+	}
+
+	// -- STABILITAET: hartes Bremsen in der Kurve schwingt nicht auf ---------
+	Run(0.2f, 8.0f, 0.0f, 1.0f, 150, Y, Mx, Fin);
+	TestTrue(TEXT("Gierrate bleibt endlich"), Fin);
+	TestTrue(FString::Printf(TEXT("Kein Aufschwingen (max |Gier| %.2f rad/s)"), Mx), Mx < 3.0f);
+
+	return true;
+}

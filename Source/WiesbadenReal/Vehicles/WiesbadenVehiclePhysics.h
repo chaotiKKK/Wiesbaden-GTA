@@ -320,6 +320,18 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1000.0"))
 	float CorneringStiffnessRearNPerRad = 36000.0f;
 
+	/**
+	 * Maximale lastabhaengige Skalierung der Schraeglaufsteifigkeit (Anteil).
+	 *
+	 * Cf/Cr werden mit dem dynamischen Achslastverhaeltnis skaliert (Bremsen ->
+	 * mehr Front-Biss, Gas -> Heck laedt) und dabei auf 1 +- diesen Wert geklemmt.
+	 * KONSERVATIV: zu weiche Hinterachse senkt die kritische Geschwindigkeit des
+	 * linearen Einspurmodells und macht es instabil. 0,2 = +-20 % - spuerbare
+	 * Balanceverschiebung, aber die Hinterachse bleibt steif genug. 0 = aus.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0", ClampMax = "0.6"))
+	float MaxStiffnessLoadShift = 0.2f;
+
 	/** Giertraegheitsmoment um die Hochachse (kg*m^2). ~ m*a*b fuer einen PKW. */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1.0"))
 	float YawInertiaKgM2 = 1150.0f;
