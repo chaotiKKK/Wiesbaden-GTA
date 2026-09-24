@@ -22,6 +22,7 @@ void FWiesbadenVehiclePhysics::Reset()
 	BrakeAbsPhaseRad = 0.0f;
 	bDriveSlipState = false;
 	bBrakeLockState = false;
+	SurfaceGripScale = 1.0f;
 }
 
 float FWiesbadenVehiclePhysics::GetTotalGearRatio() const
@@ -216,7 +217,7 @@ float FWiesbadenVehiclePhysics::ComputeYawRate(
 	// hat weniger Querkraft uebrig. Bei hoher Geschwindigkeit untersteuert das
 	// Fahrzeug zusaetzlich, weil die zulaessige Gierrate mit 1/v faellt.
 	const float AvailableLateral = ComputeAvailableLateralAccel(
-		MuTraction, GravityMetersPerS2, LongitudinalAccelMetersPerS2);
+		EffectiveMuTraction(), GravityMetersPerS2, LongitudinalAccelMetersPerS2);
 	const float MaxLateralYaw = AvailableLateral / Speed;
 	return FMath::Clamp(KinematicYaw, -MaxLateralYaw, MaxLateralYaw);
 }
@@ -227,6 +228,10 @@ void FWiesbadenVehiclePhysics::Tick(
 	FWiesbadenVehiclePhysicsOutput& Out)
 {
 	DeltaSeconds = FMath::Clamp(DeltaSeconds, 0.0f, 0.5f);
+
+	// Belags-Griffigkeit dieses Ticks uebernehmen (skaliert das effektive mu in
+	// allen Grip-Termen - Antrieb, Bremse, Reibungskreis, Gierlimit).
+	SurfaceGripScale = FMath::Clamp(Input.SurfaceGripScale, 0.1f, 1.0f);
 
 	// Duenner Orchestrator: erst die Laengsdynamik (liefert die Laengs-
 	// beschleunigung), dann die Querdynamik, die sie fuer Reibungskreis und
@@ -319,7 +324,7 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 	// nicht aus dem BrakeForceN-Wert.
 	const float LateralAccel = FMath::Abs(SpeedMetersPerS * YawRateRadPerS);
 	const float AvailLongGripN = Powertrain.MassKg *
-		ComputeAvailableLateralAccel(MuTraction, GravityMetersPerS2, LateralAccel);
+		ComputeAvailableLateralAccel(EffectiveMuTraction(), GravityMetersPerS2, LateralAccel);
 	if (bBrakeLockState)
 	{
 		if (BrakeDemandN <= AvailLongGripN * MuKineticFraction) { bBrakeLockState = false; }
@@ -472,8 +477,8 @@ void FWiesbadenVehiclePhysics::TickLateral(
 		// - dieselbe Kopplung wie ComputeAvailableLateralAccel. Ohne sie liesse
 		// sich unter Vollbremsung genauso scharf einlenken wie ohne (Schienen).
 		const float LatFraction = ComputeAvailableLateralAccel(
-			MuTraction, GravityMetersPerS2, LongitudinalAccelMetersPerS2)
-			/ FMath::Max(MuTraction * GravityMetersPerS2, 0.01f);
+			EffectiveMuTraction(), GravityMetersPerS2, LongitudinalAccelMetersPerS2)
+			/ FMath::Max(EffectiveMuTraction() * GravityMetersPerS2, 0.01f);
 
 		// Reifen-Seitenkraefte, linear, im Reibungskreis je Achse gesaettigt.
 		//
@@ -503,7 +508,7 @@ void FWiesbadenVehiclePhysics::TickLateral(
 		// die Klemmung deckelt nur transiente UEberschwinger auf dieses Limit.
 		LateralVelocityMetersPerS =
 			FMath::Clamp(LateralVelocityMetersPerS, -0.7f * Vx - 1.0f, 0.7f * Vx + 1.0f);
-		const float MaxYaw = MuTraction * GravityMetersPerS2 / FMath::Max(Vx, 1.0f);
+		const float MaxYaw = EffectiveMuTraction() * GravityMetersPerS2 / FMath::Max(Vx, 1.0f);
 		YawRateRadPerS = FMath::Clamp(YawRateRadPerS, -MaxYaw, MaxYaw);
 	}
 	else

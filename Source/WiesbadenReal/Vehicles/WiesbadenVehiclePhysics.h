@@ -38,6 +38,19 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysicsInput
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle")
 	bool bReverseRequested = false;
+
+	/**
+	 * Griffigkeit des UNTERGRUNDS, 0..1 (1 = trockener Asphalt, kleiner = nass /
+	 * Kopfsteinpflaster / Schotter).
+	 *
+	 * Skaliert das effektive mu und wirkt damit ueber DIESELBE Kopplung wie die
+	 * Reifenhaftung: Traktion, Anfahr-Radspin und das grip-abgeleitete Brems-
+	 * blockieren setzen auf griffarmem Belag frueher/staerker ein. Das Fahrzeug
+	 * liefert den Wert (aktuell ein Dev-Override, spaeter aus dem Strassenbelag);
+	 * die Physik bleibt rein.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float SurfaceGripScale = 1.0f;
 };
 
 /**
@@ -394,6 +407,10 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	bool bBrakeLockState = false;
 
+	/** Belags-Griffigkeit dieses Ticks (0..1, 1 = trocken) - aus dem Input. */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float SurfaceGripScale = 1.0f;
+
 	/**
 	 * Treibt die Laengs-/Querdynamik einen Schritt weiter.
 	 * @param Out Ergebnisfelder des Ticks (Speed, Drehzahl, Gang, YawRate, a).
@@ -493,8 +510,10 @@ private:
 	void TickLateral(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds, float LongitudinalAccelMetersPerS2, FWiesbadenVehiclePhysicsOutput& Out);
 
 	/** Haft-/Gleitreibungs-Kraft einer Achse aus ihrer Radlast (eine Politik, EIN Ort). */
-	float StaticGripN(float LoadN) const { return MuTraction * LoadN; }
-	float KineticGripN(float LoadN) const { return MuTraction * MuKineticFraction * LoadN; }
+	/** Effektiver Reibbeiwert = Reifenhaftung * Belags-Griffigkeit. */
+	float EffectiveMuTraction() const { return MuTraction * SurfaceGripScale; }
+	float StaticGripN(float LoadN) const { return EffectiveMuTraction() * LoadN; }
+	float KineticGripN(float LoadN) const { return EffectiveMuTraction() * MuKineticFraction * LoadN; }
 
 	/** Rohe Antriebs-Laengskraft am Rad aus Motormoment*Uebersetzung/Radius (vor Grip). */
 	float GetWheelForceDemand(float Throttle) const;
