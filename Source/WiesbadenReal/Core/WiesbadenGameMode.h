@@ -13,6 +13,7 @@
 
 class UWiesbadenCitySubsystem;
 class AWiesbadenStoreMerchant;
+class AWiesbadenPlatterParking;
 struct FWiesbadenRoadClearance;
 struct FWiesbadenBuildingClearance;
 
@@ -341,6 +342,11 @@ private:
 	 *  Idempotenz des Einsetzens) nutzen diesen Zeiger statt PlayerCar. */
 	UPROPERTY(Transient)
 	TObjectPtr<APawn> PlayerVehicle = nullptr;
+
+	/** Die runtime gebaute Anlage an der Standard-Startadresse. Der Actor ist
+	 * waehrend GameMode::BeginPlay noch nicht per ActorIterator sichtbar. */
+	UPROPERTY(Transient)
+	TObjectPtr<AWiesbadenPlatterParking> PlatterParking = nullptr;
 
 	/** Helikopter am Startpunkt. */
 	UPROPERTY(Transient)

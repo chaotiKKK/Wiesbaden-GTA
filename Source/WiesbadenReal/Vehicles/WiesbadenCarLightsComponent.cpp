@@ -6,6 +6,10 @@
 
 #include "Components/PointLightComponent.h"
 #include "Components/SpotLightComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 
 UWiesbadenCarLightsComponent::UWiesbadenCarLightsComponent()
 {
@@ -149,6 +153,35 @@ UPointLightComponent* UWiesbadenCarLightsComponent::MakePointLight(
 	return Light;
 }
 
+UMaterialInstanceDynamic* UWiesbadenCarLightsComponent::MakeLens(
+	const TCHAR* Name, const FVector& Offset, const FVector& Scale,
+	const FLinearColor& Color)
+{
+	AActor* Owner = GetOwner();
+	if (!Owner) { return nullptr; }
+	UStaticMesh* Sphere = LoadObject<UStaticMesh>(nullptr,
+		TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr,
+		TEXT("/Game/Vehicles/Beetle/Restored/M_WbBeetleLamp.M_WbBeetleLamp"));
+	if (!Sphere || !Material) { return nullptr; }
+	UStaticMeshComponent* Lens = NewObject<UStaticMeshComponent>(Owner, Name);
+	Lens->SetupAttachment(this);
+	Lens->SetStaticMesh(Sphere);
+	Lens->SetRelativeLocation(Offset);
+	Lens->SetRelativeScale3D(Scale);
+	Lens->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Lens->SetCastShadow(false);
+	Owner->AddInstanceComponent(Lens);
+	Lens->RegisterComponent();
+	UMaterialInstanceDynamic* Dynamic = Lens->CreateDynamicMaterialInstance(0, Material);
+	if (Dynamic)
+	{
+		Dynamic->SetVectorParameterValue(TEXT("LensColor"), Color);
+		Dynamic->SetScalarParameterValue(TEXT("Glow"), 0.0f);
+	}
+	return Dynamic;
+}
+
 void UWiesbadenCarLightsComponent::CreateLights()
 {
 	// Y-Vorzeichen spiegelt die Einbaulage auf die jeweilige Fahrzeugseite.
@@ -168,6 +201,28 @@ void UWiesbadenCarLightsComponent::CreateLights()
 	if (USpotLightComponent* R = MakeSpotLight(TEXT("HeadlightRight"), Mirror(HeadlightOffset, 1.0), RightAim))
 	{
 		Headlights.Add(R);
+	}
+	// Ein weicher Rand und ein enger Kern geben dem Abblendlicht eine
+	// erkennbare Fahrbahnverteilung. Fernlicht kommt als dritter, langer Kegel.
+	for (const double Side : {-1.0, 1.0})
+	{
+		const bool bLeft = Side < 0.0;
+		if (USpotLightComponent* Focus = MakeSpotLight(
+			bLeft ? TEXT("BeamFocusLeft") : TEXT("BeamFocusRight"),
+			Mirror(HeadlightOffset, Side), FRotator(-3.0f, bLeft ? -2.0f : 2.0f, 0.0f)))
+		{
+			Focus->SetAttenuationRadius(7200.0f);
+			Focus->SetCastShadows(false);
+			FocusedBeams.Add(Focus);
+		}
+		if (USpotLightComponent* Distance = MakeSpotLight(
+			bLeft ? TEXT("HighBeamLeft") : TEXT("HighBeamRight"),
+			Mirror(HeadlightOffset, Side), FRotator(-1.5f, 0.0f, 0.0f)))
+		{
+			Distance->SetAttenuationRadius(9000.0f);
+			Distance->SetCastShadows(false);
+			HighBeams.Add(Distance);
+		}
 	}
 
 	if (UPointLightComponent* L = MakePointLight(TEXT("ParkingLeft"), Mirror(HeadlightOffset, -1.0), HeadlightColor))
@@ -207,10 +262,47 @@ void UWiesbadenCarLightsComponent::CreateLights()
 
 	ReverseLight = MakePointLight(TEXT("ReverseLight"), ReverseLightOffset, FColor(240, 240, 255));
 
+	for (const double Side : {-1.0, 1.0})
+	{
+		const bool bLeft = Side < 0.0;
+		if (UMaterialInstanceDynamic* Lens = MakeLens(
+			bLeft ? TEXT("HeadLensLeft") : TEXT("HeadLensRight"),
+			Mirror(HeadlightOffset + FVector(13.0, 0.0, 0.0), Side),
+			FVector(.035, .28, .28), FLinearColor(HeadlightColor)))
+		{
+			HeadlightLenses.Add(Lens);
+		}
+		if (UMaterialInstanceDynamic* Lens = MakeLens(
+			bLeft ? TEXT("TailLensLeft") : TEXT("TailLensRight"),
+			Mirror(TailLightOffset - FVector(9.0, 0.0, 0.0), Side),
+			FVector(.04, .22, .24), FLinearColor(TailLightColor)))
+		{
+			TailLenses.Add(Lens);
+		}
+		const FVector FrontBlink = Mirror(FrontIndicatorOffset, Side);
+		const FVector RearBlink = Mirror(RearIndicatorOffset - FVector(1.0, 0.0, 0.0), Side);
+		TArray<UMaterialInstanceDynamic*>& Lenses = bLeft
+			? LeftIndicatorLenses : RightIndicatorLenses;
+		if (UMaterialInstanceDynamic* Lens = MakeLens(
+			bLeft ? TEXT("FrontBlinkLensLeft") : TEXT("FrontBlinkLensRight"),
+			FrontBlink, FVector(.19, .105, .095), FLinearColor(IndicatorColor)))
+		{
+			Lenses.Add(Lens);
+		}
+		if (UMaterialInstanceDynamic* Lens = MakeLens(
+			bLeft ? TEXT("RearBlinkLensLeft") : TEXT("RearBlinkLensRight"),
+			RearBlink, FVector(.065, .15, .075), FLinearColor(IndicatorColor)))
+		{
+			Lenses.Add(Lens);
+		}
+	}
+
 	UE_LOG(LogWbVehicles, Log,
-		TEXT("Lichtanlage aufgebaut: %d Scheinwerfer, %d Standlichter, %d Rueckleuchten, %d/%d Blinker."),
-		Headlights.Num(), ParkingLights.Num(), TailLights.Num(),
-		LeftIndicators.Num(), RightIndicators.Num());
+		TEXT("Lichtanlage aufgebaut: %d Scheinwerfer (+ %d Kern/%d Fern), %d Standlichter, %d Rueckleuchten, %d/%d Blinker, %d Leuchtlinsen."),
+		Headlights.Num(), FocusedBeams.Num(), HighBeams.Num(),
+		ParkingLights.Num(), TailLights.Num(),
+		LeftIndicators.Num(), RightIndicators.Num(),
+		HeadlightLenses.Num() + TailLenses.Num() + LeftIndicatorLenses.Num() + RightIndicatorLenses.Num());
 }
 
 void UWiesbadenCarLightsComponent::BeginPlay()
@@ -354,14 +446,33 @@ void UWiesbadenCarLightsComponent::ApplyHeadlightState()
 		}
 
 		Light->SetVisibility(bSpotOn);
-		Light->SetIntensity(bHigh ? HighBeamIntensity : LowBeamIntensity);
-		Light->SetOuterConeAngle(bHigh ? HighBeamOuterConeAngle : LowBeamOuterConeAngle);
-		Light->SetInnerConeAngle((bHigh ? HighBeamOuterConeAngle : LowBeamOuterConeAngle) * 0.45f);
+		Light->SetIntensity(bHigh ? HighBeamIntensity * .18f : LowBeamIntensity * .55f);
+		Light->SetOuterConeAngle(LowBeamOuterConeAngle);
+		Light->SetInnerConeAngle(LowBeamOuterConeAngle * .40f);
 
 		// Fernlicht steht waagerechter, Abblendlicht bleibt abgesenkt.
 		FRotator Aim = Light->GetRelativeRotation();
 		Aim.Pitch = bHigh ? -1.5f : -LowBeamDownwardPitch;
 		Light->SetRelativeRotation(Aim);
+	}
+	for (USpotLightComponent* Light : FocusedBeams)
+	{
+		if (!Light) { continue; }
+		Light->SetVisibility(bSpotOn);
+		Light->SetIntensity(bHigh ? HighBeamIntensity * .24f : LowBeamIntensity * .72f);
+		Light->SetOuterConeAngle(bHigh ? 19.0f : 23.0f);
+		Light->SetInnerConeAngle(bHigh ? 9.0f : 11.0f);
+		FRotator Aim = Light->GetRelativeRotation();
+		Aim.Pitch = bHigh ? -1.5f : -4.0f;
+		Light->SetRelativeRotation(Aim);
+	}
+	for (USpotLightComponent* Light : HighBeams)
+	{
+		if (!Light) { continue; }
+		Light->SetVisibility(bHigh);
+		Light->SetIntensity(bHigh ? HighBeamIntensity * .60f : 0.0f);
+		Light->SetOuterConeAngle(HighBeamOuterConeAngle);
+		Light->SetInnerConeAngle(HighBeamOuterConeAngle * .38f);
 	}
 
 	// Standlicht brennt bei jeder Stufe ausser "Aus" mit.
@@ -373,6 +484,13 @@ void UWiesbadenCarLightsComponent::ApplyHeadlightState()
 			Light->SetVisibility(bParkingOn);
 			Light->SetIntensity(ParkingIntensity);
 		}
+	}
+	const float HeadGlow = bHigh ? 5.0f
+		: (HeadlightMode == EWiesbadenHeadlightMode::LowBeam ? 2.8f
+		: (bParkingOn ? .55f : 0.0f));
+	for (UMaterialInstanceDynamic* Lens : HeadlightLenses)
+	{
+		if (Lens) { Lens->SetScalarParameterValue(TEXT("Glow"), HeadGlow); }
 	}
 
 	// Die Rueckleuchten haengen ebenfalls am Fahrlicht (Schlusslicht).
@@ -391,6 +509,14 @@ void UWiesbadenCarLightsComponent::ApplyRearLightState()
 		{
 			Light->SetVisibility(bTailOn);
 			Light->SetIntensity(bTailOn ? TailIntensity : 0.0f);
+		}
+	}
+	for (UMaterialInstanceDynamic* Lens : TailLenses)
+	{
+		if (Lens)
+		{
+			Lens->SetScalarParameterValue(TEXT("Glow"),
+				bBraking ? 5.0f : (bTailOn ? .75f : 0.0f));
 		}
 	}
 
@@ -424,6 +550,14 @@ void UWiesbadenCarLightsComponent::ApplyIndicatorState()
 			Light->SetVisibility(bRight);
 			Light->SetIntensity(bRight ? BrakeLightIntensity : 0.0f);
 		}
+	}
+	for (UMaterialInstanceDynamic* Lens : LeftIndicatorLenses)
+	{
+		if (Lens) { Lens->SetScalarParameterValue(TEXT("Glow"), bLeft ? 3.4f : 0.0f); }
+	}
+	for (UMaterialInstanceDynamic* Lens : RightIndicatorLenses)
+	{
+		if (Lens) { Lens->SetScalarParameterValue(TEXT("Glow"), bRight ? 3.4f : 0.0f); }
 	}
 }
 

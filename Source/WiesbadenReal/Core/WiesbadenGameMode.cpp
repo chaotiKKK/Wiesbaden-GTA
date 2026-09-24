@@ -43,6 +43,7 @@
 #include "World/WiesbadenBusStopMonitor.h"
 #include "World/WiesbadenWeatherFX.h"
 #include "World/WiesbadenParkFeatures.h"
+#include "World/WiesbadenPlatterParking.h"
 #include "NPC/WiesbadenSylvia.h"
 
 AWiesbadenGameMode::AWiesbadenGameMode()
@@ -219,6 +220,10 @@ void AWiesbadenGameMode::BeginPlay()
 			AWiesbadenParkFeatures::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
 
+		PlatterParking = LandmarkWorld->SpawnActor<AWiesbadenPlatterParking>(
+			AWiesbadenPlatterParking::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
+
 		// Sylvia steht als reine Runtime-Szene vor Platter Strasse 144. Der
 		// Actor loest die Adresse und den Boden selbst auf; die gebackene
 		// Alkis-Karte und ihre External-Actor-Pakete bleiben unberuehrt.
@@ -393,6 +398,26 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 	// Hier blockierend streamen, bis die Zelle da ist - danach trifft der Strahl
 	// den Asphalt.
 	BlockLoadSpawnCell(World, SpawnLocation);
+	// Die Adresse 144/146 hat einen privaten Garagenhof. Den Kaefer dort in
+	// einer markierten Bucht abstellen; benutzerdefinierte Startadressen bleiben
+	// bei der gewohnten naechsten Fahrspur. Ist das Gelaende noch nicht bereit
+	// oder die Bucht blockiert, faellt die Platzsuche auf diese Fahrspur zurueck.
+	const FVector RoadSpawnLocation = SpawnLocation;
+	const FRotator RoadSpawnRotation = SpawnRotation;
+	bool bParkingPose = false;
+	if (FMath::Abs(PlayerStartAddress.Longitude - 8.2234186) < 0.0000001
+		&& FMath::Abs(PlayerStartAddress.Latitude - 50.0932604) < 0.0000001)
+	{
+		const FWiesbadenPlatterSpace Space = AWiesbadenPlatterParking::PlayerStartSpace();
+		const FGeoCoordinate ParkingCoord(
+			PlayerStartAddress.Longitude + Space.EastNorthM.X /
+				UGeoCoordinateConverter::MetersPerDegreeLongitude(PlayerStartAddress.Latitude),
+			PlayerStartAddress.Latitude + Space.EastNorthM.Y /
+				UGeoCoordinateConverter::MetersPerDegreeLatitude(PlayerStartAddress.Latitude), 0.0);
+		BlockLoadSpawnCell(World, Converter->GeoToUnrealGround(ParkingCoord));
+		if (!PlatterParking || !PlatterParking->EnsureBuilt()) { return false; }
+		bParkingPose = PlatterParking->GetPlayerStart(SpawnLocation, SpawnRotation);
+	}
 
 	// Startplatz pruefen: frei UND eben.
 	//
@@ -450,16 +475,24 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 			TraceParams.AddIgnoredActor(*It);
 		}
 
-		const FVector Forward = SpawnRotation.Vector();
 		const FVector Original = SpawnLocation;
+		const FRotator OriginalRotation = SpawnRotation;
 		bool bFound = false;
 
 		static const double Offsets[] = { 0.0, 600.0, -600.0, 1200.0, -1200.0,
 			1800.0, -1800.0, 2600.0, -2600.0, 3600.0, -3600.0 };
 
-		for (const double Offset : Offsets)
+		for (int32 Attempt = 0; Attempt < (bParkingPose ? 2 : 1) && !bFound; ++Attempt)
 		{
-			const FVector Candidate = Original + Forward * Offset;
+			const FVector SearchOrigin = Attempt == 0 ? Original : RoadSpawnLocation;
+			const FRotator SearchRotation = Attempt == 0 ? OriginalRotation : RoadSpawnRotation;
+			const FVector Forward = SearchRotation.Vector();
+			for (const double Offset : Offsets)
+			{
+				// Im Hof nur die markierte Bucht nutzen. Andere Versatzwerte
+				// wuerden in ein Haus oder durch die Garagentore fuehren.
+				if (bParkingPose && Attempt == 0 && Offset != 0.0) { continue; }
+				const FVector Candidate = SearchOrigin + Forward * Offset;
 
 			// Boden unter allen vier Radpositionen abtasten.
 			double MinGround = TNumericLimits<double>::Max();
@@ -468,7 +501,7 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 
 			for (const FVector& Offs : WheelOffsets)
 			{
-				const FVector WheelXY = Candidate + SpawnRotation.RotateVector(Offs);
+				const FVector WheelXY = Candidate + SearchRotation.RotateVector(Offs);
 				FHitResult Hit;
 				if (GetWorld()->LineTraceSingleByChannel(
 						Hit, WheelXY + FVector(0, 0, 300.0), WheelXY - FVector(0, 0, 500.0),
@@ -504,13 +537,14 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 			const FVector Placed(Candidate.X, Candidate.Y, MaxGround + WheelRadiusCm + 5.0);
 
 			if (GetWorld()->OverlapAnyTestByObjectType(
-					Placed + FVector(0, 0, 60.0), SpawnRotation.Quaternion(), Occupants,
+					Placed + FVector(0, 0, 60.0), SearchRotation.Quaternion(), Occupants,
 					FCollisionShape::MakeBox(FVector(215.0, 85.0, 60.0)), TraceParams))
 			{
 				continue;
 			}
 
 			SpawnLocation = Placed;
+			SpawnRotation = SearchRotation;
 			bFound = true;
 
 			UE_LOG(LogWbCore, Log,
@@ -518,6 +552,7 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 				TEXT("Fahrzeug auf Z %.1f."),
 				Offset * 0.01, MaxGround - MinGround, SpawnLocation.Z);
 			break;
+			}
 		}
 
 		if (!bFound)
@@ -525,7 +560,8 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 			UE_LOG(LogWbCore, Warning,
 				TEXT("Startplatz: in +/- 36 m keine ebene, freie Stelle gefunden - ")
 				TEXT("das Fahrzeug steht moeglicherweise schief oder in anderen Fahrzeugen."));
-			SpawnLocation = Original + FVector(0, 0, 40.0);
+			SpawnLocation = RoadSpawnLocation + FVector(0, 0, 40.0);
+			SpawnRotation = RoadSpawnRotation;
 		}
 	}
 
@@ -641,6 +677,13 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 void AWiesbadenGameMode::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (bSpawnPlayerCar && !PlayerVehicle && IsCityReady())
+	{
+		if (SpawnPlayerCarAtStartAddress() && bSpawnHelicopter)
+		{
+			SpawnHelicopterNearStart();
+		}
+	}
 
 	const UWorld* World = GetWorld();
 	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
