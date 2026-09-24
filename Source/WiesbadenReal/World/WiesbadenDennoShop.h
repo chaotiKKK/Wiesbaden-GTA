@@ -19,6 +19,13 @@ enum class EDennoShopBuild : uint8
 	GiveUp   // nach der Wartezeit keine Wand: KEIN Laden (statt eines schwebenden)
 };
 
+/** Denno-Pose relativ zur Grundstellung: Drehung um die Fuesse + Atem-Skalierung. */
+struct FDennoIdlePose
+{
+	FRotator Rotation = FRotator::ZeroRotator;   // Pitch/Roll = Gewicht verlagern, Yaw = umschauen
+	FVector Scale = FVector::OneVector;          // XY = Brustkorb weitet sich, Z = hebt sich
+};
+
 /**
  * Dennos Laden im Erdgeschoss von Sedanplatz 5 (OSM 175418681): Cafe in der
  * Nordhaelfte, Friseur in der Suedhaelfte, Denno selbst im Cafe.
@@ -80,6 +87,22 @@ public:
 	static bool IsInsideCut(const FVector& Point, const FVector& Centre,
 		const FVector2D& AxisU, const FVector& HalfExtent);
 
+	// -- Denno lebt: Atmen, Gewicht verlagern, umschauen -------------------
+	// Die Figur hat kein Skelett (Tripo-Scan, Tools/Blender/build_denno_figure.py);
+	// eine Animation als Asset kaeme mit Rig und Clips auf Megabytes. Stattdessen
+	// bewegt der Actor die EINE Mesh-Komponente um ihren Ursprung an den Fuessen -
+	// die Fuesse bleiben stehen, Kopf und Schultern bewegen sich um 1-2 cm.
+	static constexpr double BreathPeriodSeconds = 4.2;
+	/** Brustkorb: Breite/Tiefe weiten sich um 1,2 %, die Figur hebt sich um 0,4 %. */
+	static constexpr double BreathWidth = 0.012;
+	static constexpr double BreathRise = 0.004;
+	static constexpr double SwayRollDeg = 0.5;
+	static constexpr double SwayPitchDeg = 0.3;
+	static constexpr double LookAroundDeg = 3.5;
+
+	/** Pose zur Spielzeit `Seconds` (datenrein, stetig, beschraenkt; Test). */
+	static FDennoIdlePose ComputeDennoIdle(double Seconds);
+
 	bool IsBuilt() const { return bBuilt; }
 
 private:
@@ -95,6 +118,8 @@ private:
 	UPROPERTY(Transient) UGeoCoordinateConverter* Converter = nullptr;
 	UPROPERTY(Transient) TArray<UStaticMeshComponent*> Parts;
 	UPROPERTY(Transient) TArray<UPointLightComponent*> Lights;
+	/** Denno selbst - die einzige Komponente, die sich jedes Bild bewegt. */
+	UPROPERTY(Transient) UStaticMeshComponent* DennoFigure = nullptr;
 	/** Bereits umgestellte Chunk-Komponenten (Streaming kann sie ersetzen). */
 	TSet<TWeakObjectPtr<UMeshComponent>> PatchedFacades;
 
