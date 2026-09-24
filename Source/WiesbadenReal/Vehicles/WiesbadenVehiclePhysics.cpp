@@ -504,8 +504,25 @@ void FWiesbadenVehiclePhysics::TickLateral(
 		const float RearLoad = m * GravityMetersPerS2 * (1.0f - FrontFracDyn);
 		const float FyfMax = StaticGripN(FrontLoad) * LatFraction;
 		const float FyrMax = StaticGripN(RearLoad) * LatFraction;
-		const float Fyf = FMath::Clamp(-CorneringStiffnessFrontNPerRad * AlphaF, -FyfMax, FyfMax);
-		const float Fyr = FMath::Clamp(-CorneringStiffnessRearNPerRad * AlphaR, -FyrMax, FyrMax);
+
+		// LASTABHAENGIGE Schraeglaufsteifigkeit: ein staerker belasteter Reifen
+		// baut Seitenkraft steiler auf. Bisher skalierte die dynamische Achslast
+		// nur die Saettigung (FyfMax/FyrMax); die STEIGUNG (Cf/Cr) blieb fest, also
+		// reagierte die Balance UNTERHALB der Grenze kaum auf die Pedale. Jetzt
+		// skaliert Cf/Cr mit dem Lastverhaeltnis (dyn/statisch): Bremsen laedt vorn
+		// -> mehr Front-Biss beim Einlenken; Gas laedt hinten -> stabiler. KONSERVATIV
+		// geklemmt (+-MaxStiffnessLoadShift), damit die Hinterachse nicht so weich
+		// wird, dass das lineare Einspurmodell instabil wird (kritische Geschwindig-
+		// keit ueber Hoechsttempo). Bei a_x=0 ist das Verhaeltnis 1 -> stationaere
+		// Kurve unveraendert.
+		const float MinScale = 1.0f - MaxStiffnessLoadShift;
+		const float MaxScale = 1.0f + MaxStiffnessLoadShift;
+		const float CfScale = FMath::Clamp(FrontFracDyn / FMath::Max(FrontWeightFraction, 0.01f), MinScale, MaxScale);
+		const float CrScale = FMath::Clamp((1.0f - FrontFracDyn) / FMath::Max(1.0f - FrontWeightFraction, 0.01f), MinScale, MaxScale);
+		const float Cf = CorneringStiffnessFrontNPerRad * CfScale;
+		const float Cr = CorneringStiffnessRearNPerRad * CrScale;
+		const float Fyf = FMath::Clamp(-Cf * AlphaF, -FyfMax, FyfMax);
+		const float Fyr = FMath::Clamp(-Cr * AlphaR, -FyrMax, FyrMax);
 
 		// Bewegungsgleichungen (Zentripetalterm -Vx*r).
 		const float dVy = (Fyf + Fyr) / m - Vx * r;
