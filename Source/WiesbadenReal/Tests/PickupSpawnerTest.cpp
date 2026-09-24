@@ -86,7 +86,7 @@ bool FPickupSpawnerTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("Auto gespawnt"), Car);
 	if (Car)
 	{
-		Car->VehiclePhysics.FuelLiters = 5.0f;
+		Car->VehiclePhysics.Fuel.FuelLiters = 5.0f;
 	}
 
 	AWiesbadenFootPawn* Foot = World->SpawnActor<AWiesbadenFootPawn>(
@@ -102,7 +102,7 @@ bool FPickupSpawnerTest::RunTest(const FString& Parameters)
 	{
 		FuelPickup->Collect(Car);
 		TestTrue(TEXT("Auto nach Treibstoff-Pickup getankt (5 + 20 l)"),
-			FMath::IsNearlyEqual(Car->VehiclePhysics.FuelLiters, 25.0f, 0.01f));
+			FMath::IsNearlyEqual(Car->VehiclePhysics.Fuel.FuelLiters, 25.0f, 0.01f));
 	}
 
 	if (HealthPickup && Foot)
@@ -121,10 +121,10 @@ bool FPickupSpawnerTest::RunTest(const FString& Parameters)
 
 	// Refuel-Grenzfall: voller Tank akzeptiert keinen Treibstoff mehr.
 	FWiesbadenVehiclePhysics Physics;
-	Physics.FuelLiters = Physics.TankCapacityLiters;
+	Physics.Fuel.FuelLiters = Physics.Fuel.TankCapacityLiters;
 	TestFalse(TEXT("Voller Tank lehnt Refuel ab"), Physics.Refuel(10.0f));
 	TestTrue(TEXT("Tank bleibt nach abgelehntem Refuel voll"),
-		FMath::IsNearlyEqual(Physics.FuelLiters, Physics.TankCapacityLiters, 0.01f));
+		FMath::IsNearlyEqual(Physics.Fuel.FuelLiters, Physics.Fuel.TankCapacityLiters, 0.01f));
 
 	World->DestroyWorld(false);
 	return true;

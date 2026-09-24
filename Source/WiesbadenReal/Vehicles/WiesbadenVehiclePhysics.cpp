@@ -14,7 +14,7 @@ void FWiesbadenVehiclePhysics::Reset()
 	SpeedMetersPerS = 0.0f;
 	Gear = 1;
 	EngineRpm = Powertrain.IdleRpm;
-	FuelLiters = TankCapacityLiters;
+	Fuel.Reset();
 	LateralVelocityMetersPerS = 0.0f;
 	YawRateRadPerS = 0.0f;
 	SteerAngleNorm = 0.0f;
@@ -228,11 +228,24 @@ void FWiesbadenVehiclePhysics::Tick(
 {
 	DeltaSeconds = FMath::Clamp(DeltaSeconds, 0.0f, 0.5f);
 
+	// Duenner Orchestrator: erst die Laengsdynamik (liefert die Laengs-
+	// beschleunigung), dann die Querdynamik, die sie fuer Reibungskreis und
+	// Radlastverlagerung braucht. Jede Phase ist fuer sich verstaendlich.
+	const float Acceleration = TickLongitudinal(Input, DeltaSeconds, Out);
+	TickLateral(Input, DeltaSeconds, Acceleration, Out);
+}
+
+float FWiesbadenVehiclePhysics::TickLongitudinal(
+	const FWiesbadenVehiclePhysicsInput& Input,
+	float DeltaSeconds,
+	FWiesbadenVehiclePhysicsOutput& Out)
+{
 	ShiftGear(Input, DeltaSeconds);
 
 	const bool bReverse = (Gear < 0);
 	const float Throttle = FMath::Clamp(Input.Throttle, 0.0f, 1.0f);
 	const float Brake = FMath::Clamp(Input.Brake, 0.0f, 1.0f);
+	const float WeightN = Powertrain.MassKg * GravityMetersPerS2;
 
 	// Drehzahl: aus der Geschwindigkeit; im Stand haelt der Leerlauf die
 	// Drehzahl, Gas im Stand hebt sie leicht an.
@@ -264,12 +277,10 @@ void FWiesbadenVehiclePhysics::Tick(
 
 		const float RearFracDyn = 1.0f - ComputeDynamicFrontLoadFraction(
 			FrontWeightFraction, LastLongAccelMetersPerS2, GravityMetersPerS2, CgHeightM, WheelbaseM);
-		const float RearLoadN = Powertrain.MassKg * GravityMetersPerS2 * RearFracDyn;
-		const float RearGripStatic = MuTraction * RearLoadN;
-		const float RearGripKinetic = MuTraction * MuKineticFraction * RearLoadN;
+		const float RearLoadN = WeightN * RearFracDyn;
 
 		DriveForce = ComputeTransmittedLongitudinalForce(
-			Demand, RearGripStatic, RearGripKinetic, bDriveSlipState);
+			Demand, StaticGripN(RearLoadN), KineticGripN(RearLoadN), bDriveSlipState);
 	}
 	else
 	{
@@ -280,20 +291,21 @@ void FWiesbadenVehiclePhysics::Tick(
 	// Widerstaende wirken gegen die Bewegungsrichtung.
 	const float Speed = SpeedMetersPerS;
 	const float RollResistance = (FMath::Abs(Speed) > 0.1f)
-		? RollCoeff * Powertrain.MassKg * GravityMetersPerS2 * FMath::Sign(Speed)
+		? RollCoeff * WeightN * FMath::Sign(Speed)
 		: 0.0f;
 	const float AirResistance = AirDensityKgM3 * 0.5f * DragCoeffAreaM2 * Speed * FMath::Abs(Speed);
+
 	// Bremskraft mit BLOCKIER-/ABS-Anmutung. Die geforderte Bremskraft (Pedal +
 	// Handbremse) ist durch die Reifenhaftung (mu * Gewicht, beide Achsen)
 	// begrenzt. Ueberschreitet die Anforderung die Haftreibung, blockieren die
 	// Raeder: die uebertragene Kraft pulst dann zwischen Gleit- und Haftreibung
 	// (Schwellwertbremsung/ABS) statt fest bei der niedrigen Gleitreibung zu
 	// haengen - "begrenzt und gepulst". Die Seitenfuehrung bricht dabei ueber den
-	// Reibungskreis (unten, via Acceleration) von selbst weg.
+	// Reibungskreis (Querdynamik, via Acceleration) von selbst weg.
 	const float BrakeDemandN = Brake * BrakeForceN
 		+ (Input.bHandbrake ? BrakeForceN * 0.6f : 0.0f);
-	const float BrakeGripStatic = MuTraction * Powertrain.MassKg * GravityMetersPerS2;
-	const float BrakeGripKinetic = MuTraction * MuKineticFraction * Powertrain.MassKg * GravityMetersPerS2;
+	const float BrakeGripStatic = StaticGripN(WeightN);
+	const float BrakeGripKinetic = KineticGripN(WeightN);
 
 	// Blockier-Hysterese: ab Haftgrenze blockiert, loest erst unter Gleitgrenze.
 	if (bBrakeLockState)
@@ -339,7 +351,7 @@ void FWiesbadenVehiclePhysics::Tick(
 	float NetForce = DriveForce - RollResistance - AirResistance - BrakeForce - EngineBrakeForce;
 
 	// Haften: Im Stillstand ohne Zugkraft bleibt das Fahrzeug stehen.
-	if (FMath::Abs(Speed) < 0.1f && FMath::Abs(NetForce) < RollCoeff * Powertrain.MassKg * GravityMetersPerS2 * 0.5f)
+	if (FMath::Abs(Speed) < 0.1f && FMath::Abs(NetForce) < RollCoeff * WeightN * 0.5f)
 	{
 		NetForce = 0.0f;
 		SpeedMetersPerS = 0.0f;
@@ -369,11 +381,31 @@ void FWiesbadenVehiclePhysics::Tick(
 		EngineRpm = FMath::Clamp(RpmFromSpeed(SpeedMetersPerS), Powertrain.IdleRpm * 0.5f, Powertrain.MaxRpm * 1.05f);
 	}
 
-	// Ausgabe fuellen.
+	// Laengs-Ausgaben fuellen.
 	Out.ForwardSpeedMetersPerS = SpeedMetersPerS;
 	Out.SpeedKmh = FMath::Abs(SpeedMetersPerS) * 3.6f;
 	Out.EngineRpm = EngineRpm;
 	Out.Gear = Gear;
+	Out.ForwardAccelerationMetersPerS2 = Acceleration;
+
+	// Laengsbeschleunigung fuer den naechsten Tick merken: die Traktionsgrenze
+	// der Antriebsachse braucht deren dynamische Radlast, und die folgt aus a_x.
+	LastLongAccelMetersPerS2 = Acceleration;
+
+	// Treibstoff: der Tank besitzt Fuellstand und Verbrauch; hier nur die
+	// mechanische Radleistung uebergeben (P = F * v).
+	const float WheelPowerKw = FMath::Abs(DriveForce * SpeedMetersPerS) / 1000.0f;
+	Fuel.Consume(WheelPowerKw, DeltaSeconds);
+
+	return Acceleration;
+}
+
+void FWiesbadenVehiclePhysics::TickLateral(
+	const FWiesbadenVehiclePhysicsInput& Input,
+	float DeltaSeconds,
+	float LongitudinalAccelMetersPerS2,
+	FWiesbadenVehiclePhysicsOutput& Out)
+{
 	// Lenkeinschlag mit begrenzter Geschwindigkeit nachfuehren, dann erst die
 	// Gierrate daraus bilden. Die rohe Eingabe darf nie direkt ins Giermodell -
 	// sonst dreht das Fahrzeug in einem Bild auf Volleinschlag ein.
@@ -392,19 +424,18 @@ void FWiesbadenVehiclePhysics::Tick(
 	const float Vx = SpeedMetersPerS;
 	if (Vx > LowSpeedBlendMetersPerS)
 	{
-	const float L = FMath::Max(WheelbaseM, 0.5f);
-	const float aFront = L * (1.0f - FrontWeightFraction);   // CG -> Vorderachse
-	const float bRear = L * FrontWeightFraction;             // CG -> Hinterachse
-	const float m = FMath::Max(Powertrain.MassKg, 1.0f);
-	const float Iz = FMath::Max(YawInertiaKgM2, 1.0f);
+		const float L = FMath::Max(WheelbaseM, 0.5f);
+		const float aFront = L * (1.0f - FrontWeightFraction);   // CG -> Vorderachse
+		const float bRear = L * FrontWeightFraction;             // CG -> Hinterachse
+		const float m = FMath::Max(Powertrain.MassKg, 1.0f);
+		const float Iz = FMath::Max(YawInertiaKgM2, 1.0f);
 
-	// Kurzschluss-Lenkrate bei vollem Anschlag und niedrigem Tempo dampfen:
-	// ohne diesen Schritt würde ein aufgedrücktes Lenkrad in ein bis zwei Bildern
-	// 90° drehen und das Fahrzeug sofort ins Trudeln bringen. Der Kaefer lenkt
-	// ohne Servounterstuetzung, also mit handlichem Aufwand - schneller als 1,2
-	// rad/s fühlt sich nach nichts an, was in reellen Rädern steht.
-	YawRateRadPerS = FMath::Min(YawRateRadPerS, 1.2f);
-	YawRateRadPerS = FMath::Max(YawRateRadPerS, -1.2f);
+		// Kurzschluss-Lenkrate bei vollem Anschlag und niedrigem Tempo dampfen:
+		// ohne diesen Schritt würde ein aufgedrücktes Lenkrad in ein bis zwei Bildern
+		// 90° drehen und das Fahrzeug sofort ins Trudeln bringen. Der Kaefer lenkt
+		// ohne Servounterstuetzung, also mit handlichem Aufwand - schneller als 1,2
+		// rad/s fühlt sich nach nichts an, was in reellen Rädern steht.
+		YawRateRadPerS = FMath::Clamp(YawRateRadPerS, -1.2f, 1.2f);
 
 		const float UsableSteerDeg = ComputeUsableSteerAngleDeg(
 			MaxSteerAngleDeg, Vx, SteerFalloffSpeedMetersPerS);
@@ -422,7 +453,7 @@ void FWiesbadenVehiclePhysics::Tick(
 		// - dieselbe Kopplung wie ComputeAvailableLateralAccel. Ohne sie liesse
 		// sich unter Vollbremsung genauso scharf einlenken wie ohne (Schienen).
 		const float LatFraction = ComputeAvailableLateralAccel(
-			MuTraction, GravityMetersPerS2, Acceleration)
+			MuTraction, GravityMetersPerS2, LongitudinalAccelMetersPerS2)
 			/ FMath::Max(MuTraction * GravityMetersPerS2, 0.01f);
 
 		// Reifen-Seitenkraefte, linear, im Reibungskreis je Achse gesaettigt.
@@ -430,14 +461,14 @@ void FWiesbadenVehiclePhysics::Tick(
 		// DYNAMISCHE Achslasten: Bremsen laedt die Vorderachse (mehr Grip vorn,
 		// Heck leichter -> Lastwechsel-Uebersteuern), Gas laedt die Hinterachse
 		// (Traktion, stabil). Der schon berechnete Laengsbeschleunigungswert
-		// (Acceleration) treibt die Verlagerung - dieselbe Groesse, die auch die
-		// Karosserie nicken laesst; so decken sich Bild und Physik.
+		// treibt die Verlagerung - dieselbe Groesse, die auch die Karosserie
+		// nicken laesst; so decken sich Bild und Physik.
 		const float FrontFracDyn = ComputeDynamicFrontLoadFraction(
-			FrontWeightFraction, Acceleration, GravityMetersPerS2, CgHeightM, L);
+			FrontWeightFraction, LongitudinalAccelMetersPerS2, GravityMetersPerS2, CgHeightM, L);
 		const float FrontLoad = m * GravityMetersPerS2 * FrontFracDyn;
 		const float RearLoad = m * GravityMetersPerS2 * (1.0f - FrontFracDyn);
-		const float FyfMax = MuTraction * FrontLoad * LatFraction;
-		const float FyrMax = MuTraction * RearLoad * LatFraction;
+		const float FyfMax = StaticGripN(FrontLoad) * LatFraction;
+		const float FyrMax = StaticGripN(RearLoad) * LatFraction;
 		const float Fyf = FMath::Clamp(-CorneringStiffnessFrontNPerRad * AlphaF, -FyfMax, FyfMax);
 		const float Fyr = FMath::Clamp(-CorneringStiffnessRearNPerRad * AlphaR, -FyrMax, FyrMax);
 
@@ -460,7 +491,7 @@ void FWiesbadenVehiclePhysics::Tick(
 	{
 		// Langsam/Stand/Rueckwaerts: kinematisch (dynamisches Modell singulaer bei
 		// v->0). Querschlupf sanft abbauen, damit kein Rest-Drift haengen bleibt.
-		YawRateRadPerS = ComputeYawRate(SteerAngleNorm, Acceleration);
+		YawRateRadPerS = ComputeYawRate(SteerAngleNorm, LongitudinalAccelMetersPerS2);
 		LateralVelocityMetersPerS =
 			FMath::FInterpTo(LateralVelocityMetersPerS, 0.0f, DeltaSeconds, 5.0f);
 	}
@@ -471,19 +502,4 @@ void FWiesbadenVehiclePhysics::Tick(
 		? FMath::RadiansToDegrees(FMath::Atan2(LateralVelocityMetersPerS, FMath::Abs(Vx)))
 		: 0.0f;
 	Out.SteerAngleNorm = SteerAngleNorm;
-	Out.ForwardAccelerationMetersPerS2 = Acceleration;
-
-	// Laengsbeschleunigung fuer den naechsten Tick merken: die Traktionsgrenze
-	// der Antriebsachse braucht deren dynamische Radlast, und die folgt aus a_x.
-	LastLongAccelMetersPerS2 = Acceleration;
-
-	// Verbrauch: Arbeit aus der Antriebskraft (P = F * v) plus Grundverbrauch
-	// des laufenden Motors. Energiegehalt Benzin: ~8,9 kWh/l.
-	if (HasFuel())
-	{
-		const float WheelPowerKw = FMath::Abs(DriveForce * SpeedMetersPerS) / 1000.0f;
-		const float IdleLiters = IdleConsumptionLitersPerHour * (DeltaSeconds / 3600.0f);
-		const float DriveLiters = (WheelPowerKw * (DeltaSeconds / 3600.0f)) * ConsumptionLitersPerKWh;
-		FuelLiters = FMath::Max(0.0f, FuelLiters - IdleLiters - DriveLiters);
-	}
 }
