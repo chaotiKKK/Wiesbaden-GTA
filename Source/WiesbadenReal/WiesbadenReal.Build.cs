@@ -60,6 +60,11 @@ public class WiesbadenReal : ModuleRules
 			"GeometryCore",
 			"Landscape",
 			"PhysicsCore",
+			"AudioMixer",
+			"MetasoundGraphCore",
+			"MetasoundFrontend",
+			"MetasoundStandardNodes",
+			"MetasoundEngine",
 		});
 
 		if (Target.bBuildEditor)

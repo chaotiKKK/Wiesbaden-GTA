@@ -2,6 +2,10 @@
 
 #include "Vehicles/WiesbadenHelicopterAudioComponent.h"
 
+#include "Audio/WiesbadenAudioPropagation.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
+
 #include "WiesbadenReal.h"
 
 #include "Audio/WiesbadenAudioSubsystem.h"
@@ -57,6 +61,10 @@ void UWiesbadenHelicopterAudioComponent::CreateAudioSources()
 	}
 
 	ApplyMasterVolume();
+
+	// Ausbreitung: weit (Rotor/Turbine tragen) inkl. Occlusion + Hall-Send.
+	WiesbadenAudioPropagation::ConfigureSource(RotorAudio, EWbAudioRange::Far);
+	WiesbadenAudioPropagation::ConfigureSource(EngineAudio, EWbAudioRange::Far);
 
 	if (bUseAssets)
 	{
@@ -138,8 +146,20 @@ void UWiesbadenHelicopterAudioComponent::UpdateAssetAudio()
 
 	// Asset-Parameter: Pitch folgt der Drehzahl, Lautstaerke der Blattlast.
 	// Groesserer Divisor = tiefere Tonhoehe (war zu hoch/schrill).
+	// Doppler ueber die Relativbewegung - der lange gemerkte ForwardSpeed-
+	// Parameter ist damit verbraucht: Vorbeifahrt klingt auf und ab.
+	APawn* ListenerPawn = nullptr;
+	if (UWorld* World = GetWorld())
+	{
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			ListenerPawn = PC->GetPawn();
+		}
+	}
+	const float Doppler = WiesbadenAudioPropagation::ComputeDopplerForActors(GetOwner(), ListenerPawn);
+
 	const float RotorPitch = FMath::Max(Params.MainRotorRpm, 0.0f) / 560.0f;
-	RotorAudio->SetPitchMultiplier(RotorPitch);
+	RotorAudio->SetPitchMultiplier(RotorPitch * Doppler);
 	RotorAudio->SetVolumeMultiplier(
 		MasterVolume * (0.3f + 0.7f * Params.Collective));
 
@@ -184,6 +204,20 @@ void UWiesbadenHelicopterAudioComponent::TickComponent(
 	float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	// MetaSound-Bruecke: Blattschlag ueber RotorRpm/Collective, Heulen ueber
+	// Rpm - dieselben Werte wie die prozedurale Referenzsynthese.
+	if (RotorAudio)
+	{
+		RotorAudio->SetFloatParameter(FName(TEXT("RotorRpm")), Params.MainRotorRpm);
+		RotorAudio->SetFloatParameter(FName(TEXT("Collective")), Params.Collective);
+		RotorAudio->SetFloatParameter(FName(TEXT("SlapDepth")), Params.BladeSlapDepth);
+	}
+	if (EngineAudio)
+	{
+		EngineAudio->SetFloatParameter(FName(TEXT("Rpm")), Params.EngineRpm);
+		EngineAudio->SetFloatParameter(FName(TEXT("Running")), Params.bEngineRunning ? 1.0f : 0.0f);
+	}
 
 	if (RotorSound || EngineSound)
 	{

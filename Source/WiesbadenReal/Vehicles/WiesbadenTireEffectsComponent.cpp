@@ -4,6 +4,7 @@
 
 #include "WiesbadenReal.h"
 
+#include "Audio/WiesbadenAudioPropagation.h"
 #include "Audio/WiesbadenAudioSubsystem.h"
 #include "Components/AudioComponent.h"
 #include "Components/DecalComponent.h"
@@ -62,7 +63,8 @@ void UWiesbadenTireEffectsComponent::CreateAudioSource()
 	// Ueber den SFX-Bus des Mischpults (Master-Lautstaerke/Ducking); nullptr, falls
 	// die Mix-Assets fehlen -> dann ohne Bus, kein Fehler.
 	SquealAudio->SoundClassOverride = UWiesbadenAudioSubsystem::LoadBusSoundClass(EWbAudioBus::SFX);
-	SquealAudio->bAllowSpatialization = true;
+	// Ausbreitung: mittlere Distanzkurve inkl. Occlusion + Hall-Send.
+	WiesbadenAudioPropagation::ConfigureSource(SquealAudio, EWbAudioRange::Mid);
 
 	SquealWave = NewObject<USoundWaveProcedural>(Owner, TEXT("TireSquealProceduralSound"));
 	if (!SquealWave)
