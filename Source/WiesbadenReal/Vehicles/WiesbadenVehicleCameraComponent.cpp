@@ -12,6 +12,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "World/WiesbadenVisualTuning.h"
 #include "InputCoreTypes.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -65,6 +66,9 @@ void UWiesbadenVehicleCameraComponent::CreateCameraRig()
 
 	ThirdPersonCamera = NewObject<UCameraComponent>(Owner, TEXT("VehicleThirdPersonCamera"));
 	ThirdPersonCamera->AttachToComponent(SpringArm, FAttachmentTransformRules::KeepRelativeTransform, USpringArmComponent::SocketName);
+	// Explizites Bildfeld statt Engine-Default 90 (Fischauge-Weitwinkel) -
+	// Werte in World/WiesbadenVisualTuning.h.
+	ThirdPersonCamera->SetFieldOfView(WiesbadenVisualTuning::FollowFieldOfView);
 	ThirdPersonCamera->bUsePawnControlRotation = false;
 	ThirdPersonCamera->SetActive(true);
 	ThirdPersonCamera->RegisterComponent();
@@ -78,6 +82,7 @@ void UWiesbadenVehicleCameraComponent::CreateCameraRig()
 
 	CockpitCamera = NewObject<UCameraComponent>(Owner, TEXT("VehicleCockpitCamera"));
 	CockpitCamera->AttachToComponent(CockpitSocket, FAttachmentTransformRules::KeepRelativeTransform);
+	CockpitCamera->SetFieldOfView(WiesbadenVisualTuning::CockpitFieldOfView);
 	CockpitCamera->bUsePawnControlRotation = false;
 	CockpitCamera->SetActive(false);
 	CockpitCamera->RegisterComponent();

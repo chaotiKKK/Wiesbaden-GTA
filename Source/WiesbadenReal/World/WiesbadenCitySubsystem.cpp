@@ -40,6 +40,7 @@
 #include "Engine/SkyLight.h"
 #include "Components/SkyLightComponent.h"
 #include "World/WiesbadenCityChunk.h"
+#include "World/WiesbadenVisualTuning.h"
 #include "World/WiesbadenStreamingSource.h"
 #include "UnrealClient.h"
 #include "HighResScreenshot.h"
@@ -258,24 +259,45 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 	PPV->bUnbound = true;
 	PPV->Priority = 1.0f;
 
+	// Bildwerte zentral in World/WiesbadenVisualTuning.h (Befund 24.09.2026:
+	// zwei Systeme legten Himmelslicht und Belichtung mit ABWEICHENDEN Werten
+	// an - je nach Aufrufreihenfolge gewann einer).
+	using namespace WiesbadenVisualTuning;
+
 	FPostProcessSettings& S = PPV->Settings;
 	// Belichtung klemmen + leicht abdunkeln (gegen "ueberbelichtet"). Min/Max-
 	// Brightness begrenzen die Auto-Adaption, der negative Bias (in EV) dunkelt ab.
 	S.bOverride_AutoExposureMinBrightness = true;
-	S.AutoExposureMinBrightness = 0.15f;
+	S.AutoExposureMinBrightness = AutoExposureMinBrightness;
 	S.bOverride_AutoExposureMaxBrightness = true;
-	S.AutoExposureMaxBrightness = 1.5f;
+	S.AutoExposureMaxBrightness = AutoExposureMaxBrightness;
 	// Bias war -0.5 gegen "ueberbelichtet". Am Strassenbild zeigte sich das
 	// Gegenteil: die verschatteten Fassaden einer Strassenschlucht saufen fast
 	// schwarz ab. -0.2 nimmt das meiste der aktiven Abdunkelung zurueck (heller,
 	// sonniger Referenz-Look), bleibt aber knapp im Minus gegen Ausbleichen.
 	S.bOverride_AutoExposureBias = true;
-	S.AutoExposureBias = -0.2f;
+	S.AutoExposureBias = AutoExposureBias;
 	// Dezent mehr Kontrast/Saettigung (gegen "flach"). W = Luminanz.
 	S.bOverride_ColorContrast = true;
-	S.ColorContrast = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
+	S.ColorContrast = FVector4(ColorContrast, ColorContrast, ColorContrast, 1.0f);
 	S.bOverride_ColorSaturation = true;
-	S.ColorSaturation = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
+	S.ColorSaturation = FVector4(ColorSaturation, ColorSaturation, ColorSaturation, 1.0f);
+
+	// Cinematic-Feinschliff: kuehle Schatten, warme Lichter (Split-Toning ueber
+	// die Gain-Bereiche Schatten/Lichter - die alten ColorShadow-Tints gibt es
+	// in UE 5.8 nicht mehr); Vignette dezenter als der Engine-Default 0.4;
+	// Bloom nur fuer echte Glanzstellen (hohe Schwelle) - Glanz ohne den
+	// dokumentierten Milchschleier.
+	S.bOverride_ColorGainShadows = true;
+	S.ColorGainShadows = FVector4(ShadowTintR, ShadowTintG, ShadowTintB, 1.0f);
+	S.bOverride_ColorGainHighlights = true;
+	S.ColorGainHighlights = FVector4(HighlightTintR, HighlightTintG, HighlightTintB, 1.0f);
+	S.bOverride_VignetteIntensity = true;
+	S.VignetteIntensity = VignetteIntensity;
+	S.bOverride_BloomIntensity = true;
+	S.BloomIntensity = BloomIntensity;
+	S.bOverride_BloomThreshold = true;
+	S.BloomThreshold = BloomThreshold;
 	// GI-Methode NONE statt Lumen - das war die URSACHE der schwarzen
 	// Schattenfassaden.
 	//
@@ -328,7 +350,7 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 		{
 			Sky->SetMobility(EComponentMobility::Movable);
 			Sky->bRealTimeCapture = true;
-			Sky->SetIntensity(3.2f);
+			Sky->SetIntensity(SkyLightIntensity);
 			++SkiesFilled;
 		}
 	}
@@ -343,7 +365,7 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 			{
 				Comp->SetMobility(EComponentMobility::Movable);
 				Comp->bRealTimeCapture = true;
-				Comp->SetIntensity(3.2f);
+				Comp->SetIntensity(SkyLightIntensity);
 			}
 			++SkiesFilled;
 		}
