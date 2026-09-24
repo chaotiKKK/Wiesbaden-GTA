@@ -143,3 +143,48 @@ bool FPedestrianClothingTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPedestrianBodyTypeTest,
+	"WiesbadenReal.Vehicles.Pedestrian.BodyType",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Deterministische Koerpertyp-Wahl (schlank/breit/Kind) je Seed: gleicher Seed
+ * -> gleicher Typ, ueber viele Seeds streut es nach den Gewichten (schlank 45 %,
+ * breit 35 %, Kind 20 %), und alle drei Typen kommen vor.
+ */
+bool FPedestrianBodyTypeTest::RunTest(const FString& Parameters)
+{
+	using Ped = UPedestrianSpawnerComponent;
+
+	// -- Determinismus + gueltiger Bereich -----------------------------------
+	for (int32 Seed : {0, 1, 7, 42, 1000, -5, 999999})
+	{
+		const int32 A = Ped::SelectPedestrianBodyType(Seed);
+		TestEqual(TEXT("gleicher Seed -> gleicher Typ"), A, Ped::SelectPedestrianBodyType(Seed));
+		TestTrue(TEXT("Typ in 0..2"), A >= 0 && A <= 2);
+	}
+
+	// -- Verteilung ----------------------------------------------------------
+	{
+		int32 Counts[3] = {0, 0, 0};
+		constexpr int32 N = 20000;
+		for (int32 Seed = 0; Seed < N; ++Seed)
+		{
+			Counts[Ped::SelectPedestrianBodyType(Seed)]++;
+		}
+		for (int32 t = 0; t < 3; ++t)
+		{
+			TestTrue(FString::Printf(TEXT("Typ %d kommt vor (%d)"), t, Counts[t]), Counts[t] > 0);
+		}
+		// Schlank am haeufigsten, Kind am seltensten.
+		TestTrue(TEXT("schlank am haeufigsten"), Counts[0] > Counts[1] && Counts[0] > Counts[2]);
+		TestTrue(TEXT("Kind am seltensten"), Counts[2] < Counts[0] && Counts[2] < Counts[1]);
+		// Grob im Rahmen der Gewichte.
+		const float FracChild = static_cast<float>(Counts[2]) / N;
+		TestTrue(FString::Printf(TEXT("Kind-Anteil ~0,20 (%.2f)"), FracChild),
+			FMath::Abs(FracChild - 0.20f) < 0.06f);
+	}
+
+	return true;
+}
