@@ -79,6 +79,24 @@ public:
 	static FString FormatHeadlightMode(uint8 Mode);
 
 	/**
+	 * Beschriftung der Traktions-Kontrollleuchte aus den Modell-Flags der
+	 * Fahrphysik - leer, wenn beide aus. Blockieren ("ABS", Bremsen) hat
+	 * Vorrang vor Antriebsschlupf ("ASR", Gas): in der Praxis schliessen sie
+	 * sich aus (nie Gas UND Bremse), die Priorisierung macht die Anzeige aber
+	 * eindeutig. Datenrein/testbar (Vehicles.HUD.TractionTellTale).
+	 */
+	static FString FormatTractionTellTale(bool bWheelSpin, bool bWheelLock);
+
+	/**
+	 * Nachleuchten der Traktions-Leuchte: bei aktivem Schlupf auf HoldSeconds
+	 * gesetzt, sonst um Dt heruntergezaehlt (nie unter 0). Datenrein/testbar.
+	 *
+	 * Ohne das Halten flackerte die Leuchte im ABS-Puls-Takt (bWheelLock
+	 * schaltet mit BrakeAbsPulseHz) und waere als Zustand nicht ablesbar.
+	 */
+	static float AdvanceTellTaleHold(bool bActive, float HoldRemaining, float Dt, float HoldSeconds);
+
+	/**
 	 * Zeilen der Tastenlegende - datenrein, damit sie ohne Welt pruefbar sind.
 	 *
 	 * Die Belegungen selbst stehen an drei Stellen im Code
@@ -506,6 +524,15 @@ private:
 
 	/** Laufzeit seit dem ersten gezeichneten Bild - fuer die Einblenddauer. */
 	float ElapsedSeconds = 0.0f;
+
+	/**
+	 * Nachleucht-Rest der Traktions-/ABS-Kontrollleuchte (s) und die zuletzt
+	 * gezeigte Beschriftung ("ASR"/"ABS"). Zusammen halten sie die Leuchte
+	 * kurz nach dem letzten Schlupf-Frame an, damit sie im ABS-Puls und bei
+	 * kurzem Anfahr-Radspin nicht flackert.
+	 */
+	float TractionTellTaleHold = 0.0f;
+	FString TractionTellTaleLabel;
 
 	/** Einmal-Latch: der Steuerungs-Legenden-Timer wird erst neu gestartet, wenn
 	 *  die Stadt fertig gestreamt ist (sonst verfaellt die Legende waehrend des

@@ -117,6 +117,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug|Licht")
 	virtual UWiesbadenCarLightsComponent* GetLights() const override { return Lights; }
 
+	/** Traktions-/ABS-Kontrollleuchte (HUD): die Modell-Flags der zuletzt
+	 *  ausgewerteten Fahrphysik, nur weitergereicht - keine Wirkung auf die Fahrt. */
+	virtual bool IsWheelSpinning() const override { return bLastWheelSpin; }
+	virtual bool IsWheelLocked() const override { return bLastWheelLock; }
+
 	/** Fahrzeug-Physik-Modul (Motor, Getriebe, Radkraefte, Lenkung). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik")
 	FWiesbadenVehiclePhysics VehiclePhysics;
@@ -363,6 +368,14 @@ private:
 
 	/** Akkumulierte Rad-Drehung um die Querachse (Grad, auf 360 normalisiert). */
 	float WheelRotationPitch = 0.0f;
+
+	/**
+	 * Letzte Traktions-Flags aus der Fahrphysik, gespiegelt fuer die HUD-
+	 * Kontrollleuchte (Radspin/Blockieren). Reine Anzeige - keine Wirkung auf
+	 * die Fahrt; werden je Physik-Tick in UpdateLightsAndAudio nachgezogen.
+	 */
+	bool bLastWheelSpin = false;
+	bool bLastWheelLock = false;
 
 	/** Grundausrichtung der Karosserie (Mesh-Orientierung ohne Neigung). */
 	FRotator BodyBaseRotation = FRotator::ZeroRotator;

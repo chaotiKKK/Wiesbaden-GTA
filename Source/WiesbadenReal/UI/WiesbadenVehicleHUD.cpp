@@ -164,6 +164,25 @@ FString AWiesbadenVehicleHUD::FormatHeadlightMode(uint8 Mode)
 	}
 }
 
+FString AWiesbadenVehicleHUD::FormatTractionTellTale(bool bWheelSpin, bool bWheelLock)
+{
+	// Blockieren vor Radspin: beim Bremsen ist die Leuchte eine ABS-Anzeige,
+	// beim Beschleunigen eine Antriebsschlupf-Anzeige. Beides zugleich kommt
+	// nicht vor (nie Gas UND Bremse), die Reihenfolge macht sie nur eindeutig.
+	if (bWheelLock) { return TEXT("ABS"); }
+	if (bWheelSpin) { return TEXT("ASR"); }
+	return FString();
+}
+
+float AWiesbadenVehicleHUD::AdvanceTellTaleHold(bool bActive, float HoldRemaining, float Dt, float HoldSeconds)
+{
+	if (bActive)
+	{
+		return FMath::Max(HoldRemaining, HoldSeconds);
+	}
+	return FMath::Max(0.0f, HoldRemaining - Dt);
+}
+
 IWiesbadenVehicleControl* AWiesbadenVehicleHUD::GetPlayerVehicleControl() const
 {
 	const APlayerController* PC = GetOwningPlayerController();
@@ -303,6 +322,25 @@ void AWiesbadenVehicleHUD::DrawTellTales(const IWiesbadenVehicleControl& Vehicle
 	DrawText(FormatHeadlightMode(static_cast<uint8>(Headlights)),
 		Headlights == EWiesbadenHeadlightMode::Off ? TellTaleOff : HeadlightOn,
 		X + 24.0f, Y + 22.0f, GEngine->GetSmallFont(), 1.0f);
+
+	// Traktions-/ABS-Kontrollleuchte: KONSUMIERT die Modell-Flags der Fahrphysik
+	// (Radspin beim Anfahren, Blockieren beim Bremsen) - reine Anzeige, kein
+	// Verhalten. Kurzes Nachleuchten gegen das Flackern im ABS-Puls; wenn nichts
+	// schlupft, steht sie unauffaellig gedimmt als "TRC" da.
+	constexpr float TractionHoldSeconds = 0.4f;
+	const float Dt = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.0f;
+	const FString NowLabel = FormatTractionTellTale(
+		Vehicle.IsWheelSpinning(), Vehicle.IsWheelLocked());
+	if (!NowLabel.IsEmpty())
+	{
+		TractionTellTaleLabel = NowLabel;
+	}
+	TractionTellTaleHold = AdvanceTellTaleHold(
+		!NowLabel.IsEmpty(), TractionTellTaleHold, Dt, TractionHoldSeconds);
+	const bool bTractionLit = TractionTellTaleHold > 0.0f && !TractionTellTaleLabel.IsEmpty();
+	DrawText(bTractionLit ? TractionTellTaleLabel : TEXT("TRC"),
+		bTractionLit ? GaugeWarn : TellTaleOff,
+		X + 150.0f, Y, GEngine->GetMediumFont(), 1.0f);
 }
 
 void AWiesbadenVehicleHUD::DrawFilledTri(const FVector2D& A, const FVector2D& B,
