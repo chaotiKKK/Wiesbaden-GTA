@@ -262,6 +262,9 @@ AWiesbadenCar::AWiesbadenCar()
 	// Der Kaefer hat den Motor hinten - der Klang kommt von dort.
 	EngineAudio->SetRelativeLocation(FVector(-160.0f, 0.0f, 50.0f));
 
+	TireEffects = CreateDefaultSubobject<UWiesbadenTireEffectsComponent>(TEXT("TireEffects"));
+	TireEffects->SetupAttachment(SceneRoot);
+
 	if (!Cube)
 	{
 		UE_LOG(LogWbVehicles, Warning,
@@ -438,6 +441,33 @@ void AWiesbadenCar::UpdateLightsAndAudio(const FWiesbadenVehiclePhysicsOutput& O
 	if (EngineAudio)
 	{
 		EngineAudio->SetEngineState(Output.EngineRpm, ThrottleInput, Output.SpeedKmh);
+	}
+
+	// Reifen-Effekte: den Schlupf-Zustand nur KONSUMIEREN (keine Physikaenderung).
+	// Welche Raeder Gummi lassen: beim Blockieren alle vier, beim Radspin die
+	// angetriebenen (hinten), beim Drift ebenfalls das kommende Heck.
+	if (TireEffects)
+	{
+		TArray<FVector> Marks;
+		const float WheelRadiusCm = VehiclePhysics.WheelRadiusM * 100.0f;
+		auto Contact = [WheelRadiusCm](const UStaticMeshComponent* Wheel) -> FVector
+		{
+			return Wheel->GetComponentLocation() - FVector(0.0f, 0.0f, WheelRadiusCm);
+		};
+		if (Output.bWheelLock && FrontLeftWheel && FrontRightWheel && RearLeftWheel && RearRightWheel)
+		{
+			Marks = { Contact(FrontLeftWheel), Contact(FrontRightWheel),
+				Contact(RearLeftWheel), Contact(RearRightWheel) };
+		}
+		else if ((Output.bWheelSpin || FMath::Abs(Output.SlipAngleDeg) > 8.0f)
+			&& RearLeftWheel && RearRightWheel)
+		{
+			Marks = { Contact(RearLeftWheel), Contact(RearRightWheel) };
+		}
+
+		const FVector TravelDir = GetActorForwardVector() * FMath::Sign(Output.ForwardSpeedMetersPerS);
+		TireEffects->UpdateTireEffects(
+			Output.bWheelSpin, Output.bWheelLock, Output.SlipAngleDeg, Output.SpeedKmh, Marks, TravelDir);
 	}
 }
 
