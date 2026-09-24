@@ -152,8 +152,8 @@ void UWiesbadenPickupSpawnerComponent::HandlePickupCollected(
 				TEXT("Pickup '%s' von %s aufgenommen: %s (%.1f/%.1f l)."),
 				*Pickup->GetName(), *Collector->GetName(),
 				bRefueled ? TEXT("getankt") : TEXT("Tank bereits voll"),
-				Car->VehiclePhysics.FuelLiters,
-				Car->VehiclePhysics.TankCapacityLiters);
+				Car->VehiclePhysics.Fuel.FuelLiters,
+				Car->VehiclePhysics.Fuel.TankCapacityLiters);
 		}
 	}
 	else if (AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(Collector))

@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 
 #include "Vehicles/WiesbadenPowertrainSpec.h"
+#include "Vehicles/WiesbadenFuelTank.h"
 
 #include "WiesbadenVehiclePhysics.generated.h"
 
@@ -179,48 +180,16 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
 	float RollCoeff = 0.012f;
 
-	// -- Treibstoff -------------------------------------------------------
-	/** Tankgroesse in Litern. */
-	UPROPERTY(EditAnywhere, Category = "Vehicle|Treibstoff", meta = (ClampMin = "1.0"))
-	float TankCapacityLiters = 42.0f;
+	// -- Treibstoff (eigenes Modul, eigener Besitzer) ---------------------
+	/** Tank als Gameplay-Ressource - Fuellstand/Verbrauch/Nachtanken. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle|Treibstoff")
+	FWiesbadenFuelTank Fuel;
 
-	/**
-	 * Aktueller Tankinhalt in Litern (Zustand).
-	 *
-	 * 42 l entsprechen dem Tank eines Kaefer 1300. Bei Verbrauch im
-	 * zweistelligen Literbereich auf 100 km reicht der Tank fuer die
-	 * halbe Karte - die Tankstellen-Pickups machen ihn zur Ressource.
-	 */
-	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Treibstoff")
-	float FuelLiters = 42.0f;
-
-	/** Grundverbrauch laufender Motor im Leerlauf (Liter je Stunde). */
-	UPROPERTY(EditAnywhere, Category = "Vehicle|Treibstoff", meta = (ClampMin = "0.0"))
-	float IdleConsumptionLitersPerHour = 1.5f;
-
-	/** Verbrauch je mechanischer Arbeit (Liter je Kilowattstunde). */
-	UPROPERTY(EditAnywhere, Category = "Vehicle|Treibstoff", meta = (ClampMin = "0.0"))
-	float ConsumptionLitersPerKWh = 0.35f;
-
-	/** True, solange Treibstoff da ist; ein leerer Motor liefert keine Kraft. */
-	bool HasFuel() const { return FuelLiters > 0.0f; }
-
-	/** Tankfuellstand 0..1 (fuer HUD). */
-	float GetFuelFraction() const { return TankCapacityLiters > 0.0f ? FMath::Clamp(FuelLiters / TankCapacityLiters, 0.0f, 1.0f) : 0.0f; }
-
-	/**
-	 * Tankt nach.
-	 * @return false, wenn der Tank bereits voll war (das Pickup bleibt dann liegen).
-	 */
-	bool Refuel(float Liters)
-	{
-		if (FuelLiters >= TankCapacityLiters - 0.01f)
-		{
-			return false;
-		}
-		FuelLiters = FMath::Min(FuelLiters + FMath::Max(Liters, 0.0f), TankCapacityLiters);
-		return true;
-	}
+	// Duenne Weiterreicher an den Tank - halten die oeffentliche Physik-API
+	// stabil (HUD/Pickups fragen weiter das Fahrzeug, nicht den Tank direkt).
+	bool HasFuel() const { return Fuel.HasFuel(); }
+	float GetFuelFraction() const { return Fuel.GetFuelFraction(); }
+	bool Refuel(float Liters) { return Fuel.Refuel(Liters); }
 
 	/** Bremskraft bei vollem Bremspedal (N). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
@@ -507,6 +476,25 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	void Reset();
 
 private:
+	/**
+	 * Laengsdynamik EINES Ticks: Schalten, Antrieb mit Radschlupf, Widerstaende,
+	 * Bremse mit Blockieren, Integration von Geschwindigkeit/Drehzahl, Verbrauch.
+	 * Fuellt die Laengs-Ausgaben und liefert die Laengsbeschleunigung, die die
+	 * Querdynamik fuer Reibungskreis und Radlastverlagerung braucht.
+	 */
+	float TickLongitudinal(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds, FWiesbadenVehiclePhysicsOutput& Out);
+
+	/**
+	 * Querdynamik EINES Ticks: Lenkeinschlag nachfuehren, dann dynamisches
+	 * Einspurmodell (bzw. kinematisch bei geringem Tempo). Braucht die
+	 * Laengsbeschleunigung aus TickLongitudinal.
+	 */
+	void TickLateral(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds, float LongitudinalAccelMetersPerS2, FWiesbadenVehiclePhysicsOutput& Out);
+
+	/** Haft-/Gleitreibungs-Kraft einer Achse aus ihrer Radlast (eine Politik, EIN Ort). */
+	float StaticGripN(float LoadN) const { return MuTraction * LoadN; }
+	float KineticGripN(float LoadN) const { return MuTraction * MuKineticFraction * LoadN; }
+
 	/** Rohe Antriebs-Laengskraft am Rad aus Motormoment*Uebersetzung/Radius (vor Grip). */
 	float GetWheelForceDemand(float Throttle) const;
 	float GetTotalGearRatio() const;
