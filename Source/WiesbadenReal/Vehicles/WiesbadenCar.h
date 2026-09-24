@@ -358,6 +358,11 @@ private:
 	/** In DIESEM Bild eine Hauswand voraus erkannt (Anflugphase). */
 	bool bWallAheadThisFrame = false;
 
+	// Flanken-Merker fuer die Radschlupf-Diagnose (WbDev): nur bei Wechsel
+	// loggen, damit der Fahrlauf Radspin/Blockieren zeigt, ohne zu spammen.
+	bool bDevLoggedWheelSpin = false;
+	bool bDevLoggedWheelLock = false;
+
 	// Halte-Flanken der Licht- und Blinkertasten. Gleiche Technik wie beim
 	// Rueckwaertsgang: die Eingabe wird gepollt statt ueber Events gebunden,
 	// damit das Fahrzeug ohne Input-Assets funktioniert.

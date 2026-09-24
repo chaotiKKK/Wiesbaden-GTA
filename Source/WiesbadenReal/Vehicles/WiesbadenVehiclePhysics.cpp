@@ -18,6 +18,10 @@ void FWiesbadenVehiclePhysics::Reset()
 	LateralVelocityMetersPerS = 0.0f;
 	YawRateRadPerS = 0.0f;
 	SteerAngleNorm = 0.0f;
+	LastLongAccelMetersPerS2 = 0.0f;
+	BrakeAbsPhaseRad = 0.0f;
+	bDriveSlipState = false;
+	bBrakeLockState = false;
 }
 
 float FWiesbadenVehiclePhysics::GetTotalGearRatio() const
@@ -78,16 +82,59 @@ void FWiesbadenVehiclePhysics::ShiftGear(const FWiesbadenVehiclePhysicsInput& In
 	}
 }
 
-float FWiesbadenVehiclePhysics::GetDriveForce(float Throttle) const
+float FWiesbadenVehiclePhysics::GetWheelForceDemand(float Throttle) const
 {
+	// ROHE Antriebskraft am Rad aus Motormoment * Gesamtuebersetzung / Radius,
+	// mit dem Gaspedal skaliert - OHNE Traktionsgrenze. Die Begrenzung durch die
+	// Reifenhaftung (und damit der Radschlupf) uebernimmt das Slip-Modell im Tick
+	// ueber ComputeTransmittedLongitudinalForce - so kann die geforderte Kraft
+	// die Haftgrenze der Antriebsachse ueberschreiten und das Rad durchdrehen.
 	const float Torque = MotorTorqueAt(EngineRpm);
 	const float WheelForce = Torque * GetTotalGearRatio() / FMath::Max(WheelRadiusM, 0.01f);
+	return WheelForce * FMath::Clamp(Throttle, 0.0f, 1.0f);
+}
 
-	// Traktionslimit: Die Reifen koennen nicht mehr Kraft uebertragen als
-	// mu * Gewicht - jenseits davon drehen die Raeder durch (vereinfacht:
-	// Kraft wird begrenzt statt Schlupf zu modellieren).
-	const float MaxTractiveForce = MuTraction * Powertrain.MassKg * GravityMetersPerS2;
-	return FMath::Clamp(WheelForce, -MaxTractiveForce, MaxTractiveForce) * FMath::Clamp(Throttle, 0.0f, 1.0f);
+float FWiesbadenVehiclePhysics::ComputeTransmittedLongitudinalForce(
+	float DemandN, float StaticGripN, float KineticGripN, bool& bSlipping)
+{
+	const float StaticGrip = FMath::Max(StaticGripN, 0.0f);
+	const float KineticGrip = FMath::Clamp(KineticGripN, 0.0f, StaticGrip);
+	const float AbsDemand = FMath::Abs(DemandN);
+
+	if (bSlipping)
+	{
+		// Bleibt rutschend, bis die Anforderung unter die Gleitreibung faellt -
+		// sonst flatterte der Zustand exakt am Grenzwert hin und her (Hysterese).
+		if (AbsDemand <= KineticGrip)
+		{
+			bSlipping = false;
+			return DemandN;
+		}
+		return FMath::Sign(DemandN) * KineticGrip;
+	}
+
+	if (AbsDemand > StaticGrip)
+	{
+		// Ueber der Haftreibung -> das Rad rutscht (dreht durch bzw. blockiert),
+		// der Grip faellt auf die kleinere Gleitreibung.
+		bSlipping = true;
+		return FMath::Sign(DemandN) * KineticGrip;
+	}
+
+	return DemandN;
+}
+
+float FWiesbadenVehiclePhysics::ComputeAbsBrakeCapN(
+	float StaticGripN, float KineticGripN, float PhaseRad)
+{
+	const float StaticGrip = FMath::Max(StaticGripN, 0.0f);
+	const float KineticGrip = FMath::Clamp(KineticGripN, 0.0f, StaticGrip);
+
+	// Threshold-/ABS-Anmutung: die uebertragbare Bremskraft pulst zwischen Gleit-
+	// und Haftreibung (das Rad wechselt zwischen blockiert und wieder greifend).
+	// Nie ueber die Haftreibung ("begrenzt"), im Mittel (Static+Kinetic)/2.
+	const float Pulse = 0.5f + 0.5f * FMath::Sin(PhaseRad);
+	return FMath::Lerp(KineticGrip, StaticGrip, Pulse);
 }
 
 float FWiesbadenVehiclePhysics::ComputeUsableSteerAngleDeg(
@@ -199,21 +246,36 @@ void FWiesbadenVehiclePhysics::Tick(
 	}
 	EngineRpm = FMath::Clamp(EngineRpm, Powertrain.IdleRpm * 0.5f, Powertrain.MaxRpm * 1.05f);
 
-	// Antriebskraft: vorwaerts positiv, rueckwaerts negativ.
+	// Antriebskraft mit RADSCHLUPF: vorwaerts positiv, rueckwaerts negativ.
 	// Ohne Treibstoff liefert der Motor keine Kraft - der Wagen rollt nur
 	// noch aus (Roll-/Luftwiderstand), Bremse und Lenkung bleiben wirksam.
+	//
+	// Die uebertragbare Kraft ist durch die Haftreibung der ANTRIEBSachse
+	// (Kaefer: hinten) begrenzt. Deren Last ist dynamisch - beim Anfahren
+	// squattet das Heck und bekommt mehr Grip. Fordert der Motor mehr als die
+	// Haftreibung, dreht das Rad durch und der Grip faellt auf Gleitreibung:
+	// harter Vollgas-Start kostet so Vortrieb (Radspin) statt ihn zu klemmen.
+	// Radlast aus dem VORTICK (a_x erst nach der Antriebskraft bekannt).
 	float DriveForce = 0.0f;
 	if (HasFuel())
 	{
-		if (bReverse)
-		{
-			DriveForce = -GetDriveForce(Throttle);
-		}
-		else
-		{
-			DriveForce = GetDriveForce(Throttle);
-		}
+		const float DemandRaw = GetWheelForceDemand(Throttle);
+		const float Demand = bReverse ? -DemandRaw : DemandRaw;
+
+		const float RearFracDyn = 1.0f - ComputeDynamicFrontLoadFraction(
+			FrontWeightFraction, LastLongAccelMetersPerS2, GravityMetersPerS2, CgHeightM, WheelbaseM);
+		const float RearLoadN = Powertrain.MassKg * GravityMetersPerS2 * RearFracDyn;
+		const float RearGripStatic = MuTraction * RearLoadN;
+		const float RearGripKinetic = MuTraction * MuKineticFraction * RearLoadN;
+
+		DriveForce = ComputeTransmittedLongitudinalForce(
+			Demand, RearGripStatic, RearGripKinetic, bDriveSlipState);
 	}
+	else
+	{
+		bDriveSlipState = false;
+	}
+	Out.bWheelSpin = bDriveSlipState && FMath::Abs(DriveForce) > 1.0f;
 
 	// Widerstaende wirken gegen die Bewegungsrichtung.
 	const float Speed = SpeedMetersPerS;
@@ -221,8 +283,42 @@ void FWiesbadenVehiclePhysics::Tick(
 		? RollCoeff * Powertrain.MassKg * GravityMetersPerS2 * FMath::Sign(Speed)
 		: 0.0f;
 	const float AirResistance = AirDensityKgM3 * 0.5f * DragCoeffAreaM2 * Speed * FMath::Abs(Speed);
-	const float BrakeForce = (Brake * BrakeForceN + (Input.bHandbrake ? BrakeForceN * 0.6f : 0.0f))
-		* FMath::Sign(Speed);
+	// Bremskraft mit BLOCKIER-/ABS-Anmutung. Die geforderte Bremskraft (Pedal +
+	// Handbremse) ist durch die Reifenhaftung (mu * Gewicht, beide Achsen)
+	// begrenzt. Ueberschreitet die Anforderung die Haftreibung, blockieren die
+	// Raeder: die uebertragene Kraft pulst dann zwischen Gleit- und Haftreibung
+	// (Schwellwertbremsung/ABS) statt fest bei der niedrigen Gleitreibung zu
+	// haengen - "begrenzt und gepulst". Die Seitenfuehrung bricht dabei ueber den
+	// Reibungskreis (unten, via Acceleration) von selbst weg.
+	const float BrakeDemandN = Brake * BrakeForceN
+		+ (Input.bHandbrake ? BrakeForceN * 0.6f : 0.0f);
+	const float BrakeGripStatic = MuTraction * Powertrain.MassKg * GravityMetersPerS2;
+	const float BrakeGripKinetic = MuTraction * MuKineticFraction * Powertrain.MassKg * GravityMetersPerS2;
+
+	// Blockier-Hysterese: ab Haftgrenze blockiert, loest erst unter Gleitgrenze.
+	if (bBrakeLockState)
+	{
+		if (BrakeDemandN <= BrakeGripKinetic) { bBrakeLockState = false; }
+	}
+	else if (BrakeDemandN > BrakeGripStatic)
+	{
+		bBrakeLockState = true;
+	}
+
+	float BrakeCapN = BrakeGripStatic;
+	if (bBrakeLockState)
+	{
+		BrakeAbsPhaseRad += 2.0f * PI * BrakeAbsPulseHz * DeltaSeconds;
+		BrakeAbsPhaseRad = FMath::Fmod(BrakeAbsPhaseRad, 2.0f * PI);
+		BrakeCapN = ComputeAbsBrakeCapN(BrakeGripStatic, BrakeGripKinetic, BrakeAbsPhaseRad);
+	}
+	else
+	{
+		BrakeAbsPhaseRad = 0.0f;
+	}
+
+	const float BrakeForce = FMath::Min(BrakeDemandN, BrakeCapN) * FMath::Sign(Speed);
+	Out.bWheelLock = bBrakeLockState && FMath::Abs(Speed) > 0.1f;
 
 	// Motorbremse im Schub: geschlossene Drosselklappe, Gang eingelegt.
 	//
@@ -376,6 +472,10 @@ void FWiesbadenVehiclePhysics::Tick(
 		: 0.0f;
 	Out.SteerAngleNorm = SteerAngleNorm;
 	Out.ForwardAccelerationMetersPerS2 = Acceleration;
+
+	// Laengsbeschleunigung fuer den naechsten Tick merken: die Traktionsgrenze
+	// der Antriebsachse braucht deren dynamische Radlast, und die folgt aus a_x.
+	LastLongAccelMetersPerS2 = Acceleration;
 
 	// Verbrauch: Arbeit aus der Antriebskraft (P = F * v) plus Grundverbrauch
 	// des laufenden Motors. Energiegehalt Benzin: ~8,9 kWh/l.
