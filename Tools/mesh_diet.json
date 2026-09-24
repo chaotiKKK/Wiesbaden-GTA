@@ -1,0 +1,21 @@
+{
+  "_zweck": "Modell-Diaet: Nanite-Meshes, deren Asset die volle Tripo-Quellgeometrie traegt (Ka-52-Rumpf 1,37 Mio. Dreiecke = 35,6 MB). Tools/replace_mesh_geometry.py importiert die Quelle, vereinfacht sie mit Unreals naht-schonendem Vereinfacher auf 'triangles' und tauscht nur die Geometrie - Pfad, Materialien, Nanite und Kollision bleiben.",
+  "_nachweis": "Ziele am Vorher/Nachher-Bild im Spiel gemessen: .planning/modell-diaet/shots (ausserhalb des Repos).",
+  "_aufruf": "UnrealEditor-Cmd <uproject> -run=pythonscript -script=Tools/replace_mesh_geometry.py  (WB_DIAET=pruefen|tauschen)",
+  "_nicht_reduziert": "SM_BusBody (26,5 MB, 1,5 Mio. Dreiecke) bleibt voll: die Orange/Blau-Kante der Tripo-Textur liegt auf UV-Naehten und wurde bei jeder Stufe sichtbar treppig (Blender 10 %, Unreal 10 %/27 %) bzw. mit gesperrten Naehten verschmierte die Schattierung (27 %). Nachweis .planning/modell-diaet/shots/bus*_seite_voll.png.",
+  "_verwaist_warum": "Der zweite Hubschrauber (AWiesbadenLegacyHelicopter) setzt zur Laufzeit M_WbHeliCivil/M_WbHeliRotor auf Slot 0 jedes Meshes - die importierten Tripo-Materialien mit je einer 4096er-Textur (3 x 14,9 MB) waren nie zu sehen. Mit der Laufzeit-Vorgabe am Asset sind sie verwaist.",
+  "verwaist": [
+    "/Game/Assets/Landmarks/HeliBody/Materials", "/Game/Assets/Landmarks/HeliBody/Textures",
+    "/Game/Assets/Landmarks/HeliRotorUpper/Materials", "/Game/Assets/Landmarks/HeliRotorUpper/Textures",
+    "/Game/Assets/Landmarks/HeliRotorLower/Materials", "/Game/Assets/Landmarks/HeliRotorLower/Textures"
+  ],
+  "jobs": [
+    {"asset": "/Game/Vehicles/Ka52/Fuselage", "source": "Content/Data/Raw/Ka52/ka52_ue.fbx", "object": "Fuselage", "triangles": 150000},
+    {"asset": "/Game/Vehicles/Ka52/Rotor_Lower", "source": "Content/Data/Raw/Ka52/ka52_ue.fbx", "object": "Rotor_Lower", "triangles": 35000},
+    {"asset": "/Game/Vehicles/Ka52/Rotor_Upper", "source": "Content/Data/Raw/Ka52/ka52_ue.fbx", "object": "Rotor_Upper", "triangles": 35000},
+    {"asset": "/Game/Assets/Landmarks/HeliBody/StaticMeshes/SM_HeliBody", "material": "/Game/Materials/City/M_WbHeliCivil", "triangles": 100000},
+    {"asset": "/Game/Assets/Landmarks/HeliRotorUpper/StaticMeshes/SM_HeliRotorUpper", "material": "/Game/Materials/City/M_WbHeliRotor", "triangles": 30000},
+    {"asset": "/Game/Assets/Landmarks/HeliRotorLower/StaticMeshes/SM_HeliRotorLower", "material": "/Game/Materials/City/M_WbHeliRotor", "triangles": 30000},
+    {"asset": "/Game/Vehicles/Bus/SM_BusWheel", "source": "Data/Raw/Bus/eswe_bus_wheel.glb", "object": "SM_BusWheel", "material_donor": "/Game/Vehicles/Bus/SM_Bus", "triangles": 15000}
+  ]
+}
