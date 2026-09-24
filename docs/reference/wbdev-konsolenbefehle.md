@@ -44,7 +44,7 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 | `WbTraffic` | `WbTraffic <0/1>` | City-Subsystem | Verkehrsdichte 0.0 (aus) oder 0.5 (an) |
 | `WbHealth` | `WbHealth` | City-Subsystem | Maschinenlesbaren Gesundheitsbericht (JSON) ausgeben + speichern |
 | `WbCam` | `WbCam <0-2>` | Fahrzeug mit Kamera | Kameramodus Follow/Orbit/Cockpit |
-| `WbHeli` | `WbHeli` | Helikopter in der Welt | ersten Helikopter uebernehmen (Possess) |
+| `WbHeli` | `WbHeli [Index]` | Helikopter in der Welt | Helikopter Nr. Index uebernehmen (Possess; 0 = erster) |
 | `WbNudge` | `WbNudge <nick> <roll>` | besessener Pawn | Nick/Roll relativ um Grad kippen |
 | `WbHeliYaw` | `WbHeliYaw <s>` | Helikopter besessen | Gierprobe (Test-Harness) fuer s Sekunden |
 | `WbHeliFly` | `WbHeliFly <s>` | Helikopter besessen | Flugprofil (Test-Harness) fuer s Sekunden |
@@ -128,15 +128,16 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 
 ## WbHeli
 
-- **Signatur:** `WbHeli`
-- **Wirkung:** Uebernimmt (`Possess`) den ERSTEN `AWiesbadenHelicopter` in der
-  Welt. Voraussetzung fuer alle `WbHeli*`-Befehle. Achtung: entlaedt damit ein
+- **Signatur:** `WbHeli [Index:int = 0]`
+- **Wirkung:** Uebernimmt (`Possess`) den `AWiesbadenHelicopter` mit dem Index
+  (0 = der erste gefundene, 1 = der zweite - seit es zwei fliegbare Maschinen
+  gibt). Voraussetzung fuer alle `WbHeli*`-Befehle. Achtung: entlaedt damit ein
   zuvor besessenes Fahrzeug (relevant fuer den Rauchtest, der Fahr- und
   Heli-Tests deshalb in zwei getrennten Sitzungen laeuft).
-- **Voraussetzung:** mindestens ein Helikopter in der Welt.
+- **Voraussetzung:** ein Helikopter mit diesem Index in der Welt.
 - **Log-Nachweis:**
-  - Erfolg: `WbDev: WbHeli - Helikopter <Name> uebernommen.`
-  - Keiner vorhanden (Warning): `WbDev: WbHeli - kein Helikopter in der Welt.`
+  - Erfolg: `WbDev: WbHeli <Index> von <Anzahl> - <Name> (<Klasse>) uebernommen, steht bei (x, y, z).`
+  - Index ungueltig (Warning): `WbDev: WbHeli <Index> - es gibt <Anzahl> Helikopter in der Welt.`
 
 ## WbNudge
 

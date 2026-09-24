@@ -140,7 +140,10 @@ Write-Host "Sitzung 1/2: Fahrzeug (Fahrprofil WbDrive + Materialien) ..."
 # Standard-Kaefer bleibt besessen (kein WbHeli): WbDrive faehrt ihn ueber den
 # Test-Harness Vollgas + Lenk-Sweep. Warten auf die Material-Bilanz (~8 s) faengt
 # alle Fahr-Messpunkte (WbDrive laeuft 7 s) mit ein.
-Invoke-Session @() "WbDrive 7" $CarLog "Material-Bilanz:" 1 240
+# Auf OFFENEM FELD (Wiese Grabenstrasse/Schulstrasse): seit der Kaefer im
+# Garagenhof Platter Str. 144 startet (c6c420f), fuhr er dort nach 2 s gegen
+# die Hofmauer - 19 km/h, kein Kurs, die Pruefung fiel ohne Physikfehler durch.
+Invoke-Session @("-WbGoto=-180086,899031") "WbDrive 7" $CarLog "Material-Bilanz:" 1 240
 
 Write-Host "Sitzung 2/3: Teleport + Aufrichten (Fahrzeug), dann Helikopter ..."
 Invoke-Session @() "WbTeleport 2,WbNudge 15 55,WbResetVehicle,WbHeli,WbHeliYaw 8,WbHeliFly 16" `
@@ -189,7 +192,9 @@ if ($m.Success) {
 #    (Test-Harness, ohne Tastatur) -> Tempo baut auf UND der Lenk-Sweep aendert
 #    den Kurs. Beweist Laengsdynamik + Lenkung des Fahrzeugs, das ausgeliefert
 #    wird (nicht der belly-gebugte ChaosCar). --------------------------------
-$fahrt = [regex]::Matches($car, 'WbDev Fahrt t=\d+: Tempo (\d+) km/h, Kursaenderung ([+-]\d+) Grad, Gang (\d+)')
+# Die Fahrt-Zeile traegt seit dem Drehzahl-Flare (a4f276b) auch die Drehzahl;
+# ohne das optionale Feld fand die Pruefung 0 Messpunkte.
+$fahrt = [regex]::Matches($car, 'WbDev Fahrt t=\d+: Tempo (\d+) km/h,(?: Drehzahl \d+ U/min,)? Kursaenderung ([+-]\d+) Grad, Gang (\d+)')
 if ($fahrt.Count -ge 3) {
     $maxTempo = 0; $maxKurs = 0; $maxGear = 0
     foreach ($f in $fahrt) {
