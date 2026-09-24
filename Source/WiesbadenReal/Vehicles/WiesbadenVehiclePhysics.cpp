@@ -510,6 +510,21 @@ void FWiesbadenVehiclePhysics::TickLateral(
 			FMath::Clamp(LateralVelocityMetersPerS, -0.7f * Vx - 1.0f, 0.7f * Vx + 1.0f);
 		const float MaxYaw = EffectiveMuTraction() * GravityMetersPerS2 / FMath::Max(Vx, 1.0f);
 		YawRateRadPerS = FMath::Clamp(YawRateRadPerS, -MaxYaw, MaxYaw);
+
+		// BLOCKIERTE Raeder gleiten und richten den Wagen zur Fahrtrichtung aus,
+		// statt Gier aufzubauen - ohne Seitenfuehrung fehlt sonst jede daempfende
+		// Kraft und das Heck reisst beim Kurvenbremsen weit herum (der im Audit
+		// bemaengelte ~80-Grad-Ausbruch). Eine sanfte, schrittweite-stabile
+		// Daempfung holt den UEBERSCHUSS zurueck, ohne das Blockieren abzuschalten:
+		// der Lastwechsel bleibt spuerbar, laeuft aber nicht mehr weg. NUR bei
+		// blockierten Raedern aktiv -> gerades Bremsen (Gier ~0) und normale Kurve
+		// (nicht blockiert) bleiben voellig unveraendert.
+		if (bBrakeLockState && LockedYawDampingRate > 0.0f)
+		{
+			const float Damp = FMath::Exp(-LockedYawDampingRate * DeltaSeconds);
+			YawRateRadPerS *= Damp;
+			LateralVelocityMetersPerS *= Damp;
+		}
 	}
 	else
 	{

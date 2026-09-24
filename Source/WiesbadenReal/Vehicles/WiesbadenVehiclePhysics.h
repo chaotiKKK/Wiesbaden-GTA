@@ -350,6 +350,19 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1.0"))
 	float BrakeAbsPulseHz = 12.0f;
 
+	/**
+	 * Gier-Daempfung bei BLOCKIERTEN Raedern (Anteil je Sekunde, exp. Abbau).
+	 *
+	 * Ein blockiertes, gleitendes Rad baut keine Gier auf, sondern richtet den
+	 * Wagen zur Fahrtrichtung aus. Ohne dieses Modell fehlt beim Kurvenbremsen
+	 * jede daempfende Seitenkraft und das Heck reisst weit herum. Der Wert daempft
+	 * NUR den ueberschiessenden Dreh (nur bei blockierten Raedern aktiv), ohne das
+	 * grip-abgeleitete Blockieren selbst abzuschalten. 3/s = Zeitkonstante ~0,33 s:
+	 * der Lastwechsel bleibt spuerbar, laeuft aber nicht mehr weg. 0 = aus.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0"))
+	float LockedYawDampingRate = 3.0f;
+
 	/** Unterhalb dieser Geschwindigkeit kinematisch lenken (m/s). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.5"))
 	float LowSpeedBlendMetersPerS = 3.0f;
