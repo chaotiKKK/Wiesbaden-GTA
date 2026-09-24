@@ -453,6 +453,11 @@ void AWiesbadenCar::UpdateLightsAndAudio(const FWiesbadenVehiclePhysicsOutput& O
 		EngineAudio->SetEngineState(Output.EngineRpm, ThrottleInput, Output.SpeedKmh);
 	}
 
+	// Traktions-Flags fuer die HUD-Kontrollleuchte spiegeln - reine Anzeige,
+	// keine Wirkung auf die Fahrt (das HUD liest sie ueber die Steuernaht).
+	bLastWheelSpin = Output.bWheelSpin;
+	bLastWheelLock = Output.bWheelLock;
+
 	// Reifen-Effekte: den Schlupf-Zustand nur KONSUMIEREN (keine Physikaenderung).
 	// Welche Raeder Gummi lassen: beim Blockieren alle vier, beim Radspin die
 	// angetriebenen (hinten), beim Drift ebenfalls das kommende Heck.

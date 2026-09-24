@@ -181,6 +181,19 @@ public:
 
 	/** Kameramodus (Follow/Orbit/Cockpit) - fuer die Cockpit-Instrumententafel. */
 	virtual EWiesbadenVehicleCameraMode GetCameraMode() const = 0;
+
+	// -- Traktions-Kontrollleuchten (HUD) ---------------------------------
+	// Reine MODELL-Ausgaben der Fahrphysik (durchdrehende Antriebsraeder /
+	// blockierende Raeder), vom HUD nur KONSUMIERT - kein Verhalten haengt
+	// daran. Standard false, damit nur das Fahrzeug, das die Flags fuehrt
+	// (der Kaefer mit dem eigenen Einspurmodell), sie ueberschreiben muss;
+	// der ChaosCar hat keine solchen Flags und bleibt bei false.
+
+	/** Drehen die Antriebsraeder gerade durch (Radspin)? */
+	virtual bool IsWheelSpinning() const { return false; }
+
+	/** Blockieren die Raeder gerade (Bremse ueber der Haftgrenze)? */
+	virtual bool IsWheelLocked() const { return false; }
 };
 
 UINTERFACE(MinimalAPI)
