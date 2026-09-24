@@ -131,6 +131,22 @@ float FWiesbadenVehiclePhysics::ComputeAvailableLateralAccel(
 	return Budget * FMath::Sqrt(FMath::Max(0.0f, 1.0f - UsedFraction * UsedFraction));
 }
 
+float FWiesbadenVehiclePhysics::ComputeDynamicFrontLoadFraction(
+	float StaticFrontFraction, float LongitudinalAccelMetersPerS2,
+	float GravityMetersPerS2, float CgHeightM, float WheelbaseM)
+{
+	const float G = FMath::Max(GravityMetersPerS2, 0.01f);
+	const float L = FMath::Max(WheelbaseM, 0.01f);
+
+	// Uebertragener Lastanteil = a_x * h / (g * L). a_x > 0 (beschleunigen)
+	// nimmt der Vorderachse Last (nach hinten), a_x < 0 (bremsen) gibt ihr Last.
+	const float Transfer = LongitudinalAccelMetersPerS2 * CgHeightM / (G * L);
+	const float FrontFraction = StaticFrontFraction - Transfer;
+
+	// Keine Achse hebt rechnerisch ganz ab - ein Rest bleibt immer belastet.
+	return FMath::Clamp(FrontFraction, 0.08f, 0.92f);
+}
+
 float FWiesbadenVehiclePhysics::ComputeYawRate(
 	float SteeringInput, float LongitudinalAccelMetersPerS2) const
 {
@@ -314,8 +330,16 @@ void FWiesbadenVehiclePhysics::Tick(
 			/ FMath::Max(MuTraction * GravityMetersPerS2, 0.01f);
 
 		// Reifen-Seitenkraefte, linear, im Reibungskreis je Achse gesaettigt.
-		const float FrontLoad = m * GravityMetersPerS2 * FrontWeightFraction;
-		const float RearLoad = m * GravityMetersPerS2 * (1.0f - FrontWeightFraction);
+		//
+		// DYNAMISCHE Achslasten: Bremsen laedt die Vorderachse (mehr Grip vorn,
+		// Heck leichter -> Lastwechsel-Uebersteuern), Gas laedt die Hinterachse
+		// (Traktion, stabil). Der schon berechnete Laengsbeschleunigungswert
+		// (Acceleration) treibt die Verlagerung - dieselbe Groesse, die auch die
+		// Karosserie nicken laesst; so decken sich Bild und Physik.
+		const float FrontFracDyn = ComputeDynamicFrontLoadFraction(
+			FrontWeightFraction, Acceleration, GravityMetersPerS2, CgHeightM, L);
+		const float FrontLoad = m * GravityMetersPerS2 * FrontFracDyn;
+		const float RearLoad = m * GravityMetersPerS2 * (1.0f - FrontFracDyn);
 		const float FyfMax = MuTraction * FrontLoad * LatFraction;
 		const float FyrMax = MuTraction * RearLoad * LatFraction;
 		const float Fyf = FMath::Clamp(-CorneringStiffnessFrontNPerRad * AlphaF, -FyfMax, FyfMax);
