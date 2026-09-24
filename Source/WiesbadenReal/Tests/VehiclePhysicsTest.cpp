@@ -510,21 +510,74 @@ bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Bei Fahrt kein Radspin mehr"), !Out.bWheelSpin);
 	}
 
-	// -- Im Fahrzeug: harte Bremsung -> Blockieren + gepulster Bremsschlupf --
+	// -- Blockieren folgt aus der GRIP-Grenze, nicht aus dem Pedalwert -------
+	// Die Bremsanforderung wird gegen den reibungskreis-reduzierten Laengs-Grip
+	// geprueft. Auf der Geraden (keine Querbeschleunigung) steht der volle Grip
+	// mu*g, der ueber der Vollbrems-Anforderung liegt -> kein Block. In der Kurve
+	// verbraucht die Querbeschleunigung Grip, bis er unter die Anforderung faellt
+	// -> Block. Beides unabhaengig vom konkreten BrakeForceN-Wert.
+	{
+		FWiesbadenVehiclePhysics V;   // Kaefer-Standardwerte
+		const float G = V.GravityMetersPerS2;
+		const float FullBrakeDemandN = V.BrakeForceN;
+
+		// Normalbremse ist der ALTE Wert (0,7 g) - keine unangeforderte Aenderung.
+		TestTrue(FString::Printf(TEXT("BrakeForceN auf altem Wert (%.0f N)"), V.BrakeForceN),
+			FMath::IsNearlyEqual(V.BrakeForceN, 5600.0f, 0.5f));
+
+		// Geradeaus: voller Grip mu*g -> Grip-Kraft ueber der Anforderung -> kein Block.
+		const float GripStraightN = V.Powertrain.MassKg *
+			FWiesbadenVehiclePhysics::ComputeAvailableLateralAccel(V.MuTraction, G, 0.0f);
+		TestTrue(FString::Printf(TEXT("Geradeaus: Grip %.0f N > Vollbrems-Anforderung %.0f N (kein Block)"),
+			GripStraightN, FullBrakeDemandN), GripStraightN > FullBrakeDemandN);
+
+		// Zuegige Kurve: Querbeschleunigung zehrt am Grip -> Laengs-Grip < Anforderung.
+		const float ALat = 0.6f * V.MuTraction * G;
+		const float GripCornerN = V.Powertrain.MassKg *
+			FWiesbadenVehiclePhysics::ComputeAvailableLateralAccel(V.MuTraction, G, ALat);
+		TestTrue(FString::Printf(TEXT("In der Kurve: Grip %.0f N < Anforderung %.0f N (Block emergiert)"),
+			GripCornerN, FullBrakeDemandN), GripCornerN < FullBrakeDemandN);
+	}
+
+	// -- Im Fahrzeug: Geradeaus-Vollbremsung blockiert NICHT, stoppt normal ---
 	{
 		FWiesbadenVehiclePhysics Vehicle;
 		Vehicle.Reset();
 		FWiesbadenVehiclePhysicsInput In;
 		In.Throttle = 1.0f;
-		Simulate(Vehicle, In, 12.0f);
+		Simulate(Vehicle, In, 10.0f);          // geradeaus auf Tempo (kein Lenken)
 
 		In.Throttle = 0.0f;
 		In.Brake = 1.0f;
 		FWiesbadenVehiclePhysicsOutput Out;
+		bool bAnyLock = false;
+		for (int32 Step = 0; Step < 150; ++Step)
+		{
+			Vehicle.Tick(In, VehicleDt, Out);
+			bAnyLock = bAnyLock || Out.bWheelLock;
+		}
+		TestFalse(TEXT("Geradeaus-Vollbremsung blockiert NICHT (0,7 g unter Grip)"), bAnyLock);
+		SimulateTo(Vehicle, In, 8.0f, Out);
+		TestTrue(FString::Printf(TEXT("Geradeaus-Bremsung stoppt (%.2f km/h)"), Out.SpeedKmh), Out.SpeedKmh < 1.0f);
+		TestTrue(TEXT("Keine Rueckwaertsbewegung durch die Bremse"), Out.ForwardSpeedMetersPerS >= 0.0f);
+	}
 
+	// -- Im Fahrzeug: Bremsen in der Kurve -> Blockieren aus der Grip-Grenze --
+	{
+		FWiesbadenVehiclePhysics Vehicle;
+		Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(Vehicle, In, 8.0f);           // Tempo aufbauen
+		In.Steering = 1.0f;
+		Simulate(Vehicle, In, 1.0f);           // in die Kurve (Querbeschleunigung)
+
+		In.Throttle = 0.0f;
+		In.Brake = 1.0f;                        // hart bremsen, weiter eingelenkt
+		FWiesbadenVehiclePhysicsOutput Out;
 		bool bLocked = false;
 		float MinDecel = 0.0f; float MaxDecel = 0.0f; bool bHaveDecel = false;
-		for (int32 Step = 0; Step < 150; ++Step)   // ~1,5 s harte Bremsung
+		for (int32 Step = 0; Step < 100; ++Step)
 		{
 			Vehicle.Tick(In, VehicleDt, Out);
 			if (Out.bWheelLock)
@@ -536,15 +589,10 @@ bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
 				MaxDecel = FMath::Max(MaxDecel, Decel);
 			}
 		}
-		TestTrue(TEXT("Harte Bremsung blockiert die Raeder"), bLocked);
+		TestTrue(TEXT("Bremsen in der Kurve blockiert (grip-abgeleitet)"), bLocked);
 		// Gepulst: die Verzoegerung schwankt spuerbar (Gleit<->Haft), nicht konstant.
 		TestTrue(FString::Printf(TEXT("Bremsschlupf pulst (Spanne %.2f m/s^2)"), MaxDecel - MinDecel),
-			(MaxDecel - MinDecel) > 0.5f);
-
-		// Trotz Blockierens kommt das Fahrzeug zum Stehen (kein Rueckwaerts).
-		SimulateTo(Vehicle, In, 8.0f, Out);
-		TestTrue(FString::Printf(TEXT("Kommt zum Stehen (%.2f km/h)"), Out.SpeedKmh), Out.SpeedKmh < 1.0f);
-		TestTrue(TEXT("Keine Rueckwaertsbewegung durch die Bremse"), Out.ForwardSpeedMetersPerS >= 0.0f);
+			(MaxDecel - MinDecel) > 0.3f);
 	}
 
 	return true;

@@ -195,15 +195,16 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
 	//
 	// Das ist die BremsANFORDERUNG bei vollem Pedal, NICHT die am Reifen
-	// wirksame Kraft. Frueher war der Wert bewusst auf ~0,7 g gedeckelt, damit
-	// er die Reifenhaftung nicht ueberschritt. Seit dem Laengsschlupf-Modell
-	// begrenzt die Reifenhaftung (mu * Gewicht) die Kraft selbst: ein voll
-	// durchgetretenes Pedal darf jetzt UEBER die Haftgrenze fordern und die
-	// Raeder blockieren (Kaefer mit Trommelbremsen, kein ABS) - die uebertragene
-	// Kraft pulst dann zwischen Gleit- und Haftreibung. 7.000 N (0,87 g
-	// Anforderung) bei 820 kg reizt die 0,75-g-Haftgrenze klar aus und macht den
-	// Bremsschlupf spuerbar, ohne dass leichtes Bremsen ruppig wird.
-	float BrakeForceN = 7000.0f;
+	// wirksame Kraft. 5.600 N bei 820 kg sind rund 0,7 g - die reale Verzoegerung
+	// eines Kaefer von 1969 mit Trommelbremsen, Bremsweg ~14 m aus 50 km/h.
+	//
+	// Das Blockieren haengt NICHT an diesem Wert: der Tick prueft die Anforderung
+	// gegen den REIBUNGSKREIS-REDUZIERTEN Laengs-Grip (mu*Gewicht abzueglich der
+	// quer verbrauchten Haftung). Auf der Geraden steht der volle Grip (mu*g >
+	// 0,7 g), das Pedal blockiert dort NICHT; beim Bremsen in der Kurve oder auf
+	// griffarmem Belag faellt der verfuegbare Grip unter die Anforderung und die
+	// Raeder blockieren - grip-abgeleitet, robust gegen Aenderungen von Masse/mu.
+	float BrakeForceN = 5600.0f;
 
 	// -- Querdynamik ------------------------------------------------------
 	/** Maximaler Lenkeinschlag der Vorderraeder (Grad). */
