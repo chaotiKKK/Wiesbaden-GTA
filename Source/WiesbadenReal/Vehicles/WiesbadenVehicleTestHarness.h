@@ -80,6 +80,7 @@ private:
 	float DriveDuration = 0.0f;   // 0 = inaktiv
 	int32 DriveLastSecond = -1;
 	float DriveStartYaw = 0.0f;
+	bool bDriveReverse = false; // -WbDriveReverse: gleiches Manoever im Rueckwaertsgang.
 
 	// -- Mast-/Kamera-Telemetrie der laufenden Sekunde ---------------------
 	// Summen/Maxima werden je Sekunde geloggt und dann zurueckgesetzt.

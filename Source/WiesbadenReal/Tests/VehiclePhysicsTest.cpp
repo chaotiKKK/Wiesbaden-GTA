@@ -193,6 +193,26 @@ bool FVehiclePhysicsReverseTest::RunTest(const FString& Parameters)
 		Out.ForwardSpeedMetersPerS >= -Vehicle.ReverseMaxSpeedMetersPerS * 1.01f);
 	TestEqual(TEXT("Gang -1 meldet Rueckwaerts"), Out.Gear, -1);
 
+	// Am Rueckwaerts-Limit mit Vollgas: der Begrenzer nimmt die Anforderung
+	// zurueck, der Wagen haelt sein Tempo OHNE Dauer-Radspin, und die Drehzahl
+	// folgt den Raedern (~3500 U/min bei 29 km/h) statt am Anschlag zu kleben.
+	TestFalse(TEXT("Am Rueckwaerts-Limit kein Dauer-Radspin"), Out.bWheelSpin);
+	TestTrue(FString::Printf(TEXT("Drehzahl am Rueckwaerts-Limit folgt den Raedern (%.0f U/min)"), Out.EngineRpm),
+		Out.EngineRpm > 3000.0f && Out.EngineRpm < 4000.0f);
+
+	// Gas weg: der Radspin-Flare klingt ab, die Drehzahl bleibt aber an die
+	// rollenden Raeder gekoppelt (bei ~25 km/h rund 3000 U/min, nicht 400).
+	In.Throttle = 0.0f;
+	SimulateTo(Vehicle, In, 1.0f, Out);
+	TestTrue(TEXT("Rueckwaerts rollt der Wagen im Schub weiter"),
+		Out.ForwardSpeedMetersPerS < -5.0f);
+	TestTrue(FString::Printf(TEXT("Motor dreht auch rueckwaerts mit den Raedern (%.0f U/min)"), Out.EngineRpm),
+		Out.EngineRpm > 2500.0f && Out.EngineRpm < 3600.0f);
+	In.Brake = 1.0f;
+	SimulateTo(Vehicle, In, 4.0f, Out);
+	TestEqual(TEXT("Rueckwaerts bremsen endet im Stand, nicht in Vorwaertsfahrt"),
+		Out.ForwardSpeedMetersPerS, 0.0f);
+
 	return true;
 }
 
