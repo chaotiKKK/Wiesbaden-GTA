@@ -1136,3 +1136,31 @@ bool FVehicleShiftingTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleSurfaceGripFromWorldTest,
+	"WiesbadenReal.Vehicles.SurfaceGripFromWorld",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Ableitung Belag/Wetter -> SurfaceGripScale: trocken voller Grip, bei Regen
+ * spuerbar weniger, monoton fallend, nach unten begrenzt. So erlebt der Spieler
+ * den Grip-Effekt aus dem echten Wetter (ohne Dev-Flag).
+ */
+bool FVehicleSurfaceGripFromWorldTest::RunTest(const FString& Parameters)
+{
+	const float Dry = AWiesbadenCar::ComputeSurfaceGripScale(0.0f);
+	const float Half = AWiesbadenCar::ComputeSurfaceGripScale(0.5f);
+	const float Wet = AWiesbadenCar::ComputeSurfaceGripScale(1.0f);
+
+	TestTrue(FString::Printf(TEXT("Trocken = voller Grip (%.2f)"), Dry), FMath::IsNearlyEqual(Dry, 1.0f, 0.001f));
+	TestTrue(FString::Printf(TEXT("Regen senkt den Grip spuerbar (%.2f < 1)"), Wet), Wet < 0.85f);
+	TestTrue(TEXT("Grip faellt monoton mit der Naesse"), Half < Dry && Wet < Half);
+	TestTrue(FString::Printf(TEXT("Grip bleibt fahrbar begrenzt (%.2f >= 0.1)"), Wet), Wet >= 0.1f);
+
+	// Eingaben werden geklemmt (robust gegen ueberzogene Intensitaeten).
+	TestTrue(TEXT("Ueberregen bleibt <= 1 und >= 0.1"),
+		AWiesbadenCar::ComputeSurfaceGripScale(5.0f) >= 0.1f
+		&& AWiesbadenCar::ComputeSurfaceGripScale(-1.0f) <= 1.0f);
+
+	return true;
+}

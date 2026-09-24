@@ -272,18 +272,28 @@ AWiesbadenCar::AWiesbadenCar()
 	}
 }
 
+float AWiesbadenCar::ComputeSurfaceGripScale(float RainIntensity)
+{
+	// Nasser Asphalt haelt deutlich weniger als trockener: bis 35 % Gripverlust
+	// bei vollem Niederschlag, linear mit der Naesse. Trocken -> 1,0.
+	const float WetGripLoss = 0.35f;
+	const float Rain = FMath::Clamp(RainIntensity, 0.0f, 1.0f);
+	return FMath::Clamp(1.0f - WetGripLoss * Rain, 0.1f, 1.0f);
+}
+
 void AWiesbadenCar::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Dev-Override der Belags-Griffigkeit: -WbSurfaceGrip=0.5 erzwingt griffarmen
-	// Untergrund fuer Messfahrten (trocken=1.0). Spaeter kommt der Wert aus dem
-	// Strassenbelag; die Fahrphysik ist ueber Input.SurfaceGripScale schon bereit.
+	// Dev-Override der Belags-Griffigkeit: -WbSurfaceGrip=0.5 erzwingt einen festen
+	// Wert (Test/Debug, Vorrang vor dem Wetter). Ohne das Flag kommt der Grip zur
+	// Laufzeit aus der Wetter-Naesse (ComputeSurfaceGripScale).
 	float GripArg = 1.0f;
 	if (FParse::Value(FCommandLine::Get(), TEXT("WbSurfaceGrip="), GripArg))
 	{
 		SurfaceGripOverride = FMath::Clamp(GripArg, 0.1f, 1.0f);
-		UE_LOG(LogWbVehicles, Log, TEXT("WbDev: Belags-Griffigkeit auf %.2f gesetzt."), SurfaceGripOverride);
+		bSurfaceGripOverridden = true;
+		UE_LOG(LogWbVehicles, Log, TEXT("WbDev: Belags-Griffigkeit fest auf %.2f (Override)."), SurfaceGripOverride);
 	}
 
 	// Herbie-Lackierung - NUR fuer das Spielerauto.
@@ -664,7 +674,24 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 		? ExternalControl.bHandbrake
 		: (IsKeyDown(EKeys::SpaceBar) || IsKeyDown(EKeys::Gamepad_FaceButton_Right));
 	Input.bReverseRequested = bReverseRequested;
-	Input.SurfaceGripScale = SurfaceGripOverride;
+
+	// Belags-Griffigkeit aus der WELT: der Dev-Override hat Vorrang (Messfahrten),
+	// sonst kommt der Wert aus der Wetter-Naesse des City-Subsystems - bei Regen
+	// sinkt der Grip, ganz ohne Kommandozeile. Nur ABFRAGEN, nicht rechnen: die
+	// Physik bleibt unveraendert.
+	if (bSurfaceGripOverridden)
+	{
+		Input.SurfaceGripScale = SurfaceGripOverride;
+	}
+	else if (const UWorld* CarWorld = GetWorld())
+	{
+		float Rain = 0.0f;
+		if (const UWiesbadenCitySubsystem* City = CarWorld->GetSubsystem<UWiesbadenCitySubsystem>())
+		{
+			Rain = City->GetWeatherState().Intensity.Rain;
+		}
+		Input.SurfaceGripScale = ComputeSurfaceGripScale(Rain);
+	}
 
 	FWiesbadenVehiclePhysicsOutput Output;
 	VehiclePhysics.Tick(Input, DeltaSeconds, Output);
