@@ -16,6 +16,10 @@ def make(name, r, g, b, rough, metal):
     if EAL.does_asset_exist(p):
         EAL.delete_asset(p)
     m = TOOLS.create_asset(name, DIR, unreal.Material, unreal.MaterialFactoryNew())
+    # Usage-Flags: ohne sie ersetzt UE das Material im Spiel durch das
+    # Default-Material (graue Fahrzeuge) - dieselbe Falle wie bei M_VehPaintVaried.
+    m.set_editor_property("used_with_instanced_static_meshes", True)
+    m.set_editor_property("used_with_nanite", True)
     col = MEL.create_material_expression(m, unreal.MaterialExpressionConstant3Vector, -400, 0)
     col.set_editor_property("constant", unreal.LinearColor(r, g, b, 1.0))
     MEL.connect_material_property(col, "", MP.MP_BASE_COLOR)
