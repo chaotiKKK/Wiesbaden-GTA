@@ -4,10 +4,14 @@
 
 #include "WiesbadenReal.h"
 
+#include "Audio/WiesbadenAudioPropagation.h"
 #include "Audio/WiesbadenAudioSubsystem.h"
 #include "Components/AudioComponent.h"
+#include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
 #include "Sound/SoundBase.h"
 #include "Sound/SoundWaveProcedural.h"
+#include "UObject/UObjectGlobals.h"
 
 namespace
 {
@@ -68,17 +72,30 @@ void UWiesbadenCarAudioComponent::CreateAudioSource()
 	// nullptr, falls die Mix-Assets fehlen -> dann eben ohne Bus (kein Fehler).
 	EngineAudio->SoundClassOverride = UWiesbadenAudioSubsystem::LoadBusSoundClass(EWbAudioBus::Vehicle);
 
-	// Raeumlich: der Motor sitzt beim Kaefer hinten, und beim Vorbeifahren
-	// soll der Klang von dort kommen.
-	EngineAudio->bAllowSpatialization = true;
+	// Raeumlich UND mit Ausbreitung: Distanzkurve (weit = Motor), Occlusion und
+	// Hall-Send stecken im Propagation-Setup bzw. dessen Attenuation-Asset.
 	EngineAudio->SetVolumeMultiplier(FMath::Clamp(MasterGain, 0.0f, 1.0f));
+	WiesbadenAudioPropagation::ConfigureSource(EngineAudio, EWbAudioRange::Far);
 
-	if (EngineSound)
+	// Reihenfolge: explizit zugewiesenes Asset, dann das erzeugte MetaSound
+	// MS_EngineBoxer (make_audio_assets.cmd), zuletzt die C++-Synthese.
+	USoundBase* Sound = EngineSound;
+	if (!Sound)
+	{
+		Sound = LoadObject<USoundBase>(nullptr,
+			*WiesbadenAudioPropagation::EngineMetaSoundPath());
+		if (Sound)
+		{
+			bMetaSound = true;
+		}
+	}
+
+	if (Sound)
 	{
 		bProcedural = false;
-		EngineAudio->SetSound(EngineSound);
+		EngineAudio->SetSound(Sound);
 		EngineAudio->Play();
-		UE_LOG(LogWbVehicles, Log, TEXT("Motorsound: Asset '%s' wird verwendet."), *EngineSound->GetName());
+		UE_LOG(LogWbVehicles, Log, TEXT("Motorsound: Asset '%s' wird verwendet."), *Sound->GetName());
 		return;
 	}
 
@@ -182,15 +199,45 @@ void UWiesbadenCarAudioComponent::TickComponent(
 		return;
 	}
 
+	// MetaSound-Bruecke: dieselben Parameter wie die C++-Synthese fahren die
+	// MetaSound-Layer (Rpm, Throttle, SpeedKmh, EngineRunning, Horn).
+	for (const TPair<FName, float>& Pair : WiesbadenAudioPropagation::EngineParamPairs(AudioParams))
+	{
+		EngineAudio->SetFloatParameter(Pair.Key, Pair.Value);
+	}
+
+	// Doppler aus der Relativbewegung von Quelle und Hoerer (Spieler-Pawn).
+	AActor* Listener = nullptr;
+	if (UWorld* World = GetWorld())
+	{
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			Listener = PC->GetPawn();
+		}
+	}
+	const float Doppler = WiesbadenAudioPropagation::ComputeDopplerForActors(GetOwner(), Listener);
+
 	if (bProcedural)
 	{
+		EngineAudio->SetPitchMultiplier(Doppler);
 		PushProceduralAudio();
 		return;
 	}
 
-	// Asset-Betrieb: Tonhoehe und Lautstaerke folgen Drehzahl und Last.
+	if (bMetaSound)
+	{
+		// Im MetaSound regeln Rpm/Throttle/EngineRunning die Layer selbst
+		// (EngineParamPairs oben) - hier wuerde eine zweite Tonhoehen-
+		// Modulation doppelt greifen. Nur Doppler und Gesamtlautstaerke.
+		EngineAudio->SetPitchMultiplier(Doppler);
+		EngineAudio->SetVolumeMultiplier(FMath::Clamp(MasterGain, 0.0f, 1.0f));
+		return;
+	}
+
+	// Asset-Betrieb (Sample-Loops): Tonhoehe und Lautstaerke folgen
+	// Drehzahl und Last.
 	const float Pitch = FMath::Clamp(AudioParams.EngineRpm / FMath::Max(1.0f, IdleRpm * 3.0f), 0.4f, 2.5f);
-	EngineAudio->SetPitchMultiplier(Pitch);
+	EngineAudio->SetPitchMultiplier(Pitch * Doppler);
 	EngineAudio->SetVolumeMultiplier(
 		AudioParams.bEngineRunning
 			? FMath::Clamp(MasterGain, 0.0f, 1.0f) * (0.4f + 0.6f * AudioParams.Throttle)

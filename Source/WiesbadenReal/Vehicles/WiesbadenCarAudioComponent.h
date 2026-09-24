@@ -77,6 +77,9 @@ public:
 
 private:
 	void CreateAudioSource();
+
+	/** Aktiv, wenn das erzeugte MetaSound MS_EngineBoxer laeuft. */
+	bool bMetaSound = false;
 	void PushProceduralAudio();
 
 	UPROPERTY(Transient)
