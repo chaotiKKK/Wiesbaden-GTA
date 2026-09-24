@@ -15,6 +15,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Components/StaticMeshComponent.h"
 #include "Vehicles/WiesbadenCarAudioComponent.h"
+#include "World/WiesbadenVisualTuning.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/StaticMesh.h"
 #include "Components/SpotLightComponent.h"
@@ -50,6 +51,9 @@ AWiesbadenFootPawn::AWiesbadenFootPawn()
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->SetupAttachment(CameraArm);
+	// Explizites Bildfeld statt Engine-Default 90 - wie die Fahrzeugkamera
+	// (World/WiesbadenVisualTuning.h), damit der Wechsel zu Fuss optisch ruhig bleibt.
+	Camera->SetFieldOfView(WiesbadenVisualTuning::FootFieldOfView);
 
 	// Sichtbarer Koerper. Die Meshes selbst kollidieren nicht - dafuer ist die
 	// Kapsel da; zwei Kollisionskoerper wuerden sich gegenseitig blockieren.
