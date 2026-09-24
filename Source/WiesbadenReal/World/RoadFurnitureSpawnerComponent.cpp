@@ -9,6 +9,8 @@
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Engine/StaticMesh.h"
+#include "MeshDescription.h"
+#include "StaticMeshAttributes.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Math/RotationMatrix.h"
@@ -487,65 +489,184 @@ float URoadFurnitureSpawnerComponent::ComputeStreetLampNightFactor(float SunElev
 	return T * T * (3.0f - 2.0f * T);
 }
 
+namespace
+{
+	/** Ecken je Zylinder - bei 9 cm Mastradius und 32 cm Kappe glatt genug. */
+	constexpr int32 LampSides = 24;
+
+	/**
+	 * Zylinder (Mantel + beide Deckel) in Welt-Zentimetern um die Mastmitte
+	 * anlegen und in den vorskalierten Raum teilen. Jedes Dreieck wird so
+	 * gewickelt, dass Cross(B - A, C - A) nach aussen zeigt - die Konvention des
+	 * Projekts (siehe GIS.PolygonUtils.RibbonWinding), sonst entfernt das
+	 * Backface-Culling die Aussenseite. Eine positive Skalierung aendert das
+	 * Vorzeichen nicht; Mantel- und Deckelnormalen bleiben unter ihr gleich.
+	 */
+	void AddLampCylinder(FStreetLampGeometry& G, int32 Section, double CentreZ, double Radius,
+		double HalfHeight, const FVector& Scale)
+	{
+		auto Tri = [&G, Section, &Scale](FVector A, FVector B, FVector C, const FVector& Normal,
+			FVector2D UA, FVector2D UB, FVector2D UC)
+		{
+			if (FVector::DotProduct(FVector::CrossProduct(B - A, C - A), Normal) < 0.0)
+			{
+				Swap(B, C);
+				Swap(UB, UC);
+			}
+			for (const TPair<FVector, FVector2D>& Corner : { TPair<FVector, FVector2D>(A, UA),
+				TPair<FVector, FVector2D>(B, UB), TPair<FVector, FVector2D>(C, UC) })
+			{
+				const FVector& P = Corner.Key;
+				G.Positions.Add(FVector3f(P.X / Scale.X, P.Y / Scale.Y, P.Z / Scale.Z));
+				G.Normals.Add(FVector3f(Normal));
+				G.UVs.Add(FVector2f(Corner.Value));
+			}
+			G.Section.Add(Section);
+		};
+		const double Bottom = CentreZ - HalfHeight;
+		const double Top = CentreZ + HalfHeight;
+		for (int32 I = 0; I < LampSides; ++I)
+		{
+			const double A0 = UE_DOUBLE_TWO_PI * I / LampSides;
+			const double A1 = UE_DOUBLE_TWO_PI * (I + 1) / LampSides;
+			const FVector D0(FMath::Cos(A0), FMath::Sin(A0), 0.0);
+			const FVector D1(FMath::Cos(A1), FMath::Sin(A1), 0.0);
+			const FVector Mid = (D0 + D1).GetSafeNormal();
+			const double U0 = double(I) / LampSides;
+			const double U1 = double(I + 1) / LampSides;
+			// Mantel: zwei Dreiecke je Segment.
+			Tri(D0 * Radius + FVector(0, 0, Bottom), D1 * Radius + FVector(0, 0, Bottom),
+				D1 * Radius + FVector(0, 0, Top), Mid, FVector2D(U0, 1), FVector2D(U1, 1), FVector2D(U1, 0));
+			Tri(D0 * Radius + FVector(0, 0, Bottom), D1 * Radius + FVector(0, 0, Top),
+				D0 * Radius + FVector(0, 0, Top), Mid, FVector2D(U0, 1), FVector2D(U1, 0), FVector2D(U0, 0));
+			// Deckel oben und unten als Faecher.
+			auto Cap = [](const FVector& D) { return FVector2D(0.5 + 0.5 * D.X, 0.5 + 0.5 * D.Y); };
+			Tri(FVector(0, 0, Top), D0 * Radius + FVector(0, 0, Top), D1 * Radius + FVector(0, 0, Top),
+				FVector::UpVector, FVector2D(0.5, 0.5), Cap(D0), Cap(D1));
+			Tri(FVector(0, 0, Bottom), D1 * Radius + FVector(0, 0, Bottom), D0 * Radius + FVector(0, 0, Bottom),
+				-FVector::UpVector, FVector2D(0.5, 0.5), Cap(D1), Cap(D0));
+		}
+	}
+
+	/** Laufzeit-Mesh aus der Geometrie (zwei Slots: Mast, Glas). */
+	UStaticMesh* BuildLampMesh(const FStreetLampGeometry& G, UObject* Outer,
+		UMaterialInterface* PostMaterial, UMaterialInterface* GlassMaterial)
+	{
+		FMeshDescription Desc;
+		FStaticMeshAttributes Attr(Desc);
+		Attr.Register();
+		Attr.GetVertexInstanceUVs().SetNumChannels(1);
+		TVertexAttributesRef<FVector3f> Positions = Attr.GetVertexPositions();
+		TVertexInstanceAttributesRef<FVector3f> Normals = Attr.GetVertexInstanceNormals();
+		TVertexInstanceAttributesRef<FVector3f> Tangents = Attr.GetVertexInstanceTangents();
+		TVertexInstanceAttributesRef<float> Signs = Attr.GetVertexInstanceBinormalSigns();
+		TVertexInstanceAttributesRef<FVector2f> UVs = Attr.GetVertexInstanceUVs();
+		TPolygonGroupAttributesRef<FName> SlotNames = Attr.GetPolygonGroupMaterialSlotNames();
+		const FName Slots[2] = { TEXT("Mast"), TEXT("Glas") };
+		FPolygonGroupID Groups[2];
+		for (int32 S = 0; S < 2; ++S)
+		{
+			Groups[S] = Desc.CreatePolygonGroup();
+			SlotNames[Groups[S]] = Slots[S];
+		}
+		for (int32 T = 0; T < G.Section.Num(); ++T)
+		{
+			FVertexInstanceID Vi[3];
+			for (int32 K = 0; K < 3; ++K)
+			{
+				const int32 Index = T * 3 + K;
+				const FVertexID V = Desc.CreateVertex();
+				Positions[V] = G.Positions[Index];
+				Vi[K] = Desc.CreateVertexInstance(V);
+				const FVector3f N = G.Normals[Index];
+				Normals[Vi[K]] = N;
+				Tangents[Vi[K]] = FMath::Abs(N.Z) > 0.9f
+					? FVector3f(1.0f, 0.0f, 0.0f) : FVector3f::CrossProduct(FVector3f::UpVector, N).GetSafeNormal();
+				Signs[Vi[K]] = 1.0f;
+				UVs.Set(Vi[K], 0, G.UVs[Index]);
+			}
+			Desc.CreatePolygon(Groups[G.Section[T]], { Vi[0], Vi[1], Vi[2] });
+		}
+		UStaticMesh* Mesh = NewObject<UStaticMesh>(Outer, TEXT("SM_WbStreetLamp"), RF_Transient);
+		Mesh->GetStaticMaterials().Add(FStaticMaterial(PostMaterial, Slots[0], Slots[0]));
+		Mesh->GetStaticMaterials().Add(FStaticMaterial(GlassMaterial, Slots[1], Slots[1]));
+		UStaticMesh::FBuildMeshDescriptionsParams Params;
+		Params.bBuildSimpleCollision = false;
+		Params.bFastBuild = true;
+		return Mesh->BuildFromMeshDescriptions({ &Desc }, Params) ? Mesh : nullptr;
+	}
+}
+
+FStreetLampGeometry URoadFurnitureSpawnerComponent::BuildStreetLampGeometry(const FVector& InstanceScale)
+{
+	FStreetLampGeometry G;
+	const FVector Scale(FMath::Max(InstanceScale.X, 1e-3), FMath::Max(InstanceScale.Y, 1e-3),
+		FMath::Max(InstanceScale.Z, 1e-3));
+	// Mast: genau der Engine-Zylinder (100 cm hoch, Radius 50, Ursprung mittig)
+	// - nach der Instanz-Skalierung also derselbe Mast wie bisher.
+	const double HalfPost = 50.0 * Scale.Z;
+	AddLampCylinder(G, 0, 0.0, 50.0 * Scale.X, HalfPost, Scale);
+	// Pilzleuchte wie an Wohnstrassen: Kappe 64 cm breit und 10 cm hoch, 22 cm
+	// ueber der Mastspitze; das Glas 50 cm breit und 16 cm hoch darunter.
+	AddLampCylinder(G, 0, HalfPost + 22.0, 32.0, 5.0, Scale);
+	AddLampCylinder(G, 1, HalfPost + 9.0, 25.0, 8.0, Scale);
+	return G;
+}
+
 void URoadFurnitureSpawnerComponent::EnsureLampHeads()
 {
-	if (LampLocations.Num() == 0 || (LampGlassInstances && LampGlassInstances->GetInstanceCount() > 0))
+	if (!LampPostInstances || LampPostInstances->GetInstanceCount() == 0
+		|| (LampMesh && LampPostInstances->GetStaticMesh() == LampMesh))
 	{
 		return;
 	}
-	UStaticMesh* Cylinder = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder"));
-	if (!Cylinder)
+	// Alle Masten tragen dieselbe Skalierung (SpawnStreetLamps bzw. die
+	// gebackenen Instanzen) - die erste gilt fuer alle.
+	FTransform First;
+	LampPostInstances->GetInstanceTransform(0, First, /*bWorldSpace=*/false);
+	FTransform Last;
+	LampPostInstances->GetInstanceTransform(LampPostInstances->GetInstanceCount() - 1, Last, false);
+	if (!First.GetScale3D().Equals(Last.GetScale3D(), 0.01))
 	{
-		return;
+		UE_LOG(LogWbCore, Warning, TEXT("Laternen: Masten verschieden skaliert (%s / %s) - Koepfe sitzen nur auf den ersten richtig."),
+			*First.GetScale3D().ToString(), *Last.GetScale3D().ToString());
 	}
-	auto MakeHism = [this, Cylinder](const TCHAR* Name)
-	{
-		UHierarchicalInstancedStaticMeshComponent* Hism =
-			NewObject<UHierarchicalInstancedStaticMeshComponent>(GetOwner(), Name);
-		Hism->SetupAttachment(this);
-		Hism->SetStaticMesh(Cylinder);
-		Hism->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Hism->SetCastShadow(false);
-		Hism->SetCullDistances(0, LampPostCullDistanceCm);
-		Hism->RegisterComponent();
-		return Hism;
-	};
-	LampCapInstances = MakeHism(TEXT("LampCaps"));
-	LampGlassInstances = MakeHism(TEXT("LampGlasses"));
-	if (LampPostMaterial)
-	{
-		LampCapInstances->SetMaterial(0, LampPostMaterial);
-	}
+
 	// Eigenes ISM-taugliches Material (Tools/create_street_lamp_material.py):
 	// ohne used_with_instanced_static_meshes ersetzt UE es im Spiel durch
 	// das Default-Material.
-	if (UMaterialInterface* Glass = LoadObject<UMaterialInterface>(nullptr,
-		TEXT("/Game/Materials/City/M_WbStreetLampGlass.M_WbStreetLampGlass")))
+	if (!LampGlassMID)
 	{
-		LampGlassMID = UMaterialInstanceDynamic::Create(Glass, this);
-		LampGlassMID->SetVectorParameterValue(TEXT("LensColor"), LampLightColor);
-		LampGlassMID->SetScalarParameterValue(TEXT("Glow"), 0.0f);
-		LampGlassInstances->SetMaterial(0, LampGlassMID);
+		if (UMaterialInterface* Glass = LoadObject<UMaterialInterface>(nullptr,
+			TEXT("/Game/Materials/City/M_WbStreetLampGlass.M_WbStreetLampGlass")))
+		{
+			LampGlassMID = UMaterialInstanceDynamic::Create(Glass, this);
+			LampGlassMID->SetVectorParameterValue(TEXT("LensColor"), LampLightColor);
+			LampGlassMID->SetScalarParameterValue(TEXT("Glow"), 0.0f);
+		}
 	}
-
-	// Pilzleuchte wie an Wohnstrassen: Kappe 64 cm breit, darunter das Glas.
-	// Der Engine-Zylinder ist 100 cm hoch, Radius 50 cm, Ursprung mittig.
-	const FVector CapScale(0.64f, 0.64f, 0.10f);
-	const FVector GlassScale(0.50f, 0.50f, 0.16f);
-	TArray<FTransform> Caps, Glasses;
-	Caps.Reserve(LampLocations.Num());
-	Glasses.Reserve(LampLocations.Num());
-	for (const FVector& Base : LampLocations)
+	// Mast und Kappe: das Pfostenmaterial der Strassenausstattung (M_WbPole, wie
+	// die Schilderpfosten). Der nackte Engine-Zylinder trug nur das Platzhalter-
+	// Raster DefaultMaterial; dass die Masten damit fast schwarz wirkten, lag an
+	// den gestauchten Zylinder-UVs, nicht an einer gewollten Farbe.
+	UMaterialInterface* PostMaterial = LampPostMaterial ? LampPostMaterial
+		: PoleMaterial ? PoleMaterial : LampPostInstances->GetMaterial(0);
+	LampMesh = BuildLampMesh(BuildStreetLampGeometry(First.GetScale3D()), this, PostMaterial, LampGlassMID);
+	if (!LampMesh)
 	{
-		const FVector Top = Base + FVector(0.0f, 0.0f, LampPostHeightCm);
-		Caps.Add(FTransform(FRotator::ZeroRotator, Top + FVector(0.0f, 0.0f, 22.0f), CapScale));
-		Glasses.Add(FTransform(FRotator::ZeroRotator, Top + FVector(0.0f, 0.0f, 9.0f), GlassScale));
+		UE_LOG(LogWbCore, Warning, TEXT("Laternen: Laternen-Netz liess sich nicht bauen - Masten bleiben ohne Kopf."));
+		return;
 	}
-	LampCapInstances->AddInstances(Caps, false, /*bWorldSpace=*/true);
-	LampGlassInstances->AddInstances(Glasses, false, /*bWorldSpace=*/true);
+	LampPostInstances->SetStaticMesh(LampMesh);
+	LampPostInstances->SetMaterial(0, PostMaterial);
+	if (LampGlassMID)
+	{
+		LampPostInstances->SetMaterial(1, LampGlassMID);
+	}
 	LastLampNightFactor = -1.0f;
-	UE_LOG(LogWbCore, Log, TEXT("Leuchtenkoepfe: %d Masten mit Kappe und Glas (Glasmaterial %s)."),
-		Glasses.Num(), LampGlassMID ? TEXT("geladen") : TEXT("FEHLT - Tools/create_street_lamp_material.py"));
+	UE_LOG(LogWbCore, Log, TEXT("Leuchtenkoepfe: %d Masten mit Kappe und Glas im Mast-Netz, keine Zusatz-Instanzen (Glasmaterial %s)."),
+		LampPostInstances->GetInstanceCount(),
+		LampGlassMID ? TEXT("geladen") : TEXT("FEHLT - Tools/create_street_lamp_material.py"));
 }
 
 void URoadFurnitureSpawnerComponent::UpdateLampNightState()

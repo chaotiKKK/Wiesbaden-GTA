@@ -16,6 +16,21 @@ class UMaterialInterface;
 class UStaticMesh;
 
 /**
+ * Laterne (Mast, Kappe, Glas) als EIN Dreiecksnetz, im VORSKALIERTEN Raum
+ * einer Mast-Instanz: die Masten sind Engine-Zylinder mit Skalierung
+ * 0,18 x 0,18 x 7 - das Netz ist so gebaut, dass es NACH dieser Skalierung
+ * die echten Masse hat. Je Dreieck drei eigene Ecken (keine geteilten).
+ */
+struct FStreetLampGeometry
+{
+	TArray<FVector3f> Positions;
+	TArray<FVector3f> Normals;
+	TArray<FVector2f> UVs;
+	/** Je Dreieck: 0 = Mast und Kappe (Mastmaterial), 1 = Glas (leuchtet). */
+	TArray<int32> Section;
+};
+
+/**
  * Visueller Ausstattungs-Spawner: rendert die Platzierungsdaten des
  * Strassenausstattungs-Passes (FRoadFurnitureLayout) als echte Meshes.
  *
@@ -188,6 +203,14 @@ public:
 	 */
 	static float ComputeStreetLampNightFactor(float SunElevationFactor);
 
+	/**
+	 * Laternen-Geometrie fuer Mast-Instanzen mit `InstanceScale` (datenrein, Test).
+	 * Mast = Einheitszylinder (wie /Engine/BasicShapes/Cylinder), Kappe 64 cm
+	 * breit 22 cm ueber der Mastspitze, Glas 50 cm breit darunter - dieselben
+	 * Masse wie die frueheren getrennten Kopf-Instanzen.
+	 */
+	static FStreetLampGeometry BuildStreetLampGeometry(const FVector& InstanceScale);
+
 	// -- Sichtweiten ---------------------------------------------------------
 	//
 	// Die Ausstattung lag in EINFACHEN InstancedStaticMeshComponents. Ein
@@ -314,7 +337,12 @@ private:
 	/** Legt den begrenzten Vorrat an Punktlichtern an (idempotent). */
 	void CreateLampLightPool();
 
-	/** Leuchtenkopf (Kappe + Glas) auf jeden Mast aus LampLocations (idempotent). */
+	/**
+	 * Leuchtenkoepfe: der Mast-HISM bekommt statt des nackten Zylinders ein
+	 * Laternen-Netz mit Kappe und Glas (idempotent). Frueher trugen zwei
+	 * eigene HISM die Koepfe - 2 x 72.433 Instanzen mehr, die das Instanz-
+	 * Budget des Rauchtests (800.000) rissen. So kostet der Kopf keine einzige.
+	 */
 	void EnsureLampHeads();
 
 	/** Glas-Leuchtkraft und Punktlichter nach der Tageszeit schalten. */
@@ -370,11 +398,9 @@ private:
 	UPROPERTY(Transient)
 	TArray<UPointLightComponent*> LampLights;
 
-	// Leuchtenkoepfe: dunkle Kappe + leuchtendes Glas darunter, je ein ISM.
+	/** Zur Laufzeit gebautes Laternen-Netz (Mast + Kappe + Glas). */
 	UPROPERTY(Transient)
-	UHierarchicalInstancedStaticMeshComponent* LampCapInstances = nullptr;
-	UPROPERTY(Transient)
-	UHierarchicalInstancedStaticMeshComponent* LampGlassInstances = nullptr;
+	UStaticMesh* LampMesh = nullptr;
 	// Eine MID fuer alle Glaeser - nachts ein einziger Parameter-Wechsel.
 	UPROPERTY(Transient)
 	class UMaterialInstanceDynamic* LampGlassMID = nullptr;
