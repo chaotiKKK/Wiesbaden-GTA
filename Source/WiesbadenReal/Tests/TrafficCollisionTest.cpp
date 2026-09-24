@@ -226,3 +226,69 @@ bool FBuildingCollisionSelectionTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficVehicleTypeTest,
+	"WiesbadenReal.Vehicles.Traffic.VehicleType",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Die gewichtete, deterministische Typ-Auswahl der Verkehrsfahrzeuge: dieselbe
+ * Id ergibt immer denselben Typ (stabil ueber Ticks), und ueber viele Ids
+ * naehert sich die Verteilung den Gewichten an (der Kaefer dominiert, der Bus
+ * ist selten).
+ */
+bool FTrafficVehicleTypeTest::RunTest(const FString& Parameters)
+{
+	using Spawner = UTrafficVehicleSpawnerComponent;
+
+	// -- Randfaelle ----------------------------------------------------------
+	{
+		TArray<float> Empty;
+		TestEqual(TEXT("leere Gewichte -> Typ 0"), Spawner::SelectVehicleType(7, Empty), 0);
+		TArray<float> Zeros = {0.0f, 0.0f};
+		TestEqual(TEXT("nur Nullgewichte -> Typ 0"), Spawner::SelectVehicleType(7, Zeros), 0);
+		TArray<float> One = {1.0f};
+		TestEqual(TEXT("ein Typ -> immer 0"), Spawner::SelectVehicleType(123, One), 0);
+	}
+
+	// -- Determinismus: gleiche Id -> gleicher Typ ---------------------------
+	const TArray<float> W = {55.0f, 15.0f, 25.0f, 5.0f};
+	{
+		for (int32 Id : {0, 1, 2, 42, 1000, 999999})
+		{
+			const int32 A = Spawner::SelectVehicleType(Id, W);
+			const int32 B = Spawner::SelectVehicleType(Id, W);
+			TestEqual(TEXT("Id -> stabiler Typ"), A, B);
+			TestTrue(TEXT("Typ im gueltigen Bereich"), A >= 0 && A < W.Num());
+		}
+	}
+
+	// -- Verteilung ueber viele Ids naehert sich den Gewichten ---------------
+	{
+		TArray<int32> Counts; Counts.SetNumZeroed(W.Num());
+		constexpr int32 N = 20000;
+		for (int32 Id = 0; Id < N; ++Id)
+		{
+			Counts[Spawner::SelectVehicleType(Id, W)]++;
+		}
+		// Alle vier Typen kommen vor.
+		for (int32 t = 0; t < W.Num(); ++t)
+		{
+			TestTrue(FString::Printf(TEXT("Typ %d kommt vor (%d)"), t, Counts[t]), Counts[t] > 0);
+		}
+		// Kaefer (55 %) ist der haeufigste, Bus (5 %) der seltenste.
+		TestTrue(TEXT("Kaefer am haeufigsten"),
+			Counts[0] > Counts[1] && Counts[0] > Counts[2] && Counts[0] > Counts[3]);
+		TestTrue(TEXT("Bus am seltensten"),
+			Counts[3] < Counts[0] && Counts[3] < Counts[1] && Counts[3] < Counts[2]);
+		// Grob im Rahmen der Gewichte (grosszuegige Toleranz gegen Hash-Rauschen).
+		const float FracBeetle = static_cast<float>(Counts[0]) / N;
+		TestTrue(FString::Printf(TEXT("Kaefer-Anteil ~0,55 (%.2f)"), FracBeetle),
+			FMath::Abs(FracBeetle - 0.55f) < 0.06f);
+		const float FracBus = static_cast<float>(Counts[3]) / N;
+		TestTrue(FString::Printf(TEXT("Bus-Anteil ~0,05 (%.2f)"), FracBus),
+			FMath::Abs(FracBus - 0.05f) < 0.03f);
+	}
+
+	return true;
+}

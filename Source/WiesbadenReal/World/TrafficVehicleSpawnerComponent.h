@@ -51,9 +51,35 @@ public:
 	/** Entfernt alle Fahrzeug-Instanzen. */
 	void ClearVehicles();
 
-	/** Das Fahrzeug-Mesh (Platzhalter oder echtes Modell). */
+	/** Das Fahrzeug-Mesh von Typ 0 (Kaefer); zugleich Fallback fuer die Bounds. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Verkehr")
 	UStaticMesh* VehicleMesh = nullptr;
+
+	/**
+	 * Fahrzeug-TYPEN (Meshes) des Verkehrs, ein ISM-Pool je Typ. Index 0 ist der
+	 * Kaefer (= VehicleMesh), danach Transporter, Kombi, Bus. Im Konstruktor
+	 * gefuellt (nur die tatsaechlich geladenen Meshes). Bounds (Lampen, Kollision)
+	 * kommen je Typ aus dem jeweiligen Mesh, damit die Lampen nicht in der Luft
+	 * haengen und die Kollisionsbox zum Fahrzeug passt.
+	 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMesh>> VehicleTypeMeshes;
+
+	/**
+	 * Relatives Vorkommen je Typ (gleiche Reihenfolge wie VehicleTypeMeshes).
+	 * Der Kaefer dominiert, der Bus ist selten. Der Typ eines Fahrzeugs folgt
+	 * deterministisch aus seiner Id (SelectVehicleType) - stabil ueber Ticks.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Verkehr")
+	TArray<float> VehicleTypeWeights;
+
+	/**
+	 * Waehlt den Fahrzeugtyp (Index in die Gewichte) deterministisch aus der
+	 * Fahrzeug-Id, gewichtet. Datenrein/statisch, ohne Welt pruefbar
+	 * (Test Vehicles.Traffic.VehicleType): dieselbe Id ergibt immer denselben
+	 * Typ, und ueber viele Ids naehert sich die Verteilung den Gewichten an.
+	 */
+	static int32 SelectVehicleType(int32 VehicleId, const TArray<float>& Weights);
 
 	/** Basismaterial; je Palette-Farbe wird eine MID erzeugt. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Verkehr")
@@ -152,6 +178,10 @@ protected:
 private:
 	/** Beobachter fuer das Culling (Player-Pawn oder Streaming-Quelle). */
 	FVector GetObserverLocation() const;
+
+	/** Bounds (Origin/Extent) eines Fahrzeugtyps aus seinem Mesh; Fallback
+	 *  VehicleMesh, sonst Kaefer-Nennmass. */
+	void GetTypeBounds(int32 Type, FVector& OutOrigin, FVector& OutExtent) const;
 
 	/** Baut die ISM-Gruppen (eine je Palette-Farbe) einmalig auf. */
 	void EnsureInstancePools();
