@@ -296,27 +296,46 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 	const float AirResistance = AirDensityKgM3 * 0.5f * DragCoeffAreaM2 * Speed * FMath::Abs(Speed);
 
 	// Bremskraft mit BLOCKIER-/ABS-Anmutung. Die geforderte Bremskraft (Pedal +
-	// Handbremse) ist durch die Reifenhaftung (mu * Gewicht, beide Achsen)
-	// begrenzt. Ueberschreitet die Anforderung die Haftreibung, blockieren die
-	// Raeder: die uebertragene Kraft pulst dann zwischen Gleit- und Haftreibung
-	// (Schwellwertbremsung/ABS) statt fest bei der niedrigen Gleitreibung zu
-	// haengen - "begrenzt und gepulst". Die Seitenfuehrung bricht dabei ueber den
-	// Reibungskreis (Querdynamik, via Acceleration) von selbst weg.
+	// Handbremse) ist durch den verfuegbaren LAENGS-Grip begrenzt - und der folgt
+	// aus dem REIBUNGSKREIS: die aktuelle Querbeschleunigung (a_lat = Vx * Gierrate
+	// aus dem Vortick) verbraucht Haftung, die dann laengs zum Bremsen fehlt.
+	//
+	// So EMERGIERT das Blockieren aus der Grip-Grenze, nicht aus dem Pedalwert:
+	// auf der Geraden steht der volle Grip (mu*g), ein 0,7-g-Pedal blockiert dort
+	// NICHT; beim Bremsen in der Kurve (oder spaeter auf griffarmem Belag ueber
+	// ein kleineres mu) faellt der verfuegbare Grip unter die Anforderung und die
+	// Raeder blockieren. Ueberschreitet die Anforderung die Haftgrenze, pulst die
+	// uebertragene Kraft zwischen Gleit- und Haftreibung (Schwellwert/ABS) -
+	// "begrenzt und gepulst". Die Seitenfuehrung bricht ueber denselben
+	// Reibungskreis (Querdynamik) von selbst weg.
 	const float BrakeDemandN = Brake * BrakeForceN
 		+ (Input.bHandbrake ? BrakeForceN * 0.6f : 0.0f);
-	const float BrakeGripStatic = StaticGripN(WeightN);
-	const float BrakeGripKinetic = KineticGripN(WeightN);
 
-	// Blockier-Hysterese: ab Haftgrenze blockiert, loest erst unter Gleitgrenze.
+	// Lock-ENTSCHEIDUNG aus dem kombinierten Reibungskreis: die Querbeschleunigung
+	// (a_lat = Vx * Gierrate aus dem Vortick) zehrt am verfuegbaren Laengs-Grip.
+	// Auf der Geraden steht der volle Grip mu*g -> ein 0,7-g-Pedal blockiert NICHT;
+	// in der Kurve (oder kuenftig auf kleinerem mu) faellt der Laengs-Grip unter
+	// die Anforderung -> Blockieren. So folgt der Zustand aus der GRIP-Grenze,
+	// nicht aus dem BrakeForceN-Wert.
+	const float LateralAccel = FMath::Abs(SpeedMetersPerS * YawRateRadPerS);
+	const float AvailLongGripN = Powertrain.MassKg *
+		ComputeAvailableLateralAccel(MuTraction, GravityMetersPerS2, LateralAccel);
 	if (bBrakeLockState)
 	{
-		if (BrakeDemandN <= BrakeGripKinetic) { bBrakeLockState = false; }
+		if (BrakeDemandN <= AvailLongGripN * MuKineticFraction) { bBrakeLockState = false; }
 	}
-	else if (BrakeDemandN > BrakeGripStatic)
+	else if (BrakeDemandN > AvailLongGripN)
 	{
 		bBrakeLockState = true;
 	}
 
+	// KRAFT-Cap an der VOLLEN Laengshaftung (mu*Gewicht); bei Blockieren pulst die
+	// uebertragene Kraft zwischen Gleit- und Haftreibung (Schwellwert/ABS,
+	// "begrenzt und gepulst"). Die Quer-Minderung uebernimmt weiterhin der
+	// Reibungskreis der Querdynamik ueber die so entstehende Laengsbeschleunigung
+	// - kein doppelter Abzug, und Bremsen bleibt am Kurvenlimit wirksam.
+	const float BrakeGripStatic = StaticGripN(WeightN);
+	const float BrakeGripKinetic = KineticGripN(WeightN);
 	float BrakeCapN = BrakeGripStatic;
 	if (bBrakeLockState)
 	{
