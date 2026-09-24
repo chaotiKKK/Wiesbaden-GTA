@@ -944,3 +944,105 @@ bool FVehicleTireEffectsTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleLockedYawDampingTest,
+	"WiesbadenReal.Vehicles.Physics.LockedYawDamping",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Kurvenbremsung mit blockierten Raedern reisst den Wagen nicht mehr weit herum.
+ * Die Gier-Daempfung wirkt NUR bei blockierten Raedern - sie zaehmt den
+ * ueberschiessenden Dreh, ohne das Blockieren abzuschalten; gerades Bremsen und
+ * normale Kurvenfahrt bleiben unveraendert.
+ */
+bool FVehicleLockedYawDampingTest::RunTest(const FString& Parameters)
+{
+	// -- Kurvenbremsung: aufsummierte Kursaenderung waehrend der Bremsung ------
+	auto RunCornerBrake = [](float DampRate, float& OutHeadingDeg, bool& OutLocked)
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		V.LockedYawDampingRate = DampRate;
+
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(V, In, 8.0f);        // Tempo aufbauen
+		In.Steering = 1.0f;
+		Simulate(V, In, 1.0f);        // in die Kurve (Gier aufbauen)
+
+		In.Throttle = 0.0f;
+		In.Brake = 1.0f;              // hart bremsen, weiter eingelenkt
+		FWiesbadenVehiclePhysicsOutput Out;
+		float Heading = 0.0f;
+		bool bLocked = false;
+		for (int32 Step = 0; Step < 120; ++Step)
+		{
+			V.Tick(In, VehicleDt, Out);
+			Heading += Out.YawRateRadPerS * VehicleDt;
+			bLocked = bLocked || Out.bWheelLock;
+		}
+		OutHeadingDeg = FMath::RadiansToDegrees(Heading);
+		OutLocked = bLocked;
+	};
+
+	float HDamped = 0.0f, HUndamped = 0.0f;
+	bool LDamped = false, LUndamped = false;
+	RunCornerBrake(3.0f, HDamped, LDamped);   // Standard-Daempfung
+	RunCornerBrake(0.0f, HUndamped, LUndamped); // wie vorher (aus)
+
+	// Das Blockieren bleibt in BEIDEN Faellen erhalten (nicht abgeschaltet).
+	TestTrue(TEXT("Blockieren bleibt erhalten (gedaempft)"), LDamped);
+	TestTrue(TEXT("Blockieren bleibt erhalten (ungedaempft)"), LUndamped);
+
+	// Ohne Daempfung bricht der Wagen deutlich aus (Bezugsgroesse).
+	TestTrue(FString::Printf(TEXT("Ungedaempfter Ausbruch ist gross (%.0f Grad)"), HUndamped),
+		FMath::Abs(HUndamped) > 10.0f);
+
+	// Mit Daempfung ist der Dreh spuerbar begrenzt ...
+	TestTrue(FString::Printf(TEXT("Ausbruch gedaempft (%.0f statt %.0f Grad)"), HDamped, HUndamped),
+		FMath::Abs(HDamped) < FMath::Abs(HUndamped) * 0.8f);
+	// ... aber der Lastwechsel ist nicht plattgemacht (etwas Dreh bleibt).
+	TestTrue(FString::Printf(TEXT("Rest-Lastwechsel bleibt (%.1f Grad)"), HDamped),
+		FMath::Abs(HDamped) > 2.0f);
+
+	// -- Gerades Vollbremsen: unveraendert -----------------------------------
+	auto RunStraightBrake = [](float DampRate, float& OutSpeed)
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		V.LockedYawDampingRate = DampRate;
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(V, In, 8.0f);
+		In.Throttle = 0.0f;
+		In.Brake = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+		SimulateTo(V, In, 3.0f, Out);
+		OutSpeed = Out.SpeedKmh;
+	};
+	float S1 = 0.0f, S0 = 0.0f;
+	RunStraightBrake(3.0f, S1);
+	RunStraightBrake(0.0f, S0);
+	TestTrue(TEXT("Gerades Bremsen unveraendert"), FMath::IsNearlyEqual(S1, S0, 0.01f));
+
+	// -- Normale Kurve (Gas, keine Bremse): unveraendert ---------------------
+	auto RunCorner = [](float DampRate, float& OutYaw)
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		V.LockedYawDampingRate = DampRate;
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(V, In, 6.0f);
+		In.Steering = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+		SimulateTo(V, In, 1.5f, Out);
+		OutYaw = Out.YawRateRadPerS;
+	};
+	float Y1 = 0.0f, Y0 = 0.0f;
+	RunCorner(3.0f, Y1);
+	RunCorner(0.0f, Y0);
+	TestTrue(TEXT("Normale Kurve unveraendert (nicht blockiert)"), FMath::IsNearlyEqual(Y1, Y0, 0.001f));
+
+	return true;
+}
