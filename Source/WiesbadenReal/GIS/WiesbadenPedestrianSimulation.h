@@ -39,6 +39,16 @@ struct WIESBADENREAL_API FPlacedPedestrian
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Fussgaenger")
 	FVector ScaleFactor = FVector::OneVector;
+
+	/**
+	 * Stabiler Streuwert je Fussgaenger (aus Segment/Seite/Phasenversatz).
+	 *
+	 * Bleibt konstant, solange die Figur existiert - der Spawner leitet daraus
+	 * DETERMINISTISCH die Kleidungsfarben ab (Hemd/Hose/Hautton per Instanz-
+	 * Custom-Data), damit dieselbe Person nicht je Bild die Farbe wechselt.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Wiesbaden|Fussgaenger")
+	int32 Seed = 0;
 };
 
 /** Ein simulierter Fussgaenger. */

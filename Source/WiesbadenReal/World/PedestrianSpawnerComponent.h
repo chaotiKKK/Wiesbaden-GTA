@@ -41,6 +41,15 @@ public:
 	int32 GetVisibleCount() const;
 
 	/**
+	 * Leitet die Kleidung einer Figur DETERMINISTISCH aus ihrem Seed ab
+	 * (datenrein/statisch, testbar: Vehicles.Pedestrian.Clothing): Hemdfarbe und
+	 * Hosenfarbe aus festen Paletten, Hautton als 0..1. Gleicher Seed -> gleiche
+	 * Kleidung; ueber viele Seeds streut es breit ueber die Paletten.
+	 */
+	static void ComputePedestrianColors(
+		int32 Seed, FLinearColor& OutShirt, FLinearColor& OutTrouser, float& OutSkinT);
+
+	/**
 	 * True, sobald die vier Gangphasen geladen sind und animiert wird.
 	 *
 	 * Bei aktiver Animation liegt der GRUNDPOOL leer und alle Figuren stecken in

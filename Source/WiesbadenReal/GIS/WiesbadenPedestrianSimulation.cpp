@@ -460,6 +460,12 @@ void FWiesbadenPedestrianSimulation::CollectPlaced(TArray<FPlacedPedestrian>& Ou
 			continue;
 		}
 
+		// Stabiler Streuwert aus Segment, Seite und Phasenversatz: bleibt konstant,
+		// solange die Figur auf ihrem Weg laeuft -> gleichbleibende Kleidungsfarbe.
+		Placed.Seed = HashCombine(
+			HashCombine(GetTypeHash(Walker.SegmentIndex), GetTypeHash(Walker.bRightSide)),
+			GetTypeHash(FMath::RoundToInt(Walker.StrideOffset * 1024.0f)));
+
 		if (Walker.BurstSeconds > 0.0f)
 		{
 			// Zerplatzt: in einem Wimpernschlag flach und breit gezogen,

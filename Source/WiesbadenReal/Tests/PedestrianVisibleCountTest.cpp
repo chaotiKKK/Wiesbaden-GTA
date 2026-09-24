@@ -95,3 +95,51 @@ bool FPedestrianVisibleCountTest::RunTest(const FString& Parameters)
 	World->DestroyWorld(false);
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPedestrianClothingTest,
+	"WiesbadenReal.Vehicles.Pedestrian.Clothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Deterministische Kleidungsfarben je Fussgaenger-Seed: gleicher Seed -> gleiche
+ * Kleidung (die Person wechselt nicht je Bild die Farbe), und ueber viele Seeds
+ * streut es breit ueber die Paletten (nicht alle gleich angezogen).
+ */
+bool FPedestrianClothingTest::RunTest(const FString& Parameters)
+{
+	using Ped = UPedestrianSpawnerComponent;
+
+	// -- Determinismus -------------------------------------------------------
+	for (int32 Seed : {0, 1, 7, 42, 1000, -5, 999999})
+	{
+		FLinearColor S1, T1, S2, T2; float K1, K2;
+		Ped::ComputePedestrianColors(Seed, S1, T1, K1);
+		Ped::ComputePedestrianColors(Seed, S2, T2, K2);
+		TestTrue(TEXT("gleicher Seed -> gleiches Hemd"), S1 == S2);
+		TestTrue(TEXT("gleicher Seed -> gleiche Hose"), T1 == T2);
+		TestEqual(TEXT("gleicher Seed -> gleicher Hautton"), K1, K2);
+		TestTrue(TEXT("Hautton in 0..1"), K1 >= 0.0f && K1 <= 1.0f);
+	}
+
+	// -- Vielfalt: ueber viele Seeds werden mehrere Hemd- UND Hosenfarben genutzt
+	{
+		TSet<FString> ShirtSet, TrouserSet;
+		int32 SkinLow = 0, SkinHigh = 0;
+		for (int32 Seed = 0; Seed < 4000; ++Seed)
+		{
+			FLinearColor Sh, Tr; float Sk;
+			Ped::ComputePedestrianColors(Seed, Sh, Tr, Sk);
+			ShirtSet.Add(Sh.ToString());
+			TrouserSet.Add(Tr.ToString());
+			if (Sk < 0.5f) { ++SkinLow; } else { ++SkinHigh; }
+		}
+		// Beide Paletten werden breit genutzt (mind. 6 Hemd-, 4 Hosenfarben).
+		TestTrue(FString::Printf(TEXT("viele Hemdfarben (%d)"), ShirtSet.Num()), ShirtSet.Num() >= 6);
+		TestTrue(FString::Printf(TEXT("viele Hosenfarben (%d)"), TrouserSet.Num()), TrouserSet.Num() >= 4);
+		// Hauttoene sind gemischt (nicht alle hell oder alle dunkel).
+		TestTrue(TEXT("dunkle Hauttoene kommen vor"), SkinLow > 200);
+		TestTrue(TEXT("helle Hauttoene kommen vor"), SkinHigh > 200);
+	}
+
+	return true;
+}
