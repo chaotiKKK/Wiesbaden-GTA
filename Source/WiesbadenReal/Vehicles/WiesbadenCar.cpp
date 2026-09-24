@@ -16,6 +16,8 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -270,6 +272,16 @@ AWiesbadenCar::AWiesbadenCar()
 void AWiesbadenCar::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Dev-Override der Belags-Griffigkeit: -WbSurfaceGrip=0.5 erzwingt griffarmen
+	// Untergrund fuer Messfahrten (trocken=1.0). Spaeter kommt der Wert aus dem
+	// Strassenbelag; die Fahrphysik ist ueber Input.SurfaceGripScale schon bereit.
+	float GripArg = 1.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("WbSurfaceGrip="), GripArg))
+	{
+		SurfaceGripOverride = FMath::Clamp(GripArg, 0.1f, 1.0f);
+		UE_LOG(LogWbVehicles, Log, TEXT("WbDev: Belags-Griffigkeit auf %.2f gesetzt."), SurfaceGripOverride);
+	}
 
 	// Herbie-Lackierung - NUR fuer das Spielerauto.
 	//
@@ -622,6 +634,7 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 		? ExternalControl.bHandbrake
 		: (IsKeyDown(EKeys::SpaceBar) || IsKeyDown(EKeys::Gamepad_FaceButton_Right));
 	Input.bReverseRequested = bReverseRequested;
+	Input.SurfaceGripScale = SurfaceGripOverride;
 
 	FWiesbadenVehiclePhysicsOutput Output;
 	VehiclePhysics.Tick(Input, DeltaSeconds, Output);

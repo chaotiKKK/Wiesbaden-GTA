@@ -333,6 +333,15 @@ private:
 	FWiesbadenCarControl ExternalControl;
 	bool bExternalControlActive = false;
 
+	/**
+	 * Belags-Griffigkeit als Dev-Override (-WbSurfaceGrip=X, 1 = trocken).
+	 *
+	 * Speist FWiesbadenVehiclePhysicsInput.SurfaceGripScale. Bis der Belag aus
+	 * dem Strassenmaterial gelesen wird, ist das der einzige Weg, griffarmen
+	 * Untergrund (nass/Pflaster) fuer Messfahrten zu erzwingen.
+	 */
+	float SurfaceGripOverride = 1.0f;
+
 	/** Akkumulierte Rad-Drehung um die Querachse (Grad, auf 360 normalisiert). */
 	float WheelRotationPitch = 0.0f;
 

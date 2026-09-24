@@ -598,6 +598,70 @@ bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleSurfaceGripTest,
+	"WiesbadenReal.Vehicles.Physics.SurfaceGrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Untergrund-abhaengiger Reibbeiwert: ein griffarmer Belag (SurfaceGripScale < 1)
+ * skaliert das effektive mu und wirkt ueber DIESELBE Kopplung wie die
+ * Reifenhaftung - Traktion, Anfahr-Radspin und grip-abgeleitetes Brems-
+ * blockieren setzen frueher/staerker ein.
+ */
+bool FVehicleSurfaceGripTest::RunTest(const FString& Parameters)
+{
+	// -- Anfahren: griffarm dreht mehr durch -> weniger Vortrieb --------------
+	{
+		FWiesbadenVehiclePhysics Dry;   Dry.Reset();
+		FWiesbadenVehiclePhysics Slick; Slick.Reset();
+
+		FWiesbadenVehiclePhysicsInput InDry;   InDry.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsInput InSlick = InDry; InSlick.SurfaceGripScale = 0.4f;
+
+		FWiesbadenVehiclePhysicsOutput OutDry, OutSlick;
+		SimulateTo(Dry, InDry, 2.0f, OutDry);
+		SimulateTo(Slick, InSlick, 2.0f, OutSlick);
+
+		TestTrue(FString::Printf(TEXT("Griffarm: weniger Vortrieb beim Anfahren (%.0f < %.0f km/h)"),
+			OutSlick.SpeedKmh, OutDry.SpeedKmh), OutSlick.SpeedKmh < OutDry.SpeedKmh - 2.0f);
+		// ... und der Radspin haelt auf griffarmem Belag laenger an.
+		TestTrue(TEXT("Griffarm: Antriebsraeder drehen noch durch"), OutSlick.bWheelSpin);
+	}
+
+	// -- Geradeaus-Vollbremsung: trocken haelt, griffarm blockiert -----------
+	{
+		FWiesbadenVehiclePhysics Vehicle; Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput Acc; Acc.Throttle = 1.0f;
+		Simulate(Vehicle, Acc, 8.0f);              // geradeaus auf Tempo
+
+		FWiesbadenVehiclePhysics Slick = Vehicle;  // gleicher Zustand/Tempo
+
+		FWiesbadenVehiclePhysicsInput BrakeDry;  BrakeDry.Brake = 1.0f;  // trocken (1.0)
+		FWiesbadenVehiclePhysicsInput BrakeSlick = BrakeDry; BrakeSlick.SurfaceGripScale = 0.5f;
+
+		FWiesbadenVehiclePhysicsOutput Out;
+		bool bDryLock = false, bSlickLock = false;
+		for (int32 Step = 0; Step < 120; ++Step)
+		{
+			Vehicle.Tick(BrakeDry, VehicleDt, Out);   bDryLock = bDryLock || Out.bWheelLock;
+			Slick.Tick(BrakeSlick, VehicleDt, Out);   bSlickLock = bSlickLock || Out.bWheelLock;
+		}
+		TestFalse(TEXT("Trocken: Geradeaus-Vollbremsung blockiert NICHT"), bDryLock);
+		TestTrue(TEXT("Griffarm: Geradeaus-Vollbremsung blockiert (kuerzerer Grip)"), bSlickLock);
+	}
+
+	// -- Kennlinie: griffarm hat weniger verfuegbaren Laengs-Grip ------------
+	{
+		constexpr float G = 9.81f;
+		const float DryGrip = FWiesbadenVehiclePhysics::ComputeAvailableLateralAccel(0.75f, G, 0.0f);
+		const float SlickGrip = FWiesbadenVehiclePhysics::ComputeAvailableLateralAccel(0.75f * 0.5f, G, 0.0f);
+		TestTrue(FString::Printf(TEXT("Griffarm: kleineres Grip-Budget (%.2f < %.2f)"), SlickGrip, DryGrip),
+			SlickGrip < DryGrip - 0.5f);
+	}
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleEngineBrakeTest,
 	"WiesbadenReal.Vehicles.Physics.EngineBrake",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
