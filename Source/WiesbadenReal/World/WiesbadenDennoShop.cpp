@@ -72,6 +72,24 @@ bool AWiesbadenDennoShop::IsInsideCut(const FVector& Point, const FVector& Centr
 		&& FMath::Abs(D.Z) < HalfExtent.Z;
 }
 
+FDennoIdlePose AWiesbadenDennoShop::ComputeDennoIdle(double Seconds)
+{
+	auto Wave = [Seconds](double Period, double Phase)
+	{
+		return FMath::Sin(UE_DOUBLE_TWO_PI * Seconds / Period + Phase);
+	};
+	FDennoIdlePose Pose;
+	// Atem: 0 = ausgeatmet (Grundstellung), 1 = eingeatmet.
+	const double Breath = 0.5 - 0.5 * FMath::Cos(UE_DOUBLE_TWO_PI * Seconds / BreathPeriodSeconds);
+	Pose.Scale = FVector(1.0 + BreathWidth * Breath, 1.0 + BreathWidth * Breath, 1.0 + BreathRise * Breath);
+	// Gewicht verlagern und umschauen: Perioden ohne gemeinsamen Takt, damit
+	// sich die Bewegung nicht sichtbar alle paar Sekunden wiederholt.
+	Pose.Rotation.Roll = SwayRollDeg * Wave(7.3, 0.0);
+	Pose.Rotation.Pitch = SwayPitchDeg * Wave(9.7, 1.3);
+	Pose.Rotation.Yaw = LookAroundDeg * (0.65 * Wave(19.0, 0.0) + 0.35 * Wave(31.0, 2.0));
+	return Pose;
+}
+
 void AWiesbadenDennoShop::BeginPlay()
 {
 	Super::BeginPlay();
@@ -106,6 +124,14 @@ void AWiesbadenDennoShop::Tick(float DeltaSeconds)
 	{
 		NextPatchSeconds = Now + 1.0;
 		PatchFacades();
+	}
+	// Denno bewegt sich nur, wenn jemand hinsieht - sonst kostet sie nichts.
+	if (DennoFigure && DennoFigure->WasRecentlyRendered(0.25f))
+	{
+		const FDennoIdlePose Pose = ComputeDennoIdle(Now);
+		DennoFigure->SetRelativeRotation(
+			FRotator(Pose.Rotation.Pitch, DennoYawDeg + Pose.Rotation.Yaw, Pose.Rotation.Roll));
+		DennoFigure->SetRelativeScale3D(Pose.Scale);
 	}
 }
 
@@ -225,7 +251,7 @@ bool AWiesbadenDennoShop::TryBuild()
 	AddPart(TEXT("DennoShopCafe"), TEXT("/Game/Buildings/DennoShop/Meshes/SM_DennoShop_Cafe.SM_DennoShop_Cafe"), FVector::ZeroVector, 0.0f);
 	AddPart(TEXT("DennoShopSalon"), TEXT("/Game/Buildings/DennoShop/Meshes/SM_DennoShop_Salon.SM_DennoShop_Salon"), FVector::ZeroVector, 0.0f);
 	AddPart(TEXT("DennoShopGlass"), TEXT("/Game/Buildings/DennoShop/Meshes/SM_DennoShop_Glass.SM_DennoShop_Glass"), FVector::ZeroVector, 0.0f);
-	AddPart(TEXT("Denno"), TEXT("/Game/Buildings/DennoShop/Meshes/SM_Denno.SM_Denno"),
+	DennoFigure = AddPart(TEXT("Denno"), TEXT("/Game/Buildings/DennoShop/Meshes/SM_Denno.SM_Denno"),
 		FVector(DennoXCm, DennoYCm, 0.0), DennoYawDeg);
 
 	// Warmes Ladenlicht: je Laden zwei Leuchten unter der Decke. Ohne sie
@@ -253,6 +279,9 @@ bool AWiesbadenDennoShop::TryBuild()
 	CutCentre = FVector(Wall.X, Wall.Y, ShopFloorZ + (CutTopCm + CutBottomCm) * 0.5);
 	CutAxisU = FVector2D(AxisU.X, AxisU.Y);
 	bBuilt = true;
+	// Ab jetzt jedes Bild (Dennos Bewegung); die Fassaden-Nachkontrolle bleibt
+	// ueber NextPatchSeconds im Sekundentakt.
+	SetActorTickInterval(0.0f);
 	const int32 Patched = PatchFacades();
 	UE_LOG(LogWbDennoShop, Log,
 		TEXT("Dennos Laden Sedanplatz 5: Front bei (%.0f, %.0f, %.0f), Ladenboden %.0f cm ueber dem Gehweg, Gier %.1f; %d Chunk-Komponente(n) ausgeschnitten (Kasten %.0f x %.0f x %.0f cm)."),

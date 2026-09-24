@@ -16,6 +16,10 @@
 #include "Materials/MaterialExpressionTextureBase.h"
 #include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialExpressionWorldPosition.h"
+#if WITH_EDITOR
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Engine/Texture2D.h"
+#endif
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDennoShopCutTest,
 	"WiesbadenReal.World.DennoShop.FacadeCut",
@@ -84,6 +88,56 @@ bool FDennoShopBuildDecisionTest::RunTest(const FString& Parameters)
 		AWiesbadenDennoShop::IsPlausibleWall(Mid + Out * 400.0, Mid, Out));
 	TestTrue(TEXT("Seitlicher Versatz entlang der Front spielt keine Rolle"),
 		AWiesbadenDennoShop::IsPlausibleWall(Mid + FVector(0.0, 500.0, 0.0), Mid, Out));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDennoShopIdleTest,
+	"WiesbadenReal.World.DennoShop.IdleMotion",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FDennoShopIdleTest::RunTest(const FString& Parameters)
+{
+	// Denno atmet und verlagert das Gewicht, ohne Skelett: der Actor dreht und
+	// skaliert die Figur um ihren Ursprung an den Fuessen. Lebendig heisst hier:
+	// der Kopf bewegt sich sichtbar (Zentimeter), die Fuesse bleiben stehen, und
+	// nichts springt von einem Bild zum naechsten.
+	auto At = [](double Seconds, const FVector& PointCm)
+	{
+		const FDennoIdlePose Pose = AWiesbadenDennoShop::ComputeDennoIdle(Seconds);
+		return FTransform(Pose.Rotation, FVector::ZeroVector, Pose.Scale).TransformPosition(PointCm);
+	};
+	const FVector Head(0.0, 0.0, 160.0);
+	const FVector Toe(8.0, 12.0, 0.0);   // Fussspitze neben der Drehachse
+	const double Frame = 1.0 / 60.0;
+	double MaxHead = 0.0, MaxToe = 0.0, MaxHeadStep = 0.0, MaxWidth = 0.0, MaxYaw = 0.0;
+	for (double T = 0.0; T < 120.0; T += Frame)
+	{
+		const FDennoIdlePose Pose = AWiesbadenDennoShop::ComputeDennoIdle(T);
+		MaxHead = FMath::Max(MaxHead, FVector::Dist(At(T, Head), Head));
+		MaxToe = FMath::Max(MaxToe, FVector::Dist(At(T, Toe), Toe));
+		MaxHeadStep = FMath::Max(MaxHeadStep, FVector::Dist(At(T + Frame, Head), At(T, Head)));
+		MaxWidth = FMath::Max(MaxWidth, Pose.Scale.X - 1.0);
+		MaxYaw = FMath::Max(MaxYaw, FMath::Abs(Pose.Rotation.Yaw));
+		TestTrue(TEXT("Nie schmaler als die Grundstellung"), Pose.Scale.X >= 1.0 - 1e-9 && Pose.Scale.Z >= 1.0 - 1e-9);
+	}
+	TestTrue(FString::Printf(TEXT("Kopf bewegt sich sichtbar (max %.2f cm >= 1 cm)"), MaxHead), MaxHead >= 1.0);
+	TestTrue(FString::Printf(TEXT("... aber dezent (max %.2f cm <= 4 cm)"), MaxHead), MaxHead <= 4.0);
+	TestTrue(FString::Printf(TEXT("Fuesse bleiben stehen (max %.2f cm < 1,5 cm)"), MaxToe), MaxToe < 1.5);
+	TestTrue(FString::Printf(TEXT("Kein Sprung zwischen zwei Bildern (max %.3f cm)"), MaxHeadStep), MaxHeadStep < 0.05);
+	TestTrue(TEXT("Brustkorb weitet sich (Atem erreicht sein Maximum)"),
+		MaxWidth > AWiesbadenDennoShop::BreathWidth * 0.99);
+	TestTrue(TEXT("Umschauen bleibt im Rahmen"), MaxYaw <= AWiesbadenDennoShop::LookAroundDeg + 1e-9);
+
+	// Atem im Takt: eine Atemperiode spaeter ist der Brustkorb wieder gleich weit.
+	const double P = AWiesbadenDennoShop::BreathPeriodSeconds;
+	for (double T : { 0.7, 13.1, 55.5 })
+	{
+		TestEqual(FString::Printf(TEXT("Atem wiederholt sich nach %.1f s"), P),
+			AWiesbadenDennoShop::ComputeDennoIdle(T).Scale.X,
+			AWiesbadenDennoShop::ComputeDennoIdle(T + P).Scale.X, 1e-9);
+	}
+	// Grundstellung zu Beginn eines Atemzugs: ausgeatmet.
+	TestEqual(TEXT("t = 0: ausgeatmet"), AWiesbadenDennoShop::ComputeDennoIdle(0.0).Scale.X, 1.0, 1e-9);
 	return true;
 }
 
@@ -281,6 +335,231 @@ bool FDennoShopCutMaterialsTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("Gegenprobe: Beton-Kopie gleicht NICHT dem Putz-Original"),
 			Fingerprint(Putz, false) == Fingerprint(BetonCut, true));
 	}
+	return true;
+}
+#endif
+
+// -- Asset-Hygiene des Laden-Ordners ------------------------------------------
+// Der erste Import legte 50 Dateien / 13,4 MB ab: jedes GLB bekam seinen
+// eigenen Materialordner (Messing, Anthrazit, Weiss je dreifach), Tripo-
+// Texturnamen mit '+' und 2048er-Texturen fuer eine Figur, die nur hinter Glas
+// steht. Tools/import_denno_shop.py raeumt das heute auf; diese Regeln halten
+// es fest, damit ein kuenftiger Import es nicht still zuruecktraegt.
+namespace DennoAssetHygiene
+{
+	const TCHAR* const Root = TEXT("/Game/Buildings/DennoShop");
+	/** Groesste erlaubte Texturkante: Denno ist im naechsten Blick ~560 px hoch. */
+	constexpr int32 MaxTextureEdge = 512;
+
+	struct FAssetInfo
+	{
+		FString Folder;          // relativ zum Laden-Ordner, z.B. "Textures"
+		FString Name;
+		FString Class;           // StaticMesh, Material, Texture2D, ...
+		int32 TextureEdge = 0;   // groesste Kantenlaenge in px (nur Texturen)
+	};
+
+	/** Zielordner je Asset-Art; leer = gehoert nicht in den Laden-Ordner. */
+	FString FolderFor(const FString& Class)
+	{
+		if (Class == TEXT("StaticMesh")) { return TEXT("Meshes"); }
+		if (Class.StartsWith(TEXT("Material"))) { return TEXT("Materials"); }
+		if (Class.StartsWith(TEXT("Texture"))) { return TEXT("Textures"); }
+		return FString();
+	}
+
+	FString PrefixFor(const FString& Folder)
+	{
+		return Folder == TEXT("Meshes") ? TEXT("SM_") : Folder == TEXT("Materials") ? TEXT("M_") : TEXT("T_");
+	}
+
+	/** Nur ASCII-Buchstaben, Ziffern und '_' - kein '+', Leerzeichen, Umlaut. */
+	bool IsCleanName(const FString& Name)
+	{
+		if (Name.IsEmpty())
+		{
+			return false;
+		}
+		for (const TCHAR C : Name)
+		{
+			const bool bOk = (C >= 'A' && C <= 'Z') || (C >= 'a' && C <= 'z') || (C >= '0' && C <= '9') || C == '_';
+			if (!bOk)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** Alle Verstoesse, je einer pro Zeile (leer = sauber). Datenrein, testbar. */
+	TArray<FString> FindIssues(const TArray<FAssetInfo>& Assets)
+	{
+		TMap<FString, int32> NameCount;
+		for (const FAssetInfo& A : Assets)
+		{
+			++NameCount.FindOrAdd(A.Name);
+		}
+		TArray<FString> Issues;
+		for (const FAssetInfo& A : Assets)
+		{
+			const FString Where = A.Folder.IsEmpty() ? A.Name : A.Folder + TEXT("/") + A.Name;
+			if (!IsCleanName(A.Name))
+			{
+				Issues.Add(TEXT("Sonderzeichen im Namen: ") + Where);
+			}
+			if (NameCount[A.Name] > 1)
+			{
+				Issues.Add(FString::Printf(TEXT("doppelt (%dx): %s"), NameCount[A.Name], *Where));
+			}
+			const FString Target = FolderFor(A.Class);
+			if (Target.IsEmpty())
+			{
+				Issues.Add(FString::Printf(TEXT("unerwartete Asset-Art %s: %s"), *A.Class, *Where));
+				continue;
+			}
+			if (A.Folder != Target)
+			{
+				Issues.Add(FString::Printf(TEXT("gehoert nach %s/: %s"), *Target, *Where));
+			}
+			if (!A.Name.StartsWith(PrefixFor(Target), ESearchCase::CaseSensitive))
+			{
+				Issues.Add(FString::Printf(TEXT("Praefix %s fehlt: %s"), *PrefixFor(Target), *Where));
+			}
+			if (Target == TEXT("Textures") && A.TextureEdge > MaxTextureEdge)
+			{
+				Issues.Add(FString::Printf(TEXT("Textur zu gross (%d px > %d): %s"), A.TextureEdge, MaxTextureEdge, *Where));
+			}
+		}
+		return Issues;
+	}
+
+	bool AnyIssueContains(const TArray<FString>& Issues, const TCHAR* Needle)
+	{
+		return Issues.ContainsByPredicate([Needle](const FString& S) { return S.Contains(Needle); });
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDennoShopAssetRulesTest,
+	"WiesbadenReal.World.DennoShop.AssetRules",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FDennoShopAssetRulesTest::RunTest(const FString& Parameters)
+{
+	using namespace DennoAssetHygiene;
+	// Ein sauberer Stand wie nach Tools/import_denno_shop.py: keine Meldung.
+	const TArray<FAssetInfo> Clean = {
+		{ TEXT("Meshes"), TEXT("SM_Denno"), TEXT("StaticMesh") },
+		{ TEXT("Materials"), TEXT("M_Denno_Brass"), TEXT("Material") },
+		{ TEXT("Materials"), TEXT("M_Denno_Part0"), TEXT("MaterialInstanceConstant") },
+		{ TEXT("Textures"), TEXT("T_Denno_Part0"), TEXT("Texture2D"), 512 },
+		{ TEXT("Textures"), TEXT("T_Denno_Part5"), TEXT("Texture2D"), 128 } };
+	const TArray<FString> CleanIssues = FindIssues(Clean);
+	TestEqual(TEXT("Sauberer Stand: keine Meldung"), CleanIssues.Num(), 0);
+	for (const FString& Issue : CleanIssues)
+	{
+		AddError(TEXT("Falschmeldung: ") + Issue);
+	}
+
+	// Jede Regel einzeln gegen den ALTEN Stand (Befund 24.09.2026). Der Verstoss
+	// steht nie an Index 0, damit eine Pruefung, die nur das erste Asset ansieht,
+	// hier auffaellt.
+	auto WithOne = [&Clean](const FAssetInfo& Bad)
+	{
+		TArray<FAssetInfo> A = Clean;
+		A.Insert(Bad, 2);
+		return A;
+	};
+	const TArray<FString> Plus = FindIssues(WithOne(
+		{ TEXT("Textures"), TEXT("T_denno+figure+3d+model_tripo_part_0_basecolor"), TEXT("Texture2D"), 512 }));
+	TestTrue(TEXT("Alter Tripo-Name mit '+' faellt auf"), AnyIssueContains(Plus, TEXT("Sonderzeichen")));
+	TestEqual(TEXT("... und nur er"), Plus.Num(), 1);
+
+	TArray<FAssetInfo> Tripled = Clean;
+	Tripled.Add({ TEXT("Materials"), TEXT("M_Denno_Brass"), TEXT("Material") });
+	Tripled.Add({ TEXT("Materials"), TEXT("M_Denno_Brass"), TEXT("Material") });
+	const TArray<FString> Dup = FindIssues(Tripled);
+	TestTrue(TEXT("Dreifaches Messing faellt auf"), AnyIssueContains(Dup, TEXT("doppelt (3x)")));
+	TestEqual(TEXT("... alle drei Exemplare gemeldet, sonst nichts"), Dup.Num(), 3);
+
+	const TArray<FString> Big = FindIssues(WithOne(
+		{ TEXT("Textures"), TEXT("T_Denno_Part1"), TEXT("Texture2D"), 2048 }));
+	TestTrue(TEXT("2048er-Textur faellt auf"), AnyIssueContains(Big, TEXT("Textur zu gross (2048")));
+	TestEqual(TEXT("... und nur sie"), Big.Num(), 1);
+
+	const TArray<FString> Folder = FindIssues(WithOne(
+		{ TEXT("denno_shop_cafe/Materials"), TEXT("M_Denno_Oak"), TEXT("Material") }));
+	TestTrue(TEXT("Alter Import-Ordner je GLB faellt auf"), AnyIssueContains(Folder, TEXT("gehoert nach Materials/")));
+	TestEqual(TEXT("... und nur er"), Folder.Num(), 1);
+
+	const TArray<FString> Prefix = FindIssues(WithOne(
+		{ TEXT("Materials"), TEXT("tripo_part_0_material"), TEXT("Material") }));
+	TestTrue(TEXT("Material ohne M_ faellt auf"), AnyIssueContains(Prefix, TEXT("Praefix M_")));
+	TestEqual(TEXT("... und nur es"), Prefix.Num(), 1);
+
+	const TArray<FString> Stray = FindIssues(WithOne(
+		{ TEXT("Meshes"), TEXT("SM_DennoOld"), TEXT("ObjectRedirector") }));
+	TestTrue(TEXT("Umleitung (fremde Asset-Art) faellt auf"), AnyIssueContains(Stray, TEXT("unerwartete Asset-Art")));
+	TestEqual(TEXT("... und nur sie"), Stray.Num(), 1);
+	return true;
+}
+
+#if WITH_EDITOR
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDennoShopAssetHygieneTest,
+	"WiesbadenReal.World.DennoShop.AssetHygiene",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FDennoShopAssetHygieneTest::RunTest(const FString& Parameters)
+{
+	using namespace DennoAssetHygiene;
+	// Der ECHTE Laden-Ordner nach denselben Regeln wie AssetRules. Schlaegt er
+	// fehl: Tools/import_denno_shop.py erneut ausfuehren (er loescht den Ordner
+	// und legt ihn sauber neu an), bzw. die Blender-Skripte anpassen.
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	Registry.ScanPathsSynchronous({ FString(Root) }, true);
+	TArray<FAssetData> Found;
+	Registry.GetAssetsByPath(FName(Root), Found, true);
+
+	TArray<FAssetInfo> Assets;
+	const FString RootPrefix = FString(Root) + TEXT("/");
+	for (const FAssetData& Data : Found)
+	{
+		FAssetInfo Info;
+		const FString Path = Data.PackagePath.ToString();
+		Info.Folder = Path.StartsWith(RootPrefix) ? Path.RightChop(RootPrefix.Len()) : FString();
+		Info.Name = Data.AssetName.ToString();
+		Info.Class = Data.AssetClassPath.GetAssetName().ToString();
+		if (FolderFor(Info.Class) == TEXT("Textures"))
+		{
+			if (const UTexture2D* Texture = Cast<UTexture2D>(Data.GetAsset()))
+			{
+#if WITH_EDITORONLY_DATA
+				Info.TextureEdge = static_cast<int32>(FMath::Max(Texture->Source.GetSizeX(), Texture->Source.GetSizeY()));
+#else
+				Info.TextureEdge = FMath::Max(Texture->GetSizeX(), Texture->GetSizeY());
+#endif
+			}
+			AddInfo(FString::Printf(TEXT("Textur %s: %d px"), *Info.Name, Info.TextureEdge));
+		}
+		Assets.Add(Info);
+	}
+
+	// Die fuenf Meshes, die AWiesbadenDennoShop laedt, muessen da sein.
+	static const TCHAR* Meshes[] = { TEXT("SM_DennoShop_Shell"), TEXT("SM_DennoShop_Cafe"),
+		TEXT("SM_DennoShop_Salon"), TEXT("SM_DennoShop_Glass"), TEXT("SM_Denno") };
+	for (const TCHAR* Mesh : Meshes)
+	{
+		TestTrue(FString::Printf(TEXT("Meshes/%s vorhanden"), Mesh), Assets.ContainsByPredicate(
+			[Mesh](const FAssetInfo& A) { return A.Folder == TEXT("Meshes") && A.Name == Mesh; }));
+	}
+	TestTrue(TEXT("Texturgroessen gelesen (Denno hat Texturen)"), Assets.ContainsByPredicate(
+		[](const FAssetInfo& A) { return FolderFor(A.Class) == TEXT("Textures") && A.TextureEdge > 0; }));
+
+	const TArray<FString> Issues = FindIssues(Assets);
+	for (const FString& Issue : Issues)
+	{
+		AddError(TEXT("Laden-Ordner: ") + Issue);
+	}
+	TestEqual(FString::Printf(TEXT("%s: %d Assets ohne Verstoss"), Root, Assets.Num()), Issues.Num(), 0);
 	return true;
 }
 #endif
