@@ -92,6 +92,27 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysicsOutput
 	/** Karosserie-Schwimmwinkel in Grad (atan(Vy/Vx)) - fuer HUD/Diagnose. */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
 	float SlipAngleDeg = 0.0f;
+
+	/**
+	 * True, solange die ANTRIEBSraeder durchdrehen (Anfahr-Radspin).
+	 *
+	 * Die geforderte Antriebslaengskraft ueberschreitet die Haftreibung der
+	 * (dynamisch belasteten) Hinterachse; der Grip faellt auf Gleitreibung. Das
+	 * ist der sichtbare Traktionsverlust beim harten Anfahren.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
+	bool bWheelSpin = false;
+
+	/**
+	 * True, solange die Raeder beim Bremsen blockieren (Bremsschlupf).
+	 *
+	 * Die geforderte Bremskraft ueberschreitet die Haftreibung; die uebertragene
+	 * Kraft pulst dann zwischen Gleit- und Haftreibung (Threshold-/ABS-Anmutung)
+	 * und die Seitenfuehrung bricht ueber den Reibungskreis weg (kein Lenken mit
+	 * blockierten Raedern).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
+	bool bWheelLock = false;
 };
 
 /**
@@ -204,15 +225,16 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	/** Bremskraft bei vollem Bremspedal (N). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
 	//
-	// 14.000 N bei 820 kg waeren 17 m/s^2, also 1,7 g. Das ist physikalisch
-	// unmoeglich - mehr als die Reifen uebertragen koennen. Ein Reifen auf
-	// trockenem Asphalt schafft rund 0,9 g, ein Kaefer von 1969 mit
-	// Trommelbremsen rundum eher 0,7 g. 5.600 N entsprechen genau dem und
-	// ergeben einen Bremsweg von rund 14 m aus 50 km/h.
-	//
-	// Mit dem alten Wert stand das Fahrzeug schlagartig - das war einer der
-	// Gruende, aus denen sich die Fahrphysik unrealistisch anfuehlte.
-	float BrakeForceN = 5600.0f;
+	// Das ist die BremsANFORDERUNG bei vollem Pedal, NICHT die am Reifen
+	// wirksame Kraft. Frueher war der Wert bewusst auf ~0,7 g gedeckelt, damit
+	// er die Reifenhaftung nicht ueberschritt. Seit dem Laengsschlupf-Modell
+	// begrenzt die Reifenhaftung (mu * Gewicht) die Kraft selbst: ein voll
+	// durchgetretenes Pedal darf jetzt UEBER die Haftgrenze fordern und die
+	// Raeder blockieren (Kaefer mit Trommelbremsen, kein ABS) - die uebertragene
+	// Kraft pulst dann zwischen Gleit- und Haftreibung. 7.000 N (0,87 g
+	// Anforderung) bei 820 kg reizt die 0,75-g-Haftgrenze klar aus und macht den
+	// Bremsschlupf spuerbar, ohne dass leichtes Bremsen ruppig wird.
+	float BrakeForceN = 7000.0f;
 
 	// -- Querdynamik ------------------------------------------------------
 	/** Maximaler Lenkeinschlag der Vorderraeder (Grad). */
@@ -323,6 +345,28 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.1"))
 	float CgHeightM = 0.45f;
 
+	/**
+	 * Verhaeltnis Gleit- zu Haftreibung (kinetic/static, 0..1).
+	 *
+	 * Ein rutschender Reifen (durchdrehend oder blockiert) uebertraegt WENIGER
+	 * als ein haftender - genau darum kostet Radspin Vortrieb und ein blockiertes
+	 * Rad bremst schlechter als ein rollendes an der Haftgrenze. ~0,72 ist ein
+	 * ueblicher Wert fuer Reifen auf Asphalt (Haft 0,75 -> Gleit 0,54).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float MuKineticFraction = 0.72f;
+
+	/**
+	 * Pulsfrequenz der Blockier-/ABS-Anmutung beim Bremsen (Hz).
+	 *
+	 * Ueber der Haftgrenze wechselt das Rad zwischen blockiert und wieder
+	 * greifend; die uebertragene Bremskraft pulst mit dieser Frequenz zwischen
+	 * Gleit- und Haftreibung. 12 Hz entspricht dem Rubbeln einer
+	 * Schwellwertbremsung / einfacher ABS-Regelung.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1.0"))
+	float BrakeAbsPulseHz = 12.0f;
+
 	/** Unterhalb dieser Geschwindigkeit kinematisch lenken (m/s). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.5"))
 	float LowSpeedBlendMetersPerS = 3.0f;
@@ -356,6 +400,29 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	/** Gierrate als integrierter Zustand (rad/s, + = rechts). */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	float YawRateRadPerS = 0.0f;
+
+	/**
+	 * Laengsbeschleunigung des VORTICKS (m/s^2) - Radlast der Antriebsachse.
+	 *
+	 * Die Traktionsgrenze der Hinterachse haengt an ihrer dynamischen Last, die
+	 * wiederum von der Laengsbeschleunigung kommt. Weil die Antriebskraft die
+	 * Beschleunigung erst erzeugt, waere das im selben Tick zirkulaer - deshalb
+	 * die Last aus dem letzten Tick.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float LastLongAccelMetersPerS2 = 0.0f;
+
+	/** Phase der Bremsschlupf-Pulsung (rad) - Zustand der ABS-Anmutung. */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float BrakeAbsPhaseRad = 0.0f;
+
+	/** Hysterese-Zustand Antriebsschlupf (Rad dreht durch). */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	bool bDriveSlipState = false;
+
+	/** Hysterese-Zustand Bremsschlupf (Rad blockiert). */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	bool bBrakeLockState = false;
 
 	/**
 	 * Treibt die Laengs-/Querdynamik einen Schritt weiter.
@@ -411,13 +478,37 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 		float StaticFrontFraction, float LongitudinalAccelMetersPerS2,
 		float GravityMetersPerS2, float CgHeightM, float WheelbaseM);
 
+	/**
+	 * Uebertragene Laengskraft eines Reifens mit Haft-/Gleitreibung + Hysterese.
+	 *
+	 * Solange die Anforderung unter der Haftreibung bleibt, wird sie voll
+	 * uebertragen. UEberschreitet sie die Haftreibung, RUTSCHT der Reifen (Rad
+	 * dreht durch bzw. blockiert): der Grip faellt auf die (kleinere) Gleit-
+	 * reibung und bleibt dort, bis die Anforderung wieder unter die Gleitreibung
+	 * faellt (Hysterese gegen Flattern am Grenzwert). @param bSlipping wird als
+	 * Zustand hinein- und herausgereicht. Datenrein pruefbar
+	 * (Test Vehicles.Physics.LongitudinalSlip).
+	 */
+	static float ComputeTransmittedLongitudinalForce(
+		float DemandN, float StaticGripN, float KineticGripN, bool& bSlipping);
+
+	/**
+	 * Uebertragbare Bremskraft bei blockierendem Rad - Threshold-/ABS-Anmutung.
+	 *
+	 * Pulst zwischen Gleit- und Haftreibung (das Rad wechselt zwischen blockiert
+	 * und wieder greifend), erreicht NIE mehr als die Haftreibung ("begrenzt")
+	 * und liegt im Mittel bei (Static+Kinetic)/2. Datenrein pruefbar.
+	 */
+	static float ComputeAbsBrakeCapN(float StaticGripN, float KineticGripN, float PhaseRad);
+
 	void Tick(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds, FWiesbadenVehiclePhysicsOutput& Out);
 
 	/** Setzt das Fahrzeug in den Ruhezustand zurueck (Stand, 1. Gang, voller Tank). */
 	void Reset();
 
 private:
-	float GetDriveForce(float Throttle) const;
+	/** Rohe Antriebs-Laengskraft am Rad aus Motormoment*Uebersetzung/Radius (vor Grip). */
+	float GetWheelForceDemand(float Throttle) const;
 	float GetTotalGearRatio() const;
 	float RpmFromSpeed(float Speed) const;
 	float MotorTorqueAt(float Rpm) const;

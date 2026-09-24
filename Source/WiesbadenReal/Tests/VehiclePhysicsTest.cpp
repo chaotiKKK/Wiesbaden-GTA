@@ -416,6 +416,140 @@ bool FVehicleLoadTransferTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleLongitudinalSlipTest,
+	"WiesbadenReal.Vehicles.Physics.LongitudinalSlip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Laengsschlupf / Traktionsverlust: durchdrehende Antriebsraeder beim harten
+ * Anfahren und blockierende Raeder mit gepulster Bremskraft beim starken
+ * Bremsen. Beides ueber Haft-/Gleitreibung mit Hysterese - die letzte grosse
+ * Luecke zwischen "berechenbar" und "glaubwuerdig".
+ */
+bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
+{
+	// -- Reine Kennlinie: Haft-/Gleitreibung mit Hysterese -------------------
+	{
+		const float StaticGrip = 3000.0f;
+		const float KineticGrip = 2000.0f;
+
+		// Haftend, Anforderung unter der Haftgrenze -> voll uebertragen.
+		bool bSlip = false;
+		float F = FWiesbadenVehiclePhysics::ComputeTransmittedLongitudinalForce(2500.0f, StaticGrip, KineticGrip, bSlip);
+		TestTrue(TEXT("Unter Haftgrenze: volle Kraft, kein Schlupf"),
+			!bSlip && FMath::IsNearlyEqual(F, 2500.0f, 0.1f));
+
+		// Ueber der Haftgrenze -> Rutschen beginnt, Grip faellt auf Gleitreibung.
+		F = FWiesbadenVehiclePhysics::ComputeTransmittedLongitudinalForce(3500.0f, StaticGrip, KineticGrip, bSlip);
+		TestTrue(FString::Printf(TEXT("Ueber Haftgrenze: Schlupf, Gleitreibung (%.0f)"), F),
+			bSlip && FMath::IsNearlyEqual(F, 2000.0f, 0.1f));
+
+		// Rutschend, Anforderung zwischen Gleit- und Haftgrenze -> bleibt rutschend.
+		F = FWiesbadenVehiclePhysics::ComputeTransmittedLongitudinalForce(2500.0f, StaticGrip, KineticGrip, bSlip);
+		TestTrue(FString::Printf(TEXT("Rutschend bleibt rutschend, Gleitreibung (%.0f)"), F),
+			bSlip && FMath::IsNearlyEqual(F, 2000.0f, 0.1f));
+
+		// Rutschend, Anforderung unter Gleitgrenze -> greift wieder (Hysterese).
+		F = FWiesbadenVehiclePhysics::ComputeTransmittedLongitudinalForce(1500.0f, StaticGrip, KineticGrip, bSlip);
+		TestTrue(FString::Printf(TEXT("Unter Gleitgrenze: greift wieder (%.0f)"), F),
+			!bSlip && FMath::IsNearlyEqual(F, 1500.0f, 0.1f));
+
+		// Vorzeichen bleibt erhalten (Rueckwaerts/Bremsen).
+		bSlip = false;
+		F = FWiesbadenVehiclePhysics::ComputeTransmittedLongitudinalForce(-3500.0f, StaticGrip, KineticGrip, bSlip);
+		TestTrue(FString::Printf(TEXT("Negatives Vorzeichen bleibt (%.0f)"), F),
+			bSlip && FMath::IsNearlyEqual(F, -2000.0f, 0.1f));
+	}
+
+	// -- Reine Kennlinie: gepulste Bremskraft, nie ueber der Haftgrenze ------
+	{
+		const float StaticGrip = 6000.0f;
+		const float KineticGrip = 4000.0f;
+
+		const float High = FWiesbadenVehiclePhysics::ComputeAbsBrakeCapN(StaticGrip, KineticGrip, HALF_PI);
+		const float Low = FWiesbadenVehiclePhysics::ComputeAbsBrakeCapN(StaticGrip, KineticGrip, -HALF_PI);
+		TestTrue(FString::Printf(TEXT("Puls-Hoch = Haftreibung (%.0f)"), High),
+			FMath::IsNearlyEqual(High, StaticGrip, 1.0f));
+		TestTrue(FString::Printf(TEXT("Puls-Tief = Gleitreibung (%.0f)"), Low),
+			FMath::IsNearlyEqual(Low, KineticGrip, 1.0f));
+
+		// UEber eine volle Periode: nie ueber Haftreibung, Mittel ~ (S+K)/2.
+		float Sum = 0.0f; float MaxCap = 0.0f; const int32 N = 360;
+		for (int32 i = 0; i < N; ++i)
+		{
+			const float Cap = FWiesbadenVehiclePhysics::ComputeAbsBrakeCapN(
+				StaticGrip, KineticGrip, (2.0f * PI * i) / N);
+			Sum += Cap;
+			MaxCap = FMath::Max(MaxCap, Cap);
+		}
+		TestTrue(FString::Printf(TEXT("Bremskraft nie ueber Haftreibung (max %.0f)"), MaxCap),
+			MaxCap <= StaticGrip + 1.0f);
+		TestTrue(FString::Printf(TEXT("Mittel ~ (Haft+Gleit)/2 (%.0f)"), Sum / N),
+			FMath::IsNearlyEqual(Sum / N, 5000.0f, 50.0f));
+	}
+
+	// -- Im Fahrzeug: Anfahren mit Vollgas -> Radspin, verschwindet bei Fahrt -
+	{
+		FWiesbadenVehiclePhysics Vehicle;
+		Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+
+		bool bSpunAtLaunch = false;
+		for (int32 Step = 0; Step < 120; ++Step)   // erste ~1,2 s
+		{
+			Vehicle.Tick(In, VehicleDt, Out);
+			bSpunAtLaunch = bSpunAtLaunch || Out.bWheelSpin;
+		}
+		TestTrue(TEXT("Vollgas-Start dreht die Antriebsraeder durch"), bSpunAtLaunch);
+
+		// Auf Tempo - bei Fahrt reicht das Moment nicht mehr fuer Radspin.
+		Simulate(Vehicle, In, 10.0f);
+		Vehicle.Tick(In, VehicleDt, Out);
+		TestTrue(TEXT("Bei Fahrt kein Radspin mehr"), !Out.bWheelSpin);
+	}
+
+	// -- Im Fahrzeug: harte Bremsung -> Blockieren + gepulster Bremsschlupf --
+	{
+		FWiesbadenVehiclePhysics Vehicle;
+		Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(Vehicle, In, 12.0f);
+
+		In.Throttle = 0.0f;
+		In.Brake = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+
+		bool bLocked = false;
+		float MinDecel = 0.0f; float MaxDecel = 0.0f; bool bHaveDecel = false;
+		for (int32 Step = 0; Step < 150; ++Step)   // ~1,5 s harte Bremsung
+		{
+			Vehicle.Tick(In, VehicleDt, Out);
+			if (Out.bWheelLock)
+			{
+				bLocked = true;
+				const float Decel = Out.ForwardAccelerationMetersPerS2;   // negativ
+				if (!bHaveDecel) { MinDecel = MaxDecel = Decel; bHaveDecel = true; }
+				MinDecel = FMath::Min(MinDecel, Decel);
+				MaxDecel = FMath::Max(MaxDecel, Decel);
+			}
+		}
+		TestTrue(TEXT("Harte Bremsung blockiert die Raeder"), bLocked);
+		// Gepulst: die Verzoegerung schwankt spuerbar (Gleit<->Haft), nicht konstant.
+		TestTrue(FString::Printf(TEXT("Bremsschlupf pulst (Spanne %.2f m/s^2)"), MaxDecel - MinDecel),
+			(MaxDecel - MinDecel) > 0.5f);
+
+		// Trotz Blockierens kommt das Fahrzeug zum Stehen (kein Rueckwaerts).
+		SimulateTo(Vehicle, In, 8.0f, Out);
+		TestTrue(FString::Printf(TEXT("Kommt zum Stehen (%.2f km/h)"), Out.SpeedKmh), Out.SpeedKmh < 1.0f);
+		TestTrue(TEXT("Keine Rueckwaertsbewegung durch die Bremse"), Out.ForwardSpeedMetersPerS >= 0.0f);
+	}
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleEngineBrakeTest,
 	"WiesbadenReal.Vehicles.Physics.EngineBrake",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
