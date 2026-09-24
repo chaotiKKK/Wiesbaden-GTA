@@ -24,6 +24,7 @@ void FWiesbadenVehiclePhysics::Reset()
 	bBrakeLockState = false;
 	SurfaceGripScale = 1.0f;
 	ShiftTimeRemaining = 0.0f;
+	WheelSpinFlare = 0.0f;
 }
 
 float FWiesbadenVehiclePhysics::GetTotalGearRatio() const
@@ -43,6 +44,25 @@ float FWiesbadenVehiclePhysics::RpmFromSpeed(float Speed) const
 	// v (m/s) -> Radwinkelgeschwindigkeit -> Motordrehzahl ueber die Uebersetzung.
 	const float WheelOmega = Speed / FMath::Max(WheelRadiusM, 0.01f);
 	return WheelOmega * GetTotalGearRatio() * (60.0f / (2.0f * PI));
+}
+
+float FWiesbadenVehiclePhysics::AdvanceWheelSpinFlare(
+	bool bWheelSpinning, float Throttle, float CurrentFlareRpm,
+	float MaxFlareRpm, float RiseRatePerSec, float DecayRatePerSec, float DeltaSeconds)
+{
+	// Ziel: beim Durchdrehen dreht der unbelastete Motor hoch (skaliert mit dem
+	// Gaspedal), sonst faellt der Flare auf 0 zurueck.
+	const float Target = bWheelSpinning
+		? MaxFlareRpm * FMath::Clamp(Throttle, 0.0f, 1.0f)
+		: 0.0f;
+	// Konstante Rate zum Ziel - hoch schnell (Ausbrechen), zurueck langsamer.
+	const float Rate = (Target > CurrentFlareRpm) ? RiseRatePerSec : DecayRatePerSec;
+	const float Step = FMath::Max(0.0f, Rate) * FMath::Max(0.0f, DeltaSeconds);
+	if (CurrentFlareRpm < Target)
+	{
+		return FMath::Min(CurrentFlareRpm + Step, Target);
+	}
+	return FMath::Max(CurrentFlareRpm - Step, Target);
 }
 
 float FWiesbadenVehiclePhysics::MotorTorqueAt(float Rpm) const
@@ -416,10 +436,20 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 		EngineRpm = FMath::Clamp(RpmFromSpeed(SpeedMetersPerS), Powertrain.IdleRpm * 0.5f, Powertrain.MaxRpm * 1.05f);
 	}
 
+	// Radspin-Drehzahlflare (nur Anzeige/Klang): beim Durchdrehen entkoppelt der
+	// Motor von der Strasse und dreht hoch. Er wird NUR auf die AUSGABE-Drehzahl
+	// gelegt - die interne EngineRpm (Schalten, Drehmoment) bleibt geschwindig-
+	// keitsabgeleitet, damit der Flare den Antrieb nicht destabilisiert.
+	WheelSpinFlare = AdvanceWheelSpinFlare(
+		Out.bWheelSpin, Throttle, WheelSpinFlare,
+		MaxWheelSpinFlareRpm, WheelSpinFlareRiseRate, WheelSpinFlareDecayRate, DeltaSeconds);
+
 	// Laengs-Ausgaben fuellen.
 	Out.ForwardSpeedMetersPerS = SpeedMetersPerS;
 	Out.SpeedKmh = FMath::Abs(SpeedMetersPerS) * 3.6f;
-	Out.EngineRpm = EngineRpm;
+	Out.EngineRpm = FMath::Clamp(
+		EngineRpm + WheelSpinFlare,
+		Powertrain.IdleRpm * 0.5f, Powertrain.MaxRpm * 1.15f);
 	Out.Gear = Gear;
 	Out.ForwardAccelerationMetersPerS2 = Acceleration;
 

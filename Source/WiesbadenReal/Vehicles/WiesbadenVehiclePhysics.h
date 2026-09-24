@@ -185,6 +185,28 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
 	float UpshiftDurationSeconds = 0.35f;
 
+	// -- Antriebsschlupf-Drehzahlflare (nur Anzeige/Klang) ----------------
+	/**
+	 * Wie weit die ANGEZEIGTE/gehoerte Drehzahl bei Radspin ueber die aus der
+	 * Fahrgeschwindigkeit abgeleitete Drehzahl hochflart (U/min).
+	 *
+	 * Beim Durchdrehen entkoppeln die Antriebsraeder von der Strasse: der
+	 * unbelastete Motor dreht hoch, waehrend der Wagen kaum schneller wird. Das
+	 * ist eine reine AUSGABE (Out.EngineRpm -> Tacho + Motorklang); die INTERNE
+	 * Drehzahl fuer Schalten und Drehmoment bleibt geschwindigkeitsabgeleitet,
+	 * damit der Flare den Antrieb NICHT destabilisiert. 0 = aus.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0"))
+	float MaxWheelSpinFlareRpm = 2500.0f;
+
+	/** Anstiegsrate des Flares (U/min je s) - schnelles Hochdrehen beim Ausbrechen. */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0"))
+	float WheelSpinFlareRiseRate = 9000.0f;
+
+	/** Abklingrate des Flares (U/min je s) - Rueckfall, sobald die Traktion greift. */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0"))
+	float WheelSpinFlareDecayRate = 5000.0f;
+
 	/** Radradius (m). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.1"))
 	float WheelRadiusM = 0.343f;
@@ -444,6 +466,14 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	bool bDriveSlipState = false;
 
+	/**
+	 * Aktueller Drehzahlflare bei Radspin (U/min ueber der geschwindigkeits-
+	 * abgeleiteten Drehzahl). Reiner Anzeige-/Klangzustand, greift NICHT in
+	 * Antrieb, Schaltung oder Drehmoment ein. Siehe MaxWheelSpinFlareRpm.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float WheelSpinFlare = 0.0f;
+
 	/** Hysterese-Zustand Bremsschlupf (Rad blockiert). */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	bool bBrakeLockState = false;
@@ -474,6 +504,18 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	 */
 	static float AdvanceSteerAngle(
 		float CurrentNorm, float TargetNorm, float Rate, float ReturnRate, float DeltaSeconds);
+
+	/**
+	 * Naechster Drehzahlflare bei Radspin (datenrein/statisch, testbar:
+	 * Vehicles.Physics.WheelSpinFlare).
+	 *
+	 * Ziel = bWheelSpinning ? MaxFlareRpm * Throttle : 0. Der Wert wandert mit
+	 * konstanter Rate zum Ziel - beim Ausbrechen schnell hoch (RiseRatePerSec),
+	 * beim Wiedergreifen langsamer zurueck (DecayRatePerSec), rahmenratenfest.
+	 */
+	static float AdvanceWheelSpinFlare(
+		bool bWheelSpinning, float Throttle, float CurrentFlareRpm,
+		float MaxFlareRpm, float RiseRatePerSec, float DecayRatePerSec, float DeltaSeconds);
 
 	/**
 	 * Verbleibende Querbeschleunigung in m/s^2 nach dem Reibungskreis.
