@@ -1046,3 +1046,93 @@ bool FVehicleLockedYawDampingTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleShiftingTest,
+	"WiesbadenReal.Vehicles.Physics.Shifting",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Hochschalten mit Zugkraftunterbrechung: fuer die Schaltdauer faellt das
+ * Antriebsmoment weg (die Beschleunigung sackt kurz ab) und erholt sich danach.
+ * Ohne Schaltvorgang bleibt alles unveraendert; die Schaltverluste kosten etwas
+ * 0-100-Zeit, die Endgeschwindigkeit bleibt gleich.
+ */
+bool FVehicleShiftingTest::RunTest(const FString& Parameters)
+{
+	// -- Delle beim Hochschalten -------------------------------------------
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();   // Standard: UpshiftDurationSeconds = 0.35 s
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+
+		int32 PrevGear = V.Gear;
+		float AccelBefore = 0.0f;
+		bool bFound = false;
+		for (int32 Step = 0; Step < 600 && !bFound; ++Step)
+		{
+			const float LastAccel = AccelBefore;
+			V.Tick(In, VehicleDt, Out);
+			if (Out.Gear > PrevGear)
+			{
+				// Hochschalten passierte in diesem Tick.
+				TestTrue(TEXT("Schaltunterbrechung wird gesetzt"), V.ShiftTimeRemaining > 0.0f);
+
+				float MinDuring = TNumericLimits<float>::Max();
+				int32 Guard = 0;
+				while (V.ShiftTimeRemaining > 0.0f && Guard++ < 200)
+				{
+					V.Tick(In, VehicleDt, Out);
+					MinDuring = FMath::Min(MinDuring, Out.ForwardAccelerationMetersPerS2);
+				}
+				// In der Schaltpause faellt die Beschleunigung deutlich unter den
+				// Wert davor (kein Antrieb -> nur Widerstaende).
+				TestTrue(FString::Printf(TEXT("Zugkraft-Delle in der Schaltpause (%.2f < %.2f m/s^2)"),
+					MinDuring, LastAccel), MinDuring < LastAccel - 1.0f);
+
+				// Nach der Schaltung greift der neue Gang wieder.
+				for (int32 k = 0; k < 15; ++k) { V.Tick(In, VehicleDt, Out); }
+				TestTrue(FString::Printf(TEXT("Zugkraft erholt sich (%.2f m/s^2)"),
+					Out.ForwardAccelerationMetersPerS2), Out.ForwardAccelerationMetersPerS2 > 0.5f);
+				bFound = true;
+			}
+			else
+			{
+				PrevGear = Out.Gear;
+				AccelBefore = Out.ForwardAccelerationMetersPerS2;
+			}
+		}
+		TestTrue(TEXT("Ein Hochschalten trat auf"), bFound);
+	}
+
+	// -- A/B: Schaltverluste kosten Zeit, Endgeschwindigkeit bleibt gleich --
+	auto RunTo = [](float UpshiftDur, float& OutTimeTo100, float& OutTopKmh)
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		V.UpshiftDurationSeconds = UpshiftDur;
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+		OutTimeTo100 = -1.0f;
+		for (float T = 0.0f; T < 60.0f; T += VehicleDt)
+		{
+			V.Tick(In, VehicleDt, Out);
+			if (OutTimeTo100 < 0.0f && Out.SpeedKmh >= 100.0f) { OutTimeTo100 = T; }
+		}
+		OutTopKmh = Out.SpeedKmh;
+	};
+
+	float T100Shift = 0.0f, TopShift = 0.0f, T100Instant = 0.0f, TopInstant = 0.0f;
+	RunTo(0.35f, T100Shift, TopShift);
+	RunTo(0.0f, T100Instant, TopInstant);
+
+	TestTrue(TEXT("Beide erreichen 100 km/h"), T100Shift > 0.0f && T100Instant > 0.0f);
+	TestTrue(FString::Printf(TEXT("Schalten kostet 0-100-Zeit (%.1f > %.1f s)"), T100Shift, T100Instant),
+		T100Shift > T100Instant + 0.3f);
+	TestTrue(FString::Printf(TEXT("Endgeschwindigkeit unveraendert (%.0f ~ %.0f km/h)"), TopShift, TopInstant),
+		FMath::IsNearlyEqual(TopShift, TopInstant, 1.0f));
+
+	return true;
+}

@@ -23,6 +23,7 @@ void FWiesbadenVehiclePhysics::Reset()
 	bDriveSlipState = false;
 	bBrakeLockState = false;
 	SurfaceGripScale = 1.0f;
+	ShiftTimeRemaining = 0.0f;
 }
 
 float FWiesbadenVehiclePhysics::GetTotalGearRatio() const
@@ -76,6 +77,11 @@ void FWiesbadenVehiclePhysics::ShiftGear(const FWiesbadenVehiclePhysicsInput& In
 	if (EngineRpm > ShiftUpRpm && Gear < LastGear)
 	{
 		Gear += 1;
+		// Hochschalten trennt kurz den Kraftschluss (Kupplung): fuer die
+		// Schaltdauer faellt das Antriebsmoment weg (Zugkraftunterbrechung), dann
+		// greift der neue Gang. Nur beim HOCHschalten - das gibt dem Antrieb sein
+		// mechanisches Gefuehl, ohne Runterschalten/Leerlauf/Stand zu beruehren.
+		ShiftTimeRemaining = UpshiftDurationSeconds;
 	}
 	else if (EngineRpm < ShiftDownRpm && Gear > 1)
 	{
@@ -245,7 +251,11 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 	float DeltaSeconds,
 	FWiesbadenVehiclePhysicsOutput& Out)
 {
+	// Laufende Schaltunterbrechung altern lassen, DANN schalten (ein frisch in
+	// ShiftGear gesetzter Timer laeuft so die volle Schaltdauer).
+	ShiftTimeRemaining = FMath::Max(0.0f, ShiftTimeRemaining - DeltaSeconds);
 	ShiftGear(Input, DeltaSeconds);
+	const bool bShifting = ShiftTimeRemaining > 0.0f;
 
 	const bool bReverse = (Gear < 0);
 	const float Throttle = FMath::Clamp(Input.Throttle, 0.0f, 1.0f);
@@ -275,7 +285,7 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 	// harter Vollgas-Start kostet so Vortrieb (Radspin) statt ihn zu klemmen.
 	// Radlast aus dem VORTICK (a_x erst nach der Antriebskraft bekannt).
 	float DriveForce = 0.0f;
-	if (HasFuel())
+	if (HasFuel() && !bShifting)
 	{
 		const float DemandRaw = GetWheelForceDemand(Throttle);
 		const float Demand = bReverse ? -DemandRaw : DemandRaw;
@@ -289,6 +299,7 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 	}
 	else
 	{
+		// Kein Kraftschluss (kein Sprit ODER Kupplung waehrend des Hochschaltens).
 		bDriveSlipState = false;
 	}
 	Out.bWheelSpin = bDriveSlipState && FMath::Abs(DriveForce) > 1.0f;
@@ -363,7 +374,7 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 	// Das Moment wirkt ueber die Gesamtuebersetzung - im kleinen Gang deutlich
 	// spuerbar, im grossen kaum, genau wie beim echten Fahrzeug.
 	float EngineBrakeForce = 0.0f;
-	if (Throttle < 0.05f && FMath::Abs(Speed) > 0.5f && Gear != 0)
+	if (Throttle < 0.05f && FMath::Abs(Speed) > 0.5f && Gear != 0 && !bShifting)
 	{
 		const float RpmFraction = FMath::Clamp(EngineRpm / FMath::Max(Powertrain.MaxRpm, 1.0f), 0.0f, 1.2f);
 		const float TorqueNm = EngineBrakeTorqueNm * RpmFraction;
