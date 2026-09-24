@@ -58,6 +58,15 @@ def add_c(mat, a, ao, c, x, y):
     return n
 
 def make_downwash():
+    """Downwash-Staub als weicher, sich aufwirbelnder Ring statt flacher Scheibe.
+
+    Frueher eine flache, gleichmaessige Zylinder-Scheibe mit Rauschen (kantiger
+    Achteck-Rand). Jetzt ein RING (Mitte durchsichtig, weiche Aussenkante vor dem
+    Netzrand) mit rotierenden Spiralbaendern (Winkel + Radius + Time) und einem
+    nach aussen driftenden Rauschen - der Staub wirbelt sichtbar. LIT, damit der
+    Staub der Tageszeit folgt. Der Opacity-Parameter bleibt (der Heli treibt ihn
+    aus Bodennaehe/Collective).
+    """
     name = "M_WbDownwash"
     p = "%s/%s" % (DIR, name)
     if EAL.does_asset_exist(p):
@@ -66,23 +75,95 @@ def make_downwash():
     m.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
     m.set_editor_property("two_sided", True)
 
-    col = expr(m, unreal.MaterialExpressionConstant3Vector, -600, 0)
-    col.set_editor_property("constant", unreal.LinearColor(0.58, 0.52, 0.44, 1.0))
+    col = expr(m, unreal.MaterialExpressionConstant3Vector, -300, -440)
+    col.set_editor_property("constant", unreal.LinearColor(0.60, 0.54, 0.46, 1.0))
     MEL.connect_material_property(col, "", MP.MP_BASE_COLOR)
-
-    rough = constant(m, 0.9, -600, 250)
+    rough = constant(m, 0.95, -300, -320)
     MEL.connect_material_property(rough, "", MP.MP_ROUGHNESS)
 
-    op = expr(m, unreal.MaterialExpressionScalarParameter, -600, 450)
+    # -- Radialkoordinate R = Weltabstand/ObjektRadius (drehungsunabhaengig) ----
+    wpos = expr(m, unreal.MaterialExpressionWorldPosition, -1700, -260)
+    opos = expr(m, unreal.MaterialExpressionObjectPositionWS, -1700, -100)
+    orad = expr(m, unreal.MaterialExpressionObjectRadius, -1700, 60)
+    dist = expr(m, unreal.MaterialExpressionDistance, -1480, -200)
+    MEL.connect_material_expressions(wpos, "", dist, "A")
+    MEL.connect_material_expressions(opos, "", dist, "B")
+    rdiv = expr(m, unreal.MaterialExpressionDivide, -1300, -160)
+    MEL.connect_material_expressions(dist, "", rdiv, "A")
+    MEL.connect_material_expressions(orad, "", rdiv, "B")
+    R = expr(m, unreal.MaterialExpressionClamp, -1140, -160)
+    MEL.connect_material_expressions(rdiv, "", R, "")
+    R.set_editor_property("min_default", 0.0)
+    R.set_editor_property("max_default", 1.0)
+
+    # -- Ring: Mitte durchsichtig, weiche Aussenkante vor dem facettierten Rand -
+    inner = expr(m, unreal.MaterialExpressionSmoothStep, -960, -280)
+    inner.set_editor_property("const_min", 0.10)
+    inner.set_editor_property("const_max", 0.40)
+    MEL.connect_material_expressions(R, "", inner, "Value")
+    outerss = expr(m, unreal.MaterialExpressionSmoothStep, -960, -140)
+    outerss.set_editor_property("const_min", 0.78)
+    outerss.set_editor_property("const_max", 0.96)
+    MEL.connect_material_expressions(R, "", outerss, "Value")
+    outer = expr(m, unreal.MaterialExpressionOneMinus, -800, -140)
+    MEL.connect_material_expressions(outerss, "", outer, "")
+    ring = mul(m, inner, "", outer, "", -640, -210)
+
+    # -- Zeit + Winkel: rotierende Spiralbaender (der Wirbel) -------------------
+    time = expr(m, unreal.MaterialExpressionTime, -1700, 260)
+    dvec = expr(m, unreal.MaterialExpressionSubtract, -1480, 320)
+    MEL.connect_material_expressions(wpos, "", dvec, "A")
+    MEL.connect_material_expressions(opos, "", dvec, "B")
+    dx = expr(m, unreal.MaterialExpressionComponentMask, -1300, 300)
+    dx.set_editor_property("r", True); dx.set_editor_property("g", False)
+    dx.set_editor_property("b", False); dx.set_editor_property("a", False)
+    MEL.connect_material_expressions(dvec, "", dx, "")
+    dy = expr(m, unreal.MaterialExpressionComponentMask, -1300, 400)
+    dy.set_editor_property("r", False); dy.set_editor_property("g", True)
+    dy.set_editor_property("b", False); dy.set_editor_property("a", False)
+    MEL.connect_material_expressions(dvec, "", dy, "")
+    ang = expr(m, unreal.MaterialExpressionArctangent2, -1120, 340)
+    MEL.connect_material_expressions(dy, "", ang, "Y")
+    MEL.connect_material_expressions(dx, "", ang, "X")
+
+    # Phase = ang*Spokes + R*Twist - Time*Spin -> nach aussen gedrehte Baender.
+    angS = mul_c(m, ang, "", 3.0, -940, 320)
+    Rtw = mul_c(m, R, "", 7.0, -940, 440)
+    base = add(m, angS, "", Rtw, "", -760, 360)
+    tt = mul_c(m, time, "", 1.6, -940, 560)
+    phase = expr(m, unreal.MaterialExpressionSubtract, -600, 380)
+    MEL.connect_material_expressions(base, "", phase, "A")
+    MEL.connect_material_expressions(tt, "", phase, "B")
+    cosP = expr(m, unreal.MaterialExpressionCosine, -440, 380)
+    cosP.set_editor_property("period", TWO_PI)
+    MEL.connect_material_expressions(phase, "", cosP, "")
+    swirl = add_c(m, mul_c(m, cosP, "", 0.5, -300, 380), "", 0.5, -160, 380)   # 0..1
+    swirlMod = add_c(m, mul_c(m, swirl, "", 0.7, -20, 380), "", 0.3, 140, 380)  # 0.3..1.0
+
+    # -- Animiertes Rauschen (Koernung, driftet nach aussen) -------------------
+    dvecS = mul_c(m, dvec, "", 0.03, -1120, 620)
+    panc = expr(m, unreal.MaterialExpressionConstant3Vector, -1120, 720)
+    panc.set_editor_property("constant", unreal.LinearColor(0.5, 0.3, 0.0, 1.0))
+    pan = mul(m, panc, "", time, "", -940, 700)
+    npos = add(m, dvecS, "", pan, "", -760, 640)
+    nz = expr(m, unreal.MaterialExpressionNoise, -600, 640)
+    nz.set_editor_property("scale", 0.12)
+    nz.set_editor_property("output_min", 0.45)
+    nz.set_editor_property("output_max", 1.0)
+    MEL.connect_material_expressions(npos, "", nz, "Position")
+
+    # -- Opazitaet = Ring * Wirbel * Rauschen * Opacity-Parameter --------------
+    op = expr(m, unreal.MaterialExpressionScalarParameter, 200, 720)
     op.set_editor_property("parameter_name", "Opacity")
     op.set_editor_property("default_value", 0.0)
-
-    nz = expr(m, unreal.MaterialExpressionNoise, -600, 650)
-    nz.set_editor_property("scale", 0.35)
-    nz.set_editor_property("output_min", 0.35)
-    nz.set_editor_property("output_max", 1.0)
-    grain = mul(m, op, "", nz, "", -300, 500)
-    MEL.connect_material_property(grain, "", MP.MP_OPACITY)
+    prof = mul(m, ring, "", swirlMod, "", 340, 300)
+    prof2 = mul(m, prof, "", nz, "", 480, 460)
+    opac = mul(m, prof2, "", op, "", 620, 560)
+    opcl = expr(m, unreal.MaterialExpressionClamp, 760, 560)
+    MEL.connect_material_expressions(opac, "", opcl, "")
+    opcl.set_editor_property("min_default", 0.0)
+    opcl.set_editor_property("max_default", 1.0)
+    MEL.connect_material_property(opcl, "", MP.MP_OPACITY)
 
     MEL.recompile_material(m)
     EAL.save_loaded_asset(m)
