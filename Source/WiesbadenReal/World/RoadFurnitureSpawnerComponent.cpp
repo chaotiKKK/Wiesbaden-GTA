@@ -12,7 +12,11 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Math/RotationMatrix.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "UObject/UObjectGlobals.h"
+#include "World/WiesbadenCitySubsystem.h"
+#include "Engine/World.h"
 
 URoadFurnitureSpawnerComponent::URoadFurnitureSpawnerComponent()
 {
@@ -469,6 +473,123 @@ void URoadFurnitureSpawnerComponent::SpawnStreetLamps(
 	}
 
 	CreateLampLightPool();
+	EnsureLampHeads();
+}
+
+float URoadFurnitureSpawnerComponent::ComputeStreetLampNightFactor(float SunElevationFactor)
+{
+	// Einblenden zwischen 0,18 (Scheinwerfer-Automatik der Fahrzeuge) und
+	// -0,05 (Sonne knapp unter dem Horizont) - Stadt- und Fahrzeuglicht
+	// gehen damit zusammen an, nicht erst in tiefer Nacht.
+	constexpr float On = -0.05f;
+	constexpr float Off = 0.18f;
+	const float T = FMath::Clamp((Off - SunElevationFactor) / (Off - On), 0.0f, 1.0f);
+	return T * T * (3.0f - 2.0f * T);
+}
+
+void URoadFurnitureSpawnerComponent::EnsureLampHeads()
+{
+	if (LampLocations.Num() == 0 || (LampGlassInstances && LampGlassInstances->GetInstanceCount() > 0))
+	{
+		return;
+	}
+	UStaticMesh* Cylinder = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder"));
+	if (!Cylinder)
+	{
+		return;
+	}
+	auto MakeHism = [this, Cylinder](const TCHAR* Name)
+	{
+		UHierarchicalInstancedStaticMeshComponent* Hism =
+			NewObject<UHierarchicalInstancedStaticMeshComponent>(GetOwner(), Name);
+		Hism->SetupAttachment(this);
+		Hism->SetStaticMesh(Cylinder);
+		Hism->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Hism->SetCastShadow(false);
+		Hism->SetCullDistances(0, LampPostCullDistanceCm);
+		Hism->RegisterComponent();
+		return Hism;
+	};
+	LampCapInstances = MakeHism(TEXT("LampCaps"));
+	LampGlassInstances = MakeHism(TEXT("LampGlasses"));
+	if (LampPostMaterial)
+	{
+		LampCapInstances->SetMaterial(0, LampPostMaterial);
+	}
+	// Eigenes ISM-taugliches Material (Tools/create_street_lamp_material.py):
+	// ohne used_with_instanced_static_meshes ersetzt UE es im Spiel durch
+	// das Default-Material.
+	if (UMaterialInterface* Glass = LoadObject<UMaterialInterface>(nullptr,
+		TEXT("/Game/Materials/City/M_WbStreetLampGlass.M_WbStreetLampGlass")))
+	{
+		LampGlassMID = UMaterialInstanceDynamic::Create(Glass, this);
+		LampGlassMID->SetVectorParameterValue(TEXT("LensColor"), LampLightColor);
+		LampGlassMID->SetScalarParameterValue(TEXT("Glow"), 0.0f);
+		LampGlassInstances->SetMaterial(0, LampGlassMID);
+	}
+
+	// Pilzleuchte wie an Wohnstrassen: Kappe 64 cm breit, darunter das Glas.
+	// Der Engine-Zylinder ist 100 cm hoch, Radius 50 cm, Ursprung mittig.
+	const FVector CapScale(0.64f, 0.64f, 0.10f);
+	const FVector GlassScale(0.50f, 0.50f, 0.16f);
+	TArray<FTransform> Caps, Glasses;
+	Caps.Reserve(LampLocations.Num());
+	Glasses.Reserve(LampLocations.Num());
+	for (const FVector& Base : LampLocations)
+	{
+		const FVector Top = Base + FVector(0.0f, 0.0f, LampPostHeightCm);
+		Caps.Add(FTransform(FRotator::ZeroRotator, Top + FVector(0.0f, 0.0f, 22.0f), CapScale));
+		Glasses.Add(FTransform(FRotator::ZeroRotator, Top + FVector(0.0f, 0.0f, 9.0f), GlassScale));
+	}
+	LampCapInstances->AddInstances(Caps, false, /*bWorldSpace=*/true);
+	LampGlassInstances->AddInstances(Glasses, false, /*bWorldSpace=*/true);
+	LastLampNightFactor = -1.0f;
+	UE_LOG(LogWbCore, Log, TEXT("Leuchtenkoepfe: %d Masten mit Kappe und Glas (Glasmaterial %s)."),
+		Glasses.Num(), LampGlassMID ? TEXT("geladen") : TEXT("FEHLT - Tools/create_street_lamp_material.py"));
+}
+
+void URoadFurnitureSpawnerComponent::UpdateLampNightState()
+{
+	const UWorld* World = GetWorld();
+	const UWiesbadenCitySubsystem* City = World ? World->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+	if (!City)
+	{
+		return;
+	}
+	// A/B-Schalter im Stil von -WbLumen: -WbNoStreetLamps lasst Glas-Glow und
+	// Punktlichter aus, damit der Laternen-Beitrag im Nachtbild messbar ist
+	// (andere Threads aendern die Szene laufend - ein Vergleich gegen alte
+	// Screenshots misst sonst alles moegliche ausser den Laternen).
+	static const bool bNoStreetLamps = FParse::Param(FCommandLine::Get(), TEXT("WbNoStreetLamps"));
+	const float Night = bNoStreetLamps
+		? 0.0f
+		: ComputeStreetLampNightFactor(City->GetWeatherState().SunElevationFactor());
+	if (FMath::Abs(Night - LastLampNightFactor) < 0.01f)
+	{
+		return;
+	}
+	const bool bFirst = LastLampNightFactor < 0.0f;
+	LastLampNightFactor = Night;
+	if (LampGlassMID)
+	{
+		LampGlassMID->SetScalarParameterValue(TEXT("Glow"), LampGlassGlowAtNight * Night);
+	}
+	// Punktlichter tagsueber aus: 48 unsichtbare 40.000-cd-Lichter kosteten
+	// bisher auch in der Mittagssonne Bildzeit.
+	for (UPointLightComponent* Light : LampLights)
+	{
+		if (Light)
+		{
+			Light->SetIntensity(LampLightIntensity * Night);
+			Light->SetVisibility(Night > 0.01f);
+		}
+	}
+	if (bFirst)
+	{
+		UE_LOG(LogWbCore, Log, TEXT("Laternen: Nachtanteil %.2f (Sonne %.2f) - Glas-Glow %.1f, Punktlichter %s."),
+			Night, City->GetWeatherState().SunElevationFactor(), LampGlassGlowAtNight * Night,
+			Night > 0.01f ? TEXT("an") : TEXT("aus"));
+	}
 }
 
 void URoadFurnitureSpawnerComponent::CreateLampLightPool()
@@ -525,6 +646,7 @@ void URoadFurnitureSpawnerComponent::BeginPlay()
 		MaxActiveLampLights);
 
 	CreateLampLightPool();
+	EnsureLampHeads();
 }
 
 void URoadFurnitureSpawnerComponent::UpdateLampLights(const FVector& Reference)
@@ -567,7 +689,8 @@ void URoadFurnitureSpawnerComponent::UpdateLampLights(const FVector& Reference)
 
 		const FVector& LampBase = LampLocations[Order[Slot]];
 		Light->SetWorldLocation(LampBase + FVector(0.0f, 0.0f, LampPostHeightCm));
-		Light->SetVisibility(true);
+		// Sichtbarkeit/Staerke folgen der Tageszeit (UpdateLampNightState).
+		Light->SetVisibility(LastLampNightFactor > 0.01f);
 	}
 
 	// Einmalig melden, wie weit die naechste Laterne ueberhaupt entfernt ist.
@@ -624,6 +747,9 @@ void URoadFurnitureSpawnerComponent::TickComponent(
 		return;
 	}
 	LampUpdateCountdown = 0.5f;
+
+	// Tageszeit zuerst - sie laeuft auch, wenn der Spieler steht.
+	UpdateLampNightState();
 
 	const UWorld* World = GetWorld();
 	const APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
