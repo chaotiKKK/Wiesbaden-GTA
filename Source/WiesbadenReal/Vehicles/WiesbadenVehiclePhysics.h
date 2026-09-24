@@ -600,7 +600,20 @@ private:
 
 	/** Rohe Antriebs-Laengskraft am Rad aus Motormoment*Uebersetzung/Radius (vor Grip). */
 	float GetWheelForceDemand(float Throttle) const;
+
+	/** Gesamtuebersetzung (Gang * Achsantrieb) als BETRAG - ohne Richtung. */
 	float GetTotalGearRatio() const;
+
+	/**
+	 * Abtriebsrichtung des eingelegten Gangs: +1 vorwaerts, -1 rueckwaerts.
+	 *
+	 * Das Vorzeichen gehoert zum Gang, nicht zur Uebersetzung: der Motor dreht
+	 * immer gleich herum, im Rueckwaertsgang kehrt das Getriebe die Richtung am
+	 * Rad um. Wer zwischen Fahrgeschwindigkeit und Motor/Antriebskraft umrechnet,
+	 * braucht deshalb Uebersetzung (Betrag) UND Richtung.
+	 */
+	float GetGearDirection() const;
+
 	float RpmFromSpeed(float Speed) const;
 	float MotorTorqueAt(float Rpm) const;
 	void ShiftGear(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds);

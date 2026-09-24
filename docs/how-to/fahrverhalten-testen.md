@@ -3,7 +3,7 @@
 Diese Anleitung zeigt Schritt fuer Schritt, wie man das Fahrverhalten des
 besessenen Fahrzeugs (Standard-Kaefer) ueber die echte Fahrphysik ausloest und am
 Log nachweist, dass es **beschleunigt** (Laengsdynamik) und **lenkt**
-(Kursaenderung) - ohne Tastatur, headless.
+(Kursaenderung) - ohne Tastatur, im gerenderten Unreal-Spielbetrieb.
 
 Sie setzt voraus, dass das Editor-Target gebaut ist. Die Befehlsreferenz steht in
 `docs/reference/wbdev-konsolenbefehle.md`; hier geht es um Ablauf und Auswertung.
@@ -11,14 +11,20 @@ Sie setzt voraus, dass das Editor-Target gebaut ist. Die Befehlsreferenz steht i
 ## Ueberblick
 
 `WbDrive <s>` faehrt den besessenen `AWiesbadenCar` ueber den Test-Harness per
-`SetExternalControl` (echte Chaos-Fahrphysik, keine Tastatur) in drei Phasen:
+`SetExternalControl` (das Physikmodell des Standard-Kaefers) in vier Phasen:
 
-1. **Beschleunigen** (0-45 % der Dauer): Vollgas geradeaus -> Tempo steigt, Gang
+1. **Beschleunigen** (0-40 % der Dauer): Vollgas geradeaus -> Tempo steigt, Gang
    schaltet hoch.
-2. **Rechts lenken** (45-72 %): Vollgas + Lenkeinschlag rechts -> Kursaenderung
+2. **Rechts lenken** (40-60 %): Vollgas + Lenkeinschlag rechts -> Kursaenderung
    waechst ins Positive.
-3. **Links lenken** (72-100 %): Lenkeinschlag links -> die Kursaenderung geht
+3. **Links lenken** (60-80 %): Lenkeinschlag links -> die Kursaenderung geht
    wieder zurueck.
+4. **Bremsen** (80-100 %): Gas weg, volle Bremse.
+
+Mit `-WbDriveReverse` beim Spielstart laeuft dasselbe Profil rueckwaerts.
+Das ist nur ein Test-Harness-Schalter; die normale Fahrzeugsteuerung bleibt
+unveraendert. `WbDrive 12` prueft Anfahren, Gegenlenken und Bremsen; Gang -1
+und steigende Motordrehzahl muessen im Log stehen, nicht 400 U/min bei Fahrt.
 
 Nachweis = das Log zeigt Tempo deutlich > 0 UND eine Kursaenderung deutlich != 0.
 

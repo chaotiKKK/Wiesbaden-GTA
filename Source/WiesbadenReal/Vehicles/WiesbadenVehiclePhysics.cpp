@@ -39,10 +39,21 @@ float FWiesbadenVehiclePhysics::GetTotalGearRatio() const
 	return Powertrain.ForwardGearRatios[Index] * Powertrain.FinalDriveRatio;
 }
 
+float FWiesbadenVehiclePhysics::GetGearDirection() const
+{
+	// Gleiche Bedingung wie bReverse im Tick: nur der Rueckwaertsgang dreht um.
+	return (Gear < 0) ? -1.0f : 1.0f;
+}
+
 float FWiesbadenVehiclePhysics::RpmFromSpeed(float Speed) const
 {
 	// v (m/s) -> Radwinkelgeschwindigkeit -> Motordrehzahl ueber die Uebersetzung.
-	const float WheelOmega = Speed / FMath::Max(WheelRadiusM, 0.01f);
+	// Die Gangrichtung bildet die Fahrtrichtung auf die Motor-Drehrichtung ab:
+	// rueckwaerts (v < 0, Richtung -1) dreht der Motor vorwaerts. Ohne sie wurde
+	// die Drehzahl rueckwaerts negativ und landete an der Untergrenze (400 U/min
+	// bei ~25 km/h) - Tacho, Motorklang, Antriebsmoment und Motorbremse liefen
+	// damit rueckwaerts alle falsch.
+	const float WheelOmega = Speed * GetGearDirection() / FMath::Max(WheelRadiusM, 0.01f);
 	return WheelOmega * GetTotalGearRatio() * (60.0f / (2.0f * PI));
 }
 
@@ -307,8 +318,23 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 	float DriveForce = 0.0f;
 	if (HasFuel() && !bShifting)
 	{
+		// Richtung aus DERSELBEN Quelle wie die Drehzahl-Umrechnung (Gang).
 		const float DemandRaw = GetWheelForceDemand(Throttle);
-		const float Demand = bReverse ? -DemandRaw : DemandRaw;
+		float Demand = DemandRaw * GetGearDirection();
+
+		// Rueckwaerts-Begrenzer: die Anforderung in den letzten 20 % vor
+		// ReverseMaxSpeed weich auf 0 zuruecknehmen. Die harte Tempoklemme
+		// weiter unten allein liess den Motor am Limit mit voller Kraft gegen
+		// die Klemme druecken - mit der korrekten Rueckwaerts-Drehzahl liegt die
+		// Anforderung dort ueber der Haftgrenze, und der Wagen fuhr mit
+		// Dauer-Radspin (Quietschen, Spuren, ASR, Drehzahl am Anschlag).
+		if (bReverse)
+		{
+			const float Limit = FMath::Max(ReverseMaxSpeedMetersPerS, 0.1f);
+			const float Headroom = FMath::Clamp(
+				(Limit - FMath::Abs(SpeedMetersPerS)) / (0.2f * Limit), 0.0f, 1.0f);
+			Demand *= Headroom;
+		}
 
 		const float RearFracDyn = 1.0f - ComputeDynamicFrontLoadFraction(
 			FrontWeightFraction, LastLongAccelMetersPerS2, GravityMetersPerS2, CgHeightM, WheelbaseM);

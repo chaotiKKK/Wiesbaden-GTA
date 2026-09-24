@@ -6,6 +6,8 @@
 #include "Camera/PlayerCameraManager.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "Vehicles/WiesbadenVehicleControl.h"
 
@@ -43,6 +45,7 @@ void UWiesbadenVehicleTestHarness::StartDriveProfile(float Seconds)
 	DriveDuration = FMath::Max(Seconds, 0.1f);
 	DriveElapsed = 0.0f;
 	DriveLastSecond = -1;
+	bDriveReverse = FParse::Param(FCommandLine::Get(), TEXT("WbDriveReverse"));
 	// Startkurs merken: die Kursaenderung wird wrap-sicher dagegen gemessen.
 	// Kurs kommt aus der Actor-Ebene (GetOwner), Steuerung aus der Naht.
 	DriveStartYaw = GetOwner() ? GetOwner()->GetActorRotation().Yaw : 0.0f;
@@ -305,6 +308,7 @@ void UWiesbadenVehicleTestHarness::TickDriveProfile(float DeltaTime)
 	const float Frac = DriveElapsed / DriveDuration;
 
 	FWiesbadenCarControl Control;
+	Control.bReverse = bDriveReverse;
 	if (Frac < 0.40f)      { Control.Throttle = 1.0f; Control.Steering = 0.0f; }
 	else if (Frac < 0.60f) { Control.Throttle = 1.0f; Control.Steering = 0.6f; }
 	else if (Frac < 0.80f) { Control.Throttle = 1.0f; Control.Steering = -0.6f; }
