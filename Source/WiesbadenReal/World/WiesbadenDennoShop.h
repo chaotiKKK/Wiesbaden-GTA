@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Missions/WiesbadenDennoDelivery.h"
 #include "WiesbadenDennoShop.generated.h"
 
 class UGeoCoordinateConverter;
@@ -103,16 +104,60 @@ public:
 	/** Pose zur Spielzeit `Seconds` (datenrein, stetig, beschraenkt; Test). */
 	static FDennoIdlePose ComputeDennoIdle(double Seconds);
 
+	// -- Lieferauftraege --------------------------------------------------------
+	// Zu Fuss vor dem Laden F druecken: Denno gibt eine Lieferung an eine
+	// zufaellige echte Adresse mit (WiesbadenDennoDelivery), bezahlt nach
+	// Entfernung. Anzeige/Frist/Auszahlung macht UWiesbadenMissionSubsystem.
+	/** So weit vor der Front (auf die Strasse hinaus) gilt man als "am Laden" (cm). */
+	static constexpr double DeliveryReachCm = 700.0;
+	/** Steht der Spieler (Laden-lokal: X laengs der Front, Y < 0 Strasse) vor dem Laden? */
+	static bool IsInDeliveryReach(const FVector& PlayerLocalCm);
+	/** Taste und Text der Annahme; laeuft schon ein Auftrag, sagt Denno das. */
+	static FString BuildDeliveryPrompt(bool bMissionActive);
+
+	bool IsPlayerInDeliveryReach(const FVector& PlayerWorldCm) const;
+	/**
+	 * F vor dem Laden. true = der Laden hat die Taste beansprucht (Auftrag
+	 * angenommen ODER Denno sagt, dass schon einer laeuft) - dann kein
+	 * Fahrzeugwechsel. OutMessage ist der Hinweis fuer das HUD.
+	 */
+	bool TryAcceptDelivery(const APawn* Player, FString& OutMessage);
+	/** Entwicklerpfad (WbDennoAuftrag): ohne Reichweite, fester Zufallswert; vor
+	 *  dem Aufbau vorgemerkt und danach eingeloest. */
+	void RequestDevDelivery(int32 Seed);
+
 	bool IsBuilt() const { return bBuilt; }
 
 private:
 	bool TryBuild();
+	/**
+	 * Ist eine Stadtzelle an der Ladenstelle geladen? Nur dann zaehlt die
+	 * Wartezeit auf die Wand. Vorher gab der Laden 30 s nach SPIELSTART auf -
+	 * wer am Garagenhof startete, hatte die ganze Sitzung keinen Laden, weil
+	 * das Haus da noch gar nicht gestreamt war.
+	 */
+	bool IsShopCellLoaded(const FVector& FrontMid) const;
 	/** Chunk-Fassaden um den Laden auf die Ausschnitt-Varianten umstellen. */
 	int32 PatchFacades();
 	void PatchComponent(UMeshComponent* Mesh);
 	FVector WorldXY(const FVector2D& EastNorthM) const;
 	UStaticMeshComponent* AddPart(const TCHAR* Name, const TCHAR* MeshPath,
 		const FVector& LocalCm, float LocalYaw);
+	/** Auftrag auswuerfeln und starten; false + Grund in OutMessage, wenn nicht. */
+	bool StartDelivery(FRandomStream& Random, FString& OutMessage);
+	void OnMissionCompleted(const FMission& Completed);
+	void ShowHint(const FString& Text) const;
+	/** Was tatsaechlich gutgeschrieben wird (Kurierlizenz +50 %, wie das Missionssystem). */
+	int32 AwardFor(int32 BaseReward) const;
+
+	/** Belieferbare Adressen der Stadt - einmal beim ersten Auftrag gesammelt. */
+	TArray<FDennoDeliveryAddress> DeliveryAddresses;
+	int32 DeliveryNumber = 0;
+	int32 PendingDevSeed = 0;
+	bool bPendingDevDelivery = false;
+	FDelegateHandle MissionCompletedHandle;
+	/** Der wartende Kunde der laufenden Lieferung. */
+	TWeakObjectPtr<class AWiesbadenDeliveryCustomer> Customer;
 
 	UPROPERTY(Transient) USceneComponent* Root = nullptr;
 	UPROPERTY(Transient) UGeoCoordinateConverter* Converter = nullptr;

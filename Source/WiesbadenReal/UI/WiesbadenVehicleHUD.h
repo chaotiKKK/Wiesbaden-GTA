@@ -491,6 +491,8 @@ private:
 	 * einzelnen Haendler (siehe DescribeNearestMerchantInReach).
 	 */
 	TWeakObjectPtr<AWiesbadenStoreMerchant> CachedFootMerchant;
+	/** Dennos Laden fuer den Annahme-Hinweis (F = Lieferauftrag). */
+	TWeakObjectPtr<class AWiesbadenDennoShop> CachedDennoShop;
 
 	/**
 	 * Nerobergbahn aus demselben Suchlauf.

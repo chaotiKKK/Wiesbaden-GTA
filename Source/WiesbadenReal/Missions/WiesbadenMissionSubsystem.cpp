@@ -109,6 +109,16 @@ bool UWiesbadenMissionSubsystem::RequestNextMission()
 	return true;
 }
 
+bool UWiesbadenMissionSubsystem::StartGeneratedMission(const FMission& Mission)
+{
+	if (bHasActiveMission || Mission.Objectives.IsEmpty())
+	{
+		return false;
+	}
+	BeginMission(Mission);
+	return true;
+}
+
 const FMissionObjective* UWiesbadenMissionSubsystem::GetCurrentObjective() const
 {
 	if (!bHasActiveMission || !ActiveMission.Objectives.IsValidIndex(ActiveObjectiveIndex))

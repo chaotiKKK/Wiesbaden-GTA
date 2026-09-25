@@ -256,6 +256,9 @@ protected:
 	 */
 	bool TryMerchantInteraction(class AWiesbadenFootPawn* FootPawn);
 
+	/** F vor Dennos Laden: Lieferauftrag annehmen (true = Taste beansprucht). */
+	bool TryDennoDelivery(class AWiesbadenFootPawn* FootPawn);
+
 	/** Naechster Haendler, dessen eigene Reichweite den Fuss-Pawn einschliesst. */
 	class AWiesbadenStoreMerchant* FindMerchantInReach(const APawn& FootPawn) const;
 
