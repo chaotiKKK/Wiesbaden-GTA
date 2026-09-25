@@ -169,7 +169,11 @@ und darin hebt die Straßen-Einebnung das Gelände nicht mehr an.
 **Läuft.** Release-Gates laufen vor jedem Commit (`Tools/git-hooks/`,
 `core.hooksPath`): `pre-commit` prüft Engine-Pfade und kompiliert nur bei
 vorgemerktem C++ (3–8 s), `pre-push` fährt zusätzlich alle Python-Suiten,
-Unit-Tests und den Rauchtest (426 s). Der Kartenname steht nur noch an **einer**
+Unit-Tests und den Rauchtest (426 s) – seit 25.09.2026 in einem eigenen, sauberen
+Worktree auf genau den zu pushenden Commits (`Tools/gate_worktree.py`,
+`<Sicherung>\.gate-worktree\WiesbadenReal`; gebackene Stadt und Stadtkarten
+verlinkt). Fremde laufende Arbeit im Arbeitsbaum blockiert den Push nicht mehr,
+und Gate 1 wie Rauchtest beenden nur Editoren des eigenen Projektordners. Der Kartenname steht nur noch an **einer**
 Stelle (`GameDefaultMap`), gelesen über `Tools/karte.cmd|py|ps1`, bewacht von
 `Tools/pruefe_kartenname.py`.
 
