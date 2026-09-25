@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
+#include "Vehicles/WiesbadenTrafficCars.h"
 #include "Misc/AutomationTest.h"
 
 #include "GIS/WiesbadenTrafficSimulation.h"
@@ -128,62 +129,51 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleLampPlacementTest,
 
 bool FVehicleLampPlacementTest::RunTest(const FString& Parameters)
 {
-	// Kaefer-Masse aus den echten Mesh-Bounds: halbe Kanten 207 / 77 / 77 cm,
-	// Ursprung in der Mitte.
-	const FVector Origin = FVector::ZeroVector;
-	const FVector Extent(207.0, 77.0, 77.0);
+	// Lampen des Golf aus dem Katalog (Fahrzeugrahmen: +X vorn, links = -Y).
+	const FWbTrafficCarType& Golf = WiesbadenTrafficCars::Types()[0];
 
 	// Fahrzeug an einer bekannten Stelle, Blick nach +X.
 	const FTransform Vehicle(FRotator::ZeroRotator, FVector(1000.0, 2000.0, 300.0));
 
 	FTransform RearLeft, RearRight, FrontLeft, FrontRight;
-	UTrafficVehicleSpawnerComponent::ComputeLampTransforms(
-		Vehicle, Origin, Extent, /*bFront=*/false, RearLeft, RearRight);
-	UTrafficVehicleSpawnerComponent::ComputeLampTransforms(
-		Vehicle, Origin, Extent, /*bFront=*/true, FrontLeft, FrontRight);
+	UTrafficVehicleSpawnerComponent::ComputeLampTransforms(Vehicle, Golf.TailLampCm, RearLeft, RearRight);
+	UTrafficVehicleSpawnerComponent::ComputeLampTransforms(Vehicle, Golf.HeadLampCm, FrontLeft, FrontRight);
 
-	// -- 1. Vorn ist vorn, hinten ist hinten. -------------------------------
+	// -- 1. Vorn ist vorn, hinten ist hinten; beide an den Enden. ------------
 	TestTrue(TEXT("Die vorderen Lampen liegen vor den hinteren"),
 		FrontLeft.GetLocation().X > RearLeft.GetLocation().X);
-
-	// -- 2. Die Lampen sitzen an den Enden, nicht in der Mitte. -------------
 	const double RearOffset = Vehicle.GetLocation().X - RearLeft.GetLocation().X;
 	TestTrue(FString::Printf(TEXT("Heckleuchte %.0f cm hinter der Mitte"), RearOffset),
-		RearOffset > Extent.X * 0.9);
+		RearOffset > Golf.RearCm * 0.9);
 
-	// -- 3. Links und rechts liegen auseinander, aber innerhalb des Autos. --
-	const double Spread = FMath::Abs(RearLeft.GetLocation().Y - RearRight.GetLocation().Y);
-	TestTrue(FString::Printf(TEXT("Lampenabstand %.0f cm"), Spread),
-		Spread > 50.0 && Spread < Extent.Y * 2.0);
+	// -- 2. Links ist links: Unreal-Y zeigt nach RECHTS. Der linke Blinker
+	// sass frueher bei +Y - ein Linksabbieger blinkte rechts.
+	TestTrue(TEXT("linke Lampe bei -Y"), FrontLeft.GetLocation().Y < Vehicle.GetLocation().Y);
+	TestTrue(TEXT("rechte Lampe bei +Y"), FrontRight.GetLocation().Y > Vehicle.GetLocation().Y);
+	const double Spread = FrontRight.GetLocation().Y - FrontLeft.GetLocation().Y;
+	TestTrue(FString::Printf(TEXT("Lampenabstand %.0f cm innerhalb der Karosserie"), Spread),
+		Spread > 60.0 && Spread < Golf.BodyWidthCm);
 
-	// -- 4. Lampenhoehe: ueber dem Boden, unter dem Dach. -------------------
-	//
-	// In der Mitte saessen sie im Fenster, unten im Radkasten. Gemessen vom
-	// tiefsten Punkt des Fahrzeugs.
-	const double Bottom = Vehicle.GetLocation().Z - Extent.Z;
-	const double LampHeight = RearLeft.GetLocation().Z - Bottom;
-	TestTrue(FString::Printf(TEXT("Lampe %.0f cm ueber dem tiefsten Punkt"), LampHeight),
-		LampHeight > 30.0 && LampHeight < Extent.Z * 2.0);
+	// -- 3. Lampenhoehe: ueber dem Boden, unter der Guertellinie. ------------
+	const double LampHeight = RearLeft.GetLocation().Z - Vehicle.GetLocation().Z;
+	TestTrue(FString::Printf(TEXT("Lampe %.0f cm ueber dem Boden"), LampHeight),
+		LampHeight > 40.0 && LampHeight < 120.0);
 
-	// -- 5. Die Lampe ist klein - ein Lichtpunkt, kein Kasten. --------------
+	// -- 4. Die Lampe ist klein - ein Lichtpunkt, kein Kasten. --------------
 	const FVector Scale = RearLeft.GetScale3D();
 	TestTrue(FString::Printf(TEXT("Lampengroesse %.0f x %.0f cm"),
 		Scale.X * 100.0, Scale.Y * 100.0),
 		Scale.X * 100.0 < 40.0 && Scale.Y * 100.0 < 30.0);
 
-	// -- 6. Gedreht bleibt gedreht: die Lampen fahren mit. ------------------
-	//
-	// Ohne die Fahrzeug-Transform waeren die Lampen weltachsen-fest und
-	// blieben beim Abbiegen stehen, waehrend das Auto sich dreht.
+	// -- 5. Gedreht bleibt gedreht: die Lampen fahren mit. ------------------
 	const FTransform Turned(FRotator(0.0, 90.0, 0.0), FVector(1000.0, 2000.0, 300.0));
 	FTransform TurnedRearLeft, TurnedRearRight;
-	UTrafficVehicleSpawnerComponent::ComputeLampTransforms(
-		Turned, Origin, Extent, /*bFront=*/false, TurnedRearLeft, TurnedRearRight);
+	UTrafficVehicleSpawnerComponent::ComputeLampTransforms(Turned, Golf.TailLampCm, TurnedRearLeft, TurnedRearRight);
 
 	// Bei 90 Grad Gierung zeigt "hinten" nach -Y statt nach -X.
 	const double TurnedOffsetY = Vehicle.GetLocation().Y - TurnedRearLeft.GetLocation().Y;
 	TestTrue(FString::Printf(TEXT("Gedreht liegt die Heckleuchte %.0f cm in -Y"), TurnedOffsetY),
-		TurnedOffsetY > Extent.X * 0.9);
+		TurnedOffsetY > Golf.RearCm * 0.9);
 
 	return true;
 }

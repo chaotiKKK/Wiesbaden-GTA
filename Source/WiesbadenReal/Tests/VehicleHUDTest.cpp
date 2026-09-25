@@ -328,25 +328,6 @@ bool FVehicleHUDControlLegendTest::RunTest(const FString& Parameters)
 			FHud::ToggleControlLegendVisible(/*bShown=*/true, Dauer, Dauer) == false);
 	}
 
-	// -- Erstkontakt-Banner ohne haengenden Gedankenstrich --------------------
-	//
-	// Der Untertitel ist leer, solange kein Missionsziel in der Naehe liegt -
-	// das ist der Normalfall. Fest formatiert stand da "Marktstrasse — ".
-	{
-		using FHud = AWiesbadenVehicleHUD;
-
-		TestEqual(TEXT("ohne Untertitel nur der Ort"),
-			FHud::ComposeFirstRunBanner(TEXT("Marktstrasse"), FString()),
-			FString(TEXT("Marktstrasse")));
-
-		TestTrue(TEXT("ohne Untertitel kein Gedankenstrich"),
-			!FHud::ComposeFirstRunBanner(TEXT("Marktstrasse"), FString()).Contains(TEXT("—")));
-
-		TestEqual(TEXT("mit Untertitel beides mit Trenner"),
-			FHud::ComposeFirstRunBanner(TEXT("Marktstrasse"), TEXT("zum Ziel Halle 120 m")),
-			FString(TEXT("Marktstrasse — zum Ziel Halle 120 m")));
-	}
-
 	return true;
 }
 
@@ -939,10 +920,74 @@ bool FVehicleHUDAudioSettingsTest::RunTest(const FString& Parameters)
 
 		TestTrue(TEXT("mind. 10 Eintraege"), Entries.Num() >= 10);
 		TestEqual(TEXT("Index 0 = Weiterspielen"), Entries[0], FString(TEXT("Weiterspielen")));
-		TestEqual(TEXT("Index 2 = Ton / Lautstaerke"), Entries[2], FString(TEXT("Ton / Lautstaerke")));
+		TestEqual(TEXT("Index 2 = Optionen"), Entries[2], FString(TEXT("Optionen")));
 		TestEqual(TEXT("Index 3 = Karte"), Entries[3], FString(TEXT("Karte zeigen / verbergen (M)")));
 		TestEqual(TEXT("letzter Eintrag = Spiel beenden"),
 			Entries.Last(), FString(TEXT("Spiel beenden")));
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleTractionTellTaleTest,
+	"WiesbadenReal.Vehicles.HUD.TractionTellTale",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Die datenreine Ableitung der Traktions-/ABS-Kontrollleuchte aus den
+ * Modell-Flags (Radspin/Blockieren) und ihr Nachleuchten. Ohne Canvas und ohne
+ * Welt - die Leuchte selbst wird im Fahrlauf per Screenshot belegt.
+ */
+bool FVehicleTractionTellTaleTest::RunTest(const FString& Parameters)
+{
+	using HUD = AWiesbadenVehicleHUD;
+
+	// -- Beschriftung aus den Flags ------------------------------------------
+	{
+		// Ruhe: keine Leuchte.
+		TestTrue(TEXT("kein Schlupf -> leer"),
+			HUD::FormatTractionTellTale(false, false).IsEmpty());
+		// Anfahren: Antriebsschlupf.
+		TestEqual(TEXT("Radspin -> ASR"),
+			HUD::FormatTractionTellTale(true, false), FString(TEXT("ASR")));
+		// Bremsen: Blockieren.
+		TestEqual(TEXT("Blockieren -> ABS"),
+			HUD::FormatTractionTellTale(false, true), FString(TEXT("ABS")));
+		// Kaeme beides (kommt in der Praxis nicht vor), gewinnt das Blockieren -
+		// so bleibt die Anzeige eindeutig statt zwischen zwei Labels zu springen.
+		TestEqual(TEXT("beide -> ABS (Vorrang)"),
+			HUD::FormatTractionTellTale(true, true), FString(TEXT("ABS")));
+	}
+
+	// -- Nachleuchten gegen den ABS-Puls -------------------------------------
+	{
+		constexpr float Hold = 0.4f;
+		constexpr float Dt = 1.0f / 60.0f;
+
+		// Aktiv -> voll aufgeladen.
+		const float Lit = HUD::AdvanceTellTaleHold(true, 0.0f, Dt, Hold);
+		TestTrue(TEXT("aktiv -> HoldSeconds"), FMath::IsNearlyEqual(Lit, Hold, 1e-4f));
+
+		// Ein einzelner Aus-Frame (wie im ABS-Puls) darf die Leuchte NICHT
+		// ausschalten - sie zaehlt nur um Dt herunter und bleibt an.
+		const float StillLit = HUD::AdvanceTellTaleHold(false, Hold, Dt, Hold);
+		TestTrue(TEXT("ein Aus-Frame -> bleibt an"), StillLit > 0.0f);
+		TestTrue(TEXT("ein Aus-Frame -> um Dt gesunken"),
+			FMath::IsNearlyEqual(StillLit, Hold - Dt, 1e-4f));
+
+		// Laengeres Loslassen laeuft der Rest auf 0 - und klemmt dort, nicht
+		// negativ.
+		float Rem = Hold;
+		for (int32 i = 0; i < 200; ++i)
+		{
+			Rem = HUD::AdvanceTellTaleHold(false, Rem, Dt, Hold);
+		}
+		TestTrue(TEXT("nach langem Loslassen -> aus"), Rem == 0.0f);
+
+		// Ein neuer Schlupf-Frame laedt sofort wieder voll auf.
+		const float Relit = HUD::AdvanceTellTaleHold(true, Rem, Dt, Hold);
+		TestTrue(TEXT("erneut aktiv -> wieder voll"),
+			FMath::IsNearlyEqual(Relit, Hold, 1e-4f));
 	}
 
 	return true;

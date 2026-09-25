@@ -19,15 +19,38 @@ namespace
 	 * worden: 900 Dreiecke, 175 cm, Ursprung zwischen den Fuessen. Bewusst
 	 * niedrig aufgeloest, weil Dutzende gleichzeitig als Instanzen laufen.
 	 */
-	const TCHAR* PersonMeshPath = TEXT("/Game/Assets/People/SM_WbPerson.SM_WbPerson");
+	// Bessere Figur (Blender, fuenf Materialzonen: Haut/Hemd/Hose/Haare/Schuhe).
+	// Die Kleidungsfarben kommen PRO INSTANZ aus Custom-Data (siehe Spawner) -
+	// darum werden die eigenen Mesh-Materialien NICHT ueberschrieben.
+	const TCHAR* PersonMeshPath =
+		TEXT("/Game/Assets/People/Varied/SM_WbPed2_1/StaticMeshes/SM_WbPed2_1.SM_WbPed2_1");
 
-	/** Die vier Gangphasen. Reihenfolge = Schrittzyklus. */
-	const TCHAR* PosePaths[] = {
-		TEXT("/Game/Assets/People/SM_WbPerson_0.SM_WbPerson_0"),
-		TEXT("/Game/Assets/People/SM_WbPerson_1.SM_WbPerson_1"),
-		TEXT("/Game/Assets/People/SM_WbPerson_2.SM_WbPerson_2"),
-		TEXT("/Game/Assets/People/SM_WbPerson_3.SM_WbPerson_3"),
+	/** Koerpertyp x Gangphase. Zeile = Typ (0 schlank, 1 breit, 2 Kind),
+	 *  Spalte = Schrittphase 0..3. */
+	const TCHAR* PosePaths[3][4] = {
+		{
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2_0/StaticMeshes/SM_WbPed2_0.SM_WbPed2_0"),
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2_1/StaticMeshes/SM_WbPed2_1.SM_WbPed2_1"),
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2_2/StaticMeshes/SM_WbPed2_2.SM_WbPed2_2"),
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2_3/StaticMeshes/SM_WbPed2_3.SM_WbPed2_3"),
+		},
+		{
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2B_0/StaticMeshes/SM_WbPed2B_0.SM_WbPed2B_0"),
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2B_1/StaticMeshes/SM_WbPed2B_1.SM_WbPed2B_1"),
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2B_2/StaticMeshes/SM_WbPed2B_2.SM_WbPed2B_2"),
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2B_3/StaticMeshes/SM_WbPed2B_3.SM_WbPed2B_3"),
+		},
+		{
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2C_0/StaticMeshes/SM_WbPed2C_0.SM_WbPed2C_0"),
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2C_1/StaticMeshes/SM_WbPed2C_1.SM_WbPed2C_1"),
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2C_2/StaticMeshes/SM_WbPed2C_2.SM_WbPed2C_2"),
+			TEXT("/Game/Assets/People/Varied/SM_WbPed2C_3/StaticMeshes/SM_WbPed2C_3.SM_WbPed2C_3"),
+		},
 	};
+
+	/** Zahl der Custom-Data-Floats je Instanz: Hemd RGB (0..2), Hose RGB (3..5),
+	 *  Hautton (6). Das Material liest genau diese Indizes. */
+	constexpr int32 PedCustomDataFloats = 7;
 
 	/**
 	 * Rueckfall: der Engine-Zylinder.
@@ -100,63 +123,81 @@ void UPedestrianSpawnerComponent::EnsureMeshAndMaterial()
 	// alles wie bisher ueber den Grundpool - ohne Animation, aber sichtbar.
 	if (PoseInstances.Num() == 0 && GetOwner())
 	{
-		for (int32 Phase = 0; Phase < WalkPoseCount; ++Phase)
+		bool bOk = true;
+		for (int32 Body = 0; Body < NumBodyTypes && bOk; ++Body)
 		{
-			UStaticMesh* PoseMesh = LoadObject<UStaticMesh>(nullptr, PosePaths[Phase]);
-			if (!PoseMesh)
+			for (int32 Phase = 0; Phase < WalkPoseCount; ++Phase)
 			{
-				UE_LOG(LogWbCore, Warning,
-					TEXT("Fussgaenger: Gangphase %d (%s) fehlt - es wird nicht animiert."),
-					Phase, PosePaths[Phase]);
-				PoseInstances.Reset();
-				break;
-			}
+				UStaticMesh* PoseMesh = LoadObject<UStaticMesh>(nullptr, PosePaths[Body][Phase]);
+				if (!PoseMesh)
+				{
+					UE_LOG(LogWbCore, Warning,
+						TEXT("Fussgaenger: Koerpertyp %d Gangphase %d (%s) fehlt - es wird nicht animiert."),
+						Body, Phase, PosePaths[Body][Phase]);
+					PoseInstances.Reset();
+					bOk = false;
+					break;
+				}
 
-			UInstancedStaticMeshComponent* Pool = NewObject<UInstancedStaticMeshComponent>(
-				GetOwner(), *FString::Printf(TEXT("PedestrianPose%d"), Phase));
-			if (!Pool)
-			{
-				PoseInstances.Reset();
-				break;
-			}
+				UInstancedStaticMeshComponent* Pool = NewObject<UInstancedStaticMeshComponent>(
+					GetOwner(), *FString::Printf(TEXT("PedestrianPose%d_%d"), Body, Phase));
+				if (!Pool)
+				{
+					PoseInstances.Reset();
+					bOk = false;
+					break;
+				}
 
-			Pool->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
-			Pool->SetStaticMesh(PoseMesh);
-			Pool->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			Pool->SetCastShadow(true);
-			Pool->RegisterComponent();
-			PoseInstances.Add(Pool);
+				Pool->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+				Pool->SetStaticMesh(PoseMesh);
+				Pool->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+				Pool->SetCastShadow(true);
+				Pool->RegisterComponent();
+				PoseInstances.Add(Pool);   // Index = Body*WalkPoseCount + Phase
+			}
 		}
 
-		if (PoseInstances.Num() == WalkPoseCount)
+		if (PoseInstances.Num() == NumBodyTypes * WalkPoseCount)
 		{
 			UE_LOG(LogWbCore, Log,
-				TEXT("Fussgaenger: %d Gangphasen geladen - Figuren werden animiert."),
-				WalkPoseCount);
+				TEXT("Fussgaenger: %d Koerpertypen x %d Gangphasen geladen - Figuren werden animiert."),
+				NumBodyTypes, WalkPoseCount);
 		}
 	}
 
-	UMaterialInterface* Material = PedestrianMaterial;
-	if (!Material)
+	// Custom-Data-Floats fuer die pro-Instanz-Kleidungsfarben (Hemd/Hose/Hautton).
+	// Auf ALLEN Pools setzen, bevor Instanzen entstehen.
+	Instances->NumCustomDataFloats = PedCustomDataFloats;
+	for (UInstancedStaticMeshComponent* Pool : PoseInstances)
 	{
-		// Ohne Zuweisung das kanonische Material laden. Ein ISM ohne Material
-		// rendert kommentarlos mit dem Default-Schachbrett - derselbe stille
-		// Fehler, der die ganze Stadt untexturiert aussehen liess.
-		Material = LoadObject<UMaterialInterface>(nullptr, FallbackMaterialPath);
+		if (Pool)
+		{
+			Pool->NumCustomDataFloats = PedCustomDataFloats;
+		}
 	}
 
-	if (Material)
+	// Zonierte Figur (mehr als ein Materialslot: Haut/Hemd/Hose/Haare/Schuhe)
+	// behaelt ihre EIGENEN Materialien - sie tragen die pro-Instanz-Farben. Nur
+	// ein ausdruecklich gesetztes PedestrianMaterial ODER der einslotige
+	// Rueckfall (Zylinder/altes Mesh) bekommt das kanonische Flach-Material.
+	const bool bZoned = Mesh && Mesh->GetStaticMaterials().Num() > 1;
+	UMaterialInterface* Override = PedestrianMaterial;
+	if (!Override && !bZoned)
 	{
-		Instances->SetMaterial(0, Material);
+		Override = LoadObject<UMaterialInterface>(nullptr, FallbackMaterialPath);
+	}
+	if (Override)
+	{
+		Instances->SetMaterial(0, Override);
 		for (UInstancedStaticMeshComponent* Pool : PoseInstances)
 		{
 			if (Pool)
 			{
-				Pool->SetMaterial(0, Material);
+				Pool->SetMaterial(0, Override);
 			}
 		}
 	}
-	else
+	else if (!bZoned)
 	{
 		UE_LOG(LogWbCore, Warning,
 			TEXT("Fussgaenger-Spawner: Material %s nicht ladbar - die Figuren rendern mit dem Default-Material."),
@@ -164,6 +205,62 @@ void UPedestrianSpawnerComponent::EnsureMeshAndMaterial()
 	}
 
 	bMeshReady = true;
+}
+
+void UPedestrianSpawnerComponent::ComputePedestrianColors(
+	int32 Seed, FLinearColor& OutShirt, FLinearColor& OutTrouser, float& OutSkinT)
+{
+	// Feste Kleiderpaletten - gaengige Alltagsfarben, keine Neonwerte.
+	static const FLinearColor Shirts[] = {
+		FLinearColor(0.24f, 0.34f, 0.62f),  // Blau
+		FLinearColor(0.70f, 0.20f, 0.18f),  // Rot
+		FLinearColor(0.24f, 0.45f, 0.28f),  // Gruen
+		FLinearColor(0.85f, 0.85f, 0.86f),  // Weiss
+		FLinearColor(0.30f, 0.30f, 0.32f),  // Grau
+		FLinearColor(0.80f, 0.62f, 0.20f),  // Senf
+		FLinearColor(0.20f, 0.48f, 0.52f),  // Petrol
+		FLinearColor(0.50f, 0.24f, 0.42f),  // Beere
+	};
+	static const FLinearColor Trousers[] = {
+		FLinearColor(0.16f, 0.20f, 0.30f),  // Jeansblau
+		FLinearColor(0.10f, 0.10f, 0.11f),  // Schwarz
+		FLinearColor(0.32f, 0.32f, 0.34f),  // Grau
+		FLinearColor(0.55f, 0.47f, 0.36f),  // Beige
+		FLinearColor(0.30f, 0.22f, 0.16f),  // Braun
+	};
+	constexpr int32 NumShirts = UE_ARRAY_COUNT(Shirts);
+	constexpr int32 NumTrousers = UE_ARRAY_COUNT(Trousers);
+
+	// Drei entkoppelte Hashes aus dem Seed, damit Hemd/Hose/Haut unabhaengig
+	// streuen (sonst korrelieren gleiche Reste).
+	const uint32 S = static_cast<uint32>(Seed);
+	const uint32 H1 = (S * 2654435761u) ^ 0x9E3779B9u;
+	const uint32 H2 = (S * 2246822519u) ^ 0x85EBCA6Bu;
+	const uint32 H3 = (S * 3266489917u) ^ 0xC2B2AE35u;
+
+	OutShirt = Shirts[H1 % NumShirts];
+	OutTrouser = Trousers[H2 % NumTrousers];
+	OutSkinT = static_cast<float>(H3 % 1000u) / 999.0f;
+}
+
+int32 UPedestrianSpawnerComponent::SelectPedestrianBodyType(int32 Seed)
+{
+	// Gewichte: schlank 45 %, breit 35 %, Kind 20 %. Eigener Hash (nicht der der
+	// Kleidung), damit Statur und Kleidung nicht korrelieren.
+	static const int32 Cum[NumBodyTypes] = { 45, 80, 100 };   // kumuliert
+	uint32 H = static_cast<uint32>(Seed) * 2654435761u;
+	H ^= (H >> 16);
+	H *= 2246822519u;
+	H ^= (H >> 13);
+	const int32 Pick = static_cast<int32>(H % 100u);
+	for (int32 i = 0; i < NumBodyTypes; ++i)
+	{
+		if (Pick < Cum[i])
+		{
+			return i;
+		}
+	}
+	return NumBodyTypes - 1;
 }
 
 void UPedestrianSpawnerComponent::UpdateInstances(const TArray<FPlacedPedestrian>& Placed)
@@ -280,29 +377,31 @@ void UPedestrianSpawnerComponent::UpdateInstances(const TArray<FPlacedPedestrian
 	};
 
 	const int32 Needed = Placed.Num();
-	const bool bAnimated = (PoseInstances.Num() == WalkPoseCount);
+	const bool bAnimated = (PoseInstances.Num() == NumBodyTypes * WalkPoseCount);
 
 	if (bAnimated)
 	{
-		// Jede Figur in den Pool ihrer Schrittphase.
+		// Jede Figur in den Pool ihres KOERPERTYPS UND ihrer Schrittphase.
 		//
-		// StridePhase laeuft von 0 bis 1 ueber einen Schritt. Vier Pools
-		// bedeuten: Wer bei 0,0 bis 0,25 ist, steht im Pool 0, und so weiter.
-		// Beim Weitergehen wandert die Figur von Pool zu Pool - das ergibt den
-		// Gang.
+		// Pool = Typ*WalkPoseCount + Phase. Der Typ (schlank/breit/Kind) folgt
+		// stabil aus dem Seed, die Phase aus StridePhase (0..1 ueber einen
+		// Schritt). Beim Weitergehen wandert die Figur durch die vier Phasen
+		// IHRES Typs - das ergibt den Gang.
 		//
 		// Gezaehlt wird zuerst, damit jeder Pool genau einmal auf seine Groesse
 		// gebracht wird. Instanzen einzeln anzulegen und zu entfernen waere bei
 		// mehreren Dutzend Figuren je Bild spuerbar.
 		TArray<TArray<int32>> ByPose;
-		ByPose.SetNum(WalkPoseCount);
+		ByPose.SetNum(PoseInstances.Num());
 
 		for (int32 Index = 0; Index < Needed; ++Index)
 		{
+			const int32 Body = FMath::Clamp(
+				SelectPedestrianBodyType(Placed[Index].Seed), 0, NumBodyTypes - 1);
 			const float Phase = FMath::Frac(FMath::Max(Placed[Index].StridePhase, 0.0f));
-			const int32 Pose = FMath::Clamp(
+			const int32 PhaseIdx = FMath::Clamp(
 				FMath::FloorToInt(Phase * WalkPoseCount), 0, WalkPoseCount - 1);
-			ByPose[Pose].Add(Index);
+			ByPose[Body * WalkPoseCount + PhaseIdx].Add(Index);
 		}
 
 		// Der Grundpool bleibt leer, solange animiert wird.
@@ -311,7 +410,7 @@ void UPedestrianSpawnerComponent::UpdateInstances(const TArray<FPlacedPedestrian
 			Instances->ClearInstances();
 		}
 
-		for (int32 Pose = 0; Pose < WalkPoseCount; ++Pose)
+		for (int32 Pose = 0; Pose < PoseInstances.Num(); ++Pose)
 		{
 			UInstancedStaticMeshComponent* Pool = PoseInstances[Pose];
 			if (!Pool)
@@ -341,6 +440,16 @@ void UPedestrianSpawnerComponent::UpdateInstances(const TArray<FPlacedPedestrian
 						Scale * Walker.ScaleFactor),
 					/*bWorldSpace=*/true,
 					/*bMarkRenderStateDirty=*/false);
+
+				// Kleidungsfarben pro Instanz (Hemd/Hose/Hautton) aus dem Seed.
+				if (Pool->NumCustomDataFloats == PedCustomDataFloats)
+				{
+					FLinearColor Shirt, Trouser; float SkinT;
+					ComputePedestrianColors(Walker.Seed, Shirt, Trouser, SkinT);
+					const TArray<float> CD = {
+						Shirt.R, Shirt.G, Shirt.B, Trouser.R, Trouser.G, Trouser.B, SkinT };
+					Pool->SetCustomData(i, CD, /*bMarkRenderStateDirty=*/false);
+				}
 			}
 
 			Pool->MarkRenderStateDirty();
@@ -369,6 +478,15 @@ void UPedestrianSpawnerComponent::UpdateInstances(const TArray<FPlacedPedestrian
 				FTransform(Walker.Rotation, GroundSnap(Walker.Location) + FVector(0.0, 0.0, FootLiftCm), Scale * Walker.ScaleFactor),
 				/*bWorldSpace=*/true,
 				/*bMarkRenderStateDirty=*/false);
+
+			if (Instances->NumCustomDataFloats == PedCustomDataFloats)
+			{
+				FLinearColor Shirt, Trouser; float SkinT;
+				ComputePedestrianColors(Walker.Seed, Shirt, Trouser, SkinT);
+				const TArray<float> CD = {
+					Shirt.R, Shirt.G, Shirt.B, Trouser.R, Trouser.G, Trouser.B, SkinT };
+				Instances->SetCustomData(Index, CD, /*bMarkRenderStateDirty=*/false);
+			}
 		}
 	}
 

@@ -6,6 +6,7 @@
 
 #include "GIS/RoadNetworkTypes.h"
 
+#include "Vehicles/WiesbadenVehiclePhysics.h"
 #include "WiesbadenTrafficSimulation.generated.h"
 
 struct FWiesbadenTrafficLightSystem;
@@ -134,6 +135,42 @@ struct WIESBADENREAL_API FTrafficVehicle
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	float SteerAngleRad = 0.0f;
+
+	/** Fahrzeugtyp (Index in WiesbadenTrafficCars::Types()), beim Einsetzen aus der Id. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 TypeIndex = 0;
+
+	/** Tempo der Karosserie aus der Fahrphysik (cm/s) - das, was man sieht. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	double BodySpeedCmS = 0.0;
+
+	/** Gerollter Winkel der Raeder (rad, 0..2 pi): Physik-Tempo durch Radradius. */
+	float WheelSpinRad = 0.0f;
+
+	/** Nicken und Wanken der Karosserie aus den Beschleunigungen (Grad) - wie
+	 *  beim Spielerauto (AWiesbadenCar::ComputeBodyTilt), nur an der Karosserie. */
+	float BodyPitchDeg = 0.0f;
+	float BodyRollDeg = 0.0f;
+
+	/** Steigung der Fahrbahn unter dem Fahrzeug (Grad, + = bergauf). */
+	float SlopePitchDeg = 0.0f;
+
+	/** Solltempo des Vorticks (fuer die Sollbeschleunigung des Fahrers). */
+	double PrevSollSpeedCmS = 0.0;
+
+	/**
+	 * Die Fahrphysik des Spielerautos (FWiesbadenVehiclePhysics) mit den Werten
+	 * des Vorbilds - ein Fahrer am Steuer folgt der Sollbahn
+	 * (WiesbadenTrafficCars::ComputeDriverInput).
+	 */
+	FWiesbadenVehiclePhysics Physics;
+	bool bPhysicsInitialized = false;
+
+	/**
+	 * Steht am Ende einer Sackgasse und wartet, bis der Spieler nicht mehr
+	 * hinsieht - erst dann verschwindet es (vorher: mitten im Bild).
+	 */
+	bool bWaitingAtDeadEnd = false;
 
 	/** False bis zum ersten Tick; dann wird die Karosserie auf die Bahn gesetzt. */
 	bool bBodyInitialized = false;
@@ -521,6 +558,37 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrphysik", meta = (ClampMin = "0.0"))
 	double DrivingBodyDeviationCm = 120.0;
+
+	/**
+	 * Karosserie mit der Fahrphysik des Spielerautos: Gaenge, Reifen-
+	 * Seitenkraefte, Radlastverlagerung - gelenkt und gefahren von einem
+	 * Fahrer, der der Sollbahn folgt (WiesbadenTrafficCars). false = das
+	 * alte kinematische Einspurmodell (StepBicycleModel).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrphysik")
+	bool bPhysicsBodies = true;
+
+	// -- Nicht vor den Augen des Spielers ----------------------------------
+	//
+	// Fahrzeuge setzten an jedem Spuranfang im 600-m-Umkreis ein und
+	// verschwanden am Ende jeder Sackgasse - auch mitten im Bild. Jetzt gilt:
+	// was der Spieler sehen koennte, entsteht und verschwindet nicht.
+
+	/**
+	 * Sichtweite des Verkehrs in Metern: so weit zeichnet ihn
+	 * UTrafficVehicleSpawnerComponent. Im Blickkegel und naeher als das setzt
+	 * kein Fahrzeug ein und verschwindet keines.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Sicht", meta = (ClampMin = "50.0"))
+	double DrawDistanceMeters = 550.0;
+
+	/** Zuschlag auf das halbe Blickfeld (Grad): Bildrand, Umsehen, Kurven. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Sicht", meta = (ClampMin = "0.0", ClampMax = "90.0"))
+	double ViewConeMarginDeg = 20.0;
+
+	/** So nah gilt alles als sichtbar, egal wohin die Kamera schaut (m). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Sicht", meta = (ClampMin = "0.0"))
+	double AlwaysVisibleMeters = 15.0;
 };
 
 /** Momentaufnahme der Simulation (pro Tick, fuer HUD/Blueprint). */
@@ -601,6 +669,14 @@ struct WIESBADENREAL_API FWiesbadenTrafficReport
 
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	int32 LaneChangeTightBoth = 0;
+
+	/** Einsatzorte, die im letzten Tick verworfen wurden, weil der Spieler sie sehen koennte. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 SpawnsSkippedInView = 0;
+
+	/** Fahrzeuge, die am Sackgassen-Ende warten, bis niemand hinsieht. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 WaitingAtDeadEnd = 0;
 };
 
 /**
@@ -963,6 +1039,28 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	void SetObserverLocation(const FVector& InLocation);
 
 	/**
+	 * Blick des Spielers (Kamera): Ort, Richtung, waagerechtes Blickfeld.
+	 * Setzt zugleich den Bezugspunkt (SetObserverLocation). Ohne Blick
+	 * (datenreine Tests) gilt nichts als sichtbar.
+	 */
+	void SetObserverView(const FVector& InLocation, const FVector& InViewDirection, float HorizontalFovDeg);
+
+	/**
+	 * Koennte der Spieler diesen Punkt sehen? Im Blickkegel (halbes Blickfeld
+	 * plus Zuschlag) und naeher als die Sichtweite - oder ganz nah.
+	 * Datenrein (Test Vehicles.Traffic.SpawnOutOfView).
+	 */
+	static bool IsPointInView(const FVector& Point, const FVector& ViewLocation, const FVector& ViewDirection,
+		double CosHalfCone, double DrawDistanceCm, double AlwaysVisibleCm);
+
+	/** IsPointInView mit dem gesetzten Blick; false ohne Blick. */
+	bool IsVisibleToObserver(const FVector& Point) const;
+
+	/** Seit Initialize: verworfene Einsatzorte in Sicht / Wartende an Sackgassen. */
+	int64 GetLifetimeSpawnsSkippedInView() const { return LifetimeSpawnsSkippedInView; }
+	int64 GetLifetimeDeadEndWaits() const { return LifetimeDeadEndWaits; }
+
+	/**
 	 * Meldet das Spielerfahrzeug als Hindernis.
 	 *
 	 * Ohne das faehrt der Verkehr stur seine Spur ab und ignoriert den
@@ -1240,6 +1338,9 @@ private:
 	/** Fuehrt die Karosserie eines Fahrzeugs der Sollbahn nach. */
 	void UpdateBodyPose(FTrafficVehicle& Vehicle, double Dt) const;
 
+	/** Karosserie mit Fahrphysik + Fahrer einen Tick weiter (setzt BodyLocation XY, Gier, Lenkung). */
+	void StepPhysicsBody(FTrafficVehicle& Vehicle, const FVector& Target, double Dt) const;
+
 private:
 
 	/** Position und Fahrtrichtung auf einer Polylinie bei Distanz abtasten. */
@@ -1375,6 +1476,16 @@ private:
 	/** Bezugspunkt fuer Spawn und Entfernen (Spielerposition). */
 	FVector ObserverLocation = FVector::ZeroVector;
 	bool bHasObserver = false;
+
+	/** Blick des Spielers (SetObserverView). */
+	bool bHasView = false;
+	FVector ViewDirection = FVector::ForwardVector;
+	double ViewCosHalfCone = 0.0;
+
+	/** Zaehler der Einsatzversuche - streut die Ortswahl, wenn ein Ort verworfen wird. */
+	int64 SpawnAttempts = 0;
+	int64 LifetimeSpawnsSkippedInView = 0;
+	int64 LifetimeDeadEndWaits = 0;
 
 	/** Spielerfahrzeug als Hindernis, auf das der Verkehr reagiert. */
 	FVector PlayerObstacleLocation = FVector::ZeroVector;

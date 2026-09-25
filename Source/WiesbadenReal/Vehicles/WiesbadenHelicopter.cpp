@@ -245,8 +245,11 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	// Zylinder (Durchmesser 100 cm) entsprechend skalieren, flach (2 cm). Sitzt
 	// an der jeweiligen Nabe und blendet mit der Drehzahl ein (Opacity per MID),
 	// waehrend die soliden Blaetter ausblenden.
-	const FVector BlurScaleUpper(15.6f, 15.6f, 0.02f);
-	const FVector BlurScaleLower(16.0f, 16.0f, 0.02f);
+	// Das Blur-Netz ist bewusst ~10 % groesser als der echte Blattkreis (15,6 /
+	// 16,0 m): das Material blendet die Opazitaet schon INNERHALB des Netzrands
+	// auf 0 (runde Kante), sodass die facettierte Zylinderkante nie sichtbar wird.
+	const FVector BlurScaleUpper(17.2f, 17.2f, 0.02f);
+	const FVector BlurScaleLower(17.6f, 17.6f, 0.02f);
 	UpperRotorBlur = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("UpperRotorBlur"));
 	UpperRotorBlur->SetupAttachment(MainRotorHub);
 	UpperRotorBlur->SetRelativeScale3D(BlurScaleUpper);
@@ -1059,17 +1062,30 @@ void AWiesbadenHelicopter::UpdateVisualEffects(float DeltaSeconds)
 
 	// Entwickler-Vorschau: -WbHeliSpin dreht den Rotor fuer Screenshots hoch und
 	// setzt das Triebwerk auf laufend, damit sich Rotor-Blur und Downwash auch am
-	// abgestellten Heli beurteilen lassen (im echten Spiel nie gesetzt).
-	static const bool bSpinDemo = FParse::Param(FCommandLine::Get(), TEXT("WbHeliSpin"));
+	// abgestellten Heli beurteilen lassen (im echten Spiel nie gesetzt). Ohne Wert
+	// = 450 U/min (volle Blur-Scheibe); mit Wert (-WbHeliSpin=220) eine feste
+	// Drehzahl, um den Uebergang Blaetter -> Scheibe zu pruefen.
+	static float SpinDemoRpm = 0.0f;
+	static bool bSpinDemoInit = false;
+	if (!bSpinDemoInit)
+	{
+		bSpinDemoInit = true;
+		if (!FParse::Value(FCommandLine::Get(), TEXT("WbHeliSpin="), SpinDemoRpm)
+			&& FParse::Param(FCommandLine::Get(), TEXT("WbHeliSpin")))
+		{
+			SpinDemoRpm = 450.0f;
+		}
+	}
+	const bool bSpinDemo = SpinDemoRpm > 0.0f;
 
 	// --- Rotor-Blur: Scheiben blenden mit der Drehzahl ein ---
-	const float Rpm = bSpinDemo ? 450.0f : RotorPhysics.MainRotorRpm;
+	const float Rpm = bSpinDemo ? SpinDemoRpm : RotorPhysics.MainRotorRpm;
 	const bool bEngineForVfx = bSpinDemo ? true : bEngineRunning;
 	// Unter ~120 U/min sieht man die Blaetter, ab ~360 die volle Scheibe.
 	const float BlurAlpha = FMath::Clamp((Rpm - 120.0f) / 240.0f, 0.0f, 1.0f);
 	if (RotorBlurMID)
 	{
-		RotorBlurMID->SetScalarParameterValue(TEXT("Opacity"), BlurAlpha * 0.33f);
+		RotorBlurMID->SetScalarParameterValue(TEXT("Opacity"), BlurAlpha * 0.70f);
 	}
 	// Solide Blaetter oberhalb 75 % Blur ausblenden - dann traegt die Scheibe das Bild.
 	const bool bBladesVisible = (BlurAlpha < 0.75f);

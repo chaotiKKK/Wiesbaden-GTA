@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "World/WiesbadenCitySubsystem.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Vehicles/WiesbadenTrafficCars.h"
 #include "World/WiesbadenStreamingCost.h"
 
 #include "WiesbadenReal.h"
@@ -40,6 +42,7 @@
 #include "Engine/SkyLight.h"
 #include "Components/SkyLightComponent.h"
 #include "World/WiesbadenCityChunk.h"
+#include "World/WiesbadenVisualTuning.h"
 #include "World/WiesbadenStreamingSource.h"
 #include "UnrealClient.h"
 #include "HighResScreenshot.h"
@@ -258,24 +261,45 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 	PPV->bUnbound = true;
 	PPV->Priority = 1.0f;
 
+	// Bildwerte zentral in World/WiesbadenVisualTuning.h (Befund 24.09.2026:
+	// zwei Systeme legten Himmelslicht und Belichtung mit ABWEICHENDEN Werten
+	// an - je nach Aufrufreihenfolge gewann einer).
+	using namespace WiesbadenVisualTuning;
+
 	FPostProcessSettings& S = PPV->Settings;
 	// Belichtung klemmen + leicht abdunkeln (gegen "ueberbelichtet"). Min/Max-
 	// Brightness begrenzen die Auto-Adaption, der negative Bias (in EV) dunkelt ab.
 	S.bOverride_AutoExposureMinBrightness = true;
-	S.AutoExposureMinBrightness = 0.15f;
+	S.AutoExposureMinBrightness = AutoExposureMinBrightness;
 	S.bOverride_AutoExposureMaxBrightness = true;
-	S.AutoExposureMaxBrightness = 1.5f;
+	S.AutoExposureMaxBrightness = AutoExposureMaxBrightness;
 	// Bias war -0.5 gegen "ueberbelichtet". Am Strassenbild zeigte sich das
 	// Gegenteil: die verschatteten Fassaden einer Strassenschlucht saufen fast
 	// schwarz ab. -0.2 nimmt das meiste der aktiven Abdunkelung zurueck (heller,
 	// sonniger Referenz-Look), bleibt aber knapp im Minus gegen Ausbleichen.
 	S.bOverride_AutoExposureBias = true;
-	S.AutoExposureBias = -0.2f;
+	S.AutoExposureBias = AutoExposureBias;
 	// Dezent mehr Kontrast/Saettigung (gegen "flach"). W = Luminanz.
 	S.bOverride_ColorContrast = true;
-	S.ColorContrast = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
+	S.ColorContrast = FVector4(ColorContrast, ColorContrast, ColorContrast, 1.0f);
 	S.bOverride_ColorSaturation = true;
-	S.ColorSaturation = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
+	S.ColorSaturation = FVector4(ColorSaturation, ColorSaturation, ColorSaturation, 1.0f);
+
+	// Cinematic-Feinschliff: kuehle Schatten, warme Lichter (Split-Toning ueber
+	// die Gain-Bereiche Schatten/Lichter - die alten ColorShadow-Tints gibt es
+	// in UE 5.8 nicht mehr); Vignette dezenter als der Engine-Default 0.4;
+	// Bloom nur fuer echte Glanzstellen (hohe Schwelle) - Glanz ohne den
+	// dokumentierten Milchschleier.
+	S.bOverride_ColorGainShadows = true;
+	S.ColorGainShadows = FVector4(ShadowTintR, ShadowTintG, ShadowTintB, 1.0f);
+	S.bOverride_ColorGainHighlights = true;
+	S.ColorGainHighlights = FVector4(HighlightTintR, HighlightTintG, HighlightTintB, 1.0f);
+	S.bOverride_VignetteIntensity = true;
+	S.VignetteIntensity = VignetteIntensity;
+	S.bOverride_BloomIntensity = true;
+	S.BloomIntensity = BloomIntensity;
+	S.bOverride_BloomThreshold = true;
+	S.BloomThreshold = BloomThreshold;
 	// GI-Methode NONE statt Lumen - das war die URSACHE der schwarzen
 	// Schattenfassaden.
 	//
@@ -328,7 +352,7 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 		{
 			Sky->SetMobility(EComponentMobility::Movable);
 			Sky->bRealTimeCapture = true;
-			Sky->SetIntensity(3.2f);
+			Sky->SetIntensity(SkyLightIntensity);
 			++SkiesFilled;
 		}
 	}
@@ -343,7 +367,7 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 			{
 				Comp->SetMobility(EComponentMobility::Movable);
 				Comp->bRealTimeCapture = true;
-				Comp->SetIntensity(3.2f);
+				Comp->SetIntensity(SkyLightIntensity);
 			}
 			++SkiesFilled;
 		}
@@ -1457,7 +1481,10 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			FVector ViewLocation = FVector::ZeroVector;
 			FRotator ViewRotation = FRotator::ZeroRotator;
 			PC->GetPlayerViewPoint(ViewLocation, ViewRotation);
-			TrafficSimulation.SetObserverLocation(ViewLocation);
+			// Mit Blickrichtung: was der Spieler sehen koennte, entsteht und
+			// verschwindet nicht (Einsetzen und Sackgassen nur ausser Sicht).
+			const float Fov = PC->PlayerCameraManager ? PC->PlayerCameraManager->GetFOVAngle() : 90.0f;
+			TrafficSimulation.SetObserverView(ViewLocation, ViewRotation.Vector(), Fov);
 			PedestrianSimulation.SetObserverLocation(ViewLocation);
 
 			// Das Spielerfahrzeug als Hindernis melden, damit der Verkehr
@@ -1579,6 +1606,43 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					TrafficSimulation.GetDensity(), R.TrafficVehiclesVisible,
 					LaneKm, TrafficSimulation.GetNearbyLaneCount(),
 					LaneKm > 0.0 ? R.ActiveVehicles / LaneKm : 0.0);
+				// Nicht vor den Augen des Spielers: verworfene Einsatzorte und
+				// Wartende an Sackgassen (seit Start) - jede Zahl > 0 ist ein
+				// Fahrzeug, das sonst im Bild aufgetaucht bzw. verschwunden waere.
+				UE_LOG(LogWbTraffic, Log,
+					TEXT("Verkehr ausser Sicht: %lld Einsatzorte in Sicht verworfen, %lld Sackgassen-Halte, %d warten gerade."),
+					TrafficSimulation.GetLifetimeSpawnsSkippedInView(), TrafficSimulation.GetLifetimeDeadEndWaits(),
+					TrafficSimulation.Report.WaitingAtDeadEnd);
+
+				// Fahrphysik belegen: das Fahrzeug naechst der Kamera mit Gang,
+				// Drehzahl, Einschlag und Radwinkel - Werte, die nur die Physik liefert.
+				if (const APlayerController* ViewPC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+				{
+					FVector Eye;
+					FRotator EyeRotation;
+					ViewPC->GetPlayerViewPoint(Eye, EyeRotation);
+					const FTrafficVehicle* Nearest = nullptr;
+					double Best = TNumericLimits<double>::Max();
+					for (const FTrafficVehicle& V : TrafficSimulation.Vehicles)
+					{
+						const double D = FVector::DistSquared2D(V.BodyLocation, Eye);
+						if (V.bPhysicsInitialized && V.BodySpeedCmS > 100.0 && D < Best)
+						{
+							Best = D;
+							Nearest = &V;
+						}
+					}
+					if (Nearest)
+					{
+						const TArray<FWbTrafficCarType>& CarTypes = WiesbadenTrafficCars::Types();
+						UE_LOG(LogWbTraffic, Log,
+							TEXT("Verkehr Fahrphysik: %s %d in %.0f m - %.0f km/h (Soll %.0f), Gang %d, %.0f U/min, Einschlag %.1f Grad, Rad %.2f rad, Nicken %.1f / Wanken %.1f Grad."),
+							CarTypes[FMath::Clamp(Nearest->TypeIndex, 0, CarTypes.Num() - 1)].Name, Nearest->VehicleId,
+							FMath::Sqrt(Best) / 100.0, Nearest->BodySpeedCmS * 0.036, Nearest->SpeedCmS * 0.036,
+							Nearest->Physics.Gear, Nearest->Physics.EngineRpm, FMath::RadiansToDegrees(Nearest->SteerAngleRad),
+							Nearest->WheelSpinRad, Nearest->BodyPitchDeg, Nearest->BodyRollDeg);
+					}
+				}
 			}
 			else
 			{
@@ -4279,6 +4343,16 @@ void UWiesbadenCitySubsystem::InitializeCity()
 					TrafficSettings.bJunctionConflicts = false;
 					UE_LOG(LogWbTraffic, Warning,
 						TEXT("-WbOhneKreuzungsregel: Kreuzungskonflikte AUS (nur zum Messen)."));
+				}
+
+				// Messwerkzeug: -WbVerkehrKinematisch faehrt die Karosserien mit dem
+				// alten kinematischen Einspurmodell statt der Spielerphysik - fuer
+				// den A/B-Vergleich am selben Ort.
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbVerkehrKinematisch")))
+				{
+					TrafficSettings.bPhysicsBodies = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbVerkehrKinematisch: Verkehr ohne Fahrphysik (nur zum Messen)."));
 				}
 
 				TrafficSimulation.Initialize(Builder->RoadNetwork, TrafficSettings);

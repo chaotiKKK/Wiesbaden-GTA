@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "GIS/WiesbadenWorldBuilder.h"
+#include "World/WiesbadenVisualTuning.h"
 
 #include "WiesbadenReal.h"
 
@@ -1756,7 +1757,10 @@ void AWiesbadenWorldBuilder::EnsureLightingActors()
 			// mehr Himmelslicht, damit die verschatteten Fassaden/Gehwege nicht
 			// dunkel absaufen. 2.2 hebt die Schattenseiten sichtbar an und bleibt
 			// unter dem milchigen 3.5.
-			Comp->SetIntensity(2.2f);
+			// Wert zentral in World/WiesbadenVisualTuning.h (Befund 24.09.2026:
+			// EnsureCinematicLighting stellte dasselbe Himmelslicht auf 3.2 -
+			// je nach Aufrufreihenfolge gewann einer der beiden).
+			Comp->SetIntensity(WiesbadenVisualTuning::SkyLightIntensity);
 		}
 		MarkAlwaysLoaded(Sky);
 	}
@@ -1817,12 +1821,12 @@ void AWiesbadenWorldBuilder::EnsureLightingActors()
 			// Enges Fenster statt fester Belichtung: Tag/Nacht-Wechsel bleibt
 			// moeglich, das Ausbleichen am Tag nicht.
 			PP.bOverride_AutoExposureMinBrightness = true;
-			PP.AutoExposureMinBrightness = 0.6f;
+			PP.AutoExposureMinBrightness = WiesbadenVisualTuning::AutoExposureMinBrightness;
 			PP.bOverride_AutoExposureMaxBrightness = true;
-			PP.AutoExposureMaxBrightness = 1.6f;
+			PP.AutoExposureMaxBrightness = WiesbadenVisualTuning::AutoExposureMaxBrightness;
 
 			PP.bOverride_AutoExposureBias = true;
-			PP.AutoExposureBias = 0.0f;
+			PP.AutoExposureBias = WiesbadenVisualTuning::AutoExposureBias;
 
 			++Created;
 		}

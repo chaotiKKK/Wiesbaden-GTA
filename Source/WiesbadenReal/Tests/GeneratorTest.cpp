@@ -782,6 +782,74 @@ bool FRoadLaneAttributesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FServiceLaneCountTest,
+	"WiesbadenReal.GIS.RoadNetworkGenerator.ServiceLaneCounts",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FServiceLaneCountTest::RunTest(const FString& Parameters)
+{
+	URoadTypeLibrary* Lib = NewObject<URoadTypeLibrary>();
+	Lib->ApplyBuiltInDefaults();
+
+	auto Counts = [Lib](const TMap<FName, FString>& Tags, EOSMOnewayType Oneway,
+		int32& Fwd, int32& Bwd)
+	{
+		FOSMWay Way;
+		Way.Id = 1;
+		for (const TPair<FName, FString>& Tag : Tags)
+		{
+			Way.Tags.Add(Tag.Key, Tag.Value);
+		}
+		Lib->ResolveLaneCounts(Way, EOSMHighwayType::Service, Oneway, Fwd, Bwd);
+	};
+
+	// --- Zufahrt: einspurig (eine Spur, keine Gegenspur) --------------------
+	// Der Klassendefault waere 1+1 = 5 m breit; eine Zufahrt ist ~2,5 m.
+	{
+		int32 Fwd = -1, Bwd = -1;
+		Counts({ { TEXT("highway"), TEXT("service") }, { TEXT("service"), TEXT("driveway") } },
+			EOSMOnewayType::No, Fwd, Bwd);
+		TestEqual(TEXT("Zufahrt: eine Fahrspur"), Fwd, 1);
+		TestEqual(TEXT("Zufahrt: keine Gegenspur"), Bwd, 0);
+	}
+
+	// --- Gasse: ebenso einspurig -------------------------------------------
+	{
+		int32 Fwd = -1, Bwd = -1;
+		Counts({ { TEXT("highway"), TEXT("service") }, { TEXT("service"), TEXT("alley") } },
+			EOSMOnewayType::No, Fwd, Bwd);
+		TestEqual(TEXT("Gasse: eine Fahrspur"), Fwd, 1);
+		TestEqual(TEXT("Gasse: keine Gegenspur"), Bwd, 0);
+	}
+
+	// --- Parkplatzgasse: NICHT verengt (oft zweispurig befahren) ------------
+	{
+		int32 Fwd = -1, Bwd = -1;
+		Counts({ { TEXT("highway"), TEXT("service") }, { TEXT("service"), TEXT("parking_aisle") } },
+			EOSMOnewayType::No, Fwd, Bwd);
+		TestEqual(TEXT("Parkplatzgasse: bleibt 1+1"), Fwd + Bwd, 2);
+	}
+
+	// --- service ohne Untertyp: unveraendert -------------------------------
+	{
+		int32 Fwd = -1, Bwd = -1;
+		Counts({ { TEXT("highway"), TEXT("service") } }, EOSMOnewayType::No, Fwd, Bwd);
+		TestEqual(TEXT("service ohne Untertyp: bleibt 1+1"), Fwd + Bwd, 2);
+	}
+
+	// --- Zufahrt MIT explizitem lanes-Tag: Vermessung schlaegt Default -----
+	// Eine getaggte Spuranordnung ist eine Aussage ueber die Wirklichkeit und
+	// darf nicht von der Konvention ueberschrieben werden.
+	{
+		int32 Fwd = -1, Bwd = -1;
+		Counts({ { TEXT("highway"), TEXT("service") }, { TEXT("service"), TEXT("driveway") },
+			{ TEXT("lanes"), TEXT("2") } }, EOSMOnewayType::No, Fwd, Bwd);
+		TestEqual(TEXT("Zufahrt mit lanes=2: zwei Spuren"), Fwd + Bwd, 2);
+	}
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoadEdgeLineMarkingTest,
 	"WiesbadenReal.GIS.RoadNetworkGenerator.EdgeLines",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
@@ -2773,6 +2841,175 @@ bool FJunctionSidewalkRingTest::RunTest(const FString& Parameters)
 		FString::Printf(TEXT("Kein Gehweg-Dreieck ueberdeckt die Kreuzungsmitte (%d von %d)"),
 			CoveringCentre, SidewalkTriangles),
 		CoveringCentre, 0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoofCoveringTest,
+	"WiesbadenReal.GIS.RoofCovering",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRoofCoveringTest::RunTest(const FString& Parameters)
+{
+	// Fassaden-Varianten (EFacadeVariant, .cpp-lokal): 0 Putz, 1 Backstein,
+	// 2 Sandstein, 3 Glas, 4 Beton, 5 Fachwerk. Deckung: 0 Terrakotta,
+	// 1 Schiefer, 2 Zink, 3 Kupfergruen, 4 dunkler Schiefer.
+	auto Cov = [](int32 Variant, EOSMRoofShape Shape, EOSMBuildingType Type, bool bLandmark)
+	{
+		return UBuildingGenerator::RoofCoveringIndex(Variant, Shape, Type, bLandmark);
+	};
+	// Gewoehnliches Gebaeude (weder Kirche noch Wahrzeichen).
+	auto Plain = [&Cov](int32 Variant, EOSMRoofShape Shape)
+	{
+		return Cov(Variant, Shape, EOSMBuildingType::Generic, false);
+	};
+
+	// -- Flachdach ist Zink fuer NICHT-Kirche/Wahrzeichen, egal welche Fassade
+	for (int32 V = 0; V <= 5; ++V)
+	{
+		TestEqual(*FString::Printf(TEXT("Flachdach Variante %d -> Zink"), V),
+			Plain(V, EOSMRoofShape::Flat), 2);
+	}
+
+	// -- Geneigt: Sandstein (Gruenderzeit/Civic/Uni) -> Schiefer -------------
+	TestEqual(TEXT("Sattel + Sandstein -> Schiefer"),
+		Plain(2, EOSMRoofShape::Gabled), 1);
+	TestEqual(TEXT("Walm + Sandstein -> Schiefer"),
+		Plain(2, EOSMRoofShape::Hipped), 1);
+
+	// -- Geneigt: Glas/Beton (Buero/Industrie) -> Zink -----------------------
+	TestEqual(TEXT("Sattel + Glas -> Zink"), Plain(3, EOSMRoofShape::Gabled), 2);
+	TestEqual(TEXT("Sattel + Beton -> Zink"), Plain(4, EOSMRoofShape::Gabled), 2);
+
+	// -- Geneigt: Wohnbau (Putz/Backstein/Fachwerk) -> Terrakotta ------------
+	TestEqual(TEXT("Sattel + Putz -> Terrakotta"), Plain(0, EOSMRoofShape::Gabled), 0);
+	TestEqual(TEXT("Sattel + Backstein -> Terrakotta"), Plain(1, EOSMRoofShape::Gabled), 0);
+	TestEqual(TEXT("Zelt + Fachwerk -> Terrakotta"), Plain(5, EOSMRoofShape::Pyramidal), 0);
+
+	// -- Civic/Uni (ebenfalls Sandstein) bleiben SCHIEFER, NICHT Kupfer ------
+	// Nur Kirche + Wahrzeichen bekommen die markante Deckung, nicht jeder
+	// Sandsteinbau.
+	TestEqual(TEXT("Civic + Sandstein + Sattel -> Schiefer"),
+		Cov(2, EOSMRoofShape::Gabled, EOSMBuildingType::Civic, false), 1);
+	TestEqual(TEXT("Uni + Sandstein + Kuppel -> Schiefer (kein Kupfer)"),
+		Cov(2, EOSMRoofShape::Dome, EOSMBuildingType::University, false), 1);
+
+	// -- KIRCHE: Kuppel/Turmhelm -> Kupfergruen, sonst -> dunkler Schiefer ---
+	// (Wiesbadener Kirchen sind schiefergedeckt; nur Kuppeln/Helme patinieren.)
+	TestEqual(TEXT("Kirche + Kuppel -> Kupfergruen"),
+		Cov(2, EOSMRoofShape::Dome, EOSMBuildingType::Church, false), 3);
+	TestEqual(TEXT("Kirche + Zeltdach -> Kupfergruen"),
+		Cov(2, EOSMRoofShape::Pyramidal, EOSMBuildingType::Church, false), 3);
+	TestEqual(TEXT("Kirche + Sattel -> dunkler Schiefer"),
+		Cov(2, EOSMRoofShape::Gabled, EOSMBuildingType::Church, false), 4);
+	TestEqual(TEXT("Kirche + Walm -> dunkler Schiefer"),
+		Cov(2, EOSMRoofShape::Hipped, EOSMBuildingType::Church, false), 4);
+	// Untaggte Kirchen sind oft "flach" - trotzdem markant (dunkler Schiefer),
+	// NICHT Zink: der Kirchen-Vorrang steht vor der Flachdach-Regel.
+	TestEqual(TEXT("Kirche + (ungetaggt) Flach -> dunkler Schiefer"),
+		Cov(2, EOSMRoofShape::Flat, EOSMBuildingType::Church, false), 4);
+	// Kirche, die zugleich Wahrzeichen ist (Marktkirche): bleibt dunkler
+	// Schiefer - der Kirchentyp entscheidet, nicht die Landmarke.
+	TestEqual(TEXT("Kirche+Wahrzeichen + Sattel -> dunkler Schiefer"),
+		Cov(2, EOSMRoofShape::Gabled, EOSMBuildingType::Church, true), 4);
+
+	// -- BUERGERLICHES WAHRZEICHEN (keine Kirche) -> Kupfergruen -------------
+	TestEqual(TEXT("Wahrzeichen + Kuppel -> Kupfergruen"),
+		Cov(0, EOSMRoofShape::Dome, EOSMBuildingType::Civic, true), 3);
+	TestEqual(TEXT("Wahrzeichen + Sattel -> Kupfergruen"),
+		Cov(0, EOSMRoofShape::Gabled, EOSMBuildingType::Generic, true), 3);
+	TestEqual(TEXT("Wahrzeichen + Flach -> Kupfergruen"),
+		Cov(3, EOSMRoofShape::Flat, EOSMBuildingType::Office, true), 3);
+
+	// -- Ergebnis ist immer eine gueltige Deckung (0..4) ---------------------
+	for (int32 V = 0; V <= 5; ++V)
+	{
+		for (int32 S = 0; S < static_cast<int32>(EOSMRoofShape::MAX); ++S)
+		{
+			const EOSMRoofShape Shape = static_cast<EOSMRoofShape>(S);
+			for (int32 T = 0; T < static_cast<int32>(EOSMBuildingType::MAX); ++T)
+			{
+				const EOSMBuildingType Type = static_cast<EOSMBuildingType>(T);
+				for (bool bLm : {false, true})
+				{
+					const int32 C = Cov(V, Shape, Type, bLm);
+					TestTrue(*FString::Printf(TEXT("Deckung 0..4 (V%d S%d T%d L%d -> %d)"),
+						V, S, T, bLm ? 1 : 0, C), C >= 0 && C <= 4);
+				}
+			}
+		}
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoofToneTest,
+	"WiesbadenReal.GIS.RoofTone",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRoofToneTest::RunTest(const FString& Parameters)
+{
+	// RoofToneByte(SourceId): deterministische Tonstufe je Gebaeude aus der
+	// OSM-Id. Landet als G-Kanal der Dach-Vertexfarbe und verschiebt die
+	// Deckungsfarbe leicht - die Deckung SELBST (R-Kanal) bleibt unberuehrt.
+	auto Tone = [](int64 Id) { return UBuildingGenerator::RoofToneByte(Id); };
+
+	// -- Deterministisch: gleiche Id -> gleicher Ton ------------------------
+	for (int64 Id : {int64(0), int64(1), int64(42), int64(123456789), int64(-7),
+		int64(4200000000LL)})
+	{
+		TestEqual(*FString::Printf(TEXT("Deterministisch fuer Id %lld"), (long long)Id),
+			Tone(Id), Tone(Id));
+	}
+
+	// -- Gleichverteilt: 1024 fortlaufende Ids fuellen fast alle 256 Stufen,
+	// keine Stufe haeuft sich, und benachbarte Ids tragen fast nie denselben
+	// Ton (eine Reihe fortlaufend nummerierter Nachbarhaeuser wirkt so nicht
+	// gebaendert). Schwellen weit von den Erwartungswerten (distinct ~254,
+	// max je Stufe ~4, Nachbar-Kollisionen ~4) entfernt -> nicht flaky.
+	const int64 Start = 1000000;
+	const int32 N = 1024;
+	int32 Counts[256] = {0};
+	int32 NeighbourEqual = 0;
+	uint8 Prev = Tone(Start);
+	for (int32 i = 0; i < N; ++i)
+	{
+		const uint8 T = Tone(Start + i);
+		++Counts[T];
+		if (i > 0 && T == Prev)
+		{
+			++NeighbourEqual;
+		}
+		Prev = T;
+	}
+
+	int32 Distinct = 0;
+	int32 MaxBucket = 0;
+	for (int32 b = 0; b < 256; ++b)
+	{
+		if (Counts[b] > 0) { ++Distinct; }
+		MaxBucket = FMath::Max(MaxBucket, Counts[b]);
+	}
+
+	TestTrue(*FString::Printf(TEXT("Viele Tonstufen belegt (%d/256 >= 200)"), Distinct),
+		Distinct >= 200);
+	TestTrue(*FString::Printf(TEXT("Keine Tonstufe haeuft sich (max %d <= 20)"), MaxBucket),
+		MaxBucket <= 20);
+	TestTrue(*FString::Printf(TEXT("Nachbar-Ids kaum gleich (%d von %d < 40)"),
+		NeighbourEqual, N - 1), NeighbourEqual < 40);
+
+	// -- Byte 128 (0.5) ist die neutrale Mitte im Material - der Wertebereich
+	// deckt beide Haelften ab (heller/dunkler als neutral kommen vor).
+	bool bBelowMid = false;
+	bool bAboveMid = false;
+	for (int32 i = 0; i < N; ++i)
+	{
+		const uint8 T = Tone(Start + i);
+		bBelowMid |= (T < 128);
+		bAboveMid |= (T > 128);
+	}
+	TestTrue(TEXT("Toene unter der Mitte kommen vor"), bBelowMid);
+	TestTrue(TEXT("Toene ueber der Mitte kommen vor"), bAboveMid);
 
 	return true;
 }

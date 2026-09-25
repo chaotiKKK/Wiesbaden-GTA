@@ -6,6 +6,8 @@
 #include "Camera/PlayerCameraManager.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "Vehicles/WiesbadenVehicleControl.h"
 
@@ -43,6 +45,7 @@ void UWiesbadenVehicleTestHarness::StartDriveProfile(float Seconds)
 	DriveDuration = FMath::Max(Seconds, 0.1f);
 	DriveElapsed = 0.0f;
 	DriveLastSecond = -1;
+	bDriveReverse = FParse::Param(FCommandLine::Get(), TEXT("WbDriveReverse"));
 	// Startkurs merken: die Kursaenderung wird wrap-sicher dagegen gemessen.
 	// Kurs kommt aus der Actor-Ebene (GetOwner), Steuerung aus der Naht.
 	DriveStartYaw = GetOwner() ? GetOwner()->GetActorRotation().Yaw : 0.0f;
@@ -293,18 +296,23 @@ void UWiesbadenVehicleTestHarness::TickDriveProfile(float DeltaTime)
 		return;
 	}
 
-	// Fahrprofil in zwei Phasen ueber die echte Fahrphysik:
-	//   Beschleunigen (0-45 %): Vollgas geradeaus -> Tempo steigt
-	//   Lenken (45-100 %): Vollgas + Lenk-Sweep rechts, dann links -> Kurs aendert sich
-	// So weist der Rauchtest BEIDES nach - Laengsdynamik und Lenkung - ohne Tastatur.
+	// Fahrprofil in vier Phasen ueber die echte Fahrphysik:
+	//   Beschleunigen (0-40 %): Vollgas geradeaus -> Tempo (und Anfahr-Radspin)
+	//   Lenken re (40-60 %):    Vollgas + Lenk-Sweep rechts
+	//   Lenken li (60-80 %):    Vollgas + Lenk-Sweep links
+	//   Bremsen (80-100 %):     Gas weg, voll bremsen -> Blockieren
+	// So weist der Rauchtest Laengsdynamik UND Lenkung nach (Max ueber den Lauf);
+	// die Bremsphase macht Radspin/Blockieren fuer die Reifen-Effekte (Quietschen
+	// + Bremsspuren) im Fahrlauf sicht- und hoerbar.
 	DriveElapsed += DeltaTime;
 	const float Frac = DriveElapsed / DriveDuration;
 
 	FWiesbadenCarControl Control;
-	Control.Throttle = 1.0f;
-	if (Frac < 0.45f)      { Control.Steering = 0.0f; }
-	else if (Frac < 0.72f) { Control.Steering = 0.6f; }
-	else                   { Control.Steering = -0.6f; }
+	Control.bReverse = bDriveReverse;
+	if (Frac < 0.40f)      { Control.Throttle = 1.0f; Control.Steering = 0.0f; }
+	else if (Frac < 0.60f) { Control.Throttle = 1.0f; Control.Steering = 0.6f; }
+	else if (Frac < 0.80f) { Control.Throttle = 1.0f; Control.Steering = -0.6f; }
+	else                   { Control.Throttle = 0.0f; Control.Brake = 1.0f; Control.Steering = 0.0f; }
 	Ctrl->SetExternalControl(Control);
 
 	const int32 Second = FMath::CeilToInt(DriveElapsed);
@@ -313,9 +321,12 @@ void UWiesbadenVehicleTestHarness::TickDriveProfile(float DeltaTime)
 		DriveLastSecond = Second;
 		// Kursaenderung wrap-sicher gegen den Startkurs (FindDeltaAngle: -180..180).
 		const float HeadingDelta = FMath::FindDeltaAngleDegrees(DriveStartYaw, Owner->GetActorRotation().Yaw);
+		// Drehzahl mitloggen: beim Anfahr-Radspin flart sie ueber die aus dem Tempo
+		// abgeleitete Basis (Antriebsschlupf-Drehzahlflare) - im Log als hohe U/min
+		// bei noch niedrigem Tempo sichtbar.
 		UE_LOG(LogWbVehicles, Log,
-			TEXT("WbDev Fahrt t=%.0f: Tempo %.0f km/h, Kursaenderung %+.0f Grad, Gang %d."),
-			DriveElapsed, Ctrl->GetSpeedKmh(), HeadingDelta, Ctrl->GetGear());
+			TEXT("WbDev Fahrt t=%.0f: Tempo %.0f km/h, Drehzahl %.0f U/min, Kursaenderung %+.0f Grad, Gang %d."),
+			DriveElapsed, Ctrl->GetSpeedKmh(), Ctrl->GetEngineRpm(), HeadingDelta, Ctrl->GetGear());
 	}
 	if (DriveElapsed >= DriveDuration)
 	{

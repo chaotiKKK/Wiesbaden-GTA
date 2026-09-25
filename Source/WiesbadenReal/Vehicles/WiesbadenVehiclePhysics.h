@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 
 #include "Vehicles/WiesbadenPowertrainSpec.h"
+#include "Vehicles/WiesbadenFuelTank.h"
 
 #include "WiesbadenVehiclePhysics.generated.h"
 
@@ -37,6 +38,19 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysicsInput
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle")
 	bool bReverseRequested = false;
+
+	/**
+	 * Griffigkeit des UNTERGRUNDS, 0..1 (1 = trockener Asphalt, kleiner = nass /
+	 * Kopfsteinpflaster / Schotter).
+	 *
+	 * Skaliert das effektive mu und wirkt damit ueber DIESELBE Kopplung wie die
+	 * Reifenhaftung: Traktion, Anfahr-Radspin und das grip-abgeleitete Brems-
+	 * blockieren setzen auf griffarmem Belag frueher/staerker ein. Das Fahrzeug
+	 * liefert den Wert (aktuell ein Dev-Override, spaeter aus dem Strassenbelag);
+	 * die Physik bleibt rein.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float SurfaceGripScale = 1.0f;
 };
 
 /**
@@ -92,6 +106,27 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysicsOutput
 	/** Karosserie-Schwimmwinkel in Grad (atan(Vy/Vx)) - fuer HUD/Diagnose. */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
 	float SlipAngleDeg = 0.0f;
+
+	/**
+	 * True, solange die ANTRIEBSraeder durchdrehen (Anfahr-Radspin).
+	 *
+	 * Die geforderte Antriebslaengskraft ueberschreitet die Haftreibung der
+	 * (dynamisch belasteten) Hinterachse; der Grip faellt auf Gleitreibung. Das
+	 * ist der sichtbare Traktionsverlust beim harten Anfahren.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
+	bool bWheelSpin = false;
+
+	/**
+	 * True, solange die Raeder beim Bremsen blockieren (Bremsschlupf).
+	 *
+	 * Die geforderte Bremskraft ueberschreitet die Haftreibung; die uebertragene
+	 * Kraft pulst dann zwischen Gleit- und Haftreibung (Threshold-/ABS-Anmutung)
+	 * und die Seitenfuehrung bricht ueber den Reibungskreis weg (kein Lenken mit
+	 * blockierten Raedern).
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
+	bool bWheelLock = false;
 };
 
 /**
@@ -138,6 +173,40 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "100.0"))
 	float ShiftDownRpm = 1800.0f;
 
+	/**
+	 * Schaltdauer beim HOCHschalten (s) - Zugkraftunterbrechung.
+	 *
+	 * Fuer diese Zeit trennt die Kupplung den Kraftschluss: Antriebsmoment UND
+	 * Motorbremse fallen weg, der Wagen rollt kurz, dann greift der neue Gang.
+	 * Das gibt dem Antrieb sein mechanisches Gefuehl (die kleine Delle bei jedem
+	 * Gangwechsel). ~0,35 s ist eine zuegige, aber spuerbare Handschaltung. 0 =
+	 * instantan (altes Verhalten). Nur Hochschalten; Runterschalten bleibt sofort.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
+	float UpshiftDurationSeconds = 0.35f;
+
+	// -- Antriebsschlupf-Drehzahlflare (nur Anzeige/Klang) ----------------
+	/**
+	 * Wie weit die ANGEZEIGTE/gehoerte Drehzahl bei Radspin ueber die aus der
+	 * Fahrgeschwindigkeit abgeleitete Drehzahl hochflart (U/min).
+	 *
+	 * Beim Durchdrehen entkoppeln die Antriebsraeder von der Strasse: der
+	 * unbelastete Motor dreht hoch, waehrend der Wagen kaum schneller wird. Das
+	 * ist eine reine AUSGABE (Out.EngineRpm -> Tacho + Motorklang); die INTERNE
+	 * Drehzahl fuer Schalten und Drehmoment bleibt geschwindigkeitsabgeleitet,
+	 * damit der Flare den Antrieb NICHT destabilisiert. 0 = aus.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0"))
+	float MaxWheelSpinFlareRpm = 2500.0f;
+
+	/** Anstiegsrate des Flares (U/min je s) - schnelles Hochdrehen beim Ausbrechen. */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0"))
+	float WheelSpinFlareRiseRate = 9000.0f;
+
+	/** Abklingrate des Flares (U/min je s) - Rueckfall, sobald die Traktion greift. */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0"))
+	float WheelSpinFlareDecayRate = 5000.0f;
+
 	/** Radradius (m). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.1"))
 	float WheelRadiusM = 0.343f;
@@ -158,60 +227,30 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
 	float RollCoeff = 0.012f;
 
-	// -- Treibstoff -------------------------------------------------------
-	/** Tankgroesse in Litern. */
-	UPROPERTY(EditAnywhere, Category = "Vehicle|Treibstoff", meta = (ClampMin = "1.0"))
-	float TankCapacityLiters = 42.0f;
+	// -- Treibstoff (eigenes Modul, eigener Besitzer) ---------------------
+	/** Tank als Gameplay-Ressource - Fuellstand/Verbrauch/Nachtanken. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle|Treibstoff")
+	FWiesbadenFuelTank Fuel;
 
-	/**
-	 * Aktueller Tankinhalt in Litern (Zustand).
-	 *
-	 * 42 l entsprechen dem Tank eines Kaefer 1300. Bei Verbrauch im
-	 * zweistelligen Literbereich auf 100 km reicht der Tank fuer die
-	 * halbe Karte - die Tankstellen-Pickups machen ihn zur Ressource.
-	 */
-	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Treibstoff")
-	float FuelLiters = 42.0f;
-
-	/** Grundverbrauch laufender Motor im Leerlauf (Liter je Stunde). */
-	UPROPERTY(EditAnywhere, Category = "Vehicle|Treibstoff", meta = (ClampMin = "0.0"))
-	float IdleConsumptionLitersPerHour = 1.5f;
-
-	/** Verbrauch je mechanischer Arbeit (Liter je Kilowattstunde). */
-	UPROPERTY(EditAnywhere, Category = "Vehicle|Treibstoff", meta = (ClampMin = "0.0"))
-	float ConsumptionLitersPerKWh = 0.35f;
-
-	/** True, solange Treibstoff da ist; ein leerer Motor liefert keine Kraft. */
-	bool HasFuel() const { return FuelLiters > 0.0f; }
-
-	/** Tankfuellstand 0..1 (fuer HUD). */
-	float GetFuelFraction() const { return TankCapacityLiters > 0.0f ? FMath::Clamp(FuelLiters / TankCapacityLiters, 0.0f, 1.0f) : 0.0f; }
-
-	/**
-	 * Tankt nach.
-	 * @return false, wenn der Tank bereits voll war (das Pickup bleibt dann liegen).
-	 */
-	bool Refuel(float Liters)
-	{
-		if (FuelLiters >= TankCapacityLiters - 0.01f)
-		{
-			return false;
-		}
-		FuelLiters = FMath::Min(FuelLiters + FMath::Max(Liters, 0.0f), TankCapacityLiters);
-		return true;
-	}
+	// Duenne Weiterreicher an den Tank - halten die oeffentliche Physik-API
+	// stabil (HUD/Pickups fragen weiter das Fahrzeug, nicht den Tank direkt).
+	bool HasFuel() const { return Fuel.HasFuel(); }
+	float GetFuelFraction() const { return Fuel.GetFuelFraction(); }
+	bool Refuel(float Liters) { return Fuel.Refuel(Liters); }
 
 	/** Bremskraft bei vollem Bremspedal (N). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
 	//
-	// 14.000 N bei 820 kg waeren 17 m/s^2, also 1,7 g. Das ist physikalisch
-	// unmoeglich - mehr als die Reifen uebertragen koennen. Ein Reifen auf
-	// trockenem Asphalt schafft rund 0,9 g, ein Kaefer von 1969 mit
-	// Trommelbremsen rundum eher 0,7 g. 5.600 N entsprechen genau dem und
-	// ergeben einen Bremsweg von rund 14 m aus 50 km/h.
+	// Das ist die BremsANFORDERUNG bei vollem Pedal, NICHT die am Reifen
+	// wirksame Kraft. 5.600 N bei 820 kg sind rund 0,7 g - die reale Verzoegerung
+	// eines Kaefer von 1969 mit Trommelbremsen, Bremsweg ~14 m aus 50 km/h.
 	//
-	// Mit dem alten Wert stand das Fahrzeug schlagartig - das war einer der
-	// Gruende, aus denen sich die Fahrphysik unrealistisch anfuehlte.
+	// Das Blockieren haengt NICHT an diesem Wert: der Tick prueft die Anforderung
+	// gegen den REIBUNGSKREIS-REDUZIERTEN Laengs-Grip (mu*Gewicht abzueglich der
+	// quer verbrauchten Haftung). Auf der Geraden steht der volle Grip (mu*g >
+	// 0,7 g), das Pedal blockiert dort NICHT; beim Bremsen in der Kurve oder auf
+	// griffarmem Belag faellt der verfuegbare Grip unter die Anforderung und die
+	// Raeder blockieren - grip-abgeleitet, robust gegen Aenderungen von Masse/mu.
 	float BrakeForceN = 5600.0f;
 
 	// -- Querdynamik ------------------------------------------------------
@@ -303,6 +342,18 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1000.0"))
 	float CorneringStiffnessRearNPerRad = 36000.0f;
 
+	/**
+	 * Maximale lastabhaengige Skalierung der Schraeglaufsteifigkeit (Anteil).
+	 *
+	 * Cf/Cr werden mit dem dynamischen Achslastverhaeltnis skaliert (Bremsen ->
+	 * mehr Front-Biss, Gas -> Heck laedt) und dabei auf 1 +- diesen Wert geklemmt.
+	 * KONSERVATIV: zu weiche Hinterachse senkt die kritische Geschwindigkeit des
+	 * linearen Einspurmodells und macht es instabil. 0,2 = +-20 % - spuerbare
+	 * Balanceverschiebung, aber die Hinterachse bleibt steif genug. 0 = aus.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0", ClampMax = "0.6"))
+	float MaxStiffnessLoadShift = 0.2f;
+
 	/** Giertraegheitsmoment um die Hochachse (kg*m^2). ~ m*a*b fuer einen PKW. */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1.0"))
 	float YawInertiaKgM2 = 1150.0f;
@@ -310,6 +361,64 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	/** Gewichtsanteil auf der Vorderachse (Kaefer hecklastig: ~0,42). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.1", ClampMax = "0.9"))
 	float FrontWeightFraction = 0.42f;
+
+	/**
+	 * Frontantrieb: die Antriebskraft stuetzt sich auf die VORDERachse.
+	 *
+	 * Der Kaefer treibt hinten an (Vorgabe false) - beim Anfahren squattet das
+	 * Heck und gewinnt Grip. Die Verkehrsautos (Golf, 207, T6) treiben vorn an:
+	 * dort ENTLASTET das Anfahren die Antriebsachse, und ein zu kraeftiger Start
+	 * dreht die Vorderraeder durch (WiesbadenTrafficCars).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik")
+	bool bFrontWheelDrive = false;
+
+	/**
+	 * Schwerpunkthoehe ueber Grund (m) - Hebel der Laengs-Radlastverlagerung.
+	 *
+	 * Bremsen und Beschleunigen kippen Last zwischen den Achsen: die
+	 * uebertragene Last ist m * a_x * h / L. Ein Kaefer 1302 hat einen tiefen,
+	 * hecklastigen Schwerpunkt bei rund 0,45 m. Ohne diesen Hebel blieben die
+	 * Achslasten statisch und die Kurvenbalance reagierte NICHT auf die Pedale -
+	 * genau das fehlte fuer ein glaubwuerdiges Fahrgefuehl.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.1"))
+	float CgHeightM = 0.45f;
+
+	/**
+	 * Verhaeltnis Gleit- zu Haftreibung (kinetic/static, 0..1).
+	 *
+	 * Ein rutschender Reifen (durchdrehend oder blockiert) uebertraegt WENIGER
+	 * als ein haftender - genau darum kostet Radspin Vortrieb und ein blockiertes
+	 * Rad bremst schlechter als ein rollendes an der Haftgrenze. ~0,72 ist ein
+	 * ueblicher Wert fuer Reifen auf Asphalt (Haft 0,75 -> Gleit 0,54).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float MuKineticFraction = 0.72f;
+
+	/**
+	 * Pulsfrequenz der Blockier-/ABS-Anmutung beim Bremsen (Hz).
+	 *
+	 * Ueber der Haftgrenze wechselt das Rad zwischen blockiert und wieder
+	 * greifend; die uebertragene Bremskraft pulst mit dieser Frequenz zwischen
+	 * Gleit- und Haftreibung. 12 Hz entspricht dem Rubbeln einer
+	 * Schwellwertbremsung / einfacher ABS-Regelung.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1.0"))
+	float BrakeAbsPulseHz = 12.0f;
+
+	/**
+	 * Gier-Daempfung bei BLOCKIERTEN Raedern (Anteil je Sekunde, exp. Abbau).
+	 *
+	 * Ein blockiertes, gleitendes Rad baut keine Gier auf, sondern richtet den
+	 * Wagen zur Fahrtrichtung aus. Ohne dieses Modell fehlt beim Kurvenbremsen
+	 * jede daempfende Seitenkraft und das Heck reisst weit herum. Der Wert daempft
+	 * NUR den ueberschiessenden Dreh (nur bei blockierten Raedern aktiv), ohne das
+	 * grip-abgeleitete Blockieren selbst abzuschalten. 3/s = Zeitkonstante ~0,33 s:
+	 * der Lastwechsel bleibt spuerbar, laeuft aber nicht mehr weg. 0 = aus.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0"))
+	float LockedYawDampingRate = 3.0f;
 
 	/** Unterhalb dieser Geschwindigkeit kinematisch lenken (m/s). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.5"))
@@ -323,6 +432,10 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	/** Aktueller Gang (1..N; -1 = Rueckwaerts). */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
 	int32 Gear = 1;
+
+	/** Restliche Schaltunterbrechung (s, >0 = Kupplung offen beim Hochschalten). */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float ShiftTimeRemaining = 0.0f;
 
 	/** Aktuelle Motordrehzahl (U/min). */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
@@ -344,6 +457,41 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	/** Gierrate als integrierter Zustand (rad/s, + = rechts). */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	float YawRateRadPerS = 0.0f;
+
+	/**
+	 * Laengsbeschleunigung des VORTICKS (m/s^2) - Radlast der Antriebsachse.
+	 *
+	 * Die Traktionsgrenze der Hinterachse haengt an ihrer dynamischen Last, die
+	 * wiederum von der Laengsbeschleunigung kommt. Weil die Antriebskraft die
+	 * Beschleunigung erst erzeugt, waere das im selben Tick zirkulaer - deshalb
+	 * die Last aus dem letzten Tick.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float LastLongAccelMetersPerS2 = 0.0f;
+
+	/** Phase der Bremsschlupf-Pulsung (rad) - Zustand der ABS-Anmutung. */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float BrakeAbsPhaseRad = 0.0f;
+
+	/** Hysterese-Zustand Antriebsschlupf (Rad dreht durch). */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	bool bDriveSlipState = false;
+
+	/**
+	 * Aktueller Drehzahlflare bei Radspin (U/min ueber der geschwindigkeits-
+	 * abgeleiteten Drehzahl). Reiner Anzeige-/Klangzustand, greift NICHT in
+	 * Antrieb, Schaltung oder Drehmoment ein. Siehe MaxWheelSpinFlareRpm.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float WheelSpinFlare = 0.0f;
+
+	/** Hysterese-Zustand Bremsschlupf (Rad blockiert). */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	bool bBrakeLockState = false;
+
+	/** Belags-Griffigkeit dieses Ticks (0..1, 1 = trocken) - aus dem Input. */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float SurfaceGripScale = 1.0f;
 
 	/**
 	 * Treibt die Laengs-/Querdynamik einen Schritt weiter.
@@ -369,6 +517,18 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 		float CurrentNorm, float TargetNorm, float Rate, float ReturnRate, float DeltaSeconds);
 
 	/**
+	 * Naechster Drehzahlflare bei Radspin (datenrein/statisch, testbar:
+	 * Vehicles.Physics.WheelSpinFlare).
+	 *
+	 * Ziel = bWheelSpinning ? MaxFlareRpm * Throttle : 0. Der Wert wandert mit
+	 * konstanter Rate zum Ziel - beim Ausbrechen schnell hoch (RiseRatePerSec),
+	 * beim Wiedergreifen langsamer zurueck (DecayRatePerSec), rahmenratenfest.
+	 */
+	static float AdvanceWheelSpinFlare(
+		bool bWheelSpinning, float Throttle, float CurrentFlareRpm,
+		float MaxFlareRpm, float RiseRatePerSec, float DecayRatePerSec, float DeltaSeconds);
+
+	/**
 	 * Verbleibende Querbeschleunigung in m/s^2 nach dem Reibungskreis.
 	 *
 	 * Ein Reifen hat EIN Kraftbudget. Wer 0,7 g bremst, hat fuer die Kurve
@@ -380,14 +540,91 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	static float ComputeAvailableLateralAccel(
 		float MuTraction, float GravityMetersPerS2, float LongitudinalAccelMetersPerS2);
 
+	/**
+	 * Dynamischer Vorderachs-Lastanteil (0..1) nach Laengs-Radlastverlagerung.
+	 *
+	 * Beim Bremsen (a_x < 0) kippt Last nach VORN (Anteil steigt), beim
+	 * Beschleunigen nach HINTEN (Anteil faellt). Uebertragener Anteil =
+	 * a_x * h / (g * L). Das macht die Kurvenbalance pedalabhaengig: geladene
+	 * Vorderachse beisst beim Einlenken/Trail-Braking, entlastete Hinterachse
+	 * kommt (Lastwechsel-Uebersteuern des Heckmotor-Kaefers); unter Gas ist es
+	 * umgekehrt (stabil, leichtes Untersteuern).
+	 *
+	 * Oeffentlich und datenrein, damit die Kennlinie ohne Fahrzeug pruefbar ist
+	 * (Test Vehicles.Physics.LoadTransfer). Auf [0,08 .. 0,92] geklemmt, damit
+	 * keine Achse rechnerisch voellig entlastet (ein 4-Rad-Fahrzeug hebt beim
+	 * Bremsen/Gasgeben keine Achse ganz ab).
+	 */
+	static float ComputeDynamicFrontLoadFraction(
+		float StaticFrontFraction, float LongitudinalAccelMetersPerS2,
+		float GravityMetersPerS2, float CgHeightM, float WheelbaseM);
+
+	/**
+	 * Uebertragene Laengskraft eines Reifens mit Haft-/Gleitreibung + Hysterese.
+	 *
+	 * Solange die Anforderung unter der Haftreibung bleibt, wird sie voll
+	 * uebertragen. UEberschreitet sie die Haftreibung, RUTSCHT der Reifen (Rad
+	 * dreht durch bzw. blockiert): der Grip faellt auf die (kleinere) Gleit-
+	 * reibung und bleibt dort, bis die Anforderung wieder unter die Gleitreibung
+	 * faellt (Hysterese gegen Flattern am Grenzwert). @param bSlipping wird als
+	 * Zustand hinein- und herausgereicht. Datenrein pruefbar
+	 * (Test Vehicles.Physics.LongitudinalSlip).
+	 */
+	static float ComputeTransmittedLongitudinalForce(
+		float DemandN, float StaticGripN, float KineticGripN, bool& bSlipping);
+
+	/**
+	 * Uebertragbare Bremskraft bei blockierendem Rad - Threshold-/ABS-Anmutung.
+	 *
+	 * Pulst zwischen Gleit- und Haftreibung (das Rad wechselt zwischen blockiert
+	 * und wieder greifend), erreicht NIE mehr als die Haftreibung ("begrenzt")
+	 * und liegt im Mittel bei (Static+Kinetic)/2. Datenrein pruefbar.
+	 */
+	static float ComputeAbsBrakeCapN(float StaticGripN, float KineticGripN, float PhaseRad);
+
 	void Tick(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds, FWiesbadenVehiclePhysicsOutput& Out);
 
 	/** Setzt das Fahrzeug in den Ruhezustand zurueck (Stand, 1. Gang, voller Tank). */
 	void Reset();
 
 private:
-	float GetDriveForce(float Throttle) const;
+	/**
+	 * Laengsdynamik EINES Ticks: Schalten, Antrieb mit Radschlupf, Widerstaende,
+	 * Bremse mit Blockieren, Integration von Geschwindigkeit/Drehzahl, Verbrauch.
+	 * Fuellt die Laengs-Ausgaben und liefert die Laengsbeschleunigung, die die
+	 * Querdynamik fuer Reibungskreis und Radlastverlagerung braucht.
+	 */
+	float TickLongitudinal(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds, FWiesbadenVehiclePhysicsOutput& Out);
+
+	/**
+	 * Querdynamik EINES Ticks: Lenkeinschlag nachfuehren, dann dynamisches
+	 * Einspurmodell (bzw. kinematisch bei geringem Tempo). Braucht die
+	 * Laengsbeschleunigung aus TickLongitudinal.
+	 */
+	void TickLateral(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds, float LongitudinalAccelMetersPerS2, FWiesbadenVehiclePhysicsOutput& Out);
+
+	/** Haft-/Gleitreibungs-Kraft einer Achse aus ihrer Radlast (eine Politik, EIN Ort). */
+	/** Effektiver Reibbeiwert = Reifenhaftung * Belags-Griffigkeit. */
+	float EffectiveMuTraction() const { return MuTraction * SurfaceGripScale; }
+	float StaticGripN(float LoadN) const { return EffectiveMuTraction() * LoadN; }
+	float KineticGripN(float LoadN) const { return EffectiveMuTraction() * MuKineticFraction * LoadN; }
+
+	/** Rohe Antriebs-Laengskraft am Rad aus Motormoment*Uebersetzung/Radius (vor Grip). */
+	float GetWheelForceDemand(float Throttle) const;
+
+	/** Gesamtuebersetzung (Gang * Achsantrieb) als BETRAG - ohne Richtung. */
 	float GetTotalGearRatio() const;
+
+	/**
+	 * Abtriebsrichtung des eingelegten Gangs: +1 vorwaerts, -1 rueckwaerts.
+	 *
+	 * Das Vorzeichen gehoert zum Gang, nicht zur Uebersetzung: der Motor dreht
+	 * immer gleich herum, im Rueckwaertsgang kehrt das Getriebe die Richtung am
+	 * Rad um. Wer zwischen Fahrgeschwindigkeit und Motor/Antriebskraft umrechnet,
+	 * braucht deshalb Uebersetzung (Betrag) UND Richtung.
+	 */
+	float GetGearDirection() const;
+
 	float RpmFromSpeed(float Speed) const;
 	float MotorTorqueAt(float Rpm) const;
 	void ShiftGear(const FWiesbadenVehiclePhysicsInput& Input, float DeltaSeconds);

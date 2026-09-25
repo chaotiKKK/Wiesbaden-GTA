@@ -3,12 +3,14 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/SaveGame.h"
+#include "Missions/WiesbadenCourierStats.h"
 #include "WiesbadenSaveGame.generated.h"
 
 /**
  * Persistenter Spielzustand auf Platte (Slot "WiesbadenReal", Index 0).
- * v1: nur Guthaben. v2: zusaetzlich gekaufte Freischaltungen. SaveVersion
- * erlaubt vorwaertskompatible Felder - ein v1-Stand laedt ohne Freischaltungen.
+ * v1: nur Guthaben. v2: zusaetzlich gekaufte Freischaltungen. v3: Kurier-Bilanz
+ * (Dennos Lieferungen). SaveVersion erlaubt vorwaertskompatible Felder - ein
+ * aelterer Stand laedt ohne die neuen (Freischaltungen leer, Bilanz bei null).
  */
 UCLASS()
 class WIESBADENREAL_API UWiesbadenSaveGame : public USaveGame
@@ -17,7 +19,7 @@ class WIESBADENREAL_API UWiesbadenSaveGame : public USaveGame
 
 public:
 	UPROPERTY()
-	int32 SaveVersion = 2;
+	int32 SaveVersion = 3;
 
 	UPROPERTY()
 	int32 Guthaben = 0;
@@ -25,4 +27,8 @@ public:
 	/** Ids der gekauften Freischaltungen (Ausgabe-Senke, TP2 Stueck 3). */
 	UPROPERTY()
 	TArray<FName> OwnedUnlocks;
+
+	/** Kurier-Bilanz der Denno-Lieferungen (v3). */
+	UPROPERTY()
+	FWbCourierStats CourierStats;
 };

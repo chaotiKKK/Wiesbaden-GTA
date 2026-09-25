@@ -3,6 +3,7 @@
 #include "Core/WiesbadenGameMode.h"
 
 #include "World/WiesbadenCityChunk.h"
+#include "GIS/WiesbadenBuildingClearance.h"
 #include "GIS/WiesbadenRoadClearance.h"
 
 #include "WiesbadenReal.h"
@@ -42,6 +43,8 @@
 #include "World/WiesbadenBusStopMonitor.h"
 #include "World/WiesbadenWeatherFX.h"
 #include "World/WiesbadenParkFeatures.h"
+#include "World/WiesbadenPlatterParking.h"
+#include "World/WiesbadenDennoShop.h"
 #include "NPC/WiesbadenSylvia.h"
 
 AWiesbadenGameMode::AWiesbadenGameMode()
@@ -218,6 +221,16 @@ void AWiesbadenGameMode::BeginPlay()
 			AWiesbadenParkFeatures::StaticClass(),
 			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
 
+		PlatterParking = LandmarkWorld->SpawnActor<AWiesbadenPlatterParking>(
+			AWiesbadenPlatterParking::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
+
+		// Dennos Laden (Cafe + Friseur) im Erdgeschoss von Sedanplatz 5 -
+		// oeffnet die gebackene Fassade zur Laufzeit, kein Re-Bake.
+		LandmarkWorld->SpawnActor<AWiesbadenDennoShop>(
+			AWiesbadenDennoShop::StaticClass(),
+			FVector::ZeroVector, FRotator::ZeroRotator, LandmarkParams);
+
 		// Sylvia steht als reine Runtime-Szene vor Platter Strasse 144. Der
 		// Actor loest die Adresse und den Boden selbst auf; die gebackene
 		// Alkis-Karte und ihre External-Actor-Pakete bleiben unberuehrt.
@@ -392,6 +405,26 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 	// Hier blockierend streamen, bis die Zelle da ist - danach trifft der Strahl
 	// den Asphalt.
 	BlockLoadSpawnCell(World, SpawnLocation);
+	// Die Adresse 144/146 hat einen privaten Garagenhof. Den Kaefer dort in
+	// einer markierten Bucht abstellen; benutzerdefinierte Startadressen bleiben
+	// bei der gewohnten naechsten Fahrspur. Ist das Gelaende noch nicht bereit
+	// oder die Bucht blockiert, faellt die Platzsuche auf diese Fahrspur zurueck.
+	const FVector RoadSpawnLocation = SpawnLocation;
+	const FRotator RoadSpawnRotation = SpawnRotation;
+	bool bParkingPose = false;
+	if (FMath::Abs(PlayerStartAddress.Longitude - 8.2234186) < 0.0000001
+		&& FMath::Abs(PlayerStartAddress.Latitude - 50.0932604) < 0.0000001)
+	{
+		const FWiesbadenPlatterSpace Space = AWiesbadenPlatterParking::PlayerStartSpace();
+		const FGeoCoordinate ParkingCoord(
+			PlayerStartAddress.Longitude + Space.EastNorthM.X /
+				UGeoCoordinateConverter::MetersPerDegreeLongitude(PlayerStartAddress.Latitude),
+			PlayerStartAddress.Latitude + Space.EastNorthM.Y /
+				UGeoCoordinateConverter::MetersPerDegreeLatitude(PlayerStartAddress.Latitude), 0.0);
+		BlockLoadSpawnCell(World, Converter->GeoToUnrealGround(ParkingCoord));
+		if (!PlatterParking || !PlatterParking->EnsureBuilt()) { return false; }
+		bParkingPose = PlatterParking->GetPlayerStart(SpawnLocation, SpawnRotation);
+	}
 
 	// Startplatz pruefen: frei UND eben.
 	//
@@ -449,16 +482,24 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 			TraceParams.AddIgnoredActor(*It);
 		}
 
-		const FVector Forward = SpawnRotation.Vector();
 		const FVector Original = SpawnLocation;
+		const FRotator OriginalRotation = SpawnRotation;
 		bool bFound = false;
 
 		static const double Offsets[] = { 0.0, 600.0, -600.0, 1200.0, -1200.0,
 			1800.0, -1800.0, 2600.0, -2600.0, 3600.0, -3600.0 };
 
-		for (const double Offset : Offsets)
+		for (int32 Attempt = 0; Attempt < (bParkingPose ? 2 : 1) && !bFound; ++Attempt)
 		{
-			const FVector Candidate = Original + Forward * Offset;
+			const FVector SearchOrigin = Attempt == 0 ? Original : RoadSpawnLocation;
+			const FRotator SearchRotation = Attempt == 0 ? OriginalRotation : RoadSpawnRotation;
+			const FVector Forward = SearchRotation.Vector();
+			for (const double Offset : Offsets)
+			{
+				// Im Hof nur die markierte Bucht nutzen. Andere Versatzwerte
+				// wuerden in ein Haus oder durch die Garagentore fuehren.
+				if (bParkingPose && Attempt == 0 && Offset != 0.0) { continue; }
+				const FVector Candidate = SearchOrigin + Forward * Offset;
 
 			// Boden unter allen vier Radpositionen abtasten.
 			double MinGround = TNumericLimits<double>::Max();
@@ -467,7 +508,7 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 
 			for (const FVector& Offs : WheelOffsets)
 			{
-				const FVector WheelXY = Candidate + SpawnRotation.RotateVector(Offs);
+				const FVector WheelXY = Candidate + SearchRotation.RotateVector(Offs);
 				FHitResult Hit;
 				if (GetWorld()->LineTraceSingleByChannel(
 						Hit, WheelXY + FVector(0, 0, 300.0), WheelXY - FVector(0, 0, 500.0),
@@ -503,13 +544,14 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 			const FVector Placed(Candidate.X, Candidate.Y, MaxGround + WheelRadiusCm + 5.0);
 
 			if (GetWorld()->OverlapAnyTestByObjectType(
-					Placed + FVector(0, 0, 60.0), SpawnRotation.Quaternion(), Occupants,
+					Placed + FVector(0, 0, 60.0), SearchRotation.Quaternion(), Occupants,
 					FCollisionShape::MakeBox(FVector(215.0, 85.0, 60.0)), TraceParams))
 			{
 				continue;
 			}
 
 			SpawnLocation = Placed;
+			SpawnRotation = SearchRotation;
 			bFound = true;
 
 			UE_LOG(LogWbCore, Log,
@@ -517,6 +559,7 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 				TEXT("Fahrzeug auf Z %.1f."),
 				Offset * 0.01, MaxGround - MinGround, SpawnLocation.Z);
 			break;
+			}
 		}
 
 		if (!bFound)
@@ -524,7 +567,8 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 			UE_LOG(LogWbCore, Warning,
 				TEXT("Startplatz: in +/- 36 m keine ebene, freie Stelle gefunden - ")
 				TEXT("das Fahrzeug steht moeglicherweise schief oder in anderen Fahrzeugen."));
-			SpawnLocation = Original + FVector(0, 0, 40.0);
+			SpawnLocation = RoadSpawnLocation + FVector(0, 0, 40.0);
+			SpawnRotation = RoadSpawnRotation;
 		}
 	}
 
@@ -640,6 +684,13 @@ bool AWiesbadenGameMode::SpawnPlayerCarAtStartAddress()
 void AWiesbadenGameMode::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (bSpawnPlayerCar && !PlayerVehicle && IsCityReady())
+	{
+		if (SpawnPlayerCarAtStartAddress() && bSpawnHelicopter)
+		{
+			SpawnHelicopterNearStart();
+		}
+	}
 
 	const UWorld* World = GetWorld();
 	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
@@ -682,7 +733,9 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 			Foot = Cast<AWiesbadenFootPawn>(Pawn);
 		}
 
-		if (!Foot || !TryMerchantInteraction(Foot))
+		// Vor Dennos Laden nimmt F einen Lieferauftrag an (Vorrang vor dem
+		// Einsteigen wie beim Haendler).
+		if (!Foot || !(TryMerchantInteraction(Foot) || TryDennoDelivery(Foot)))
 		{
 			TogglePlayerVehicle();
 		}
@@ -705,6 +758,31 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 		UE_LOG(LogWbVehicles, Log,
 			TEXT("-WbZuFuss: nach %.1f s ausgestiegen."), ElapsedSeconds);
 	}
+}
+
+bool AWiesbadenGameMode::TryDennoDelivery(AWiesbadenFootPawn* Foot)
+{
+	UWorld* World = GetWorld();
+	if (!Foot || !World)
+	{
+		return false;
+	}
+	for (TActorIterator<AWiesbadenDennoShop> It(World); It; ++It)
+	{
+		FString Message;
+		if (It->TryAcceptDelivery(Foot, Message))
+		{
+			if (APlayerController* PC = World->GetFirstPlayerController())
+			{
+				if (AWiesbadenVehicleHUD* HUD = Cast<AWiesbadenVehicleHUD>(PC->GetHUD()))
+				{
+					HUD->ShowTransientHint(Message);
+				}
+			}
+			return true;
+		}
+	}
+	return false;
 }
 
 bool AWiesbadenGameMode::TryMerchantInteraction(AWiesbadenFootPawn* Foot)
@@ -803,6 +881,10 @@ APawn* AWiesbadenGameMode::FindNearbyVehicle(const FVector& Location) const
 
 	Consider(PlayerVehicle);   // das aktuelle Auto (Chaos ODER Kaefer)
 	Consider(PlayerHelicopter);
+	// Der zweite Hubschrauber. Er fehlte hier, solange er ein blosser AActor
+	// war - diese Schleife sucht Pawns, und ein Actor ist keiner. Genau darum
+	// liess er sich nie betreten.
+	Consider(LegacyHelicopter);
 	return Best;
 }
 
@@ -1006,24 +1088,39 @@ bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 		return true;
 	}
 
-	// Seitlich vom Fahrzeug absetzen und per Trace auf den Boden stellen.
 	// VOR das Fahrzeug setzen, nicht daneben: seitlich liegt er ausserhalb des
 	// Blickfelds der Verfolgerkamera und war schlicht nicht zu finden.
+	const double StandDistanceCm = HelicopterDistanceMeters * 100.0;
 	const FVector Base = PlayerVehicle->GetActorLocation()
-		+ PlayerVehicle->GetActorForwardVector() * (HelicopterDistanceMeters * 100.0)
+		+ PlayerVehicle->GetActorForwardVector() * StandDistanceCm
 		+ PlayerVehicle->GetActorRightVector() * 600.0;
 
-	FVector SpawnLocation = Base + FVector(0.0, 0.0, 200.0);
+	// PLATZ SUCHEN STATT BLIND SETZEN.
+	//
+	// Hier stand nur ein Lot fuer die Hoehe - keine Frage nach Fahrbahn, keine
+	// nach Gebaeuden. Der gewohnte Platz bleibt der erste Kandidat; erst wenn
+	// er belegt ist, wird gefaechert. Der Grundriss kommt vom CDO, die Netze
+	// haengen dort schon im Konstruktor.
+	const AWiesbadenHelicopter* HeliCDO = GetDefault<AWiesbadenHelicopter>();
+	const double OwnFootprintCm = HeliCDO
+		? FMath::Max(HeliCDO->GetNoseToTailCm() * 0.5, 200.0) : 700.0;
 
-	FHitResult Hit;
-	FCollisionQueryParams Params;
-	Params.AddIgnoredActor(PlayerVehicle);
-	if (World->LineTraceSingleByChannel(Hit,
-		Base + FVector(0.0, 0.0, 20000.0), Base - FVector(0.0, 0.0, 20000.0),
-		ECC_Visibility, Params))
+	TArray<FVector> Candidates;
+	Candidates.Add(Base);
+	Candidates.Append(BuildHelicopterStandCandidates(
+		Base, PlayerVehicle->GetActorRotation().Yaw, StandDistanceCm));
+
+	FVector Stand = FVector::ZeroVector;
+	int32 ChosenIndex = INDEX_NONE;
+	if (!FindFreeHelicopterStand(Candidates, OwnFootprintCm,
+		TEXT("Helikopter"), Stand, ChosenIndex))
 	{
-		SpawnLocation = Hit.Location + FVector(0.0, 0.0, 60.0);
+		return false;
 	}
+
+	// 60 cm Zugabe: der Ursprung des Ka-52 liegt in der Rumpfmitte, nicht an
+	// der Kufe.
+	const FVector SpawnLocation = Stand + FVector(0.0, 0.0, 60.0);
 
 	FActorSpawnParameters SpawnParams;
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -1050,7 +1147,7 @@ bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 		// Das importierte Ka-52-Modell bringt seine eigenen PBR-Materialien mit
 		// (M_Ka52PBR je Slot, geprueft von WiesbadenReal.Vehicles.HelicopterModell).
 		// Die alte Zell-Tarnung darueberzulegen wuerde sie ueberschreiben - der
-		// neue Heli saehe dann aus wie der alte, und das Standstueck daneben waere
+		// neue Heli saehe dann aus wie der alte, und die zweite Maschine daneben waere
 		// nicht mehr zu unterscheiden.
 		if (PlayerHelicopter->HasImportedModel())
 		{
@@ -1098,16 +1195,134 @@ bool AWiesbadenGameMode::SpawnHelicopterNearStart()
 		return false;
 	}
 
+	// Den TATSAECHLICHEN Abstand nennen, nicht den gewuenschten: seit der
+	// Platz gesucht statt gesetzt wird, koennen die beiden auseinanderliegen -
+	// hier gemessen 43 m statt der erbetenen 12, weil naeher alles bebaut war.
 	UE_LOG(LogWbVehicles, Log,
-		TEXT("Helikopter abgesetzt: %.0f m neben dem Fahrzeug bei (%.0f, %.0f, %.0f) - mit F einsteigen."),
+		TEXT("Helikopter abgesetzt: %.0f m vom Fahrzeug (erbeten: %.0f m) bei (%.0f, %.0f, %.0f) - mit F einsteigen."),
+		FVector::Dist2D(SpawnLocation, PlayerVehicle->GetActorLocation()) * 0.01,
 		HelicopterDistanceMeters, SpawnLocation.X, SpawnLocation.Y, SpawnLocation.Z);
 
-	// Das alte Modell daneben aufstellen - es ist die Anschauung zum neuen.
+	// Die zweite Maschine daneben aufstellen - beide sind fliegbar, und
+	// beide brauchen einen Platz, der weder Fahrbahn noch Gebaeude ist.
 	if (bSpawnLegacyHelicopter)
 	{
 		SpawnLegacyHelicopterNearStart();
 	}
 	return true;
+}
+
+bool AWiesbadenGameMode::FindFreeHelicopterStand(
+	const TArray<FVector>& Candidates, double FootprintCm,
+	const TCHAR* Wofuer, FVector& OutLocation, int32& OutIndex) const
+{
+	OutIndex = INDEX_NONE;
+
+	UWorld* World = GetWorld();
+	if (!World || Candidates.Num() == 0)
+	{
+		return false;
+	}
+
+	// Beide Indizes liegen um denselben Mittelpunkt. Der Radius muss den
+	// WEITESTEN Kandidaten samt Grundriss einschliessen, sonst gilt dort
+	// faelschlich alles als frei - und der letzte Ausweichplatz waere
+	// ausgerechnet der ungepruefte.
+	const FVector2D Center(Candidates[0].X, Candidates[0].Y);
+	double Reach = 0.0;
+	for (const FVector& Candidate : Candidates)
+	{
+		Reach = FMath::Max(
+			Reach, FVector2D::Distance(Center, FVector2D(Candidate.X, Candidate.Y)));
+	}
+	const double AreaRadiusCm = Reach + FootprintCm + 1000.0;
+
+	AWiesbadenWorldBuilder* NetworkBuilder = nullptr;
+	for (TActorIterator<AWiesbadenWorldBuilder> It(World); It; ++It)
+	{
+		if (It->RoadNetwork.Segments.Num() > 0 || It->Buildings.Num() > 0)
+		{
+			NetworkBuilder = *It;
+			break;
+		}
+	}
+
+	if (!NetworkBuilder)
+	{
+		// Kein Netz, keine Aussage. Lieber gar nicht aufstellen als blind -
+		// genau das war der Fehler.
+		UE_LOG(LogWbVehicles, Warning,
+			TEXT("%s nicht aufgestellt: kein WorldBuilder mit Stadtdaten um (%.0f, %.0f)."),
+			Wofuer, Center.X, Center.Y);
+		return false;
+	}
+
+	// Ohne Gehweg: der Hubschrauber darf am Fahrbahnrand stehen, nur nicht
+	// auf der Fahrbahn. 150 cm Zuschlag halten ihn von der Bordsteinkante weg.
+	FWiesbadenRoadClearance Carriageway;
+	Carriageway.BuildAround(NetworkBuilder->RoadNetwork, Center, AreaRadiusCm,
+		/*ExtraMarginCm=*/150.0, /*bIncludeSidewalk=*/false);
+
+	// 50 cm Zuschlag um jeden Grundriss: Vordaecher, Freitreppen und Rampen
+	// stehen nicht in der Gebaeudeliste, ragen aber vor die Wand. Mehr waere
+	// hier teuer - der Grundriss-Radius der Maschine (7 m) trennt ohnehin
+	// schon deutlich von der Wand.
+	FWiesbadenBuildingClearance Buildings;
+	Buildings.BuildAround(NetworkBuilder->Buildings, Center, AreaRadiusCm,
+		/*ExtraMarginCm=*/50.0);
+
+	if (Carriageway.IsEmpty() && Buildings.IsEmpty())
+	{
+		UE_LOG(LogWbVehicles, Warning,
+			TEXT("%s nicht aufgestellt: weder Fahrbahn noch Gebaeude um (%.0f, %.0f) bekannt."),
+			Wofuer, Center.X, Center.Y);
+		return false;
+	}
+
+	// Mitzaehlen, WORAN die verworfenen Plaetze scheitern. Ohne die Aufteilung
+	// sagt ein Fehlschlag nur "nichts frei" - und man raet, ob die Fahrbahn zu
+	// breit gesperrt ist oder die Gebaeude zu nah stehen.
+	int32 WegenFahrbahn = 0;
+	int32 WegenGebaeude = 0;
+	int32 WegenBoden = 0;
+
+	for (int32 Index = 0; Index < Candidates.Num(); ++Index)
+	{
+		double GroundZ = 0.0;
+		const FVector2D Flach(Candidates[Index].X, Candidates[Index].Y);
+		if (Buildings.IsBlocked(Flach, FootprintCm))
+		{
+			++WegenGebaeude;
+		}
+		else if (Carriageway.IsBlocked(Flach))
+		{
+			++WegenFahrbahn;
+		}
+
+		if (IsHelicopterStandFree(Candidates[Index], FootprintCm,
+			Carriageway, Buildings, GroundZ))
+		{
+			OutLocation = FVector(Candidates[Index].X, Candidates[Index].Y, GroundZ);
+			OutIndex = Index;
+			UE_LOG(LogWbVehicles, Log,
+				TEXT("%s: Platz %d von %d - frei von Fahrbahn (%d Abschnitte) und ")
+				TEXT("Gebaeuden (%d Grundrisse) im Umkreis von %.0f m."),
+				Wofuer, Index + 1, Candidates.Num(),
+				Carriageway.GetSpanCount(), Buildings.GetFootprintCount(),
+				AreaRadiusCm * 0.01);
+			return true;
+		}
+	}
+
+	WegenBoden = Candidates.Num() - WegenFahrbahn - WegenGebaeude;
+	UE_LOG(LogWbVehicles, Warning,
+		TEXT("%s nicht aufgestellt: unter %d geprueften Stellen um (%.0f, %.0f) ")
+		TEXT("liegt keine frei - %d an Gebaeuden, %d auf der Fahrbahn, %d sonst ")
+		TEXT("(Grundriss-Radius %.1f m; %d Fahrbahnabschnitte, %d Gebaeudegrundrisse)."),
+		Wofuer, Candidates.Num(), Center.X, Center.Y,
+		WegenGebaeude, WegenFahrbahn, WegenBoden, FootprintCm * 0.01,
+		Carriageway.GetSpanCount(), Buildings.GetFootprintCount());
+	return false;
 }
 
 double AWiesbadenGameMode::ComputeHelicopterStandDistanceCm(
@@ -1119,8 +1334,8 @@ double AWiesbadenGameMode::ComputeHelicopterStandDistanceCm(
 	const double Discs = (FMath::Max(OwnDiscCm, 0.0) + FMath::Max(LegacyDiscCm, 0.0)) * 0.5 + 500.0;
 	const double Hulls = (FMath::Max(OwnLengthCm, 0.0) + FMath::Max(LegacyLengthCm, 0.0)) * 0.5 + 200.0;
 
-	// Ohne Netze (frischer Checkout) bleibt ein Mindestabstand - ein Standstueck
-	// darf nie im Spielerheli stehen.
+	// Ohne Netze (frischer Checkout) bleibt ein Mindestabstand - eine Maschine
+	// darf nie in der anderen stehen.
 	return FMath::Max(800.0, FMath::Max(Discs, Hulls));
 }
 
@@ -1135,7 +1350,14 @@ TArray<FVector> AWiesbadenGameMode::BuildHelicopterStandCandidates(
 	static const double AngleOffsets[] = {
 		0.0, 30.0, -30.0, 60.0, -60.0, 90.0, -90.0,
 		120.0, -120.0, 150.0, -150.0, 180.0 };
-	static const double DistanceFactors[] = { 1.0, 1.6, 2.4 };
+	// WIE WEIT der Faecher reicht, entscheidet, ob ueberhaupt etwas gefunden
+	// wird. Mit den ersten drei Ringen (bis 2,4-facher Abstand) blieb in der
+	// Innenstadt gar kein Platz uebrig: gemessen 25 von 37 Stellen an
+	// Gebaeuden, 5 auf der Fahrbahn. Ein Hubschrauber von 14 m Laenge passt in
+	// keinen Hinterhof - er braucht eine echte Freiflaeche, und die liegt
+	// schon mal achtzig Meter weiter. Lieber weiter laufen als gar keine
+	// Maschine: die Reihenfolge bevorzugt weiterhin den naechsten Platz.
+	static const double DistanceFactors[] = { 1.0, 1.6, 2.4, 3.6, 5.2, 7.5 };
 
 	Candidates.Reserve(UE_ARRAY_COUNT(AngleOffsets) * UE_ARRAY_COUNT(DistanceFactors));
 	for (const double Factor : DistanceFactors)
@@ -1153,7 +1375,8 @@ TArray<FVector> AWiesbadenGameMode::BuildHelicopterStandCandidates(
 
 bool AWiesbadenGameMode::IsHelicopterStandFree(
 	const FVector& Point, double FootprintCm,
-	const FWiesbadenRoadClearance& Carriageway, double& OutGroundZ) const
+	const FWiesbadenRoadClearance& Carriageway,
+	const FWiesbadenBuildingClearance& Buildings, double& OutGroundZ) const
 {
 	const UWorld* World = GetWorld();
 	if (!World)
@@ -1174,7 +1397,7 @@ bool AWiesbadenGameMode::IsHelicopterStandFree(
 
 	// FAHRBAHN aus dem STRASSENNETZ, nicht aus der Kollision.
 	//
-	// Das Standstueck wird im ersten Bild gesetzt - da hat World Partition noch
+	// Der Platz wird im ersten Bild vergeben - da hat World Partition noch
 	// keine einzige Stadtkachel hereingestreamt, und ein Lot trifft nur die
 	// Landschaft. Eine Pruefung gegen die Fahrbahn-Kollision meldete deshalb
 	// selbst mitten auf der Strasse "frei"; nachgemessen am Standort des
@@ -1186,6 +1409,18 @@ bool AWiesbadenGameMode::IsHelicopterStandFree(
 		{
 			return false;   // Fahrbahn - genau das soll nie passieren.
 		}
+	}
+
+	// GEBAEUDE - und zwar als Kreis in einem Zug, nicht als neun Stichproben.
+	//
+	// Diese Pruefung fehlte. Sie fehlte nicht bloss, sie kehrte die Sache um:
+	// wer vor der Fahrbahn ausweicht, weicht ins Blockinnere aus, und dort
+	// stehen die Haeuser. Gemessen am Stand davor landete der zweite Hubschrauber auf
+	// Platz 13 von 36 - die ersten zwoelf lagen auf der Strasse - und damit
+	// 9,4 m tief in "Platter Strasse 150".
+	if (Buildings.IsBlocked(FVector2D(Point.X, Point.Y), FootprintCm))
+	{
+		return false;
 	}
 
 	// Die HOEHE darf weiterhin aus dem Lot kommen: die Landschaft ist von
@@ -1250,13 +1485,13 @@ bool AWiesbadenGameMode::SpawnLegacyHelicopterNearStart()
 
 	// VOM SPIELERHELI AUS messen, nicht vom Auto.
 	//
-	// Vom Auto aus gerechnet (erster Entwurf) rueckte das Standstueck um den
+	// Vom Auto aus gerechnet (erster Entwurf) rueckte der zweite Hubschrauber um den
 	// Seitenversatz des Helis aus der Flucht - die beiden standen dann schraeg
 	// zueinander statt nebeneinander. Und der Abstand war nicht mehr der
 	// gerechnete, sondern die Diagonale darueber.
 	// Platz SUCHEN statt blind setzen.
 	//
-	// Bisher stand das Standstueck immer genau vor dem Spielerheli, mit einem
+	// Bisher stand der zweite immer genau vor dem ersten, mit einem
 	// Lot fuer die Hoehe und sonst keiner Pruefung. Fuehrt dort eine Strasse
 	// entlang, stand die Maschine mitten auf der Fahrbahn - der Verkehr faehrt
 	// hindurch, und zu sehen ist ein Hubschrauber auf der Strasse. Der erste
@@ -1267,74 +1502,20 @@ bool AWiesbadenGameMode::SpawnLegacyHelicopterNearStart()
 	const TArray<FVector> Candidates = BuildHelicopterStandCandidates(
 		Anchor, PlayerHelicopter->GetActorRotation().Yaw, StandDistanceCm);
 
-	// Fahrbahn-Index NUR um den Ankerpunkt: ein Index ueber alle rund 125.000
-	// Abschnitte der Stadt kostete eine spuerbare Pause fuer eine einzige
-	// Frage. Der Umkreis muss den weitesten Kandidaten samt Grundriss
-	// einschliessen, sonst gilt dort alles als frei.
-	const double AreaRadiusCm = StandDistanceCm * 2.4 + FootprintCm + 1000.0;
+	// 60 cm Zugabe wie beim Ka-52: beide Modelle haengen jetzt an derselben
+	// Rumpfmitte, seit der alte Heli ein Pawn derselben Klasse ist.
+	constexpr double GroundClearanceCm = 60.0;
 
-	AWiesbadenWorldBuilder* NetworkBuilder = nullptr;
-	for (TActorIterator<AWiesbadenWorldBuilder> It(World); It; ++It)
-	{
-		if (It->RoadNetwork.Segments.Num() > 0)
-		{
-			NetworkBuilder = *It;
-			break;
-		}
-	}
-
-	FWiesbadenRoadClearance Carriageway;
-	if (NetworkBuilder)
-	{
-		// Ohne Gehweg: der Hubschrauber darf am Fahrbahnrand stehen, nur nicht
-		// auf der Fahrbahn. 150 cm Zuschlag halten ihn von der Bordsteinkante weg.
-		Carriageway.BuildAround(NetworkBuilder->RoadNetwork,
-			FVector2D(Anchor.X, Anchor.Y), AreaRadiusCm,
-			/*ExtraMarginCm=*/150.0, /*bIncludeSidewalk=*/false);
-	}
-
-	if (Carriageway.IsEmpty())
-	{
-		// Kein Netz, keine Aussage. Lieber gar nicht aufstellen als blind auf
-		// die Strasse - genau das war der Fehler.
-		UE_LOG(LogWbVehicles, Warning,
-			TEXT("Alter Helikopter nicht aufgestellt: kein Strassennetz zum Pruefen ")
-			TEXT("der Fahrbahn um (%.0f, %.0f)."), Anchor.X, Anchor.Y);
-		return false;
-	}
-
-	// Der Ursprung des ALTEN Rumpfnetzes liegt an der Rumpfunterseite (gemessene
-	// Bounds z 0..17,1 cm, nicht der Mittelpunkt), der Actor-Ursprung darf also
-	// direkt auf die Aufstandsflaeche - die kleine Zugabe deckt die Unebenheit
-	// des Gelaendes ab.
-	constexpr double GroundClearanceCm = 5.0;
-
-	FVector StandLocation = FVector::ZeroVector;
+	FVector Stand = FVector::ZeroVector;
 	int32 ChosenIndex = INDEX_NONE;
-	for (int32 Index = 0; Index < Candidates.Num(); ++Index)
+	if (!FindFreeHelicopterStand(Candidates, FootprintCm,
+		TEXT("Zweiter Helikopter"), Stand, ChosenIndex))
 	{
-		double GroundZ = 0.0;
-		if (IsHelicopterStandFree(Candidates[Index], FootprintCm, Carriageway, GroundZ))
-		{
-			StandLocation = FVector(
-				Candidates[Index].X, Candidates[Index].Y, GroundZ + GroundClearanceCm);
-			ChosenIndex = Index;
-			break;
-		}
-	}
-
-	if (ChosenIndex == INDEX_NONE)
-	{
-		// Lieber gar kein Standstueck als eines auf der Fahrbahn. Tritt nur
-		// ein, wenn im ganzen Umkreis nichts als Strasse liegt.
-		UE_LOG(LogWbVehicles, Warning,
-			TEXT("Alter Helikopter nicht aufgestellt: kein fahrbahnfreier Platz ")
-			TEXT("unter %d geprueften Stellen um (%.0f, %.0f) (%d Fahrbahnabschnitte)."),
-			Candidates.Num(), Anchor.X, Anchor.Y, Carriageway.GetSpanCount());
 		return false;
 	}
+	const FVector StandLocation = Stand + FVector(0.0, 0.0, GroundClearanceCm);
 
-	// Nur die Richtung uebernehmen: das Standstueck steht aufrecht, auch wenn
+	// Nur die Richtung uebernehmen: die Maschine steht aufrecht, auch wenn
 	// der Spielerheli Laengs- oder Querneigung hat.
 	const FRotator StandRotation(0.0, PlayerHelicopter->GetActorRotation().Yaw, 0.0);
 
@@ -1352,8 +1533,8 @@ bool AWiesbadenGameMode::SpawnLegacyHelicopterNearStart()
 	}
 
 	UE_LOG(LogWbVehicles, Log,
-		TEXT("Alter Helikopter steht fahrbahnfrei bei (%.0f, %.0f, %.0f), %.1f m vom ")
-		TEXT("Spielerheli (Platz %d von %d geprueften) - Rotorkreise %.1f / %.1f m, ")
+		TEXT("Zweiter Helikopter steht frei bei (%.0f, %.0f, %.0f), %.1f m vom ")
+		TEXT("ersten (Platz %d von %d geprueften) - Rotorkreise %.1f / %.1f m, ")
 		TEXT("Rumpf %.1f m, Grundriss %.1f m."),
 		StandLocation.X, StandLocation.Y, StandLocation.Z,
 		FVector::Dist2D(StandLocation, Anchor) * 0.01,

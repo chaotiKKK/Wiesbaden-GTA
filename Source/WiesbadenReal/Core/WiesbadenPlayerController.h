@@ -54,9 +54,13 @@ public:
 	UFUNCTION(Exec)
 	void WbCam(int32 Modus);
 
-	// Uebernimmt den naechsten Helikopter der Welt (Dev-Hilfe zum Testen).
+	// Uebernimmt einen Helikopter der Welt (Dev-Hilfe zum Testen).
+	//
+	// Der INDEX ist noetig, seit es zwei fliegbare Maschinen gibt: ohne ihn
+	// erwischte man immer dieselbe, und die zweite waere fuer jede Pruefung
+	// unerreichbar. 0 = der erste gefundene, 1 = der zweite.
 	UFUNCTION(Exec)
-	void WbHeli();
+	void WbHeli(int32 Index = 0);
 
 	// Kippt das besessene Fahrzeug um Nick/Roll (Grad) - Testhilfe, um das
 	// Aufrichten (WbResetVehicle) sichtbar vorzufuehren.
@@ -92,6 +96,14 @@ public:
 	// Spawnt einen reaktiven Verfolger 40 m vor dem Spieler (Dev/Test).
 	UFUNCTION(Exec)
 	void WbSpawnPursuer();
+
+	// Nimmt bei Dennos Laden einen Lieferauftrag an, ohne dort zu stehen - mit
+	// festem Zufallswert, damit ein Lauf dieselbe Adresse wieder zieht. Steht der
+	// Laden noch nicht (Streaming), wird der Auftrag vorgemerkt. DelaySeconds
+	// schiebt die Annahme auf (Aufnahmen: Dennos Paketuebergabe erst, wenn die
+	// Kamera laeuft).
+	UFUNCTION(Exec)
+	void WbDennoAuftrag(int32 Seed = 1, float DelaySeconds = 0.0f);
 
 private:
 	// Schreibt den Gesundheitsbericht JETZT (JSON + Log). Gemeinsame Endstrecke von

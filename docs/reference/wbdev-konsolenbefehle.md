@@ -44,7 +44,7 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 | `WbTraffic` | `WbTraffic <0/1>` | City-Subsystem | Verkehrsdichte 0.0 (aus) oder 0.5 (an) |
 | `WbHealth` | `WbHealth` | City-Subsystem | Maschinenlesbaren Gesundheitsbericht (JSON) ausgeben + speichern |
 | `WbCam` | `WbCam <0-2>` | Fahrzeug mit Kamera | Kameramodus Follow/Orbit/Cockpit |
-| `WbHeli` | `WbHeli` | Helikopter in der Welt | ersten Helikopter uebernehmen (Possess) |
+| `WbHeli` | `WbHeli [Index]` | Helikopter in der Welt | Helikopter Nr. Index uebernehmen (Possess; 0 = erster) |
 | `WbNudge` | `WbNudge <nick> <roll>` | besessener Pawn | Nick/Roll relativ um Grad kippen |
 | `WbHeliYaw` | `WbHeliYaw <s>` | Helikopter besessen | Gierprobe (Test-Harness) fuer s Sekunden |
 | `WbHeliFly` | `WbHeliFly <s>` | Helikopter besessen | Flugprofil (Test-Harness) fuer s Sekunden |
@@ -52,6 +52,9 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 | `WbHeliGoto` | `WbHeliGoto <dx> <dy> <dz>` | Helikopter besessen | Autopilot fliegt dx/dy/dz m relativ, haelt |
 | `WbHeliHover` | `WbHeliHover` | Helikopter besessen | Autopilot haelt aktuelle Position |
 | `WbHeliOff` | `WbHeliOff` | Helikopter besessen | Autopilot aus, Steuerung zurueck an Eingabe |
+| `WbOptionen` | `WbOptionen` | HUD vorhanden | Optionsfenster auf/zu; protokolliert alle Zeilen mit Index und Wert |
+| `WbOption` | `WbOption <Zeile> <Schritte>` | HUD vorhanden | Eine Zeile des Optionsfensters verstellen (Vorzeichen = Richtung) |
+| `WbDennoAuftrag` | `WbDennoAuftrag [Seed] [VerzoegerungS]` | Denno-Laden in der Welt | Lieferauftrag bei Denno annehmen, ohne dort zu stehen (fester Zufallswert); Denno reicht das Paket an der Cafetuer |
 
 ---
 
@@ -126,15 +129,16 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 
 ## WbHeli
 
-- **Signatur:** `WbHeli`
-- **Wirkung:** Uebernimmt (`Possess`) den ERSTEN `AWiesbadenHelicopter` in der
-  Welt. Voraussetzung fuer alle `WbHeli*`-Befehle. Achtung: entlaedt damit ein
+- **Signatur:** `WbHeli [Index:int = 0]`
+- **Wirkung:** Uebernimmt (`Possess`) den `AWiesbadenHelicopter` mit dem Index
+  (0 = der erste gefundene, 1 = der zweite - seit es zwei fliegbare Maschinen
+  gibt). Voraussetzung fuer alle `WbHeli*`-Befehle. Achtung: entlaedt damit ein
   zuvor besessenes Fahrzeug (relevant fuer den Rauchtest, der Fahr- und
   Heli-Tests deshalb in zwei getrennten Sitzungen laeuft).
-- **Voraussetzung:** mindestens ein Helikopter in der Welt.
+- **Voraussetzung:** ein Helikopter mit diesem Index in der Welt.
 - **Log-Nachweis:**
-  - Erfolg: `WbDev: WbHeli - Helikopter <Name> uebernommen.`
-  - Keiner vorhanden (Warning): `WbDev: WbHeli - kein Helikopter in der Welt.`
+  - Erfolg: `WbDev: WbHeli <Index> von <Anzahl> - <Name> (<Klasse>) uebernommen, steht bei (x, y, z).`
+  - Index ungueltig (Warning): `WbDev: WbHeli <Index> - es gibt <Anzahl> Helikopter in der Welt.`
 
 ## WbNudge
 
@@ -236,6 +240,69 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
   gemessen - der Verfolger steht dann bei (4000, 0).
 - **Log-Nachweis:**
   - `WbDev: WbSpawnPursuer - Verfolger %s bei (%.0f, %.0f).`
+
+---
+
+## WbDennoAuftrag
+
+- **Signatur:** `WbDennoAuftrag [Seed:int = 1] [VerzoegerungS:float = 0]`
+- **Wirkung:** Nimmt bei Dennos Laden (Sedanplatz 5) einen Lieferauftrag an,
+  als haette man zu Fuss vor dem Laden F gedrueckt - nur ohne dort zu stehen.
+  Der Seed legt Adresse und Ware fest: derselbe Seed zieht dieselbe Adresse
+  (solange sich Karte und Laden nicht aendern). Steht der Laden noch nicht
+  (Haus nicht gestreamt), wird der Auftrag vorgemerkt und nach dem Aufbau
+  eingeloest. Ziel 1 ist die Abholung vor dem Laden, Ziel 2 die Abgabe an
+  der Adresse; Frist und Auszahlung wie bei jedem Auftrag. Denno (mit
+  Skelett) holt das Paket, reicht es in der Cafetuer und zwinkert.
+  `VerzoegerungS` schiebt die Annahme um so viele Sekunden auf - fuer
+  Aufnahmen, die die Uebergabe erst zeigen koennen, wenn die Kamera laeuft
+  (z. B. `-ExecCmds="WbDennoAuftrag 7 25"`). Mehrere Aufrufe stehen
+  hintereinander an: jeder wird eingeloest, sobald seine Verzoegerung um ist
+  UND kein Auftrag mehr laeuft - so lassen sich Kunden nacheinander pruefen
+  (`-ExecCmds="WbDennoAuftrag 7, WbDennoAuftrag 7 90"`; die Kundenfiguren
+  wechseln sich ab).
+- **Voraussetzung:** ein `AWiesbadenDennoShop` in der Welt. Vorgemerkte
+  Auftraege warten auf das Ende des laufenden.
+- **Log-Nachweis:**
+  - Erfolg: `WbDev: WbDennoAuftrag <Seed> - Lieferauftrag angefordert (Laden steht).`
+    bzw. `(Laden noch im Aufbau, vorgemerkt).` Danach vom Laden:
+    `Dennos Lieferung <n> angenommen: <Ware> nach <Adresse>, Abgabe bei (x, y, z), Luftlinie <m> m, <EUR> EUR, Kunde <Figur>.`
+  - Kein Laden (Warning): `WbDev: WbDennoAuftrag <Seed> - kein Denno-Laden in der Welt.`
+
+---
+
+## WbOptionen
+
+- **Signatur:** `WbOptionen`
+- **Wirkung:** Oeffnet oder schliesst das Optionsfenster und schreibt beim
+  Oeffnen die GANZE Zeilenliste ins Protokoll - Index, Gruppe, Beschriftung und
+  aktueller Wert. Damit laesst sich `WbOption` ansteuern, ohne das Bild zu
+  brauchen.
+- **Voraussetzung:** ein HUD (`AWiesbadenVehicleHUD`). Die Exec-Kette erreicht
+  es, darum sitzt der Befehl dort und nicht auf dem PlayerController.
+- **ER PAUSIERT NICHT**, anders als der Weg ueber das Pausemenue. Eine Pause ab
+  Bild 0 haelt den Welt-Takt an; die Stadt wuerde nie fertig streamen, und ein
+  Lauf, der das Menue fotografieren soll, kaeme nie so weit.
+- **Log-Nachweis:**
+  - `WbOptionen: Fenster offen, %d Zeilen.` und je Zeile
+    `  [%2d] GRUPPE  Beschriftung = Wert`
+
+---
+
+## WbOption
+
+- **Signatur:** `WbOption <Zeile> <Schritte>`
+- **Wirkung:** Waehlt die Zeile und verstellt sie um `Schritte` Schritte; das
+  Vorzeichen ist die Richtung. Die Schrittweite gehoert zur Wertart (Qualitaet
+  eine Stufe, Lautstaerke 5 %, Verkehrsdichte 10 %, Tageszeit eine Stunde).
+- **Voraussetzung:** ein HUD. Die Indizes stehen im Protokoll von `WbOptionen`.
+- **Log-Nachweis (mit Rueckgelesenem):**
+  - `WbOption: %s  %s -> %s (gesetzt: %s)` - der letzte Wert kommt aus einem
+    erneuten Lesen beim besitzenden System. Weicht er ab, haengt
+    `ACHTUNG: NICHT ANGEKOMMEN` dahinter. Eine Einstellung, die nichts
+    bewirkt, faellt damit im Protokoll auf und nicht erst im Bild.
+- **Beispiel:** `-ExecCmds="WbOptionen,WbOption 1 -4,WbOption 15 23"` setzt die
+  Schatten auf die unterste Stufe und die Tageszeit auf 22 Uhr.
 
 ---
 

@@ -15,6 +15,7 @@ class AWiesbadenNerobergbahn;
 class UWiesbadenWorldMapView;
 class UWorld;
 class UWiesbadenCitySubsystem;
+struct FWbOptionRow;
 
 /**
  * Fahrzeug-HUD: Tacho, Drehzahl, Gang und Kontrollleuchten.
@@ -78,6 +79,24 @@ public:
 	static FString FormatHeadlightMode(uint8 Mode);
 
 	/**
+	 * Beschriftung der Traktions-Kontrollleuchte aus den Modell-Flags der
+	 * Fahrphysik - leer, wenn beide aus. Blockieren ("ABS", Bremsen) hat
+	 * Vorrang vor Antriebsschlupf ("ASR", Gas): in der Praxis schliessen sie
+	 * sich aus (nie Gas UND Bremse), die Priorisierung macht die Anzeige aber
+	 * eindeutig. Datenrein/testbar (Vehicles.HUD.TractionTellTale).
+	 */
+	static FString FormatTractionTellTale(bool bWheelSpin, bool bWheelLock);
+
+	/**
+	 * Nachleuchten der Traktions-Leuchte: bei aktivem Schlupf auf HoldSeconds
+	 * gesetzt, sonst um Dt heruntergezaehlt (nie unter 0). Datenrein/testbar.
+	 *
+	 * Ohne das Halten flackerte die Leuchte im ABS-Puls-Takt (bWheelLock
+	 * schaltet mit BrakeAbsPulseHz) und waere als Zustand nicht ablesbar.
+	 */
+	static float AdvanceTellTaleHold(bool bActive, float HoldRemaining, float Dt, float HoldSeconds);
+
+	/**
 	 * Zeilen der Tastenlegende - datenrein, damit sie ohne Welt pruefbar sind.
 	 *
 	 * Die Belegungen selbst stehen an drei Stellen im Code
@@ -98,14 +117,6 @@ public:
 	 */
 	static bool ToggleControlLegendVisible(
 		bool bShown, float ElapsedSeconds, float LegendSeconds);
-
-	/**
-	 * Banner der Erstkontakt-Hilfe - datenrein.
-	 *
-	 * Ohne Untertitel (kein Missionsziel in der Naehe = Normalfall) darf kein
-	 * Gedankenstrich stehenbleiben.
-	 */
-	static FString ComposeFirstRunBanner(const FString& Title, const FString& Subtitle);
 
 	/**
 	 * Waehlt den Handlungshinweis zu Fuss (datenrein, testbar).
@@ -267,13 +278,47 @@ private:
 	/** Fuehrt den gewaehlten Eintrag aus. */
 	void ActivatePauseEntry(int32 Index);
 
-	/** Zeichnet das Ton-Unterfenster (Lautstaerke-Balken je Bus) mittig. */
-	void DrawAudioSettings(float Width, float Height);
+	/** Zeichnet das Optionsfenster (Gruppen, Beschriftung, Wert, Balken). */
+	void DrawOptions(float Width, float Height);
 
-	/** Wertet die Tasten des Ton-Unterfensters aus: Pfeile/W/S waehlen den Bus,
-	 *  Links/Rechts bzw. A/D regeln ihn leiser/lauter. Escape (zurueck) laeuft
-	 *  ueber UpdatePauseMenu. */
-	void UpdateAudioSettings();
+	/** Wertet die Tasten des Optionsfensters aus: Pfeile/W/S waehlen die Zeile,
+	 *  Links/Rechts bzw. A/D verstellen sie. Escape (zurueck) laeuft ueber
+	 *  UpdatePauseMenu. */
+	void UpdateOptions();
+
+	/** Baut die Zeilenliste aus den Systemen, die es GERADE gibt. */
+	void BuildOptionRows(TArray<FWbOptionRow>& OutRows) const;
+
+	/** Das Stadt-Subsystem, wenn es die Welt gerade gibt - sonst nullptr. */
+	class UWiesbadenCitySubsystem* FindCity() const;
+
+	/** Das Mischpult, wenn es die Spielinstanz gerade gibt - sonst nullptr. */
+	class UWiesbadenAudioSubsystem* FindAudio() const;
+
+	/**
+	 * Der aktuelle Wert einer Zeile - gelesen bei dem System, dem er gehoert.
+	 *
+	 * Das Menue haelt keine Kopie (Ausnahme: die Maus-Empfindlichkeit, siehe
+	 * MouseSensitivityFactor). Damit zeigt die Zeile immer, was WIRKLICH
+	 * eingestellt ist, und eine Schreibung, die nicht ankommt, faellt sofort
+	 * auf.
+	 */
+	double ReadOptionValue(const FWbOptionRow& Row) const;
+
+	/** Schreibt einen Wert an sein System und macht ihn dauerhaft. */
+	void WriteOptionValue(const FWbOptionRow& Row, double Value);
+
+	/**
+	 * Gespeicherte Optionen anwenden.
+	 *
+	 * Laeuft nicht nur beim Start, sondern im Sekundentakt: Spielfigur und
+	 * Fahrzeugkamera werden beim Ein- und Aussteigen neu erzeugt und haetten
+	 * sonst wieder die eingebaute Empfindlichkeit.
+	 */
+	void ApplyPersistentOptions();
+
+	/** Liest die eigenen Optionen aus den GameUserSettings (einmal beim Start). */
+	void LoadPersistentOptions();
 
 public:
 	/**
@@ -294,6 +339,30 @@ public:
 	/** Lautstaerke (0..1) als Prozenttext, z. B. "75 %". Datenrein/testbar. */
 	static FString FormatVolumePercent(float Slider01);
 
+	/**
+	 * Entwicklerbefehl: Optionsfenster oeffnen oder schliessen (haelt an).
+	 *
+	 * WOFUER: Ohne ihn laesst sich das Menue nur mit der Hand bedienen - ein
+	 * Lauf, der belegen soll, dass eine Einstellung wirkt, koennte sie gar
+	 * nicht erst verstellen. Die Exec-Kette erreicht das HUD, darum sitzt der
+	 * Befehl hier und nicht auf dem PlayerController.
+	 */
+	UFUNCTION(Exec)
+	void WbOptionen();
+
+	/**
+	 * Entwicklerbefehl: eine Zeile des Optionsfensters verstellen.
+	 *
+	 * @param Zeile   Index in der Zeilenliste (0-basiert, wie angezeigt).
+	 * @param Schritte Zahl der Schritte; das Vorzeichen ist die Richtung.
+	 *
+	 * Meldet Vorher/Nachher UND den zurueckgelesenen Wert - eine Einstellung,
+	 * die nicht ankommt, faellt damit im Protokoll auf.
+	 */
+	UFUNCTION(Exec)
+	void WbOption(int32 Zeile, int32 Schritte);
+
+
 private:
 	/** True, solange das Spiel pausiert ist. */
 	bool bPaused = false;
@@ -307,11 +376,62 @@ private:
 	/** Ausgewaehlter Eintrag. */
 	int32 PauseSelection = 0;
 
-	/** True, solange das Ton-Unterfenster (Lautstaerke) im Pausemenue offen ist. */
-	bool bAudioSettingsOpen = false;
+	/**
+	 * WAS GERADE UEBER DEM SPIEL LIEGT - ein Zustand, ein Eigentuemer.
+	 *
+	 * Vorher gab es zwei Schalter: `bPaused` entschied, ob Tasten ausgewertet
+	 * werden, `bOptionsOpen`, ob das Optionsfenster gezeichnet wird. Beide
+	 * konnten auseinanderlaufen, und genau das taten sie: ein Fenster war zu
+	 * sehen, waehrend die Pfeiltasten ins Leere gingen. Jetzt entscheidet
+	 * DIESELBE Groesse ueber Zeichnen UND Eingabe - sichtbar heisst damit
+	 * bedienbar, ohne dass jemand daran denken muss.
+	 */
+	enum class EWbPauseView : uint8
+	{
+		Aus,        // nichts liegt ueber dem Spiel
+		Menue,      // Pausemenue
+		Optionen,   // Optionsfenster
+	};
 
-	/** Ausgewaehlte Bus-Zeile im Ton-Unterfenster. */
-	int32 AudioSelection = 0;
+	EWbPauseView PauseView = EWbPauseView::Aus;
+
+	/** Ausgewaehlte Zeile im Optionsfenster. */
+	int32 OptionSelection = 0;
+
+	/**
+	 * Einmal je Oeffnen: die Tastenauswertung hat sich gemeldet.
+	 *
+	 * Das ist der Nachweis der Reparatur. Vorher entschieden zwei Schalter
+	 * ueber Zeichnen und Eingabe; stand das Fenster ohne Pause, lief
+	 * UpdateOptions NIE. Die Zeile im Protokoll sagt, dass es laeuft, solange
+	 * das Fenster zu sehen ist.
+	 */
+	bool bOptionInputAnnounced = false;
+
+	/**
+	 * Maus-Empfindlichkeit als FAKTOR auf die eingebauten Werte (1,00 = wie
+	 * gebaut). Die einzige Zeile, deren Wert das Menue selbst haelt - zu Fuss
+	 * (1,0) und im Fahrzeug (2,2) sind die Grundwerte verschieden, ein
+	 * gemeinsamer absoluter Wert waere fuer eines von beiden falsch.
+	 */
+	float MouseSensitivityFactor = 1.0f;
+
+	/** Naechste Anwendung der gespeicherten Optionen (Weltzeit in Sekunden). */
+	float NextOptionApplyAt = 0.0f;
+
+	/** Einmal-Merker: die gespeicherten Optionen wurden schon gelesen. */
+	bool bOptionsLoaded = false;
+
+	/**
+	 * Gespeicherte Tageszeit: -2 = nichts gespeichert (Weltwert nicht anfassen),
+	 * -1 = Systemzeit, 0..23 = feste Stunde.
+	 *
+	 * Sie wird im Sekundentakt nachgezogen, nicht nur einmal gelesen:
+	 * UWiesbadenCitySubsystem setzt seine Zeitquelle in seinem ERSTEN Takt
+	 * (Latch bTimeOverrideApplied) und ueberschrieb den geladenen Wert dabei.
+	 * Gemessen: eine gespeicherte 22 Uhr kam als heller Tag zurueck.
+	 */
+	float StoredTimeOfDay = -2.0f;
 
 	/** Flankenerkennung der Lautstaerke-Tasten (links/rechts bzw. A/D). */
 	bool bMenuLeftHeld = false;
@@ -371,6 +491,8 @@ private:
 	 * einzelnen Haendler (siehe DescribeNearestMerchantInReach).
 	 */
 	TWeakObjectPtr<AWiesbadenStoreMerchant> CachedFootMerchant;
+	/** Dennos Laden fuer den Annahme-Hinweis (F = Lieferauftrag). */
+	TWeakObjectPtr<class AWiesbadenDennoShop> CachedDennoShop;
 
 	/**
 	 * Nerobergbahn aus demselben Suchlauf.
@@ -404,6 +526,15 @@ private:
 
 	/** Laufzeit seit dem ersten gezeichneten Bild - fuer die Einblenddauer. */
 	float ElapsedSeconds = 0.0f;
+
+	/**
+	 * Nachleucht-Rest der Traktions-/ABS-Kontrollleuchte (s) und die zuletzt
+	 * gezeigte Beschriftung ("ASR"/"ABS"). Zusammen halten sie die Leuchte
+	 * kurz nach dem letzten Schlupf-Frame an, damit sie im ABS-Puls und bei
+	 * kurzem Anfahr-Radspin nicht flackert.
+	 */
+	float TractionTellTaleHold = 0.0f;
+	FString TractionTellTaleLabel;
 
 	/** Einmal-Latch: der Steuerungs-Legenden-Timer wird erst neu gestartet, wenn
 	 *  die Stadt fertig gestreamt ist (sonst verfaellt die Legende waehrend des
@@ -443,23 +574,19 @@ private:
 		float ExpiresAt = -1000.0f;          // world time when the prompt should
 											// stop nagging even if still idle
 		FVector2D ArmWorldPos = FVector2D::ZeroVector; // planar arm position for drift + distance
-		FString Title;                       // e.g. 'Platter Strasse'
-		FString Subtitle;                    // e.g. 'zum Ziel Haltestelle Nerobergbahn 120 m'
 		bool bModeSpecificHintShown = false; // 'W gasen ...' / 'F einsteigen ...' / etc.
 		EFirstRunContext Context = EFirstRunContext::Unknown;
 	};
 
 	FFirstRunPrompt FirstRun;
 
-	bool IsFirstRunPromptArmed() const;
-
 	// --- First-Run-Fuehrung (aus DrawHUD herausgezogen) --------------------
-	// DrawHUD zeichnet, diese Methoden entscheiden: verdienen -> komponieren
-	// -> zeigen -> ehrlich zuruecknehmen.
+	// DrawHUD zeichnet, diese Methoden entscheiden: verdienen -> zeigen ->
+	// ehrlich zuruecknehmen. Gezeigt wird nur noch der Steuerungshinweis;
+	// das Ortsbanner ist ersatzlos entfallen.
 	void UpdateFirstRunOnboarding();
 	void ArmFirstRunPrompt(const UWorld& World,
 		const UWiesbadenCitySubsystem* City, bool bPlayerIdle);
-	void ComposeFirstRunText(const UWorld* HudWorld);
 	void ShowFirstRunContextHintOnce();
 	FString ResolveMerchantCue() const;
 	EFirstRunContext ResolveFirstRunContext() const;

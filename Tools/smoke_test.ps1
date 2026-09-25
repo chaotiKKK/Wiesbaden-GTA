@@ -20,7 +20,10 @@
 # Exit 0 = alle Pruefungen bestanden, sonst Exit 1.
 
 param(
-    [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
+    # Leer = Ordner ueber dem Projekt (siehe unten, damit das Gate im Worktree dessen Stand prueft).
+    [string]$Root = "",
+    # Die INSTALLIERTE Engine, mit der auch Gate 1 baut (Tools\pruefe_engine.py).
+    [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8",
     # Perf-Regression-Schranken (aus dem 8-s-Diagnoseblock am Boden), die den
     # WP-Streaming-Fix (hoehenadaptiver Radius, 1a8f34c) festnageln.
     # PRIMAeRES Signal = die DETERMINISTISCHEN Zaehler: Komponenten/Instanzen sind
@@ -50,7 +53,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Exe    = Join-Path $Root "UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
+# Ordner UEBER dem Projekt aus dem Ort dieses Skripts (Tools\ im Projekt) - im
+# RUMPF bestimmt, nicht als Parameter-Vorgabe: mit [CmdletBinding()] ist
+# $PSScriptRoot dort unter PowerShell 5.1 LEER (gemessen 25.09.2026 im
+# Gate-Worktree: "Split-Path: leere Zeichenfolge").
+if (-not $Root) { $Root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
+
+$Exe    = Join-Path $EngineRoot "Engine\Binaries\Win64\UnrealEditor.exe"
 $Proj   = Join-Path $Root "WiesbadenReal\WiesbadenReal.uproject"
 $LogDir = Join-Path $Root "WiesbadenReal\Saved\Logs"
 $CarLog  = Join-Path $LogDir "smoke_car.log"
@@ -60,6 +69,18 @@ $HealthJson = Join-Path $LogDir "WbHealth.json"
 
 if (-not (Test-Path $Exe))  { Write-Host "ABBRUCH: Editor nicht gefunden: $Exe"; exit 2 }
 if (-not (Test-Path $Proj)) { Write-Host "ABBRUCH: Projekt nicht gefunden: $Proj"; exit 2 }
+
+# Nur Editoren DIESES Projektordners beenden - nicht jeden auf dem Rechner.
+# Frueher traf "Get-Process UnrealEditor* | Stop-Process" auch fremde, laufende
+# Arbeit (andere Agenten, offene Editoren); darum wartete der Push-Waechter, bis
+# keiner mehr lief. Im Gate-Worktree (Tools\gate_worktree.py) haelt ohnehin nur
+# der eigene Editor dessen Binaries fest.
+function Stop-ProjectEditors([string]$ProjectFile) {
+    $want = $ProjectFile.Replace('/', '\')
+    Get-CimInstance Win32_Process -Filter "Name LIKE 'UnrealEditor%'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine.Replace('/', '\') -like "*$want*" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
 
 $Checks = New-Object System.Collections.ArrayList
 function Add-Check([string]$Name, [bool]$Ok, [string]$Detail) {
@@ -96,7 +117,7 @@ function Measure-LoadFactor([int]$Iter, [int]$Samples, [double]$RefMs, [double]$
 # dann beenden. ExtraArgs sind zusaetzliche Kommandozeilen-Schalter.
 function Invoke-Session([string[]]$ExtraArgs, [string]$ExecCmds, [string]$LogFile,
                         [string]$WaitPattern, [int]$MinCount, [int]$TimeoutSec) {
-    Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process -Force
+    Stop-ProjectEditors $Proj
     Start-Sleep -Seconds 3
     Remove-Item $LogFile -ErrorAction SilentlyContinue
 
@@ -117,7 +138,7 @@ function Invoke-Session([string[]]$ExtraArgs, [string]$ExecCmds, [string]$LogFil
     }
     Write-Host ("    {0} Treffer fuer '{1}'; beende Sitzung." -f $n, $WaitPattern)
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process -Force
+    Stop-ProjectEditors $Proj
     Start-Sleep -Seconds 1
 }
 
@@ -140,7 +161,10 @@ Write-Host "Sitzung 1/2: Fahrzeug (Fahrprofil WbDrive + Materialien) ..."
 # Standard-Kaefer bleibt besessen (kein WbHeli): WbDrive faehrt ihn ueber den
 # Test-Harness Vollgas + Lenk-Sweep. Warten auf die Material-Bilanz (~8 s) faengt
 # alle Fahr-Messpunkte (WbDrive laeuft 7 s) mit ein.
-Invoke-Session @() "WbDrive 7" $CarLog "Material-Bilanz:" 1 240
+# Auf OFFENEM FELD (Wiese Grabenstrasse/Schulstrasse): seit der Kaefer im
+# Garagenhof Platter Str. 144 startet (c6c420f), fuhr er dort nach 2 s gegen
+# die Hofmauer - 19 km/h, kein Kurs, die Pruefung fiel ohne Physikfehler durch.
+Invoke-Session @("-WbGoto=-180086,899031") "WbDrive 7" $CarLog "Material-Bilanz:" 1 240
 
 Write-Host "Sitzung 2/3: Teleport + Aufrichten (Fahrzeug), dann Helikopter ..."
 Invoke-Session @() "WbTeleport 2,WbNudge 15 55,WbResetVehicle,WbHeli,WbHeliYaw 8,WbHeliFly 16" `
@@ -189,7 +213,9 @@ if ($m.Success) {
 #    (Test-Harness, ohne Tastatur) -> Tempo baut auf UND der Lenk-Sweep aendert
 #    den Kurs. Beweist Laengsdynamik + Lenkung des Fahrzeugs, das ausgeliefert
 #    wird (nicht der belly-gebugte ChaosCar). --------------------------------
-$fahrt = [regex]::Matches($car, 'WbDev Fahrt t=\d+: Tempo (\d+) km/h, Kursaenderung ([+-]\d+) Grad, Gang (\d+)')
+# Die Fahrt-Zeile traegt seit dem Drehzahl-Flare (a4f276b) auch die Drehzahl;
+# ohne das optionale Feld fand die Pruefung 0 Messpunkte.
+$fahrt = [regex]::Matches($car, 'WbDev Fahrt t=\d+: Tempo (\d+) km/h,(?: Drehzahl \d+ U/min,)? Kursaenderung ([+-]\d+) Grad, Gang (\d+)')
 if ($fahrt.Count -ge 3) {
     $maxTempo = 0; $maxKurs = 0; $maxGear = 0
     foreach ($f in $fahrt) {

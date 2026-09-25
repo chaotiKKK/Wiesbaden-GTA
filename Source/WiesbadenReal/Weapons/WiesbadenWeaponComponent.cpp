@@ -4,6 +4,7 @@
 
 #include "WiesbadenReal.h"
 
+#include "Audio/WiesbadenAudioPropagation.h"
 #include "Audio/WiesbadenAudioSubsystem.h"
 #include "Components/AudioComponent.h"
 #include "Components/PointLightComponent.h"
@@ -165,6 +166,9 @@ void UWiesbadenWeaponComponent::SetupAudio()
 	// ueber Master-Lautstaerke und Ducking wie die Fahrzeugklaenge, nicht am
 	// Mischpult vorbei. nullptr, falls die Mix-Assets fehlen -> dann ohne Bus.
 	ShotAudio->SoundClassOverride = UWiesbadenAudioSubsystem::LoadBusSoundClass(EWbAudioBus::SFX);
+
+	// Ausbreitung: mittlere Distanzkurve (Schuss) inkl. Occlusion + Hall-Send.
+	WiesbadenAudioPropagation::ConfigureSource(ShotAudio, EWbAudioRange::Mid);
 
 	// Dasselbe Verfahren wie beim Motor: eine laufende prozedurale Welle, in
 	// die Abtastwerte geschoben werden. Sie spielt dauerhaft und ist still,

@@ -7,6 +7,7 @@
 #include "InputCoreTypes.h"
 
 #include "Vehicles/WiesbadenCarAudioComponent.h"
+#include "Vehicles/WiesbadenTireEffectsComponent.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "Vehicles/WiesbadenVehicleControl.h"
@@ -66,6 +67,11 @@ public:
 	static FBeetleAssembly ChooseBeetleAssembly(
 		bool bBodyMeshAvailable, bool bWheelMeshAvailable, bool bHerbieMeshAvailable);
 
+	/** Das rechte Spender-Rad links nach aussen drehen und beide Seiten in
+	 *  Fahrtrichtung rollen lassen (+X vorwaerts, +Y rechts). */
+	static FRotator WheelVisualRotation(float ForwardRollDegrees,
+		float SteeringDegrees, bool bLeftSide);
+
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void PossessedBy(AController* NewController) override;
@@ -115,6 +121,11 @@ public:
 	/** Lichtanlage des Fahrzeugs - fuer die HUD-Kontrollleuchten. */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Fahrzeug|Licht")
 	virtual UWiesbadenCarLightsComponent* GetLights() const override { return Lights; }
+
+	/** Traktions-/ABS-Kontrollleuchte (HUD): die Modell-Flags der zuletzt
+	 *  ausgewerteten Fahrphysik, nur weitergereicht - keine Wirkung auf die Fahrt. */
+	virtual bool IsWheelSpinning() const override { return bLastWheelSpin; }
+	virtual bool IsWheelLocked() const override { return bLastWheelLock; }
 
 	/** Fahrzeug-Physik-Modul (Motor, Getriebe, Radkraefte, Lenkung). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik")
@@ -176,6 +187,50 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.1"))
 	float SuspensionResponse = 16.0f;
 
+	// -- Gewichtsverlagerung (rein visuell an der Karosserie) -----------------
+	//
+	// Der Wagen folgte bisher nur der Gelaendeneigung und blieb sonst brettl-
+	// eben: kein Eintauchen beim Bremsen, kein Aufstellen beim Beschleunigen,
+	// kein Legen in die Kurve. Das laesst jede Fahrt leblos wirken. Die
+	// Karosserie (BodyMesh) nickt und wankt jetzt aus den Beschleunigungen -
+	// die Raeder (am VisualRoot, ungeneigt) bleiben am Boden, die Kollision unberuehrt.
+
+	/** Nicken der Karosserie je m/s^2 Laengsbeschleunigung (Grad). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
+	float BodyPitchPerMeterPerS2 = 0.40f;
+
+	/** Wanken je m/s^2 Querbeschleunigung (Grad) - der Wagen legt sich in die Kurve. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
+	float BodyRollPerMeterPerS2 = 0.70f;
+
+	/** Groesstes Nicken (Grad). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
+	float BodyMaxPitchDeg = 4.0f;
+
+	/** Groesstes Wanken (Grad). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.0"))
+	float BodyMaxRollDeg = 6.0f;
+
+	/** Wie schnell die Karosserie der Zielneigung folgt (hoeher = straffer). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik", meta = (ClampMin = "0.1"))
+	float BodyTiltResponse = 8.0f;
+
+	/**
+	 * Zielneigung der Karosserie aus den Beschleunigungen bilden und weich
+	 * nachfuehren (datenrein, ohne Welt pruefbar: Vehicles.Physics.BodyTilt).
+	 *
+	 * Nicken: + Laengsbeschleunigung -> Nase hebt sich (Heck taucht ein),
+	 * - (Bremsen) -> Nase taucht. Wanken: + Querbeschleunigung (Rechtskurve)
+	 * -> Wagen legt sich nach aussen. Beide mit Anschlag und exponentieller,
+	 * rahmenratenunabhaengiger Glaettung.
+	 */
+	static void ComputeBodyTilt(
+		float LongAccelMs2, float LatAccelMs2,
+		float PitchPerMs2, float RollPerMs2,
+		float MaxPitchDeg, float MaxRollDeg,
+		float Response, float Dt,
+		float& InOutPitchDeg, float& InOutRollDeg);
+
 	/** Flughoehe ueber dem Gebaeude beim Ueberflug, in cm. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Ueberflug", meta = (ClampMin = "100.0"))
 	float FlyOverClearanceCm = 1000.0f;
@@ -207,6 +262,20 @@ public:
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
 	USceneComponent* SceneRoot = nullptr;
+
+	/**
+	 * Traeger aller SICHTBAREN Teile (Karosserie, Raeder, Leuchten), um
+	 * GroundClearanceCm unter die Wurzel gesetzt.
+	 *
+	 * Die Wurzel schwebt bewusst GroundClearanceCm ueber der Fahrbahn: dort
+	 * beginnt die Kollisionsbox, und Bordsteine rutschen unter ihr durch. Die
+	 * Meshes haben ihren Ursprung aber am Reifenaufstand - an der Wurzel
+	 * befestigt, stand der Kaefer darum 35 cm ueber dem Boden (sichtbar am
+	 * Schatten, und der Grund fuer die "grosse Projektionstiefe" der
+	 * Reifenspur-Decals).
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	USceneComponent* VisualRoot = nullptr;
 
 	/**
 	 * Kollisionskoerper in echten Fahrzeugmassen.
@@ -249,6 +318,10 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
 	UWiesbadenCarAudioComponent* EngineAudio = nullptr;
 
+	/** Reifen-Effekte: Quietschen + Bremsspuren aus dem Schlupf-Zustand. */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	UWiesbadenTireEffectsComponent* TireEffects = nullptr;
+
 private:
 	void ReadInput(float DeltaSeconds);
 	void ApplyVehiclePhysics(float DeltaSeconds);
@@ -289,8 +362,46 @@ private:
 	FWiesbadenCarControl ExternalControl;
 	bool bExternalControlActive = false;
 
+	/**
+	 * Belags-Griffigkeit als Dev-Override (-WbSurfaceGrip=X, 1 = trocken).
+	 *
+	 * Test-/Debug-Hook: erzwingt einen festen Wert und HAT VORRANG vor der
+	 * Welt-Ableitung (Wetter). Nur wirksam, wenn per Kommandozeile gesetzt
+	 * (bSurfaceGripOverridden) - sonst kommt der Wert aus dem Wetter.
+	 */
+	float SurfaceGripOverride = 1.0f;
+
+	/** True, wenn -WbSurfaceGrip gesetzt wurde (Override statt Welt-Ableitung). */
+	bool bSurfaceGripOverridden = false;
+
+public:
+	/**
+	 * Belags-Griffigkeit (0..1) aus der Wetter-Naesse. Trocken = 1; bei Regen
+	 * faellt der Grip linear bis zu WetGripLoss bei vollem Niederschlag (nasser
+	 * Asphalt haelt deutlich weniger). Datenrein und statisch, damit die
+	 * Belag->Scale-Ableitung ohne Welt pruefbar ist (Test SurfaceGripFromWorld).
+	 */
+	static float ComputeSurfaceGripScale(float RainIntensity);
+
+private:
+
 	/** Akkumulierte Rad-Drehung um die Querachse (Grad, auf 360 normalisiert). */
 	float WheelRotationPitch = 0.0f;
+
+	/**
+	 * Letzte Traktions-Flags aus der Fahrphysik, gespiegelt fuer die HUD-
+	 * Kontrollleuchte (Radspin/Blockieren). Reine Anzeige - keine Wirkung auf
+	 * die Fahrt; werden je Physik-Tick in UpdateLightsAndAudio nachgezogen.
+	 */
+	bool bLastWheelSpin = false;
+	bool bLastWheelLock = false;
+
+	/** Grundausrichtung der Karosserie (Mesh-Orientierung ohne Neigung). */
+	FRotator BodyBaseRotation = FRotator::ZeroRotator;
+
+	/** Aktuelle visuelle Karosserie-Neigung (Grad), weich nachgefuehrt. */
+	float BodyPitchDeg = 0.0f;
+	float BodyRollDeg = 0.0f;
 
 	/** Aktuelle Fallgeschwindigkeit (cm/s), wenn kein Boden unter dem Wagen liegt. */
 	float FallSpeedCmS = 0.0f;

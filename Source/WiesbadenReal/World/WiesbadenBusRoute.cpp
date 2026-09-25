@@ -206,7 +206,15 @@ void AWiesbadenBusRoute::BeginPlay()
 	Converter->InitializeWithWiesbadenOrigin();
 	LoadLine();
 	LoadSchedule();
-	BusMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/Vehicles/Bus/SM_Bus.SM_Bus"));
+	BusMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/Vehicles/Bus/SM_BusBody.SM_BusBody"));
+	BusWheelMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/Vehicles/Bus/SM_BusWheel.SM_BusWheel"));
+	if (!BusMesh || !BusWheelMesh)
+	{
+		// Alte Karten/Installationen ohne die zwei neuen Assets behalten ihren
+		// vollstaendigen (noch starren) Bus, statt unsichtbare Fahrzeuge zu zeigen.
+		BusMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/Vehicles/Bus/SM_Bus.SM_Bus"));
+		BusWheelMesh = nullptr;
+	}
 	if (BusMesh)
 	{
 		const FBox LocalBox = BusMesh->GetBoundingBox();
@@ -228,7 +236,9 @@ void AWiesbadenBusRoute::BeginPlay()
 			MinZ = FMath::Min(MinZ, MeshOrient.RotateVector(Corner * MeshScale).Z);
 			MaxZ = FMath::Max(MaxZ, MeshOrient.RotateVector(Corner * MeshScale).Z);
 		}
-		MeshBottomCm = -MinZ;
+		// Das neue Body-Mesh beginnt ueber dem Boden, weil seine Raeder einzeln
+		// sind. Sein Pivot liegt bereits auf Fahrbahnhoehe (Blender-Bake).
+		MeshBottomCm = BusWheelMesh ? 0.0 : -MinZ;
 		MeshTopCm = MaxZ;
 		UE_LOG(LogWbBus, Log, TEXT("Bus-Box lokal Min.Z=%.2f Max.Z=%.2f, Scale %.3f -> Unterkante %.0f cm, Oberkante %.0f cm ueber Pivot, Hoehe %.0f cm."),
 			LocalBox.Min.Z, LocalBox.Max.Z, MeshScale, MeshBottomCm, MeshTopCm, MeshBottomCm + MeshTopCm);
@@ -327,6 +337,31 @@ void AWiesbadenBusRoute::BeginPlay()
 		Bus->SetWorldScale3D(FVector(MeshScale));
 		Bus->SetVisibility(false);
 		Buses.Add(Bus);
+		if (BusWheelMesh)
+		{
+			// Das Spenderrad stammt von der linken Vorderachse. Die drei
+			// Achsenpositionen wurden im glTF vor dem Trennen gemessen; das rechte
+			// Rad dreht seine Aussenseite nach +X. Drehwinkel folgen der wirklich
+			// gefahrenen Strecke, nicht der Fahrplanuhr.
+			static const FVector AxlesCm[6] = {
+				FVector(-79.4, 254.5, 38.2), FVector(79.4, 254.5, 38.2),
+				FVector(-79.4, -40.2, 38.2), FVector(79.4, -40.2, 38.2),
+				FVector(-79.4, -271.4, 38.2), FVector(79.4, -271.4, 38.2) };
+			for (int32 WheelIndex = 0; WheelIndex < 6; ++WheelIndex)
+			{
+				UStaticMeshComponent* Wheel = NewObject<UStaticMeshComponent>(this);
+				Wheel->SetStaticMesh(BusWheelMesh);
+				Wheel->SetupAttachment(Bus);
+				Wheel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+				Wheel->SetCastShadow(true);
+				Wheel->RegisterComponent();
+				Wheel->SetRelativeLocation(AxlesCm[WheelIndex]);
+				Wheel->SetRelativeRotation(WiesbadenBusDrive::WheelVisualRotation(
+					0.0f, (WheelIndex & 1) != 0));
+				Wheel->SetVisibility(false);
+				BusWheels.Add(Wheel);
+			}
+		}
 
 		// Punktmatrix-Blinds: Front + rechte Seite (Liniennummer + Ziel, Material je
 		// Fahrtrichtung), Heck nur die Liniennummer. Front/Seite starten mit dem
@@ -342,6 +377,7 @@ void AWiesbadenBusRoute::BeginPlay()
 	SlotLaneSide.Init(1.0, Buses.Num());
 	SlotState.Init(0, Buses.Num());
 	SlotVehicleId.Init(-1, Buses.Num());
+	DriveStates.SetNum(Buses.Num());
 
 	AuditLastArcCm.Init(-1.0, Buses.Num());
 	SetupAnnouncements();
@@ -414,6 +450,16 @@ void AWiesbadenBusRoute::BeginPlay()
 void AWiesbadenBusRoute::HideBusSlot(int32 k)
 {
 	if (Buses.IsValidIndex(k) && Buses[k]) { Buses[k]->SetVisibility(false); }
+	if (BusWheelMesh)
+	{
+		for (int32 i = 0; i < 6; ++i)
+		{
+			if (BusWheels.IsValidIndex(k * 6 + i) && BusWheels[k * 6 + i])
+			{
+				BusWheels[k * 6 + i]->SetVisibility(false);
+			}
+		}
+	}
 	if (BlindFront.IsValidIndex(k) && BlindFront[k]) { BlindFront[k]->SetVisibility(false); }
 	if (BlindSide.IsValidIndex(k) && BlindSide[k]) { BlindSide[k]->SetVisibility(false); }
 	if (BlindRear.IsValidIndex(k) && BlindRear[k]) { BlindRear[k]->SetVisibility(false); }
@@ -516,6 +562,31 @@ WiesbadenBusLine::FBusState AWiesbadenBusRoute::ComputeHeldState(int64 VehicleId
 	return St;
 }
 
+void AWiesbadenBusRoute::AdvanceAndPlaceBus(int32 k,
+	const WiesbadenBusLine::FBusState& St, float DeltaSeconds, bool bLogThisTick)
+{
+	if (!DriveStates.IsValidIndex(k)) { return; }
+	const double Direction = St.bForward ? 1.0 : -1.0;
+	FVector Here, Tangent, Ahead, AheadTangent;
+	float SteerNorm = 0.0f;
+	const double NextArc = FMath::Clamp(St.ArcLengthCm + Direction * 1200.0,
+		0.0, LineRoute->Route.TotalLengthCm);
+	if (WiesbadenRailTransport::SamplePolyline(LineRoute->WorldPath,
+			LineRoute->ArcCm, St.ArcLengthCm, Here, Tangent)
+		&& WiesbadenRailTransport::SamplePolyline(LineRoute->WorldPath,
+			LineRoute->ArcCm, NextArc, Ahead, AheadTangent))
+	{
+		const float Yaw = (Tangent * Direction).Rotation().Yaw;
+		const float AheadYaw = (AheadTangent * Direction).Rotation().Yaw;
+		SteerNorm = FMath::Clamp(FMath::FindDeltaAngleDegrees(Yaw, AheadYaw) / 38.0f,
+			-1.0f, 1.0f);
+	}
+	const int64 Id = SlotVehicleId.IsValidIndex(k) ? SlotVehicleId[k] : k;
+	const WiesbadenBusDrive::FStep Step = WiesbadenBusDrive::Advance(
+		DriveStates[k], St, LineRoute->Route, SpeedKmh, DeltaSeconds, Id, SteerNorm);
+	PlaceBusAt(k, Step.Position, bLogThisTick);
+}
+
 void AWiesbadenBusRoute::PlaceBusAt(int32 k, const WiesbadenBusLine::FBusState& St, bool bLogThisTick)
 {
 	UStaticMeshComponent* Bus = Buses.IsValidIndex(k) ? Buses[k] : nullptr;
@@ -587,6 +658,21 @@ void AWiesbadenBusRoute::PlaceBusAt(int32 k, const WiesbadenBusLine::FBusState& 
 	const FQuat Q = Dir.Rotation().Quaternion() * MeshOrient.Quaternion();
 	Bus->SetWorldLocationAndRotation(FVector(FinalX, FinalY, BusZ), Q);
 	Bus->SetVisibility(true);
+	if (BusWheelMesh && DriveStates.IsValidIndex(k))
+	{
+		const float Roll = DriveStates[k].WheelDegrees;
+		const float Steer = DriveStates[k].Physics.SteerAngleNorm * 38.0f;
+		for (int32 i = 0; i < 6; ++i)
+		{
+			if (BusWheels.IsValidIndex(k * 6 + i) && BusWheels[k * 6 + i])
+			{
+				UStaticMeshComponent* Wheel = BusWheels[k * 6 + i];
+				Wheel->SetRelativeRotation(WiesbadenBusDrive::WheelVisualRotation(
+					Roll, (i & 1) != 0, i < 2 ? Steer : 0.0f));
+				Wheel->SetVisibility(true);
+			}
+		}
+	}
 	if (SlotWorldPos.IsValidIndex(k)) { SlotWorldPos[k] = FVector(FinalX, FinalY, BusZ); }
 	if (SlotState.IsValidIndex(k)) { SlotState[k] = St.bDwelling ? 2 : 1; }
 
@@ -1080,7 +1166,7 @@ void AWiesbadenBusRoute::Tick(float DeltaSeconds)
 			if (Local < 0.0) { Local += CycleSeconds; }
 			bool bFinished = false;
 			const WiesbadenBusLine::FBusState St = ComputeHeldState(V.Id, Local, DeltaSeconds, true, bFinished);
-			PlaceBusAt(k, St, bLogThisTick);
+			AdvanceAndPlaceBus(k, St, DeltaSeconds, bLogThisTick);
 			if (bAnnounceDiag && !bRiding && k == 0) { UpdateStopAnnouncement(St); }
 			if (bRiding && k == RiddenSlot) { UpdateStopAnnouncement(St); }
 		}
@@ -1139,7 +1225,7 @@ void AWiesbadenBusRoute::Tick(float DeltaSeconds)
 			}
 			Used[Slot] = true;
 			if (SlotVehicleId.IsValidIndex(Slot)) { SlotVehicleId[Slot] = (int32)R.Index; }
-			PlaceBusAt(Slot, St, bLogThisTick);
+			AdvanceAndPlaceBus(Slot, St, DeltaSeconds, bLogThisTick);
 			if (bAnnounceDiag && !bRiding && Driving == 0) { UpdateStopAnnouncement(St); }
 			++Driving;
 		}
@@ -1167,7 +1253,7 @@ void AWiesbadenBusRoute::Tick(float DeltaSeconds)
 			const WiesbadenBusLine::FBusState St = WiesbadenBusLine::EvaluateRoundTrip(
 				WorldTime + Offset, LineRoute->Route, SpeedCmS, StopDwellSeconds, TerminusDwellSeconds);
 			if (SlotVehicleId.IsValidIndex(k)) { SlotVehicleId[k] = FirstVehicleNumber() + k; }
-			PlaceBusAt(k, St, bLogThisTick);
+			AdvanceAndPlaceBus(k, St, DeltaSeconds, bLogThisTick);
 		}
 	}
 
