@@ -233,3 +233,45 @@ bool FDennoDeliveryTipTest::RunTest(const FString& Parameters)
 		ComputeTip(200, 300.0, Deadline).Thanks, ComputeTip(200, 20.0, Deadline).Thanks);
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDennoDeliveryWalkHomeTest,
+	"WiesbadenReal.Missions.DennoDelivery.WalkHome",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FDennoDeliveryWalkHomeTest::RunTest(const FString& Parameters)
+{
+	using namespace WiesbadenDennoDelivery;
+	const FVector Spot(1000.0, 2000.0, 50.0);
+	const FVector House = Spot + FVector(0.0, 1500.0, 900.0);   // Schwerpunkt 15 m ins Haus
+
+	// Wand gemessen: knapp davor stehen bleiben, Richtung Haus.
+	const FVector Door = ComputeDoorPoint(Spot, House, 400.0);
+	TestTrue(TEXT("Tuer knapp vor der Wand"),
+		FMath::IsNearlyEqual(FVector::Dist2D(Spot, Door), 400.0 - DoorWallGapCm, 0.5));
+	TestTrue(TEXT("Tuer liegt Richtung Haus"), Door.Y > Spot.Y && FMath::IsNearlyEqual(Door.X, Spot.X, 0.5));
+	TestEqual(TEXT("Hoehe vom Warteplatz (Boden holt der Actor)"), Door.Z, Spot.Z);
+
+	// Wand direkt hinter ihm: an Ort und Stelle, nie rueckwaerts.
+	TestTrue(TEXT("Wand dichter als der Abstand: bleibt stehen"),
+		FVector::Dist2D(ComputeDoorPoint(Spot, House, 10.0), Spot) < 0.5);
+
+	// Kein Wandtreffer: begrenzt, nie in den Schwerpunkt hinein.
+	TestTrue(TEXT("Ohne Wand hoechstens DoorFallbackMaxCm"),
+		FVector::Dist2D(ComputeDoorPoint(Spot, House, -1.0), Spot) <= DoorFallbackMaxCm + 0.5);
+	const FVector NearHouse = Spot + FVector(300.0, 0.0, 0.0);
+	TestTrue(TEXT("Ohne Wand 1,5 m vor dem Schwerpunkt"),
+		FMath::IsNearlyEqual(FVector::Dist2D(ComputeDoorPoint(Spot, NearHouse, -1.0), Spot), 150.0, 0.5));
+	TestFalse(TEXT("Schwerpunkt auf dem Warteplatz: keine ungueltige Position"),
+		ComputeDoorPoint(Spot, Spot, -1.0).ContainsNaN());
+
+	// Gangbild: beginnt in der Wartepose und laeuft die vier Posen der Reihe nach.
+	TestEqual(TEXT("Stehend = Pose 1 (wie beim Warten)"), ComputeWalkPose(0.0), 1);
+	const int32 Expected[] = { 1, 2, 3, 0, 1, 2, 3, 0 };
+	for (int32 Step = 0; Step < UE_ARRAY_COUNT(Expected); ++Step)
+	{
+		const double Walked = (Step + 0.5) * CustomerStrideCm / 4.0;
+		TestEqual(FString::Printf(TEXT("Pose nach %.0f cm"), Walked), ComputeWalkPose(Walked), Expected[Step]);
+	}
+	TestEqual(TEXT("Negative Strecke = Wartepose"), ComputeWalkPose(-20.0), 1);
+	return true;
+}

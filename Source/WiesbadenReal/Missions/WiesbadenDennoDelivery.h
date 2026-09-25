@@ -104,4 +104,32 @@ namespace WiesbadenDennoDelivery
 	 * sonst 5 %; ohne Restzeit (oder ohne Frist) nichts. Ganze Euro, mindestens 1.
 	 */
 	FDennoTip ComputeTip(int32 Payout, double RemainingSeconds, double DeadlineSeconds);
+
+	// -- Nach dem Dank: zurueck ins Haus ---------------------------------------
+	/** So lange bleibt er nach dem Dank stehen (s) - der Dank ist zu sehen. */
+	constexpr double CustomerThankPauseSeconds = 2.5;
+	/** Gehtempo und Schrittlaenge wie die Fussgaenger (WiesbadenPedestrianSimulation:
+	 *  1,35 m/s, 75 cm je Gangzyklus). */
+	constexpr double CustomerWalkSpeedCmS = 135.0;
+	constexpr double CustomerStrideCm = 75.0;
+	/** Abstand der Haustuer vor der gemessenen Wand (cm) - dort verschwindet er. */
+	constexpr double DoorWallGapCm = 35.0;
+	/** Ohne Wandtreffer: hoechstens so weit Richtung Schwerpunkt (cm). */
+	constexpr double DoorFallbackMaxCm = 600.0;
+
+	/**
+	 * Die Haustuer, zu der der Kunde zurueckgeht: vom Warteplatz Richtung
+	 * Gebaeudeschwerpunkt, knapp vor der Wand. WallDistanceCm ist der Abstand
+	 * der Wand vom Warteplatz (Strahl des Actors, < 0 = kein Treffer); ohne
+	 * Wand hoechstens DoorFallbackMaxCm und nie ueber 1,5 m vor den Schwerpunkt.
+	 * Z bleibt die des Warteplatzes.
+	 */
+	FVector ComputeDoorPoint(const FVector& Spot, const FVector& AddressLocation, double WallDistanceCm);
+
+	/**
+	 * Gangbild nach gegangener Strecke: Index 0..3 der Fussgaenger-Posen
+	 * (SM_WbPed2*_0..3). Bei 0 cm Pose 1 - die Durchgangsstellung, in der er
+	 * gewartet hat -, damit der erste Schritt nicht springt.
+	 */
+	int32 ComputeWalkPose(double WalkedCm);
 }

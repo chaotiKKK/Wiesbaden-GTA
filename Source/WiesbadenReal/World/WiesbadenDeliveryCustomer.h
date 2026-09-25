@@ -7,6 +7,7 @@
 #include "WiesbadenDeliveryCustomer.generated.h"
 
 class UInstancedStaticMeshComponent;
+class UStaticMesh;
 
 /**
  * Der Kunde einer Denno-Lieferung: wartet an der Zieladresse vor dem Haus,
@@ -19,8 +20,10 @@ class UInstancedStaticMeshComponent;
  *
  * Er erscheint erst, wenn der Spieler auf CustomerAppearCm heran ist (vorher
  * ist sein Boden womoeglich nicht gestreamt), schaut zur Strasse und dreht sich
- * zum Spieler, wenn der naeher kommt. Endet der Auftrag ohne Abgabe (Frist
- * verpasst), geht er still.
+ * zum Spieler, wenn der naeher kommt. Nach Dank und Trinkgeld geht er zur
+ * Haustuer zurueck - mit dem Gang der Fussgaenger (dieselben vier Posen,
+ * gewechselt nach gegangener Strecke, 1,35 m/s) - und verschwindet dort im
+ * Haus. Endet der Auftrag ohne Abgabe (Frist verpasst), geht er still.
  */
 UCLASS()
 class WIESBADENREAL_API AWiesbadenDeliveryCustomer : public AActor
@@ -36,7 +39,8 @@ public:
 
 	/**
 	 * Abgabe: Trinkgeld nach der zuletzt gemessenen Restzeit gutschreiben, den
-	 * Dank zurueckgeben (fuer den HUD-Hinweis) und nach ein paar Sekunden gehen.
+	 * Dank zurueckgeben (fuer den HUD-Hinweis), kurz stehen bleiben und dann
+	 * zur Haustuer zurueckgehen.
 	 * Liefert das Trinkgeld in EUR.
 	 */
 	int32 ThankAndTip(int32 Payout, double DeadlineSeconds, FString& OutThanks);
@@ -48,9 +52,26 @@ public:
 
 private:
 	bool TryPlace(const FVector& PlayerLocation);
+	/** Die Figur als EINE Instanz, Kleidungsfarben in den Instanz-Daten. */
+	void CreateFigure(const TArray<float>& Colors);
+	/**
+	 * Gangphase zeigen: EINE Komponente tauscht ihr Mesh. Vier abwechselnd
+	 * sichtbare Komponenten verwischten beim Gehen - eine eingeblendete hatte
+	 * fuer die Bewegungsunschaerfe noch die Lage von ihrem letzten sichtbaren
+	 * Bild, Schritte zurueck.
+	 */
+	void ShowPose(int32 Pose);
+	bool HasFigure() const { return Figure != nullptr; }
+	/** Zum Spieler drehen, wenn er nah ist, sonst zur Strasse. */
+	void FacePlayerOrStreet(const FVector& PlayerLocation, float DeltaSeconds);
+	/** Haustuer per Wandstrahl bestimmen, Heimweg starten. */
+	void BeginWalkHome();
+	void TickWalkHome(float DeltaSeconds);
 
 	UPROPERTY(Transient) USceneComponent* Root = nullptr;
 	UPROPERTY(Transient) UInstancedStaticMeshComponent* Figure = nullptr;
+	/** Index = Gangphase 0..3; fehlende Posen bleiben leer. */
+	UPROPERTY(Transient) TArray<UStaticMesh*> PoseMeshes;
 
 	FName MissionId;
 	FVector DropPoint = FVector::ZeroVector;
@@ -61,4 +82,10 @@ private:
 	/** Zuletzt gelesene Restzeit des Auftrags (s) - bei der Abgabe ist er schon beendet. */
 	double LastRemainingSeconds = -1.0;
 	double StandYawDeg = 0.0;
+	/** Heimweg: sichtbare Pose, Dankzeitpunkt, Tuer, gegangene Strecke. */
+	int32 ShownPose = 1;
+	double ThankedAtSeconds = 0.0;
+	FVector DoorPoint = FVector::ZeroVector;
+	double WalkedCm = 0.0;
+	double WalkDistanceCm = 0.0;
 };
