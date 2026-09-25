@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Missions/WiesbadenDennoDelivery.h"
 #include "WiesbadenDeliveryCustomer.generated.h"
 
 class UInstancedStaticMeshComponent;
@@ -41,9 +42,9 @@ public:
 	 * Abgabe: Trinkgeld nach der zuletzt gemessenen Restzeit gutschreiben, den
 	 * Dank zurueckgeben (fuer den HUD-Hinweis), kurz stehen bleiben und dann
 	 * zur Haustuer zurueckgehen.
-	 * Liefert das Trinkgeld in EUR.
+	 * Liefert das Trinkgeld (Betrag, Dank, flott) fuer Hinweis und Kurier-Bilanz.
 	 */
-	int32 ThankAndTip(int32 Payout, double DeadlineSeconds, FString& OutThanks);
+	FDennoTip ThankAndTip(int32 Payout, double DeadlineSeconds);
 
 	/** So nah dreht er sich zum Spieler (cm). */
 	static constexpr double FacePlayerCm = 2500.0;

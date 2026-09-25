@@ -8,6 +8,7 @@
 
 DECLARE_MULTICAST_DELEGATE(FOnMissionObjectiveChanged);
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnMissionCompleted, const FMission& /*Completed*/);
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnMissionFailed, const FMission& /*Failed*/);
 
 /**
  * Fuehrt Missionen zur Laufzeit: laedt den Missions-Pool (JSON) und vergibt
@@ -65,6 +66,8 @@ public:
 
 	FOnMissionObjectiveChanged OnObjectiveChanged;
 	FOnMissionCompleted OnMissionCompleted;
+	/** Frist abgelaufen - der Auftrag verfaellt (nach der Vertragsstrafe). */
+	FOnMissionFailed OnMissionFailed;
 
 private:
 	void LoadMissions();

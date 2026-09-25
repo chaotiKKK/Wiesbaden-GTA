@@ -90,6 +90,11 @@ FMission BuildMission(const FDennoDeliveryJob& Job, const FVector& ShopFront, in
 	return Mission;
 }
 
+bool IsDeliveryMission(FName MissionId)
+{
+	return MissionId.ToString().StartsWith(TEXT("denno_lieferung_"), ESearchCase::CaseSensitive);
+}
+
 FVector ComputeCustomerSpot(const FVector& DropPoint, const FVector& AddressLocation)
 {
 	FVector Dir(AddressLocation.X - DropPoint.X, AddressLocation.Y - DropPoint.Y, 0.0);
@@ -143,6 +148,7 @@ FDennoTip ComputeTip(int32 Payout, double RemainingSeconds, double DeadlineSecon
 	{
 		Share = 0.25;
 		Tip.Thanks = TEXT("Das ging ja flott! Der Rest ist fuer Sie.");
+		Tip.bFast = true;
 	}
 	else if (Fraction >= 0.25)
 	{

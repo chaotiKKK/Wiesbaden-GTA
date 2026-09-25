@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "Missions/WiesbadenCourierStats.h"
 #include "WiesbadenGameStateSubsystem.generated.h"
 
 DECLARE_MULTICAST_DELEGATE(FOnGuthabenChanged);
@@ -60,6 +61,15 @@ public:
 	/** Gekaufte Freischaltungen (fuer HUD/Anzeige). */
 	const TSet<FName>& GetOwnedUnlocks() const { return OwnedUnlocks; }
 
+	/** Kurier-Bilanz der Denno-Lieferungen (gespeichert). */
+	const FWbCourierStats& GetCourierStats() const { return CourierStats; }
+
+	/** Abgabe verbuchen und speichern. true = neuer Trinkgeld-Rekord. */
+	bool RecordCourierDelivery(int32 Tip, bool bFast);
+
+	/** Abgelaufene Lieferfrist verbuchen und speichern. */
+	void RecordCourierMissed();
+
 	FOnGuthabenChanged OnGuthabenChanged;
 	FOnUnlocksChanged OnUnlocksChanged;
 
@@ -69,4 +79,5 @@ private:
 
 	int32 Guthaben = 0;
 	TSet<FName> OwnedUnlocks;
+	FWbCourierStats CourierStats;
 };

@@ -2393,9 +2393,17 @@ void AWiesbadenVehicleHUD::DrawTransientHint(float Width, float Height)
 	{
 		return;
 	}
+	// Mehrzeilig ueber Zeilenumbrueche (z. B. Dennos Auftrag + Kurier-Bilanz);
+	// jede weitere Zeile bleibt 2 s laenger stehen, damit sie gelesen wird.
+	TArray<FString> Lines;
+	TransientHintText.ParseIntoArrayLines(Lines, /*bCullEmpty=*/true);
+	if (Lines.IsEmpty())
+	{
+		return;
+	}
 	const float Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 	const float Age = Now - TransientHintShownAt;
-	const float HoldSeconds = 3.5f;
+	const float HoldSeconds = 3.5f + 2.0f * (Lines.Num() - 1);
 	if (Age < 0.0f || Age > HoldSeconds)
 	{
 		return;
@@ -2403,13 +2411,30 @@ void AWiesbadenVehicleHUD::DrawTransientHint(float Width, float Height)
 	// Letzte 1 s ausblenden.
 	const float Alpha = Age > (HoldSeconds - 1.0f) ? (HoldSeconds - Age) : 1.0f;
 
-	const float PanelW = 460.0f;
-	const float PanelH = 40.0f;
+	// Das Feld waechst mit dem laengsten Text (mindestens die alten 460 px).
+	UFont* Font = GEngine ? GEngine->GetMediumFont() : nullptr;
+	float TextW = 0.0f;
+	float LineH = 20.0f;
+	for (const FString& Line : Lines)
+	{
+		float LineW = 0.0f;
+		float MeasuredH = 0.0f;
+		GetTextSize(Line, LineW, MeasuredH, Font, 1.0f);
+		TextW = FMath::Max(TextW, LineW);
+		LineH = FMath::Max(LineH, MeasuredH);
+	}
+	const float PanelW = FMath::Min(FMath::Max(460.0f, TextW + 36.0f), Width - 40.0f);
+	const float PanelH = 20.0f + LineH * Lines.Num() + 4.0f * (Lines.Num() - 1);
 	const float X = (Width - PanelW) * 0.5f;
 	const float Y = Height * 0.24f;
 	DrawPanelBackdrop(X, Y, PanelW, PanelH, 8.0f, FLinearColor(0.14f, 0.05f, 0.05f), 0.78f * Alpha);
-	DrawText(TransientHintText, FLinearColor(1.0f, 0.78f, 0.42f, Alpha),
-		X + 18.0f, Y + 10.0f, GEngine ? GEngine->GetMediumFont() : nullptr, 1.0f);
+	for (int32 Index = 0; Index < Lines.Num(); ++Index)
+	{
+		// Folgezeilen (Bilanz, Nachsatz) etwas zurueckgenommen.
+		const FLinearColor Colour = Index == 0 ? FLinearColor(1.0f, 0.78f, 0.42f, Alpha)
+			: FLinearColor(0.92f, 0.86f, 0.74f, Alpha);
+		DrawText(Lines[Index], Colour, X + 18.0f, Y + 10.0f + Index * (LineH + 4.0f), Font, 1.0f);
+	}
 }
 
 void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)

@@ -19,6 +19,8 @@ struct FDennoTip
 {
 	int32 Amount = 0;
 	FString Thanks;
+	/** Mit mindestens der halben Frist uebrig abgegeben (hoechste Stufe). */
+	bool bFast = false;
 };
 
 /** Ein fertig ausgewuerfelter Lieferauftrag. */
@@ -84,6 +86,9 @@ namespace WiesbadenDennoDelivery
 	 * Job.Payout. `ShopFront` ist der Aufnahmepunkt vor dem Laden.
 	 */
 	FMission BuildMission(const FDennoDeliveryJob& Job, const FVector& ShopFront, int32 Number);
+
+	/** Ist das ein Denno-Lieferauftrag (Id aus BuildMission)? */
+	bool IsDeliveryMission(FName MissionId);
 
 	// -- Der wartende Kunde ----------------------------------------------------
 	/** Ab dieser Naehe des Spielers steht der Kunde vor dem Haus (cm) - erst dann

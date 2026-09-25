@@ -307,6 +307,7 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 		// Zeitlimit gerissen: statt Belohnung eine Vertragsstrafe (Anteil der
 		// entgangenen Praemie), damit Zeitdruck etwas kostet. Der Auftrag verfaellt;
 		// AddGuthaben klemmt ueber ApplyDelta bei 0 -> nie ins Minus.
+		const FMission Failed = ActiveMission;
 		const FString FailedTitle = ActiveMission.Title;
 		const int32 Penalty =
 			FWiesbadenStore::ComputeFailurePenalty(ActiveMission.Reward.Guthaben);
@@ -321,6 +322,7 @@ void UWiesbadenMissionSubsystem::Tick(float DeltaTime)
 		UE_LOG(LogWbCore, Warning,
 			TEXT("Auftrag GESCHEITERT (Zeitlimit ueberschritten): %s. Vertragsstrafe: %d Guthaben. Naechster Auftrag folgt."),
 			*FailedTitle, Penalty);
+		OnMissionFailed.Broadcast(Failed);
 		OnObjectiveChanged.Broadcast(); // HUD-Panel leeren
 		return;
 	}

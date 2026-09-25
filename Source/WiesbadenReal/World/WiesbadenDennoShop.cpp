@@ -589,8 +589,15 @@ bool AWiesbadenDennoShop::StartDelivery(FRandomStream& Random, FString& OutMessa
 	{
 		MissionCompletedHandle = Missions->OnMissionCompleted.AddUObject(this, &AWiesbadenDennoShop::OnMissionCompleted);
 	}
-	OutMessage = FString::Printf(TEXT("Denno: %s nach %s - %.1f km, %d EUR. Ziel auf der Karte (M)."),
-		*Job.Cargo, *Job.Address, Job.DistanceCm / 100000.0, AwardFor(Job.Payout));
+	if (!MissionFailedHandle.IsValid())
+	{
+		MissionFailedHandle = Missions->OnMissionFailed.AddUObject(this, &AWiesbadenDennoShop::OnMissionFailed);
+	}
+	// Zweite Zeile: die bisherige Kurier-Bilanz (vor diesem Auftrag).
+	const UWiesbadenGameStateSubsystem* GameState = GetGameState();
+	OutMessage = FString::Printf(TEXT("Denno: %s nach %s - %.1f km, %d EUR. Ziel auf der Karte (M).\n%s"),
+		*Job.Cargo, *Job.Address, Job.DistanceCm / 100000.0, AwardFor(Job.Payout),
+		*WiesbadenCourierStats::Describe(GameState ? GameState->GetCourierStats() : FWbCourierStats()));
 	UE_LOG(LogWbDennoShop, Log,
 		TEXT("Dennos Lieferung %d angenommen: %s nach %s, Abgabe bei (%.0f, %.0f, %.0f), Luftlinie %.0f m, %d EUR."),
 		DeliveryNumber, *Job.Cargo, *Job.Address, Job.DropPoint.X, Job.DropPoint.Y, Job.DropPoint.Z,
@@ -600,7 +607,7 @@ bool AWiesbadenDennoShop::StartDelivery(FRandomStream& Random, FString& OutMessa
 
 void AWiesbadenDennoShop::OnMissionCompleted(const FMission& Completed)
 {
-	if (!Completed.Id.ToString().StartsWith(TEXT("denno_lieferung_")))
+	if (!WiesbadenDennoDelivery::IsDeliveryMission(Completed.Id))
 	{
 		return;
 	}
@@ -608,16 +615,42 @@ void AWiesbadenDennoShop::OnMissionCompleted(const FMission& Completed)
 	UE_LOG(LogWbDennoShop, Log, TEXT("Dennos Lieferung abgegeben: %s, %d EUR (Grundpreis %d)."),
 		*Completed.Title, Award, Completed.Reward.Guthaben);
 	AWiesbadenDeliveryCustomer* Waiting = Customer.Get();
+	// Ohne Kunden (nicht gespawnt) kein Trinkgeld und keine Aussage zur Eile.
+	const FDennoTip Tip = Waiting ? Waiting->ThankAndTip(Completed.Reward.Guthaben, Completed.DeadlineSeconds)
+		: FDennoTip();
+	UWiesbadenGameStateSubsystem* GameState = GetGameState();
+	const bool bRecord = GameState && GameState->RecordCourierDelivery(Tip.Amount, Tip.bFast);
+	const FString Record = bRecord ? TEXT("  Neuer Trinkgeld-Rekord!") : TEXT("");
 	if (!Waiting)
 	{
 		ShowHint(FString::Printf(TEXT("Geliefert! Denno zahlt %d EUR."), Award));
 		return;
 	}
-	FString Thanks;
-	const int32 Tip = Waiting->ThankAndTip(Completed.Reward.Guthaben, Completed.DeadlineSeconds, Thanks);
-	ShowHint(Tip > 0
-		? FString::Printf(TEXT("Kunde: \"%s\"  +%d EUR Trinkgeld.  Denno zahlt %d EUR."), *Thanks, Tip, Award)
-		: FString::Printf(TEXT("Kunde: \"%s\"  Denno zahlt %d EUR."), *Thanks, Award));
+	ShowHint(Tip.Amount > 0
+		? FString::Printf(TEXT("Kunde: \"%s\"  +%d EUR Trinkgeld.  Denno zahlt %d EUR.%s"),
+			*Tip.Thanks, Tip.Amount, Award, *Record)
+		: FString::Printf(TEXT("Kunde: \"%s\"  Denno zahlt %d EUR."), *Tip.Thanks, Award));
+}
+
+void AWiesbadenDennoShop::OnMissionFailed(const FMission& Failed)
+{
+	if (!WiesbadenDennoDelivery::IsDeliveryMission(Failed.Id))
+	{
+		return;
+	}
+	UE_LOG(LogWbDennoShop, Log, TEXT("Dennos Lieferung verfallen: %s."), *Failed.Title);
+	if (UWiesbadenGameStateSubsystem* GameState = GetGameState())
+	{
+		GameState->RecordCourierMissed();
+		ShowHint(FString::Printf(TEXT("Denno: Zu spaet - der Kunde hat nicht mehr gewartet.\n%s"),
+			*WiesbadenCourierStats::Describe(GameState->GetCourierStats())));
+	}
+}
+
+UWiesbadenGameStateSubsystem* AWiesbadenDennoShop::GetGameState() const
+{
+	const UGameInstance* GI = GetGameInstance();
+	return GI ? GI->GetSubsystem<UWiesbadenGameStateSubsystem>() : nullptr;
 }
 
 int32 AWiesbadenDennoShop::AwardFor(int32 BaseReward) const
