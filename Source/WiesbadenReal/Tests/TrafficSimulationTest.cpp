@@ -311,7 +311,11 @@ bool FTrafficGraphFollowTest::RunTest(const FString& Parameters)
 		{
 			Sim.Tick(1.0f);
 		}
-		TestTrue(TEXT("Sackgassen-Netz: Fahrzeuge werden entfernt"), Sim.Report.TotalRemovedCount >= 20);
+		// Seit dem vorausschauenden Folgen (25.09.) mit realistischer Zeitluecke
+		// ~1,7 s (~2100 Fz/h je Spur, echte Kapazitaet): 17 in 40 s. Vorher
+		// 0,67 s Abstand bei 50 km/h (5400 Fz/h, physikalisch unmoeglich): >= 20.
+		TestTrue(FString::Printf(TEXT("Sackgassen-Netz: Fahrzeuge werden entfernt (%d)"), Sim.Report.TotalRemovedCount),
+			Sim.Report.TotalRemovedCount >= 12);
 		TestTrue(TEXT("Sackgassen-Netz: Bestand gedeckelt"), Sim.Report.ActiveVehicleCount < 100);
 	}
 
@@ -333,8 +337,13 @@ bool FTrafficHeadwayTest::RunTest(const FString& Parameters)
 	Segment.LengthCm = 50000.0;
 	LongNetwork.Segments.Add(Segment);
 
+	// Geprueft wird die EXAKTE Ein-Tick-Regel - seit dem vorausschauenden Folgen
+	// (Traffic.Fahrbild) die Notbremse darunter. Darum hier das alte Fahrbild;
+	// unten die Gegenprobe, dass das neue nie schneller faehrt als sie erlaubt.
+	FWiesbadenTrafficSettings ExactSettings = MakeSettings(0.0f);
+	ExactSettings.bSmoothDriving = false;
 	FWiesbadenTrafficSimulation Sim;
-	Sim.Initialize(LongNetwork, MakeSettings(0.0f));
+	Sim.Initialize(LongNetwork, ExactSettings);
 
 	// Leader: langsam (300 cm/s) bei 40000; Follower bei 39300 (Luecke 700 = MinGap);
 	// Dritter weitere 1300 cm dahinter -> Safe-Tempo 300 + 600 = 900.
@@ -372,6 +381,20 @@ bool FTrafficHeadwayTest::RunTest(const FString& Parameters)
 		FMath::Abs(Sim.Vehicles[1].SpeedCmS - 300.0) < 0.5);
 	TestTrue(TEXT("Dritter mit Luecke 1300: Safe-Tempo 900"),
 		FMath::Abs(Sim.Vehicles[2].SpeedCmS - 900.0) < 0.5);
+
+	// Gegenprobe mit vorausschauendem Folgen: nie schneller als die Notbremse.
+	{
+		FWiesbadenTrafficSimulation Smooth;
+		Smooth.Initialize(LongNetwork, MakeSettings(0.0f));
+		Smooth.Vehicles.Add(Leader);
+		Smooth.Vehicles.Add(Follower);
+		Smooth.Vehicles.Add(Third);
+		Smooth.Tick(1.0f);
+		TestTrue(FString::Printf(TEXT("vorausschauend: Follower %.0f <= 300"), Smooth.Vehicles[1].SpeedCmS),
+			Smooth.Vehicles[1].SpeedCmS <= 300.5);
+		TestTrue(FString::Printf(TEXT("vorausschauend: Dritter %.0f <= 900"), Smooth.Vehicles[2].SpeedCmS),
+			Smooth.Vehicles[2].SpeedCmS <= 900.5);
+	}
 
 	for (int32 t = 0; t < 5; ++t)
 	{
@@ -805,11 +828,14 @@ bool FTrafficRedLightStopTest::RunTest(const FString& Parameters)
 	Simulation.Initialize(Network, MakeSettings(0.0f));
 	Simulation.SetTrafficLightSystem(&Lights);
 
-	// Fahrzeug kurz vor dem Spurende (= vor der Haltelinie) einsetzen.
+	// Fahrzeug AN der Haltelinie einsetzen (halber Meter dahinter). Die
+	// Haltelinie liegt je Zufahrt aus der Knotengeometrie (GetStopDistanceCm);
+	// wer schon darueber hinaus ist und faehrt, raeumt bei Rot - siehe unten.
+	const double AtLine = Network.Lanes[0].LengthCm - Simulation.GetStopDistanceCm(0) + 50.0;
 	FTrafficVehicle Vehicle;
 	Vehicle.LaneId = 0;
 	Vehicle.bOnLane = true;
-	Vehicle.DistanceCm = Network.Lanes[0].LengthCm - 50.0;
+	Vehicle.DistanceCm = AtLine;
 	Vehicle.SpeedCmS = 500.0;
 
 	// DesiredSpeedCmS MUSS mitgesetzt werden: der Kolonnen-Durchgang schreibt
@@ -835,7 +861,7 @@ bool FTrafficRedLightStopTest::RunTest(const FString& Parameters)
 			break;
 		}
 
-		Simulation.Vehicles[0].DistanceCm = Network.Lanes[0].LengthCm - 50.0;
+		Simulation.Vehicles[0].DistanceCm = AtLine;
 		Simulation.Vehicles[0].SpeedCmS = 500.0;
 		Simulation.Vehicles[0].DesiredSpeedCmS = 500.0;
 		Simulation.Vehicles[0].bOnLane = true;
@@ -856,6 +882,30 @@ bool FTrafficRedLightStopTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("Bei Rot wird das Fahrzeug gehalten"), bSawHeldAtRed);
 	TestTrue(TEXT("Bei Gruen faehrt es weiter"), bSawMovingAtGreen);
+
+	// Schon UEBER der Haltelinie (50 cm vor dem Spurende), als es rot wird:
+	// in Fahrt wird geraeumt, stehend bleibt es stehen. Frueher blieb auch der
+	// Fahrende stehen - mit der Front im Querweg bis zur naechsten Gruenphase.
+	{
+		int32 Guard = 0;
+		while (Lights.IsConnectionGreen(0) && Guard++ < 300)
+		{
+			Lights.Tick(0.1f);
+		}
+		if (TestFalse(TEXT("Testvorbereitung: rot"), Lights.IsConnectionGreen(0)) && Simulation.Vehicles.Num() > 0)
+		{
+			FTrafficVehicle& V = Simulation.Vehicles[0];
+			V.bOnLane = true;
+			V.LaneId = 0;
+			V.DistanceCm = Network.Lanes[0].LengthCm - 50.0;
+			V.SpeedCmS = 500.0;
+			V.DesiredSpeedCmS = 500.0;
+			V.bWasHeldAtRed = false;
+			Simulation.Tick(0.02f);
+			TestTrue(TEXT("Ueber der Linie in Fahrt: raeumt bei Rot"),
+				Simulation.Vehicles.Num() > 0 && (Simulation.Vehicles[0].SpeedCmS > 0.0 || !Simulation.Vehicles[0].bOnLane));
+		}
+	}
 	TestTrue(TEXT("Zaehler meldet gehaltene Fahrzeuge"), Simulation.GetVehiclesHeldAtRed() >= 0);
 
 	// Gegenprobe: OHNE gesetztes Ampelsystem darf NICHTS halten - genau dieser

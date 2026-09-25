@@ -1298,11 +1298,41 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 						Overlap.OnlyBodies, Overlap.NarrowestLaneCm, Overlap.MaxBodyOffsetCm,
 						Overlap.SameSegmentLanes, Overlap.CrossSegmentLanes,
 						Overlap.MinLaneRailDistanceCm);
+					UE_LOG(LogWbTraffic, Log,
+						TEXT("Fahrzeuge ineinander: davon %d an Kreuzungen, %d nur mit echter Typgroesse (Einheitsbox frei), %d auf verschiedenen Ebenen (Bruecke)."),
+						Overlap.AtJunction, Overlap.OnlyRealSize, Overlap.DifferentLevels);
+					for (const FString& Sample : Overlap.Samples)
+					{
+						UE_LOG(LogWbTraffic, Log, TEXT("  Paar: %s"), *Sample);
+					}
 				}
 				else
 				{
 					UE_LOG(LogWbTraffic, Log, TEXT("Fahrzeuge ineinander: keine."));
 				}
+			}
+
+			// Fahrbild: Lenkzappeln, Rutschen, Schraeglage, Schwanken,
+			// unfahrbare Sollbremsungen, Spurwechsel im Stau - je Fahrzeug-Minute.
+			{
+				const FWiesbadenTrafficSimulation::FMotionQuality M = TrafficSimulation.TakeMotionQuality();
+				const double AllMin = FMath::Max(M.AllSeconds / 60.0, 1e-6);
+				const double DriveMin = FMath::Max(M.DrivingSeconds / 60.0, 1e-6);
+				const double AllS = FMath::Max(M.AllSeconds, 1e-6);
+				const double DriveS = FMath::Max(M.DrivingSeconds, 1e-6);
+				UE_LOG(LogWbTraffic, Log,
+					TEXT("Fahrbild: %.0f Fz-min (%.0f in Fahrt); Lenk-Richtungswechsel %.1f je Fz-min in Fahrt; ")
+					TEXT("seitliches Nachziehen %.1f cm je Fz-s; Gier-Abweichung RMS %.1f Grad, schraeg im Stand %.1f %%; ")
+					TEXT("Seitenversatz RMS %.0f cm; Wanken RMS %.2f, Nicken RMS %.2f Grad; ")
+					TEXT("Soll-Bremsungen ueber 8 m/s2: %.1f je Fz-min (max %.0f m/s2); Spurwechsel %.2f je Fz-min, davon %d von %d im Stau."),
+					M.AllSeconds / 60.0, M.DrivingSeconds / 60.0,
+					M.SteerReversals / DriveMin,
+					M.SlideCm / AllS,
+					FMath::Sqrt(M.YawErrSqDegS / AllS), 100.0 * M.StandYawBad / AllS,
+					FMath::Sqrt(M.OffsetSqCmS / AllS),
+					FMath::Sqrt(M.RollSqDegS / DriveS), FMath::Sqrt(M.PitchSqDegS / DriveS),
+					M.HardSollBrakes / AllMin, M.MaxSollDecelCmS2 / 100.0,
+					M.LaneChanges / AllMin, M.LaneChangesSlow, M.LaneChanges);
 			}
 
 			// Warum NICHT gewechselt wird. Die blosse Zahl der Spurwechsel
@@ -4333,6 +4363,24 @@ void UWiesbadenCitySubsystem::InitializeCity()
 						TEXT("-WbVerkehr=%.2f: Fahrzeuge je Spur-km %.1f statt %.1f."),
 						VerkehrsFaktor, TrafficSettings.VehiclesPerLaneKm,
 						Builder->TrafficSettings.VehiclesPerLaneKm);
+				}
+
+				// Messwerkzeug: -WbHaltelinienAlt = pauschale Haltelinie
+				// (350 cm vor dem Spurende) wie vor dem 25.09. - A/B gegen die
+				// Haltelinien aus der Knotengeometrie.
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbHaltelinienAlt")))
+				{
+					TrafficSettings.bGeometricStopLines = false;
+					UE_LOG(LogWbTraffic, Log, TEXT("-WbHaltelinienAlt: pauschale Haltelinie."));
+				}
+
+				// Messwerkzeug: -WbFahrbildAlt = exakte Abstandsregel ohne
+				// Vorausschau, Spurwechsel als Sprung, Halt erst an der Linie -
+				// A/B gegen das vorausschauende Fahren (25.09.).
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbFahrbildAlt")))
+				{
+					TrafficSettings.bSmoothDriving = false;
+					UE_LOG(LogWbTraffic, Log, TEXT("-WbFahrbildAlt: altes Fahrbild."));
 				}
 
 				// Messwerkzeug: -WbOhneKreuzungsregel schaltet die

@@ -194,13 +194,13 @@ bool FTrafficLightSystemTest::RunTest(const FString& Parameters)
 		Sim.Initialize(ScopedNetwork6, SimSettings);
 		Sim.SetTrafficLightSystem(&Lights);
 
-		// Fahrzeug von Hand auf Lane 0 innerhalb der Stopp-Zone vor der
-		// Haltelinie (Distanz 9800 von 10000; Stop-Zone ab ~9650).
+		// Fahrzeug von Hand auf Lane 0 an die Haltelinie (halber Meter
+		// dahinter). Wer schon weit darueber ist und faehrt, raeumt bei Rot.
 		FTrafficVehicle Vehicle;
 		Vehicle.VehicleId = 7;
 		Vehicle.LaneId = 0;
 		Vehicle.bOnLane = true;
-		Vehicle.DistanceCm = 9800.0;
+		Vehicle.DistanceCm = ScopedNetwork6.Lanes[0].LengthCm - Sim.GetStopDistanceCm(0) + 50.0;
 		Vehicle.SpeedCmS = 500.0;
 		Vehicle.DesiredSpeedCmS = 500.0;
 		Sim.Vehicles.Add(Vehicle);
