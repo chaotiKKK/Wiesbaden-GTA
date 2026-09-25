@@ -103,6 +103,31 @@ FVector ComputeCustomerSpot(const FVector& DropPoint, const FVector& AddressLoca
 	return DropPoint + Dir * Offset;
 }
 
+FVector ComputeDoorPoint(const FVector& Spot, const FVector& AddressLocation, double WallDistanceCm)
+{
+	FVector Dir(AddressLocation.X - Spot.X, AddressLocation.Y - Spot.Y, 0.0);
+	const double Distance = Dir.Size();
+	if (Distance <= 1.0)
+	{
+		return Spot;   // steht schon am Schwerpunkt: an Ort und Stelle hinein
+	}
+	Dir /= Distance;
+	double Reach = FMath::Clamp(Distance - 150.0, 0.0, DoorFallbackMaxCm);
+	if (WallDistanceCm >= 0.0)
+	{
+		Reach = FMath::Min(FMath::Max(WallDistanceCm - DoorWallGapCm, 0.0), Distance);
+	}
+	return Spot + Dir * Reach;
+}
+
+int32 ComputeWalkPose(double WalkedCm)
+{
+	// Viertel-Versatz: bei 0 cm Pose 1 (Durchgangsstellung), dann 2, 3, 0, ...
+	const double Cycles = FMath::Max(WalkedCm, 0.0) / CustomerStrideCm + 0.25;
+	const double Phase = Cycles - FMath::FloorToDouble(Cycles);
+	return FMath::Clamp(FMath::FloorToInt32(Phase * 4.0), 0, 3);
+}
+
 FDennoTip ComputeTip(int32 Payout, double RemainingSeconds, double DeadlineSeconds)
 {
 	FDennoTip Tip;
