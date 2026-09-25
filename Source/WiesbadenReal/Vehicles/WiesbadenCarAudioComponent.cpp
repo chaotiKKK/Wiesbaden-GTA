@@ -77,9 +77,19 @@ void UWiesbadenCarAudioComponent::CreateAudioSource()
 	EngineAudio->SetVolumeMultiplier(FMath::Clamp(MasterGain, 0.0f, 1.0f));
 	WiesbadenAudioPropagation::ConfigureSource(EngineAudio, EWbAudioRange::Far);
 
-	// Reihenfolge: explizit zugewiesenes Asset, dann das erzeugte MetaSound
-	// MS_EngineBoxer (make_audio_assets.cmd), zuletzt die C++-Synthese.
+	// Reihenfolge: explizit zugewiesenes Asset, dann die ECHTE Aufnahme
+	// (Nutzerwunsch 2026-09: den Synth-Klang ersetzen), dann das MetaSound
+	// MS_EngineBoxer, zuletzt die C++-Synthese.
 	USoundBase* Sound = EngineSound;
+	if (!Sound)
+	{
+		Sound = LoadObject<USoundBase>(nullptr,
+			TEXT("/Game/Audio/Samples/A_EngineGasolineSmall.A_EngineGasolineSmall"));
+		if (Sound)
+		{
+			UE_LOG(LogWbVehicles, Log, TEXT("Motorsound: Aufnahme 'Small gasoline engine' statt Synth."));
+		}
+	}
 	if (!Sound)
 	{
 		Sound = LoadObject<USoundBase>(nullptr,
@@ -234,12 +244,15 @@ void UWiesbadenCarAudioComponent::TickComponent(
 		return;
 	}
 
-	// Asset-Betrieb (Sample-Loops): Tonhoehe und Lautstaerke folgen
-	// Drehzahl und Last.
-	const float Pitch = FMath::Clamp(AudioParams.EngineRpm / FMath::Max(1.0f, IdleRpm * 3.0f), 0.4f, 2.5f);
+	// Asset-Betrieb (echte Aufnahme): Tonhoehe folgt der Drehzahl SANFT
+	// (Leerlauf = 1,0, Volllast ~1,25) - ein starker Pitch-Sweep klingt nach
+	// Kassettendeck, die Aufnahme lebt von ihrem eigenen Klang. Die Last
+	// steuert zusaetzlich die Lautstaerke (Gassen zwischen Drehzahl und Pegel).
+	const float Pitch = FMath::Clamp(1.0f + (AudioParams.EngineRpm - IdleRpm)
+		/ FMath::Max(1.0f, IdleRpm * 4.0f), 0.9f, 1.3f);
 	EngineAudio->SetPitchMultiplier(Pitch * Doppler);
 	EngineAudio->SetVolumeMultiplier(
 		AudioParams.bEngineRunning
-			? FMath::Clamp(MasterGain, 0.0f, 1.0f) * (0.4f + 0.6f * AudioParams.Throttle)
+			? FMath::Clamp(MasterGain, 0.0f, 1.0f) * (0.55f + 0.45f * AudioParams.Throttle)
 			: 0.0f);
 }

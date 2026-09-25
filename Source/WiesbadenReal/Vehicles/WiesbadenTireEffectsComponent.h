@@ -76,6 +76,10 @@ private:
 	UPROPERTY(Transient)
 	USoundWaveProcedural* SquealWave = nullptr;
 
+	/** True, wenn die echte Aufnahme laeuft (dann steuert die Intensitaet
+	 *  nur die Lautstaerke, kein Synth-Nachschub). */
+	bool bSampleSqueal = false;
+
 	UPROPERTY(Transient)
 	UMaterialInterface* SkidDecalMaterial = nullptr;
 

@@ -66,6 +66,20 @@ void UWiesbadenTireEffectsComponent::CreateAudioSource()
 	// Ausbreitung: mittlere Distanzkurve inkl. Occlusion + Hall-Send.
 	WiesbadenAudioPropagation::ConfigureSource(SquealAudio, EWbAudioRange::Mid);
 
+	// Echte Aufnahme statt Synth (Nutzerwunsch 2026-09): die Handbrems-
+	// Aufnahme (0,44 s, geloopt) klingt nach gummiertem Screech. Die
+	// Intensitaet steuert im Tick NUR die Lautstaerke - ein Pitch-Sweep
+	// liess die 0,44-s-Schleife wie ein Jubilaeums-Sound kreischen.
+	if (USoundBase* Sample = LoadObject<USoundBase>(nullptr,
+		TEXT("/Game/Audio/Samples/A_TireSqueal.A_TireSqueal")))
+	{
+		SquealAudio->SetSound(Sample);
+		SquealAudio->Play();
+		bSampleSqueal = true;
+		UE_LOG(LogWbVehicles, Log, TEXT("Reifen: Aufnahme 'Handbrake 4' statt Synth."));
+		return;
+	}
+
 	SquealWave = NewObject<USoundWaveProcedural>(Owner, TEXT("TireSquealProceduralSound"));
 	if (!SquealWave)
 	{
@@ -166,6 +180,18 @@ void UWiesbadenTireEffectsComponent::TickComponent(
 	// Lautstaerke weich nachfuehren (schnell an, langsamer aus) - kein Knacken.
 	const float Rate = (TargetIntensity > CurrentIntensity) ? 22.0f : 9.0f;
 	CurrentIntensity = FMath::FInterpTo(CurrentIntensity, TargetIntensity, DeltaSeconds, Rate);
+
+	if (bSampleSqueal)
+	{
+		// Aufnahme: gelooptes Sample läuft, die Intensitaet steuert nur die
+		// Lautstaerke (0 im Stand => still, voller Schlupf => voll da).
+		if (SquealAudio)
+		{
+			SquealAudio->SetVolumeMultiplier(
+				FMath::Clamp(MasterGain, 0.0f, 1.0f) * CurrentIntensity);
+		}
+		return;
+	}
 
 	PushProceduralAudio();
 }

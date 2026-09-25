@@ -5,14 +5,30 @@
 #include "Components/SceneComponent.h"
 #include "CoreMinimal.h"
 
+#include "Weapons/WiesbadenBallistics.h"
 #include "Weapons/WiesbadenGunshotSynth.h"
+#include "Weapons/WiesbadenWeaponSpec.h"
 
 #include "WiesbadenWeaponComponent.generated.h"
 
 class UAudioComponent;
 class UPointLightComponent;
+class USoundBase;
 class USoundWaveProcedural;
 class UStaticMeshComponent;
+
+/**
+ * Ein abgefeuertes Projektil mit seiner Leuchtspur (Kopplung Flug/Sicht).
+ *
+ * Die Flugbahn rechnet WiesbadenBallistics::Step (Gravitation, Restreich-
+ * weite); die Leuchtspur folgt der Projektile-Position, statt sofort aufs
+ * Ziel zu laufen - so ist die Flugzeit sichtbar (Entwurf 2026-09).
+ */
+struct FWiesbadenLiveShot
+{
+	FWiesbadenProjectile Projectile;
+	int32 TracerIndex = INDEX_NONE;
+};
 
 /**
  * Ein sichtbarer Leuchtspur-Flug vom Lauf zum Einschlag.
@@ -77,8 +93,21 @@ public:
 	 */
 	void Fire(const FVector& AimStart, const FVector& AimDirection);
 
-	/** Treibt Leuchtspuren, Muendungslicht und Rueckstoss weiter. */
+	/** Treibt Leuchtspuren, Projektile, Muendungslicht und Rueckstoss weiter. */
 	void TickWeapon(float DeltaSeconds);
+
+	/** Waffe aus der Tabelle (WiesbadenWeapons::Spec), Default = die MP. */
+	UPROPERTY(EditAnywhere, Category = "Waffe")
+	int32 WeaponIndex = static_cast<int32>(EWiesbadenWeaponId::Maschinenpistole);
+
+	/** Waffe waehlen (Tasten 1-9 am FootPawn); meldet die neue Spezifikation. */
+	void SetWeaponIndex(int32 InIndex);
+
+	/** Gibt es diese Waffe ueberhaupt? (Tastenbelegung vor dem Umschalten.) */
+	static bool IsValidWeaponIndex(int32 Index);
+
+	/** Zahl der gerade fliegenden Projektile (fuer Pruefungen). */
+	int32 GetActiveProjectileCount() const { return LiveShots.Num(); }
 
 	/** Weltposition der Muendung - Ursprung der Leuchtspuren. */
 	FVector GetMuzzleLocation() const;
@@ -135,6 +164,19 @@ private:
 	/** Setzt das Modell aus Grundkoerpern zusammen. */
 	void BuildWeaponMesh();
 
+	/** Fliegende Projektile einen Schritt weiter; Aufschlag auswerten. */
+	void StepProjectiles(float DeltaSeconds);
+
+	/** Treffer am Aufschlag auswerten (Ziel-Adapter, Impuls, Effekt). */
+	void ResolveImpact(AActor* HitActor, UPrimitiveComponent* HitComponent,
+		const FVector& ImpactPoint, const FWiesbadenProjectile& P);
+
+	/** Explosion am Punkt: alle Ziele im Radius, inkl. Eigenschaden. */
+	void ApplyExplosionAt(const FVector& Centre, const FWiesbadenProjectile& P);
+
+	/** Passanten im Aufschlag-Umkreis zu Boden + Tat ins Fahndungskonto. */
+	void ReportPedestrianAndWanted(UWorld* World, const FVector& ImpactPoint, float Damage);
+
 	/** Legt die prozedurale Klangquelle an. */
 	void SetupAudio();
 
@@ -163,6 +205,10 @@ private:
 	UPROPERTY(Transient)
 	USoundWaveProcedural* ShotWave = nullptr;
 
+	/** Echte Schuss-Aufnahme (erste Wahl); null = Synth-Rueckfall. */
+	UPROPERTY(Transient)
+	USoundBase* ShotSample = nullptr;
+
 	/** Restzeit des Muendungsfeuers. */
 	float MuzzleFlashRemaining = 0.0f;
 
@@ -176,6 +222,9 @@ private:
 	int32 ShotCounter = 0;
 
 	TArray<FWiesbadenTracer> Tracers;
+
+	/** Fliegende Schuesse (Projektil + gekoppelte Leuchtspur). */
+	TArray<FWiesbadenLiveShot> LiveShots;
 
 	bool bSetupDone = false;
 };
