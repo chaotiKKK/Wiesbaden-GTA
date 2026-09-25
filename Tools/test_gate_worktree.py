@@ -187,6 +187,7 @@ class HookWegTest(unittest.TestCase):
 
     def test_rot_im_worktree_weist_den_push_ab(self):
         with mock.patch.object(gw, "pruefen", return_value=1), \
+                mock.patch.object(gw, "motor_sperre", return_value=True), \
                 mock.patch.object(gw, "git", return_value="baum\n"), \
                 mock.patch("sys.stdout", io.StringIO()):
             self.assertEqual(gw.push_pruefen(WURZEL, "refs/heads/x %s refs/heads/x %s\n" % (A, B)), 1)
@@ -293,6 +294,65 @@ class HookWegTest(unittest.TestCase):
         self.assertIn("belegt", ps1)
 
 
+class PipelineLockTest(unittest.TestCase):
+    """Der Lock umschliesst die GANZE Push-Pipeline - ab dem Worktree-Checkout.
+
+    Anlass (25.09.2026): ein paralleler `build_release -GatesOnly` im selben
+    Gate-Worktree beendete in seinem Gate 1 den Gate-2-Editor des Push-Laufs,
+    bevor dessen Lock griff - der Push-Lauf nahm ihn erst in build_release.
+    """
+
+    def test_push_nimmt_den_lock_vor_dem_ersten_checkout(self):
+        folge = []
+        with mock.patch.object(gw, "motor_sperre", side_effect=lambda name: folge.append("lock") or True), \
+                mock.patch.object(gw, "pruefen", side_effect=lambda p, sha: folge.append(sha) or 0), \
+                mock.patch.object(gw, "git", side_effect=lambda cwd, *a, **k: a[1] + "\n"), \
+                mock.patch("sys.stdout", io.StringIO()):
+            rc = gw.push_pruefen(WURZEL, "refs/heads/x %s refs/heads/x %s\nrefs/heads/y %s refs/heads/y %s\n"
+                                 % (A, B, B, A))
+        self.assertEqual(rc, 0)
+        # Genau EINMAL, und vor jedem Commit - nicht je Commit neu.
+        self.assertEqual(folge[0], "lock")
+        self.assertEqual(folge.count("lock"), 1)
+        self.assertEqual(len(folge), 3)
+
+    def test_belegter_lock_faesst_den_worktree_nicht_an(self):
+        with mock.patch.object(gw, "motor_sperre", return_value=False), \
+                mock.patch.object(gw, "pruefen") as pruefen, \
+                mock.patch.object(gw, "vorbereiten") as vorbereiten, \
+                mock.patch.object(gw, "git", return_value="baum\n"), \
+                mock.patch("sys.stdout", io.StringIO()) as aus:
+            rc = gw.push_pruefen(WURZEL, "refs/heads/x %s refs/heads/x %s\n" % (A, B))
+        self.assertEqual(rc, 1)
+        pruefen.assert_not_called()
+        vorbereiten.assert_not_called()
+        self.assertIn("Engine-Lock belegt", aus.getvalue())
+
+    def test_volle_stufe_nimmt_den_lock_vor_gate_0(self):
+        folge = []
+        with mock.patch.object(gw, "motor_sperre", side_effect=lambda name: folge.append("lock") or True), \
+                mock.patch.object(vdc.Lauf, "fahre", side_effect=lambda name, *a, **k: folge.append(name) or True), \
+                mock.patch("sys.stdout", io.StringIO()):
+            self.assertEqual(vdc.gates_fahren("voll", ["Source/x.cpp"]), 0)
+        self.assertEqual(folge[0], "lock")
+        self.assertTrue(folge[1].startswith("Gate 0"))
+        self.assertIn("Gate 2+3  Tests und Rauchtest", folge)
+
+    def test_volle_stufe_ohne_lock_faehrt_kein_gate(self):
+        with mock.patch.object(gw, "motor_sperre", return_value=False), \
+                mock.patch.object(vdc.Lauf, "fahre") as fahre, \
+                mock.patch("sys.stdout", io.StringIO()):
+            self.assertEqual(vdc.gates_fahren("voll", ["Source/x.cpp"]), 1)
+        fahre.assert_not_called()
+
+    def test_schnelle_stufe_wartet_auf_niemanden(self):
+        with mock.patch.object(gw, "motor_sperre") as sperre, \
+                mock.patch.object(vdc.Lauf, "fahre", return_value=True), \
+                mock.patch("sys.stdout", io.StringIO()):
+            vdc.gates_fahren("schnell", ["Source/x.cpp"])
+        sperre.assert_not_called()
+
+
 class EngineLockTest(unittest.TestCase):
     """Der Engine-Lock in der Tat: Tools/engine_run_lock.ps1 gegen echte Prozesse.
 
@@ -375,6 +435,48 @@ class EngineLockTest(unittest.TestCase):
             self.assertEqual(uebernehmen.returncode, 0, uebernehmen.stdout + uebernehmen.stderr)
             self.assertIn("verwaist", uebernehmen.stdout)
             self.assertEqual(self.felder(pfad)["Label"], "unittest")
+
+    def test_motor_sperre_gehoert_dem_python_lauf_und_wartet_auf_den_fremden(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pfad = str(Path(tmp) / "engine_run.lock")
+            # Ein fremder Lauf, der nach 4 s endet.
+            fremder = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(4)"],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            try:
+                Path(pfad).write_text(
+                    "LockVersion=1\nOwnerPid=%d\nLabel=build_release\nTakenAt=2026-09-25 21:02:35\n"
+                    "Host=TEST\n" % fremder.pid, encoding="utf-8")
+                with mock.patch("sys.stdout", io.StringIO()) as aus:
+                    self.assertFalse(gw.motor_sperre("unittest", warte_s=0, lock_pfad=pfad))
+                self.assertIn("BELEGT", aus.getvalue())
+                with mock.patch("sys.stdout", io.StringIO()) as aus:
+                    gehalten = gw.motor_sperre("unittest", warte_s=60, lock_pfad=pfad,
+                                               schlaf=lambda s: time.sleep(1))
+                self.assertTrue(gehalten, aus.getvalue())
+                self.assertIn("warte", aus.getvalue())
+            finally:
+                fremder.wait(timeout=30)
+            self.assertEqual(int(self.felder(pfad)["OwnerPid"]), os.getpid())
+
+    def test_tief_verschachtelte_laeufe_bleiben_eigen(self):
+        # Die tiefste echte Abfrage liegt 6 Ebenen unter dem Hook (Cleanup ->
+        # cmd -> smoke_test -> build_release -> cmd -> vor_dem_commit -> Hook).
+        # Nachgebaut mit fuenf cmd-Ebenen plus PowerShell unter diesem Test.
+        with tempfile.TemporaryDirectory() as tmp:
+            pfad = str(Path(tmp) / "engine_run.lock")
+            with mock.patch("sys.stdout", io.StringIO()):
+                self.assertTrue(gw.motor_sperre("unittest", warte_s=0, lock_pfad=pfad))
+            # Ohne Anfuehrungszeichen: die liessen sich durch fuenf cmd /c nicht
+            # heil durchreichen; beide Pfade sind leerzeichenfrei.
+            self.assertNotIn(" ", str(self.LOCK) + pfad)
+            innen = "powershell -NoProfile -ExecutionPolicy Bypass -File %s -Modus Status -LockPfad %s" % (
+                self.LOCK, pfad)
+            befehl = ["cmd", "/c", "cmd /c cmd /c cmd /c cmd /c " + innen]
+            lauf = subprocess.run(befehl, capture_output=True, text=True, encoding="cp850",
+                                  errors="replace", timeout=120)
+            self.assertEqual(lauf.returncode, 0, lauf.stdout + lauf.stderr)
+            self.assertIn("von diesem Lauf gehalten", lauf.stdout)
 
     def test_start_modus_nimmt_den_lock_und_reinigt_trocken(self):
         with tempfile.TemporaryDirectory() as tmp:

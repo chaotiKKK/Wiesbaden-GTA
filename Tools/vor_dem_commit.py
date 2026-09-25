@@ -209,6 +209,18 @@ def gates_fahren(stufe, dateien):
     lauf = Lauf()
     print("Gates vor dem Commit (Stufe: %s)" % stufe)
 
+    # Die volle Stufe startet Editoren und beendet sie (Gate 2+3) - der
+    # Engine-Lock muss sie ab Gate 0 umschliessen, nicht erst ab dem Aufruf
+    # von build_release (Gate 1 kompiliert sonst ungeschuetzt unter einem
+    # fremden Lauf). Im Push-Worktree haelt ihn schon der Hook; dann ist er
+    # hier "eigen" und kostet nur die Abfrage. Die schnelle Stufe startet
+    # keinen Editor und wartet deshalb auf niemanden.
+    if stufe == "voll":
+        import gate_worktree
+        if not gate_worktree.motor_sperre("vor_dem_commit"):
+            print("\nEngine-Lock belegt - Gates nicht gefahren.")
+            return 1
+
     lauf.fahre("Gate 0  Engine-Pfade", gate0_befehl(dateien))
 
     # Die Python-Suiten gehoeren zur vollen Stufe, nicht vor jeden Commit.

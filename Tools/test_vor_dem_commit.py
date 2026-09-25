@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -207,8 +208,12 @@ class StufenZuordnungTest(unittest.TestCase):
         doppel = self.LaufDoppel()
         alt = vdc.Lauf
         vdc.Lauf = lambda: doppel
+        # Die volle Stufe nimmt den maschinenweiten Engine-Lock - ein Test darf
+        # ihn nicht anfassen (er wartete sonst auf einen echten Gate-Lauf).
+        import gate_worktree
         try:
-            vdc.gates_fahren(stufe, dateien)
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+                vdc.gates_fahren(stufe, dateien)
         finally:
             vdc.Lauf = alt
         return doppel

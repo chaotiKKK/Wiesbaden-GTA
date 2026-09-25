@@ -37,6 +37,7 @@ import fnmatch
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 NULL_SHA = "0" * 40
@@ -153,6 +154,64 @@ def verlinken(projekt, wt, verzeichnisse, dateien):
     return neu
 
 
+LOCK_SKRIPT = Path(__file__).resolve().parent / "engine_run_lock.ps1"
+LOCK_BELEGT = 3
+
+
+def motor_sperre(name, warte_s=None, lock_pfad=None, schlaf=time.sleep, uhr=time.monotonic):
+    """Den maschinenweiten Engine-Lock fuer DIESEN Prozess nehmen.
+
+    WARUM HIER UND NICHT ERST IN build_release.ps1: build_release nimmt den
+    Lock vor SEINEM Gate 0 - aber der Push-Lauf faengt frueher an. Er setzt
+    den geteilten Gate-Worktree per `checkout --force` + `clean` auf seinen
+    Commit, faehrt Gate 0 und kompiliert (Gate 1), und erst "Gate 2+3" ruft
+    build_release auf. Gemessen am 25.09.2026: ein paralleler
+    `build_release -GatesOnly` im selben Worktree beendete in seinem Gate 1
+    (Stop-ProjectEditors) den Gate-2-Editor des Push-Laufs, bevor dessen Lock
+    ueberhaupt griff. Der Lock muss also die ganze Pipeline umschliessen - ab
+    dem Checkout.
+
+    Besitzer ist der Aufrufer dieses PowerShell-Kindes, also dieser Python-
+    Prozess: der Lock lebt so lange wie der Push-Lauf und stirbt mit ihm
+    (keine Freigabepflicht). Die verschachtelten Laeufe (build_release,
+    smoke_test, Cleanup) finden ihn in ihrer Prozesskette und gelten als eigen.
+
+    Ist der Lock belegt, wird GEWARTET statt abgewiesen - ein zweiter Push soll
+    hinter dem ersten anstehen, nicht rot werden. Abfrage alle 15 s, eine
+    Zeile je Minute; nach warte_s (Vorgabe WB_GATE_LOCK_WARTEN, sonst 3600 s)
+    gibt der Lauf auf. Rueckgabe True = gehalten.
+    """
+    if warte_s is None:
+        warte_s = float(os.environ.get("WB_GATE_LOCK_WARTEN", "3600"))
+    befehl = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(LOCK_SKRIPT),
+              "-Modus", "Nehmen", "-Name", name]
+    if lock_pfad:
+        befehl += ["-LockPfad", str(lock_pfad)]
+    frist = uhr() + warte_s
+    naechste_meldung = uhr()
+    while True:
+        # WarteSekunden 0: das Skript prueft und legt atomar an, gewartet wird
+        # hier - sonst schriebe es alle 2 s eine Zeile ins Hook-Protokoll.
+        fertig = subprocess.run(befehl, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace")
+        text = ((fertig.stdout or "") + (fertig.stderr or "")).strip().splitlines()
+        if fertig.returncode == 0:
+            print("Engine-Lock: %s" % (text[-1] if text else "gehalten"), flush=True)
+            return True
+        if fertig.returncode != LOCK_BELEGT or uhr() >= frist:
+            for zeile in text[:3]:
+                print(zeile, flush=True)
+            print("Engine-Lock nicht bekommen - dieser Lauf faesst den Gate-Worktree nicht an.",
+                  flush=True)
+            return False
+        if uhr() >= naechste_meldung:
+            belegt = next((z for z in text if "BELEGT" in z), text[0] if text else "belegt")
+            print("%s - warte (hoechstens noch %.0f min) ..." % (belegt, (frist - uhr()) / 60.0),
+                  flush=True)
+            naechste_meldung = uhr() + 60.0
+        schlaf(15.0)
+
+
 def vorbereiten(projekt, sha):
     """Worktree auf genau diesen Commit bringen; Rueckgabe: sein Projektordner."""
     projekt = Path(projekt)
@@ -196,6 +255,11 @@ def push_pruefen(projekt, stdin_text):
         print("Nur Loeschungen im Push - nichts zu pruefen.")
         return 0
     auswahl = je_baum_einer(shas, lambda s: git(projekt, "rev-parse", s + "^{tree}").strip())
+    # Lock VOR dem ersten Checkout und ueber alle Commits (siehe motor_sperre).
+    if not motor_sperre("push_gate"):
+        print("\nEngine-Lock belegt - der Push wird abgewiesen, der laufende Gate-Lauf bleibt heil.")
+        print("Spaeter erneut pushen, oder: git push --no-verify")
+        return 1
     for sha in auswahl:
         print("Volles Gate im sauberen Worktree fuer %s ..." % sha[:10], flush=True)
         rot = pruefen(projekt, sha)
@@ -210,4 +274,6 @@ def push_pruefen(projekt, stdin_text):
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit("Aufruf: python Tools/gate_worktree.py <commit>")
+    if not motor_sperre("gate_worktree"):
+        sys.exit(LOCK_BELEGT)
     sys.exit(pruefen(Path(__file__).resolve().parent.parent, sys.argv[1]))

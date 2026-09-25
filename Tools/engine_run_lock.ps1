@@ -59,13 +59,18 @@ function Get-LockDatei([string]$Pfad) {
     return (Join-Path $ordner "engine_run.lock")
 }
 
-# PID -> Startzeit fuer diesen Prozess und seine Vorfahren (max. 6 Ebenen).
+# PID -> Startzeit fuer diesen Prozess und seine Vorfahren (max. 16 Ebenen).
 # Damit laesst sich ohne Absprache erkennen, ob der Lock-Besitzer zu diesem
 # Lauf gehoert (Vater-/Sohnprozess) oder zu einem fremden.
+#
+# 16 statt 6: seit der Push-Hook den Lock VOR dem Worktree-Checkout nimmt, ist
+# sein Python-Prozess der Besitzer, und die tiefste Abfrage liegt 6 Ebenen
+# darunter (Cleanup -> cmd -> smoke_test -> build_release -> cmd ->
+# vor_dem_commit -> Hook). Mit 6 Ebenen hielte sich der eigene Lauf fuer fremd.
 function Get-ProzessKette([int]$StartPid) {
     $kette = @{}
     $aktuell = $StartPid
-    for ($i = 0; $i -lt 6 -and $aktuell -gt 0; $i++) {
+    for ($i = 0; $i -lt 16 -and $aktuell -gt 0; $i++) {
         $start = ""
         try {
             $p = Get-Process -Id $aktuell -ErrorAction SilentlyContinue
