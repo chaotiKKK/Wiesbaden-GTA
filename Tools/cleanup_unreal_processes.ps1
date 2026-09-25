@@ -11,11 +11,28 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Ein Prozess, der schon BEENDET ist (HasExited), aber noch in der Liste steht,
+# ist eine Handle-Leiche: er rechnet nicht mehr, und kein Kill - auch nicht als
+# Administrator - entfernt ihn ("keine Instanz wird ausgefuehrt"); erst ein
+# Neustart raeumt ihn. Gemessen am 26.09.2026: ein im atexit-Destruktor
+# abgestuerzter pythonscript-Lauf (PID 43820) liess so jedes Push-Gate im
+# Rauchtest rot werden. Solche Eintraege werden gemeldet und uebergangen.
+function Test-Beendet($Prozess) {
+    try { return [bool]$Prozess.HasExited } catch { return $false }
+}
+
 function Get-EngineReste {
     @(
         Get-Process -Name "UnrealEditor*" -ErrorAction SilentlyContinue
         Get-Process -Name "zenserver" -ErrorAction SilentlyContinue
-    ) | Where-Object { $_ } | Sort-Object Id -Unique
+    ) | Where-Object { $_ -and -not (Test-Beendet $_) } | Sort-Object Id -Unique
+}
+
+function Get-EngineLeichen {
+    @(
+        Get-Process -Name "UnrealEditor*" -ErrorAction SilentlyContinue
+        Get-Process -Name "zenserver" -ErrorAction SilentlyContinue
+    ) | Where-Object { $_ -and (Test-Beendet $_) } | Sort-Object Id -Unique
 }
 
 function Stop-EngineReste($Prozesse) {
@@ -41,6 +58,11 @@ if (-not $SperreIgnorieren) {
                "naechsten Start automatisch uebernommen. Nur mit -SperreIgnorieren " +
                "bewusst darueber hinweg beenden.")
     }
+}
+
+foreach ($leiche in @(Get-EngineLeichen)) {
+    Write-Host ("Prozessbereinigung: {0} (PID {1}) ist schon beendet, haengt nur noch in der Liste - uebergangen (verschwindet mit dem naechsten Neustart)." -f `
+        $leiche.ProcessName, $leiche.Id)
 }
 
 $prozesse = @(Get-EngineReste)

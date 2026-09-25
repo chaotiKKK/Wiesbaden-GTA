@@ -276,6 +276,19 @@ class HookWegTest(unittest.TestCase):
                 if spaeter in text:
                     self.assertLess(text.index("engine_run_lock.ps1"), text.index(spaeter), name)
 
+    def test_der_cleanup_uebergeht_beendete_prozessleichen(self):
+        # Ein beendeter Prozess, der nur noch in der Liste haengt (HasExited),
+        # laesst sich nicht mehr beenden - auch nicht als Administrator. Er darf
+        # die Bereinigung nicht scheitern lassen (26.09.2026: PID 43820 machte
+        # jedes Push-Gate im Rauchtest rot).
+        ps1 = (WURZEL / "Tools" / "cleanup_unreal_processes.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Test-Beendet", ps1)
+        reste = ps1[ps1.index("function Get-EngineReste"):ps1.index("function Get-EngineLeichen")]
+        self.assertIn("-not (Test-Beendet $_)", reste)
+        self.assertIn("uebergangen", ps1)
+        # Die Leichen werden erst NACH der Lock-Pruefung gemeldet.
+        self.assertLess(ps1.index("engine_run_lock.ps1"), ps1.index("@(Get-EngineLeichen)"))
+
     def test_die_pipeline_und_der_cleanup_achten_auf_den_lock(self):
         build = (WURZEL / "Tools" / "build_release.ps1").read_text(encoding="utf-8")
         ps1 = (WURZEL / "Tools" / "cleanup_unreal_processes.ps1").read_text(encoding="utf-8")
