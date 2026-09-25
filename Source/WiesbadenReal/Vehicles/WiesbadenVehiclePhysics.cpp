@@ -336,12 +336,13 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 			Demand *= Headroom;
 		}
 
-		const float RearFracDyn = 1.0f - ComputeDynamicFrontLoadFraction(
+		// Last der ANTRIEBSachse: Kaefer hinten, Frontantrieb vorn.
+		const float FrontFracDyn = ComputeDynamicFrontLoadFraction(
 			FrontWeightFraction, LastLongAccelMetersPerS2, GravityMetersPerS2, CgHeightM, WheelbaseM);
-		const float RearLoadN = WeightN * RearFracDyn;
+		const float DrivenLoadN = WeightN * (bFrontWheelDrive ? FrontFracDyn : 1.0f - FrontFracDyn);
 
 		DriveForce = ComputeTransmittedLongitudinalForce(
-			Demand, StaticGripN(RearLoadN), KineticGripN(RearLoadN), bDriveSlipState);
+			Demand, StaticGripN(DrivenLoadN), KineticGripN(DrivenLoadN), bDriveSlipState);
 	}
 	else
 	{

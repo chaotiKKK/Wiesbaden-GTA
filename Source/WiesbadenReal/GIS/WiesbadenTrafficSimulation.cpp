@@ -5,6 +5,8 @@
 #include "WiesbadenReal.h"
 
 #include "GIS/WiesbadenTrafficLights.h"
+#include "Vehicles/WiesbadenCar.h"
+#include "Vehicles/WiesbadenTrafficCars.h"
 #include "Misc/FileHelper.h"
 
 namespace
@@ -53,6 +55,9 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 	VehiclesByLaneCache.Reset();
 	SpawnAccumulator = 0.0;
 	TotalSpawned = 0;
+	SpawnAttempts = 0;
+	LifetimeSpawnsSkippedInView = 0;
+	LifetimeDeadEndWaits = 0;
 	TotalRemoved = 0;
 	LifetimeVehiclesHeldAtRed = 0;
 	LifetimeLaneChanges = 0;
@@ -237,6 +242,9 @@ void FWiesbadenTrafficSimulation::Reset()
 	VehiclesByLaneCache.Reset();
 	SpawnAccumulator = 0.0;
 	TotalSpawned = 0;
+	SpawnAttempts = 0;
+	LifetimeSpawnsSkippedInView = 0;
+	LifetimeDeadEndWaits = 0;
 	TotalRemoved = 0;
 	LifetimeVehiclesHeldAtRed = 0;
 	LifetimeVehiclesApproachingSignal = 0;
@@ -700,6 +708,8 @@ void FWiesbadenTrafficSimulation::UpdateBodyPose(FTrafficVehicle& Vehicle, doubl
 		Vehicle.BodyLocation = Vehicle.Location;
 		Vehicle.BodyYawRad = static_cast<float>(FMath::Atan2(Forward.Y, Forward.X));
 		Vehicle.SteerAngleRad = 0.0f;
+		Vehicle.BodySpeedCmS = Vehicle.SpeedCmS;
+		Vehicle.PrevSollSpeedCmS = Vehicle.SpeedCmS;
 		Vehicle.bBodyInitialized = true;
 		return;
 	}
@@ -709,16 +719,26 @@ void FWiesbadenTrafficSimulation::UpdateBodyPose(FTrafficVehicle& Vehicle, doubl
 	const FVector Target = GetPathPointAhead(Vehicle, Lookahead);
 
 	FVector2D BodyXY(Vehicle.BodyLocation.X, Vehicle.BodyLocation.Y);
-	StepBicycleModel(
-		FVector2D(Target.X, Target.Y),
-		Vehicle.SpeedCmS,
-		Settings.WheelbaseCm,
-		FMath::DegreesToRadians(Settings.MaxSteerAngleDeg),
-		FMath::DegreesToRadians(Settings.MaxSteerRateDegS),
-		Dt,
-		BodyXY,
-		Vehicle.BodyYawRad,
-		Vehicle.SteerAngleRad);
+	if (Settings.bPhysicsBodies)
+	{
+		// Die Fahrphysik des Spielerautos, ein Fahrer am Steuer.
+		StepPhysicsBody(Vehicle, Target, Dt);
+		BodyXY = FVector2D(Vehicle.BodyLocation.X, Vehicle.BodyLocation.Y);
+	}
+	else
+	{
+		StepBicycleModel(
+			FVector2D(Target.X, Target.Y),
+			Vehicle.SpeedCmS,
+			Settings.WheelbaseCm,
+			FMath::DegreesToRadians(Settings.MaxSteerAngleDeg),
+			FMath::DegreesToRadians(Settings.MaxSteerRateDegS),
+			Dt,
+			BodyXY,
+			Vehicle.BodyYawRad,
+			Vehicle.SteerAngleRad);
+		Vehicle.BodySpeedCmS = Vehicle.SpeedCmS;
+	}
 
 	// Sicherheitsnetz gegen davonlaufenden Fehler.
 	//
@@ -749,6 +769,125 @@ void FWiesbadenTrafficSimulation::UpdateBodyPose(FTrafficVehicle& Vehicle, doubl
 	// Die Hoehe kommt weiter aus der Bahn: die Strasse steigt und faellt, und
 	// ein mitintegriertes Z wuerde durch den Belag sinken.
 	Vehicle.BodyLocation.Z = Vehicle.Location.Z;
+
+	// Die Raeder rollen mit dem Tempo der Karosserie.
+	const TArray<FWbTrafficCarType>& CarTypes = WiesbadenTrafficCars::Types();
+	const FWbTrafficCarType& CarType = CarTypes[FMath::Clamp(Vehicle.TypeIndex, 0, CarTypes.Num() - 1)];
+	Vehicle.WheelSpinRad = static_cast<float>(FMath::Fmod(
+		static_cast<double>(Vehicle.WheelSpinRad) + Vehicle.BodySpeedCmS * Dt / FMath::Max(CarType.WheelRadiusCm, 1.0),
+		2.0 * PI));
+
+	// Steigung unter dem Fahrzeug: Fahrbahnhoehe an Vorder- und Hinterachse.
+	// Frueher stand jedes Auto am Hang waagerecht - bei 100 m Hoehenunterschied
+	// in der Stadt stach die Front in den Berg oder schwebte das Heck.
+	const double HalfBase = 0.5 * CarType.WheelbaseCm;
+	const double FrontZ = GetPathPointAhead(Vehicle, HalfBase).Z;
+	double RearZ = 2.0 * Vehicle.Location.Z - FrontZ;
+	if (Vehicle.DistanceCm >= HalfBase)
+	{
+		const TArray<FVector>* Path = nullptr;
+		if (Vehicle.bOnLane && Network->Lanes.IsValidIndex(Vehicle.LaneId))
+		{
+			Path = &Network->Lanes[Vehicle.LaneId].Centerline;
+		}
+		else if (!Vehicle.bOnLane && Network->Connections.IsValidIndex(Vehicle.ConnectionIndex))
+		{
+			Path = &Network->Connections[Vehicle.ConnectionIndex].ConnectionPath;
+		}
+		if (Path)
+		{
+			FVector RearLocation, RearForward;
+			SamplePolyline(*Path, Vehicle.DistanceCm - HalfBase, RearLocation, RearForward);
+			RearZ = RearLocation.Z;
+		}
+	}
+	const double TargetSlope = FMath::RadiansToDegrees(FMath::Atan2(FrontZ - RearZ, 2.0 * HalfBase));
+	const double SlopeAlpha = 1.0 - FMath::Exp(-6.0 * Dt);
+	Vehicle.SlopePitchDeg = static_cast<float>(FMath::Lerp(static_cast<double>(Vehicle.SlopePitchDeg),
+		FMath::Clamp(TargetSlope, -20.0, 20.0), SlopeAlpha));
+	Vehicle.PrevSollSpeedCmS = Vehicle.SpeedCmS;
+}
+
+void FWiesbadenTrafficSimulation::StepPhysicsBody(FTrafficVehicle& Vehicle, const FVector& Target, double Dt) const
+{
+	const TArray<FWbTrafficCarType>& CarTypes = WiesbadenTrafficCars::Types();
+	const FWbTrafficCarType& Type = CarTypes[FMath::Clamp(Vehicle.TypeIndex, 0, CarTypes.Num() - 1)];
+	FWiesbadenVehiclePhysics& P = Vehicle.Physics;
+	if (!Vehicle.bPhysicsInitialized)
+	{
+		// Eingesetzt wird in Fahrt: Tempo der Bahn, der Gang, in dem die
+		// Drehzahl unter der Hochschaltgrenze liegt.
+		P = Type.MakePhysics();
+		P.SpeedMetersPerS = static_cast<float>(Vehicle.BodySpeedCmS / 100.0);
+		for (int32 Gear = 1; Gear <= P.Powertrain.ForwardGearRatios.Num(); ++Gear)
+		{
+			P.Gear = Gear;
+			const double Rpm = P.SpeedMetersPerS / FMath::Max(P.WheelRadiusM, 0.1f)
+				* P.Powertrain.ForwardGearRatios[Gear - 1] * P.Powertrain.FinalDriveRatio * 60.0 / (2.0 * PI);
+			if (Rpm < P.ShiftUpRpm)
+			{
+				break;
+			}
+		}
+		Vehicle.bPhysicsInitialized = true;
+	}
+
+	const float Mass = FMath::Max(P.Powertrain.MassKg, 1.0f);
+	const float Speed = P.SpeedMetersPerS;
+	const float UsableSteerDeg = FWiesbadenVehiclePhysics::ComputeUsableSteerAngleDeg(
+		P.MaxSteerAngleDeg, Speed, P.SteerFalloffSpeedMetersPerS);
+
+	FWbTrafficDriverView View;
+	View.BodyXY = FVector2D(Vehicle.BodyLocation.X, Vehicle.BodyLocation.Y);
+	View.BodyYawRad = Vehicle.BodyYawRad;
+	View.BodySpeedCmS = Speed * 100.0;
+	View.PursuitTargetXY = FVector2D(Target.X, Target.Y);
+	View.SollXY = FVector2D(Vehicle.Location.X, Vehicle.Location.Y);
+	View.SollSpeedCmS = Vehicle.SpeedCmS;
+	View.PrevSollSpeedCmS = Vehicle.PrevSollSpeedCmS;
+	View.Dt = Dt;
+	View.UsableSteerRad = FMath::DegreesToRadians(UsableSteerDeg);
+	View.WheelbaseCm = Type.WheelbaseCm;
+	View.FullBrakeCmS2 = P.BrakeForceN / Mass * 100.0;
+	// Zugkraft im eingelegten Gang bei Nennmoment - reicht als Mass fuer das Pedal.
+	const int32 GearIndex = FMath::Clamp(P.Gear, 1, FMath::Max(P.Powertrain.ForwardGearRatios.Num(), 1)) - 1;
+	const double GearRatio = P.Powertrain.ForwardGearRatios.IsValidIndex(GearIndex) ? P.Powertrain.ForwardGearRatios[GearIndex] : 1.0;
+	View.FullThrottleCmS2 = FMath::Max(100.0,
+		P.Powertrain.MaxTorqueNm * GearRatio * P.Powertrain.FinalDriveRatio / FMath::Max(P.WheelRadiusM, 0.1f) / Mass * 100.0);
+	const FWiesbadenVehiclePhysicsInput Input = WiesbadenTrafficCars::ComputeDriverInput(View);
+
+	// Die Physik ist fuer Bildtakte gebaut - einen Ruckler (0,1 s) in Teilschritte zerlegen.
+	const int32 Steps = FMath::Clamp(FMath::CeilToInt(static_cast<float>(Dt * 60.0)), 1, 6);
+	const float H = static_cast<float>(Dt / Steps);
+	FVector2D XY = View.BodyXY;
+	double Yaw = Vehicle.BodyYawRad;
+	FWiesbadenVehiclePhysicsOutput Out;
+	for (int32 Step = 0; Step < Steps; ++Step)
+	{
+		P.Tick(Input, H, Out);
+		Yaw += Out.YawRateRadPerS * H;
+		// Wie AWiesbadenCar: entlang der Fahrzeugachse plus Querschlupf nach rechts.
+		const FVector2D Forward(FMath::Cos(Yaw), FMath::Sin(Yaw));
+		const FVector2D Right(-FMath::Sin(Yaw), FMath::Cos(Yaw));
+		XY += (Forward * Out.ForwardSpeedMetersPerS + Right * Out.LateralVelocityMetersPerS) * (100.0 * H);
+	}
+	// Der Verkehr tankt nie.
+	P.Fuel.FuelLiters = P.Fuel.TankCapacityLiters;
+
+	Vehicle.BodyLocation.X = XY.X;
+	Vehicle.BodyLocation.Y = XY.Y;
+	Vehicle.BodyYawRad = static_cast<float>(FMath::UnwindRadians(Yaw));
+	Vehicle.BodySpeedCmS = Out.ForwardSpeedMetersPerS * 100.0;
+	Vehicle.SteerAngleRad = static_cast<float>(P.SteerAngleNorm * FMath::DegreesToRadians(
+		FWiesbadenVehiclePhysics::ComputeUsableSteerAngleDeg(P.MaxSteerAngleDeg, P.SpeedMetersPerS, P.SteerFalloffSpeedMetersPerS)));
+
+	// Gewichtsverlagerung wie beim Spielerauto: Nicken aus der Laengs-, Wanken
+	// aus der Querbeschleunigung.
+	const AWiesbadenCar* Car = GetDefault<AWiesbadenCar>();
+	AWiesbadenCar::ComputeBodyTilt(
+		Out.ForwardAccelerationMetersPerS2, Out.ForwardSpeedMetersPerS * Out.YawRateRadPerS,
+		Car->BodyPitchPerMeterPerS2, Car->BodyRollPerMeterPerS2, Car->BodyMaxPitchDeg, Car->BodyMaxRollDeg,
+		Car->BodyTiltResponse, static_cast<float>(Dt), Vehicle.BodyPitchDeg, Vehicle.BodyRollDeg);
 }
 
 void FWiesbadenTrafficSimulation::SamplePolyline(const TArray<FVector>& Polyline, double DistanceCm,
@@ -986,6 +1125,41 @@ void FWiesbadenTrafficSimulation::SetObserverLocation(const FVector& InLocation)
 		LastSpawnSearchLocation = InLocation;
 		bNearbyLanesValid = true;
 	}
+}
+
+void FWiesbadenTrafficSimulation::SetObserverView(const FVector& InLocation, const FVector& InViewDirection, float HorizontalFovDeg)
+{
+	SetObserverLocation(InLocation);
+	ViewDirection = InViewDirection.GetSafeNormal();
+	if (ViewDirection.IsNearlyZero())
+	{
+		ViewDirection = FVector::ForwardVector;
+	}
+	const double HalfCone = FMath::Clamp(0.5 * HorizontalFovDeg + Settings.ViewConeMarginDeg, 1.0, 179.0);
+	ViewCosHalfCone = FMath::Cos(FMath::DegreesToRadians(HalfCone));
+	bHasView = true;
+}
+
+bool FWiesbadenTrafficSimulation::IsPointInView(const FVector& Point, const FVector& ViewLocation,
+	const FVector& InViewDirection, double CosHalfCone, double DrawDistanceCm, double AlwaysVisibleCm)
+{
+	const FVector ToPoint = Point - ViewLocation;
+	const double Distance = ToPoint.Size();
+	if (Distance <= AlwaysVisibleCm)
+	{
+		return true;
+	}
+	if (Distance > DrawDistanceCm)
+	{
+		return false;   // so weit zeichnet der Verkehr nicht
+	}
+	return FVector::DotProduct(ToPoint / Distance, InViewDirection) >= CosHalfCone;
+}
+
+bool FWiesbadenTrafficSimulation::IsVisibleToObserver(const FVector& Point) const
+{
+	return bHasView && IsPointInView(Point, ObserverLocation, ViewDirection, ViewCosHalfCone,
+		Settings.DrawDistanceMeters * 100.0, Settings.AlwaysVisibleMeters * 100.0);
 }
 
 void FWiesbadenTrafficSimulation::SetPlayerObstacle(const FVector& Location, double HalfLengthCm)
@@ -2539,6 +2713,34 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		}
 	}
 
+	// -- 1c) Sackgasse in Sicht: anhalten statt verschwinden -------------------
+	//
+	// Am Ende einer Sackgasse wurde ein Fahrzeug frueher sofort entfernt - auch
+	// mitten im Bild. Sieht der Spieler hin, bremst es jetzt vor dem Ende und
+	// wartet dort; verschwinden darf es erst, wenn niemand mehr hinsieht.
+	if (bHasView)
+	{
+		constexpr double DeadEndDecelCmS2 = 300.0;
+		constexpr double DeadEndStopShortCm = 150.0;
+		for (FTrafficVehicle& Vehicle : Vehicles)
+		{
+			bool bNextOnLane = false;
+			int32 NextIndex = INDEX_NONE;
+			if (PeekNextEdge(Vehicle, bNextOnLane, NextIndex) || !IsVisibleToObserver(Vehicle.Location))
+			{
+				continue;
+			}
+			const double Remaining = GetEdgeLengthCm(Vehicle) - DeadEndStopShortCm - Vehicle.DistanceCm;
+			const double StopSpeed = FMath::Sqrt(2.0 * DeadEndDecelCmS2 * FMath::Max(0.0, Remaining));
+			Vehicle.SpeedCmS = FMath::Min(Vehicle.SpeedCmS, StopSpeed);
+			if (Remaining <= 30.0 && !Vehicle.bWaitingAtDeadEnd)
+			{
+				Vehicle.bWaitingAtDeadEnd = true;   // angekommen: wartet, bis niemand hinsieht
+				++LifetimeDeadEndWaits;
+			}
+		}
+	}
+
 	// -- 2) Vorsprung ----------------------------------------------------------
 	double DistanceThisTick = 0.0;
 	for (FTrafficVehicle& Vehicle : Vehicles)
@@ -2598,6 +2800,19 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 				int32 NextIndex = INDEX_NONE;
 				if (!PeekNextEdge(Vehicle, bNextOnLane, NextIndex))
 				{
+					// Sackgasse: nur verschwinden, wenn es niemand sieht - sonst
+					// am Ende warten (Regel 1c hat es dort schon abgebremst).
+					if (IsVisibleToObserver(Vehicle.Location))
+					{
+						Vehicle.DistanceCm = FMath::Max(0.0, EdgeLength - 1.0);
+						Vehicle.SpeedCmS = 0.0;
+						if (!Vehicle.bWaitingAtDeadEnd)
+						{
+							++LifetimeDeadEndWaits;
+						}
+						Vehicle.bWaitingAtDeadEnd = true;
+						break;
+					}
 					Vehicle.bRemoved = true;
 					break;
 				}
@@ -2652,8 +2867,18 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 			// Draufsicht direkt neben dem Spieler stehen.
 			const double Dx = Vehicle.Location.X - ObserverLocation.X;
 			const double Dy = Vehicle.Location.Y - ObserverLocation.Y;
-			return (Dx * Dx + Dy * Dy) > DespawnRadiusCmSq;
+			// Sichtbares bleibt (nur denkbar, wenn der Radius kleiner als die Sichtweite ist).
+			return (Dx * Dx + Dy * Dy) > DespawnRadiusCmSq && !IsVisibleToObserver(Vehicle.Location);
 		});
+	}
+
+	// Wer an einer Sackgasse gewartet hat, verschwindet, sobald niemand hinsieht.
+	for (FTrafficVehicle& Vehicle : Vehicles)
+	{
+		if (Vehicle.bWaitingAtDeadEnd && !IsVisibleToObserver(Vehicle.Location))
+		{
+			Vehicle.bRemoved = true;
+		}
 	}
 
 	const int32 CountBefore = Vehicles.Num();
@@ -2707,6 +2932,7 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		}
 
 		int32 SpawnBudget = Settings.MaxVehicles; // Schutz vor Endlosschleife.
+		Report.SpawnsSkippedInView = 0;
 		while (SpawnAccumulator >= 1.0
 			&& Vehicles.Num() < FMath::Min(TargetCount, Settings.MaxVehicles)
 			&& SpawnBudget-- > 0)
@@ -2728,8 +2954,10 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 			if (bHasObserver
 				&& NearbySpawnCumulativeWeights.Num() == ActiveSpawnLanes.Num())
 			{
+				// Je VERSUCH ein neuer Ort: wird einer verworfen (in Sicht),
+				// kommt beim naechsten Mal ein anderer dran statt desselben.
 				SpawnSlot = PickWeightedIndex(NearbySpawnCumulativeWeights,
-					Hash2(static_cast<uint32>(TotalSpawned),
+					Hash2(static_cast<uint32>(SpawnAttempts++),
 						static_cast<uint32>(Settings.RandomSeed)));
 			}
 			if (SpawnSlot == INDEX_NONE)
@@ -2753,8 +2981,19 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 				continue; // Spawn wartet (deterministisch).
 			}
 
+			// Nicht vor den Augen des Spielers: ein Spuranfang, den er sehen
+			// koennte, faellt als Einsatzort aus.
+			const TArray<FVector>& SpawnLine = Network->Lanes[SpawnLaneId].Centerline;
+			if (SpawnLine.Num() > 0 && IsVisibleToObserver(SpawnLine[0]))
+			{
+				++Report.SpawnsSkippedInView;
+				++LifetimeSpawnsSkippedInView;
+				continue;
+			}
+
 			FTrafficVehicle Vehicle;
 			Vehicle.VehicleId = static_cast<int32>(TotalSpawned);
+			Vehicle.TypeIndex = WiesbadenTrafficCars::SelectType(Vehicle.VehicleId);
 			Vehicle.LaneId = SpawnLaneId;
 			Vehicle.bOnLane = true;
 			Vehicle.DistanceCm = 0.0;
@@ -2815,6 +3054,11 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		}
 	}
 	Report.StalledVehicleCount = Stalled;
+	Report.WaitingAtDeadEnd = 0;
+	for (const FTrafficVehicle& Vehicle : Vehicles)
+	{
+		Report.WaitingAtDeadEnd += Vehicle.bWaitingAtDeadEnd ? 1 : 0;
+	}
 
 	Report.ActiveVehicleCount = Vehicles.Num();
 	Report.TotalSpawnedCount = TotalSpawned;

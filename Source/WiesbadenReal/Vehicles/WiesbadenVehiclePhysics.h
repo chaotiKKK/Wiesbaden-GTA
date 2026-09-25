@@ -363,6 +363,17 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	float FrontWeightFraction = 0.42f;
 
 	/**
+	 * Frontantrieb: die Antriebskraft stuetzt sich auf die VORDERachse.
+	 *
+	 * Der Kaefer treibt hinten an (Vorgabe false) - beim Anfahren squattet das
+	 * Heck und gewinnt Grip. Die Verkehrsautos (Golf, 207, T6) treiben vorn an:
+	 * dort ENTLASTET das Anfahren die Antriebsachse, und ein zu kraeftiger Start
+	 * dreht die Vorderraeder durch (WiesbadenTrafficCars).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik")
+	bool bFrontWheelDrive = false;
+
+	/**
 	 * Schwerpunkthoehe ueber Grund (m) - Hebel der Laengs-Radlastverlagerung.
 	 *
 	 * Bremsen und Beschleunigen kippen Last zwischen den Achsen: die
