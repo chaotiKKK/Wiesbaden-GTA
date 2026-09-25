@@ -627,9 +627,9 @@ void AWiesbadenDennoShop::OnMissionCompleted(const FMission& Completed)
 		return;
 	}
 	ShowHint(Tip.Amount > 0
-		? FString::Printf(TEXT("Kunde: \"%s\"  +%d EUR Trinkgeld.  Denno zahlt %d EUR.%s"),
+		? FString::Printf(TEXT("Kundin: \"%s\"  +%d EUR Trinkgeld.  Denno zahlt %d EUR.%s"),
 			*Tip.Thanks, Tip.Amount, Award, *Record)
-		: FString::Printf(TEXT("Kunde: \"%s\"  Denno zahlt %d EUR."), *Tip.Thanks, Award));
+		: FString::Printf(TEXT("Kundin: \"%s\"  Denno zahlt %d EUR."), *Tip.Thanks, Award));
 }
 
 void AWiesbadenDennoShop::OnMissionFailed(const FMission& Failed)
@@ -642,7 +642,7 @@ void AWiesbadenDennoShop::OnMissionFailed(const FMission& Failed)
 	if (UWiesbadenGameStateSubsystem* GameState = GetGameState())
 	{
 		GameState->RecordCourierMissed();
-		ShowHint(FString::Printf(TEXT("Denno: Zu spaet - der Kunde hat nicht mehr gewartet.\n%s"),
+		ShowHint(FString::Printf(TEXT("Denno: Zu spaet - die Kundin hat nicht mehr gewartet.\n%s"),
 			*WiesbadenCourierStats::Describe(GameState->GetCourierStats())));
 	}
 }
