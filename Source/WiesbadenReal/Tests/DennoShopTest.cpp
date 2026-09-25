@@ -82,6 +82,16 @@ bool FDennoShopBuildDecisionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Keine Wand nach der Wartezeit -> aufgeben, KEIN Laden"),
 		AWiesbadenDennoShop::DecideBuild(false, Wait) == EDennoShopBuild::GiveUp);
 
+	// Die Frist zaehlt erst, wenn das Haus seinen Kollisionskasten hat. Beim
+	// Start am Garagenhof war die Zelle (ab ~900 m) geladen, der Kasten (Pool,
+	// <=150 m) aber nicht: der Laden gab auf, bevor der Spieler ankam.
+	TestFalse(TEXT("Zelle geladen, Haus ohne Kasten (Spieler weit weg) -> Frist zaehlt nicht"),
+		AWiesbadenDennoShop::CountsTowardGiveUp(true, false));
+	TestFalse(TEXT("Zelle nicht geladen -> Frist zaehlt nicht"),
+		AWiesbadenDennoShop::CountsTowardGiveUp(false, false));
+	TestTrue(TEXT("Zelle geladen und Kasten da -> Frist zaehlt"),
+		AWiesbadenDennoShop::CountsTowardGiveUp(true, true));
+
 	// Nur ein Treffer auf der Frontlinie ist die Hauswand.
 	const FVector Mid(1000.0, 2000.0, 0.0);
 	const FVector Out(-1.0, 0.0, 0.0);

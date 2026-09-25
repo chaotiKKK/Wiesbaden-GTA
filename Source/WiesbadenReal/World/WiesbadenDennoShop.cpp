@@ -15,8 +15,10 @@
 #include "GameFramework/PlayerController.h"
 #include "HAL/PlatformTime.h"
 #include "World/WiesbadenCityChunk.h"
+#include "World/BuildingCollisionSpawnerComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/OverlapResult.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -237,6 +239,24 @@ bool AWiesbadenDennoShop::TryBuild()
 		return false;   // Zelle noch nicht gestreamt
 	}
 	const double FloorZ = Ground.ImpactPoint.Z;
+
+	// Hat das Haus schon seinen Kollisionskasten? Die Gebaeude-Kollision ist ein
+	// Pool um die Kamera (siehe CountsTowardGiveUp) - ohne Kasten kann der
+	// Wandstrahl nichts treffen, und das ist kein Grund aufzugeben.
+	TArray<FOverlapResult> Overlaps;
+	World->OverlapMultiByObjectType(Overlaps,
+		FVector(Mid.X, Mid.Y, FloorZ + 150.0) - Outward * 250.0, FQuat::Identity, StaticOnly,
+		FCollisionShape::MakeBox(FVector(300.0, 300.0, 100.0)), Params);
+	const bool bHouseBody = Overlaps.ContainsByPredicate([](const FOverlapResult& O)
+	{
+		const UPrimitiveComponent* C = O.GetComponent();
+		return C && C->ComponentHasTag(UBuildingCollisionSpawnerComponent::BuildingBodyTag);
+	});
+	if (!CountsTowardGiveUp(true, bHouseBody))
+	{
+		FirstAttemptSeconds = Now;
+		return false;
+	}
 
 	// Die gebackene Wand selbst: waagerechter Strahl von der Strasse ins Haus.
 	FVector Wall;

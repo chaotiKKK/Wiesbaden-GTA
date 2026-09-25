@@ -102,6 +102,19 @@ public:
 
 	/** Entscheidung nach der Wandsuche (datenrein, Test). */
 	static EDennoShopBuild DecideBuild(bool bWallFound, double WaitedSeconds);
+
+	/**
+	 * Zaehlt dieser Versuch zur Wartefrist? Nur wenn die Zelle geladen ist UND
+	 * das Haus schon einen Kollisionskasten hat. Der Kasten kommt aus einem Pool
+	 * (96 Koerper, hoechstens 150 m um die Kamera), die Zelle laedt aber ab
+	 * ~900 m: beim normalen Start am Garagenhof (1,2 km) lief die Frist sonst
+	 * ab, bevor der Spieler ankam - und der Laden blieb die ganze Sitzung weg
+	 * (gemeldet 25.09.2026, Alkis31 und Alkis22).
+	 */
+	static bool CountsTowardGiveUp(bool bCellLoaded, bool bHouseBodyPresent)
+	{
+		return bCellLoaded && bHouseBodyPresent;
+	}
 	/** Liegt ein Treffer quer zur Front nah genug an der OSM-Linie? Ein
 	 *  Schildmast oder Baum davor ist KEINE Hauswand. */
 	static bool IsPlausibleWall(const FVector& Hit, const FVector& OsmFrontMid, const FVector& Outward);
