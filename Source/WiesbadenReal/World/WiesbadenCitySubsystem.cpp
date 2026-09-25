@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "World/WiesbadenCitySubsystem.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Vehicles/WiesbadenTrafficCars.h"
 #include "World/WiesbadenStreamingCost.h"
 
 #include "WiesbadenReal.h"
@@ -1479,7 +1481,10 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			FVector ViewLocation = FVector::ZeroVector;
 			FRotator ViewRotation = FRotator::ZeroRotator;
 			PC->GetPlayerViewPoint(ViewLocation, ViewRotation);
-			TrafficSimulation.SetObserverLocation(ViewLocation);
+			// Mit Blickrichtung: was der Spieler sehen koennte, entsteht und
+			// verschwindet nicht (Einsetzen und Sackgassen nur ausser Sicht).
+			const float Fov = PC->PlayerCameraManager ? PC->PlayerCameraManager->GetFOVAngle() : 90.0f;
+			TrafficSimulation.SetObserverView(ViewLocation, ViewRotation.Vector(), Fov);
 			PedestrianSimulation.SetObserverLocation(ViewLocation);
 
 			// Das Spielerfahrzeug als Hindernis melden, damit der Verkehr
@@ -1601,6 +1606,43 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					TrafficSimulation.GetDensity(), R.TrafficVehiclesVisible,
 					LaneKm, TrafficSimulation.GetNearbyLaneCount(),
 					LaneKm > 0.0 ? R.ActiveVehicles / LaneKm : 0.0);
+				// Nicht vor den Augen des Spielers: verworfene Einsatzorte und
+				// Wartende an Sackgassen (seit Start) - jede Zahl > 0 ist ein
+				// Fahrzeug, das sonst im Bild aufgetaucht bzw. verschwunden waere.
+				UE_LOG(LogWbTraffic, Log,
+					TEXT("Verkehr ausser Sicht: %lld Einsatzorte in Sicht verworfen, %lld Sackgassen-Halte, %d warten gerade."),
+					TrafficSimulation.GetLifetimeSpawnsSkippedInView(), TrafficSimulation.GetLifetimeDeadEndWaits(),
+					TrafficSimulation.Report.WaitingAtDeadEnd);
+
+				// Fahrphysik belegen: das Fahrzeug naechst der Kamera mit Gang,
+				// Drehzahl, Einschlag und Radwinkel - Werte, die nur die Physik liefert.
+				if (const APlayerController* ViewPC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+				{
+					FVector Eye;
+					FRotator EyeRotation;
+					ViewPC->GetPlayerViewPoint(Eye, EyeRotation);
+					const FTrafficVehicle* Nearest = nullptr;
+					double Best = TNumericLimits<double>::Max();
+					for (const FTrafficVehicle& V : TrafficSimulation.Vehicles)
+					{
+						const double D = FVector::DistSquared2D(V.BodyLocation, Eye);
+						if (V.bPhysicsInitialized && V.BodySpeedCmS > 100.0 && D < Best)
+						{
+							Best = D;
+							Nearest = &V;
+						}
+					}
+					if (Nearest)
+					{
+						const TArray<FWbTrafficCarType>& CarTypes = WiesbadenTrafficCars::Types();
+						UE_LOG(LogWbTraffic, Log,
+							TEXT("Verkehr Fahrphysik: %s %d in %.0f m - %.0f km/h (Soll %.0f), Gang %d, %.0f U/min, Einschlag %.1f Grad, Rad %.2f rad, Nicken %.1f / Wanken %.1f Grad."),
+							CarTypes[FMath::Clamp(Nearest->TypeIndex, 0, CarTypes.Num() - 1)].Name, Nearest->VehicleId,
+							FMath::Sqrt(Best) / 100.0, Nearest->BodySpeedCmS * 0.036, Nearest->SpeedCmS * 0.036,
+							Nearest->Physics.Gear, Nearest->Physics.EngineRpm, FMath::RadiansToDegrees(Nearest->SteerAngleRad),
+							Nearest->WheelSpinRad, Nearest->BodyPitchDeg, Nearest->BodyRollDeg);
+					}
+				}
 			}
 			else
 			{
@@ -4301,6 +4343,16 @@ void UWiesbadenCitySubsystem::InitializeCity()
 					TrafficSettings.bJunctionConflicts = false;
 					UE_LOG(LogWbTraffic, Warning,
 						TEXT("-WbOhneKreuzungsregel: Kreuzungskonflikte AUS (nur zum Messen)."));
+				}
+
+				// Messwerkzeug: -WbVerkehrKinematisch faehrt die Karosserien mit dem
+				// alten kinematischen Einspurmodell statt der Spielerphysik - fuer
+				// den A/B-Vergleich am selben Ort.
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbVerkehrKinematisch")))
+				{
+					TrafficSettings.bPhysicsBodies = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbVerkehrKinematisch: Verkehr ohne Fahrphysik (nur zum Messen)."));
 				}
 
 				TrafficSimulation.Initialize(Builder->RoadNetwork, TrafficSettings);

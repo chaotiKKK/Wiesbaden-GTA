@@ -40,21 +40,10 @@ PROP = {
 KNOWN = [
     # Ka52: Nanite-Mesh, Material ohne Nanite-Flag -> grauer Hubschrauber.
     ("/Game/Vehicles/Ka52/M_Ka52PBR", "Nanite"),
-    # Verkehrs-Fahrzeuge (BEFUND 24.09.2026): Warnzeilen in jedem Lauf-Log,
-    # "Default Material will be used in game" - die Fahrzeuge renderten grau.
-    # Nanite UND InstancedStaticMeshes, weil die Typen beides nutzen.
-    ("/Game/Vehicles/Traffic/Mats/M_VehPaintVaried", "Nanite"),
-    ("/Game/Vehicles/Traffic/Mats/M_VehPaintVaried", "InstancedStaticMeshes"),
-    ("/Game/Vehicles/Traffic/Mats/M_VehGlass", "Nanite"),
-    ("/Game/Vehicles/Traffic/Mats/M_VehGlass", "InstancedStaticMeshes"),
-    ("/Game/Vehicles/Traffic/Mats/M_VehTire", "Nanite"),
-    ("/Game/Vehicles/Traffic/Mats/M_VehTire", "InstancedStaticMeshes"),
-    ("/Game/Vehicles/Traffic/Mats/M_VehPaintWhite", "Nanite"),
-    ("/Game/Vehicles/Traffic/Mats/M_VehPaintWhite", "InstancedStaticMeshes"),
-    ("/Game/Vehicles/Traffic/Mats/M_VehPaintBlue", "Nanite"),
-    ("/Game/Vehicles/Traffic/Mats/M_VehPaintBlue", "InstancedStaticMeshes"),
-    ("/Game/Vehicles/Traffic/Mats/M_VehPaintOrange", "Nanite"),
-    ("/Game/Vehicles/Traffic/Mats/M_VehPaintOrange", "InstancedStaticMeshes"),
+    # Verkehrs-Fahrzeuge (Tripo, seit 25.09.2026): Nanite-ISM. Das Flag setzt
+    # schon Tools/import_traffic_cars.py - hier nur als Waechter.
+    ("/Game/Vehicles/Traffic/Mats/M_WbTrafficCar", "Nanite"),
+    ("/Game/Vehicles/Traffic/Mats/M_WbTrafficCar", "InstancedStaticMeshes"),
 ]
 # Nerobergbahn: die Nb-Materialien werden in InstancedStaticMesh-Komponenten
 # verbaut (Schienen, Zahnstangen, Roste, Seil, Schotter).

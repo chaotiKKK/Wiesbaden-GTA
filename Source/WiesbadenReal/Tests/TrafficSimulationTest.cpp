@@ -4,6 +4,7 @@
 
 #include "GIS/WiesbadenTrafficLights.h"
 #include "GIS/WiesbadenTrafficSimulation.h"
+#include "World/TrafficVehicleSpawnerComponent.h"
 
 namespace
 {
@@ -1325,5 +1326,114 @@ bool FTrafficClassShareTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Dieselbe Eingabe liefert dieselbe Wahl"), bStable);
 	}
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficSpawnOutOfViewTest,
+	"WiesbadenReal.Vehicles.Traffic.SpawnOutOfView",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficSpawnOutOfViewTest::RunTest(const FString& Parameters)
+{
+	// Sichtpruefung selbst: Blickkegel, Sichtweite, Nahbereich.
+	const FVector Eye(0.0, 0.0, 0.0);
+	const FVector Look(1.0, 0.0, 0.0);
+	const double Cos = FMath::Cos(FMath::DegreesToRadians(65.0));
+	TestTrue(TEXT("voraus in Sicht"), FWiesbadenTrafficSimulation::IsPointInView(FVector(5000, 1000, 0), Eye, Look, Cos, 55000.0, 1500.0));
+	TestFalse(TEXT("dahinter nicht"), FWiesbadenTrafficSimulation::IsPointInView(FVector(-5000, 0, 0), Eye, Look, Cos, 55000.0, 1500.0));
+	TestFalse(TEXT("jenseits der Sichtweite nicht"), FWiesbadenTrafficSimulation::IsPointInView(FVector(60000, 0, 0), Eye, Look, Cos, 55000.0, 1500.0));
+	TestTrue(TEXT("ganz nah immer"), FWiesbadenTrafficSimulation::IsPointInView(FVector(-1000, 0, 0), Eye, Look, Cos, 55000.0, 1500.0));
+
+	// Gezeichnet wird genau so weit, wie die Simulation "Sicht" rechnet.
+	TestEqual(TEXT("Sichtweite Zeichnen = Simulation"),
+		static_cast<double>(GetDefault<UTrafficVehicleSpawnerComponent>()->CullRadiusMeters),
+		FWiesbadenTrafficSettings().DrawDistanceMeters);
+
+	// Einsetzen: Spur 0 (Start 0,0) und Spur 2 (Start 0,50 m) liegen im Blick
+	// (Kamera bei y = -30 m, Blick +Y), Spur 1 (Start 105 m, 0) seitlich
+	// ausserhalb. In 4 s darf auf 0 und 2 nichts entstehen.
+	{
+		FWiesbadenTrafficSimulation Sim;
+		const FRoadNetwork Network = MakeNetwork();
+		Sim.Initialize(Network, MakeSettings(1.0f));
+		for (int32 i = 0; i < 16; ++i)
+		{
+			Sim.SetObserverView(FVector(0.0, -3000.0, 0.0), FVector(0.0, 1.0, 0.0), 90.0f);
+			Sim.Tick(0.25f);
+		}
+		bool bOnlyHidden = true;
+		for (const FTrafficVehicle& Vehicle : Sim.Vehicles)
+		{
+			bOnlyHidden = bOnlyHidden && !(Vehicle.bOnLane && (Vehicle.LaneId == 0 || Vehicle.LaneId == 2));
+		}
+		TestTrue(TEXT("im Blick entsteht nichts"), bOnlyHidden);
+		TestTrue(TEXT("es entstehen Fahrzeuge ausser Sicht"), Sim.Report.TotalSpawnedCount > 0);
+		TestTrue(FString::Printf(TEXT("verworfene Einsatzorte gezaehlt (%lld)"), Sim.GetLifetimeSpawnsSkippedInView()),
+			Sim.GetLifetimeSpawnsSkippedInView() > 0);
+	}
+	// Gegenprobe: Blick weg (-Y) - dann setzen auch Spur 0 und 2 ein.
+	{
+		FWiesbadenTrafficSimulation Sim;
+		const FRoadNetwork Network = MakeNetwork();
+		Sim.Initialize(Network, MakeSettings(1.0f));
+		TSet<int32> Lanes;
+		for (int32 i = 0; i < 16; ++i)
+		{
+			Sim.SetObserverView(FVector(0.0, -3000.0, 0.0), FVector(0.0, -1.0, 0.0), 90.0f);
+			Sim.Tick(0.25f);
+			for (const FTrafficVehicle& Vehicle : Sim.Vehicles)
+			{
+				Lanes.Add(Vehicle.bOnLane ? Vehicle.LaneId : -1);
+			}
+		}
+		TestTrue(TEXT("Blick weg: auch Spur 0 oder 2 besetzt"), Lanes.Contains(0) || Lanes.Contains(2));
+		TestEqual(TEXT("Blick weg: nichts verworfen"), Sim.GetLifetimeSpawnsSkippedInView(), static_cast<int64>(0));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficDeadEndInViewTest,
+	"WiesbadenReal.Vehicles.Traffic.DeadEndInView",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficDeadEndInViewTest::RunTest(const FString& Parameters)
+{
+	// Spur 2 ist eine Sackgasse (Ende bei 100 m, 50 m). Ein Fahrzeug faehrt
+	// darauf zu, der Spieler sieht hin: es haelt vor dem Ende und bleibt -
+	// erst als der Spieler wegschaut, verschwindet es.
+	FWiesbadenTrafficSimulation Sim;
+	const FRoadNetwork Network = MakeNetwork();
+	Sim.Initialize(Network, MakeSettings(0.0f));
+	FTrafficVehicle Car;
+	Car.VehicleId = 7;
+	Car.LaneId = 2;
+	Car.bOnLane = true;
+	Car.DistanceCm = 6000.0;
+	Car.DesiredSpeedCmS = 1000.0;
+	Car.SpeedCmS = 1000.0;
+	Sim.Vehicles.Add(Car);
+
+	const FVector Eye(9000.0, 2000.0, 0.0);
+	for (int32 i = 0; i < 100; ++i)   // 10 s
+	{
+		Sim.SetObserverView(Eye, FVector(0.0, 1.0, 0.0), 90.0f);
+		Sim.Tick(0.1f);
+	}
+	if (!TestEqual(TEXT("im Blick: das Fahrzeug bleibt"), Sim.Vehicles.Num(), 1))
+	{
+		return false;
+	}
+	const FTrafficVehicle& Held = Sim.Vehicles[0];
+	TestTrue(FString::Printf(TEXT("steht vor dem Ende (%.0f cm, %.0f cm/s)"), Held.DistanceCm, Held.SpeedCmS),
+		Held.SpeedCmS < 1.0 && Held.DistanceCm < 10000.0 && Held.DistanceCm > 9000.0);
+	TestTrue(FString::Printf(TEXT("die Karosserie steht auch (%.0f cm/s)"), Held.BodySpeedCmS), FMath::Abs(Held.BodySpeedCmS) < 20.0);
+
+	for (int32 i = 0; i < 5; ++i)
+	{
+		Sim.SetObserverView(Eye, FVector(0.0, -1.0, 0.0), 90.0f);   // weggeschaut
+		Sim.Tick(0.1f);
+	}
+	// Ganz nah (15 m) gilt immer als sichtbar - der Spieler steht hier 30 m weg.
+	TestEqual(TEXT("weggeschaut: verschwunden"), Sim.Vehicles.Num(), 0);
 	return true;
 }

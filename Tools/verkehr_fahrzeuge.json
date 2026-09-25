@@ -1,0 +1,29 @@
+{
+  "_zweck": "Die Fahrzeuge des Stadtverkehrs (Tripo-Modelle). Tools/Blender/build_traffic_cars.py trennt je Modell die vier Raeder ab (Tripo-Teile, die den Boden beruehren, samt der Teile in ihrem Umriss), skaliert auf die echte Laenge, dreht die Front nach +X und legt den Ursprung in die Radstandmitte am Boden; Ergebnis Data/Raw/Verkehr/<Name>/SM_<Name>_Body.fbx + SM_<Name>_Wheel_{FL,FR,RL,RR}.fbx + tex/ + masse.json. Tools/import_traffic_cars.py legt sie nach /Game/Vehicles/Traffic/<Name>. Die Masse aus masse.json stehen in C++ in WiesbadenTrafficCarTypes (Test Vehicles.TrafficCars.MeshDims prueft sie gegen die Meshes). laenge_m = echte Laenge des Vorbilds (Massstab); spur_m = echte Spurweite vorn - Tripo-Modelle sind oft zu breit, die Breite wird darauf gestaucht (nur Y: die Raeder bleiben rund); dreiecke = Ziel fuer die Karosserie (Nanite), rad_dreiecke je Rad; hauptteil_textur = Kante der groessten Textur, alle anderen hoechstens nebenteil_textur.",
+  "fahrzeuge": {
+    "Golf": {
+      "quelle": "Data/Raw/Verkehr/Golf/golf_source.glb",
+      "vorbild": "VW Golf III 5-Tuerer (1991-1997)",
+      "laenge_m": 4.02,
+      "dreiecke": 150000,
+      "rad_dreiecke": 12000,
+      "spur_m": 1.427
+    },
+    "Peugeot": {
+      "quelle": "Data/Raw/Verkehr/Peugeot/peugeot_source.glb",
+      "vorbild": "Peugeot 207 3-Tuerer (2006-2012)",
+      "laenge_m": 4.03,
+      "dreiecke": 150000,
+      "rad_dreiecke": 12000,
+      "spur_m": 1.475
+    },
+    "Transporter": {
+      "quelle": "Data/Raw/Verkehr/Transporter/transporter_source.glb",
+      "vorbild": "VW T6 California (2015-2019)",
+      "laenge_m": 4.904,
+      "dreiecke": 150000,
+      "rad_dreiecke": 12000,
+      "spur_m": 1.628
+    }
+  }
+}
