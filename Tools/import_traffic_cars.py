@@ -14,7 +14,8 @@ dieser Teile bekommen M_WbTrafficCarLack: der Verkehr gibt je Instanz die
 Lackfarbe als PerInstanceCustomData 0-2 und 3 = umfaerben (0 = Werkslack) -
 gerechnet wie umfaerben() im Maskenskript, nur linear statt sRGB. Die Raeder
 behalten immer M_WbTrafficCar. WB_NUR_LACK=1 wendet nur den Lack auf schon
-importierte Fahrzeuge an (Meshes und Texturen bleiben).
+importierte Fahrzeuge an (Meshes und Texturen bleiben). WB_NUR_RAEDER=1 liest
+nur die vier Rad-Meshes neu ein (nach Tools/Blender/straighten_traffic_wheels.py).
 
 Der Rad-Ursprung ist der Fahrzeugursprung (Radstandmitte am Boden): die
 Radmitte ist die Mitte der Rad-Bounds - daraus rechnet der Verkehr Drehung und
@@ -362,15 +363,70 @@ def import_vehicle(name, master):
     return lines
 
 
+def reimport_wheels(name):
+    """Nur die vier Rad-Meshes neu einlesen (nach Tools/Blender/straighten_traffic_wheels.py);
+    Karosserie, Texturen, Lack bleiben. Materialien je Schlitz wie beim Import."""
+    src = os.path.join(PROJECT, 'Data', 'Raw', 'Verkehr', name)
+    root = '/Game/Vehicles/Traffic/%s' % name
+    lines = []
+    for w in WHEELS:
+        leaf = 'SM_%s_Wheel_%s' % (name, w)
+        t = unreal.AssetImportTask()
+        t.filename = os.path.join(src, leaf + '.fbx')
+        t.destination_path = root + '/Meshes'
+        t.destination_name = leaf
+        t.automated = True
+        t.replace_existing = True
+        t.save = False
+        ui = unreal.FbxImportUI()
+        ui.set_editor_property('import_mesh', True)
+        ui.set_editor_property('import_as_skeletal', False)
+        ui.set_editor_property('import_materials', False)
+        ui.set_editor_property('import_textures', False)
+        ui.set_editor_property('import_animations', False)
+        ui.set_editor_property('mesh_type_to_import', unreal.FBXImportType.FBXIT_STATIC_MESH)
+        smd = ui.static_mesh_import_data
+        smd.set_editor_property('combine_meshes', True)
+        smd.set_editor_property('auto_generate_collision', False)
+        smd.set_editor_property('generate_lightmap_u_vs', False)
+        smd.set_editor_property('import_uniform_scale', 1.0)
+        t.options = ui
+        tools.import_asset_tasks([t])
+        mesh = eal.load_asset('%s/Meshes/%s' % (root, leaf))
+        if mesh is None:
+            raise RuntimeError('%s nicht eingelesen' % leaf)
+        slots = list(mesh.get_editor_property('static_materials'))
+        for slot in slots:
+            part = str(slot.get_editor_property('material_slot_name')).split('_Part')[-1]
+            inst = eal.load_asset('%s/Materials/M_%s_Part%s' % (root, name, part))
+            if inst is None:
+                raise RuntimeError('%s: Material M_%s_Part%s fehlt' % (leaf, name, part))
+            slot.set_editor_property('material_interface', inst)
+        mesh.set_editor_property('static_materials', slots)
+        nanite = mesh.get_editor_property('nanite_settings')
+        nanite.set_editor_property('enabled', True)
+        mesh.set_editor_property('nanite_settings', nanite)
+        eal.save_loaded_asset(mesh)
+        b = mesh.get_bounds()
+        lines.append('%s: Radmitte (%.1f, %.1f, %.1f), halbe Breite %.1f cm' % (
+            leaf, b.origin.x, b.origin.y, b.origin.z, b.box_extent.y))
+    unreal.log('###VERKEHR_RAEDER### ' + ' | '.join(lines))
+    return lines
+
+
 master = build_master()
 lack_master = build_lack_master()
 nur_lack = os.environ.get('WB_NUR_LACK') == '1'
+nur_raeder = os.environ.get('WB_NUR_RAEDER') == '1'
 choice = os.environ.get('WB_FAHRZEUG', 'alle')
 names = list(REGISTRY) if choice == 'alle' else [n.strip() for n in choice.split(',') if n.strip()]
 report = []
 for vehicle in names:
     if vehicle not in REGISTRY:
         raise RuntimeError('WB_FAHRZEUG=%s unbekannt (%s)' % (vehicle, ', '.join(REGISTRY)))
+    if nur_raeder:
+        report += reimport_wheels(vehicle)
+        continue
     if not nur_lack:
         report += import_vehicle(vehicle, master)
     report += apply_paint(vehicle, lack_master)

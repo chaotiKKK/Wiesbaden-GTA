@@ -12,6 +12,8 @@ Je Fahrzeug aus Tools/verkehr_fahrzeuge.json:
      rund. Jedes Rad sitzt auf dem Boden (Tripo laesst einzelne schweben).
   4. Texturen umbenennen (T_<Name>_PartN) und verkleinern, Karosserie und
      Raeder getrennt dezimieren (das Spiel zeichnet sie mit Nanite).
+  4b. Raeder gerade stellen (Tools/Blender/wheel_align.py): Tripo liefert
+     Vorderraeder oft eingeschlagen (T6 20 Grad) - um Y gedreht taumelten sie.
   5. FBX je Teil (SM_<Name>_Body, SM_<Name>_Wheel_FL/FR/RL/RR) - der Rad-
      Ursprung bleibt der Fahrzeugursprung: die Radmitte ist die Mitte seiner
      Bounds, daraus rechnet das Spiel Drehung und Einschlag.
@@ -30,6 +32,9 @@ from pathlib import Path
 
 import bpy
 from mathutils import Matrix, Vector
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import wheel_align  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = json.loads((ROOT / 'Tools/verkehr_fahrzeuge.json').read_text(encoding='utf-8'))['fahrzeuge']
@@ -263,6 +268,18 @@ def build(name, cfg):
     for obj in [body] + list(wheels.values()):
         obj.select_set(True)
     bpy.context.view_layer.objects.active = body
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+
+    # Tripo liefert Vorderraeder oft eingeschlagen - um Y gedreht taumelten sie.
+    for key, w in wheels.items():
+        yaw, camber, before, after = wheel_align.straighten(w)
+        if before > after:
+            log(name, 'Rad %s gerade gestellt: Einschlag %.1f, Sturz %.1f Grad, Breite %.1f -> %.1f cm'
+                % (key, yaw, camber, before * 100, after * 100))
+    bpy.ops.object.select_all(action='DESELECT')
+    for w in wheels.values():
+        w.select_set(True)
+    bpy.context.view_layer.objects.active = wheels['FL']
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
     textures(name, [body] + list(wheels.values()), out_dir / 'tex',
