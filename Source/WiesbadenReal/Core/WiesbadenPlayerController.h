@@ -97,6 +97,12 @@ public:
 	UFUNCTION(Exec)
 	void WbSpawnPursuer();
 
+	// Nimmt bei Dennos Laden einen Lieferauftrag an, ohne dort zu stehen - mit
+	// festem Zufallswert, damit ein Lauf dieselbe Adresse wieder zieht. Steht der
+	// Laden noch nicht (Streaming), wird der Auftrag vorgemerkt.
+	UFUNCTION(Exec)
+	void WbDennoAuftrag(int32 Seed = 1);
+
 private:
 	// Schreibt den Gesundheitsbericht JETZT (JSON + Log). Gemeinsame Endstrecke von
 	// WbHealth (sofort) und dem Gate-Poll.

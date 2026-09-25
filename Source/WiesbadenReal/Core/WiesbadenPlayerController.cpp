@@ -18,6 +18,7 @@
 #include "Vehicles/WiesbadenVehicleTestHarness.h"
 #include "World/WiesbadenCitySubsystem.h"
 #include "NPC/WiesbadenPursuerActor.h"
+#include "World/WiesbadenDennoShop.h"
 
 void AWiesbadenPlayerController::WbTeleport(int32 Ziel)
 {
@@ -339,4 +340,23 @@ void AWiesbadenPlayerController::WbSpawnPursuer()
 		AWiesbadenPursuerActor::StaticClass(), Spawn, FRotator::ZeroRotator, Sp);
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbSpawnPursuer - Verfolger %s bei (%.0f, %.0f)."),
 		Pursuer ? TEXT("gespawnt") : TEXT("NICHT gespawnt"), Spawn.X, Spawn.Y);
+}
+
+void AWiesbadenPlayerController::WbDennoAuftrag(int32 Seed)
+{
+	UWorld* World = GetWorld();
+	AWiesbadenDennoShop* Shop = nullptr;
+	for (TActorIterator<AWiesbadenDennoShop> It(World); World && It; ++It)
+	{
+		Shop = *It;
+		break;
+	}
+	if (!Shop)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbDennoAuftrag %d - kein Denno-Laden in der Welt."), Seed);
+		return;
+	}
+	Shop->RequestDevDelivery(Seed);
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbDennoAuftrag %d - Lieferauftrag angefordert (Laden %s)."),
+		Seed, Shop->IsBuilt() ? TEXT("steht") : TEXT("noch im Aufbau, vorgemerkt"));
 }

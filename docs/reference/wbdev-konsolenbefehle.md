@@ -54,6 +54,7 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 | `WbHeliOff` | `WbHeliOff` | Helikopter besessen | Autopilot aus, Steuerung zurueck an Eingabe |
 | `WbOptionen` | `WbOptionen` | HUD vorhanden | Optionsfenster auf/zu; protokolliert alle Zeilen mit Index und Wert |
 | `WbOption` | `WbOption <Zeile> <Schritte>` | HUD vorhanden | Eine Zeile des Optionsfensters verstellen (Vorzeichen = Richtung) |
+| `WbDennoAuftrag` | `WbDennoAuftrag [Seed]` | Denno-Laden in der Welt | Lieferauftrag bei Denno annehmen, ohne dort zu stehen (fester Zufallswert) |
 
 ---
 
@@ -239,6 +240,26 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
   gemessen - der Verfolger steht dann bei (4000, 0).
 - **Log-Nachweis:**
   - `WbDev: WbSpawnPursuer - Verfolger %s bei (%.0f, %.0f).`
+
+---
+
+## WbDennoAuftrag
+
+- **Signatur:** `WbDennoAuftrag [Seed:int = 1]`
+- **Wirkung:** Nimmt bei Dennos Laden (Sedanplatz 5) einen Lieferauftrag an,
+  als haette man zu Fuss vor dem Laden F gedrueckt - nur ohne dort zu stehen.
+  Der Seed legt Adresse und Ware fest: derselbe Seed zieht dieselbe Adresse
+  (solange sich Karte und Laden nicht aendern). Steht der Laden noch nicht
+  (Haus nicht gestreamt), wird der Auftrag vorgemerkt und nach dem Aufbau
+  eingeloest. Ziel 1 ist die Abholung vor dem Laden, Ziel 2 die Abgabe an
+  der Adresse; Frist und Auszahlung wie bei jedem Auftrag.
+- **Voraussetzung:** ein `AWiesbadenDennoShop` in der Welt; kein laufender
+  Auftrag (sonst lehnt Denno ab - Protokoll `Dennos Lieferung abgelehnt`).
+- **Log-Nachweis:**
+  - Erfolg: `WbDev: WbDennoAuftrag <Seed> - Lieferauftrag angefordert (Laden steht).`
+    bzw. `(Laden noch im Aufbau, vorgemerkt).` Danach vom Laden:
+    `Dennos Lieferung <n> angenommen: <Ware> nach <Adresse>, Abgabe bei (x, y, z), Luftlinie <m> m, <EUR> EUR.`
+  - Kein Laden (Warning): `WbDev: WbDennoAuftrag <Seed> - kein Denno-Laden in der Welt.`
 
 ---
 

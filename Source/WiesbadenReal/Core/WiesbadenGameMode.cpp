@@ -733,7 +733,9 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 			Foot = Cast<AWiesbadenFootPawn>(Pawn);
 		}
 
-		if (!Foot || !TryMerchantInteraction(Foot))
+		// Vor Dennos Laden nimmt F einen Lieferauftrag an (Vorrang vor dem
+		// Einsteigen wie beim Haendler).
+		if (!Foot || !(TryMerchantInteraction(Foot) || TryDennoDelivery(Foot)))
 		{
 			TogglePlayerVehicle();
 		}
@@ -756,6 +758,31 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 		UE_LOG(LogWbVehicles, Log,
 			TEXT("-WbZuFuss: nach %.1f s ausgestiegen."), ElapsedSeconds);
 	}
+}
+
+bool AWiesbadenGameMode::TryDennoDelivery(AWiesbadenFootPawn* Foot)
+{
+	UWorld* World = GetWorld();
+	if (!Foot || !World)
+	{
+		return false;
+	}
+	for (TActorIterator<AWiesbadenDennoShop> It(World); It; ++It)
+	{
+		FString Message;
+		if (It->TryAcceptDelivery(Foot, Message))
+		{
+			if (APlayerController* PC = World->GetFirstPlayerController())
+			{
+				if (AWiesbadenVehicleHUD* HUD = Cast<AWiesbadenVehicleHUD>(PC->GetHUD()))
+				{
+					HUD->ShowTransientHint(Message);
+				}
+			}
+			return true;
+		}
+	}
+	return false;
 }
 
 bool AWiesbadenGameMode::TryMerchantInteraction(AWiesbadenFootPawn* Foot)

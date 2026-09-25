@@ -4,6 +4,16 @@
 
 #include "GIS/GeoCoordinateConverter.h"
 #include "GIS/WiesbadenWorldBuilder.h"
+#include "Missions/WiesbadenMissionSubsystem.h"
+#include "World/WiesbadenDeliveryCustomer.h"
+#include "Core/WiesbadenGameStateSubsystem.h"
+#include "Store/WiesbadenStore.h"
+#include "Engine/GameInstance.h"
+#include "UI/WiesbadenVehicleHUD.h"
+#include "Vehicles/WiesbadenCarSpawn.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
+#include "HAL/PlatformTime.h"
 #include "World/WiesbadenCityChunk.h"
 #include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -125,6 +135,15 @@ void AWiesbadenDennoShop::Tick(float DeltaSeconds)
 		NextPatchSeconds = Now + 1.0;
 		PatchFacades();
 	}
+	// Vorgemerkter Entwickler-Auftrag (WbDennoAuftrag kam vor dem Aufbau).
+	if (bPendingDevDelivery)
+	{
+		bPendingDevDelivery = false;
+		FRandomStream Random(PendingDevSeed);
+		FString Message;
+		StartDelivery(Random, Message);
+		ShowHint(Message);
+	}
 	// Denno bewegt sich nur, wenn jemand hinsieht - sonst kostet sie nichts.
 	if (DennoFigure && DennoFigure->WasRecentlyRendered(0.25f))
 	{
@@ -133,6 +152,26 @@ void AWiesbadenDennoShop::Tick(float DeltaSeconds)
 			FRotator(Pose.Rotation.Pitch, DennoYawDeg + Pose.Rotation.Yaw, Pose.Rotation.Roll));
 		DennoFigure->SetRelativeScale3D(Pose.Scale);
 	}
+}
+
+bool AWiesbadenDennoShop::IsShopCellLoaded(const FVector& FrontMid) const
+{
+	// Dieselbe Pruefung wie PatchFacades: irgendeine Chunk-Komponente, deren
+	// Grenzen die Ladenstelle beruehren. Ohne Z-Bezug - die Frontmitte liegt
+	// auf Hoehe 0 der Geo-Umrechnung, die Chunks auf Gelaendehoehe.
+	const FBox Probe = FBox::BuildAABB(FVector(FrontMid.X, FrontMid.Y, 0.0), FVector(200.0, 200.0, 1.0e7));
+	for (TActorIterator<AWiesbadenCityChunk> It(GetWorld()); It; ++It)
+	{
+		TInlineComponentArray<UMeshComponent*> Meshes(*It);
+		for (const UMeshComponent* Mesh : Meshes)
+		{
+			if (Mesh && Mesh->IsRegistered() && Mesh->Bounds.GetBox().Intersect(Probe))
+			{
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 FVector AWiesbadenDennoShop::WorldXY(const FVector2D& EastNorthM) const
@@ -161,17 +200,29 @@ bool AWiesbadenDennoShop::TryBuild()
 	const FVector2D AlongEN = (FrontNorthEN - FrontSouthEN).GetSafeNormal();
 	const FVector2D OutEN(-AlongEN.Y, AlongEN.X);   // nach Westen, zum Platz
 	const FVector Mid = WorldXY(MidEN);
+
+	// Ist die Stadtzelle an der Ladenstelle noch nicht geladen, kann es keine
+	// Wand geben: Uhr zuruecksetzen und weiter warten.
+	if (!IsShopCellLoaded(Mid))
+	{
+		FirstAttemptSeconds = Now;
+		return false;
+	}
 	const FVector AxisU = (WorldXY(MidEN + AlongEN) - Mid).GetSafeNormal2D();
 	const FVector Outward = (WorldXY(MidEN + OutEN) - Mid).GetSafeNormal2D();
 
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbDennoShop), true);
 	Params.AddIgnoredActor(this);
+	// Nur statische Weltgeometrie: ein Auto oder Passant vor dem Laden (auch der
+	// Spieler selbst) fing sonst den Wand-Strahl ab, der Treffer lag zu weit vor
+	// der Frontlinie, und der Laden gab nach 30 s auf.
+	const FCollisionObjectQueryParams StaticOnly(ECC_WorldStatic);
 
 	// Boden vor der Front (Gehweg): erster Treffer von oben.
 	const FVector Walk = Mid + Outward * 150.0;
 	FHitResult Ground;
-	if (!World->LineTraceSingleByChannel(Ground, FVector(Walk.X, Walk.Y, 100000.0),
-		FVector(Walk.X, Walk.Y, -20000.0), ECC_WorldStatic, Params))
+	if (!World->LineTraceSingleByObjectType(Ground, FVector(Walk.X, Walk.Y, 100000.0),
+		FVector(Walk.X, Walk.Y, -20000.0), StaticOnly, Params))
 	{
 		return false;   // Zelle noch nicht gestreamt
 	}
@@ -180,9 +231,9 @@ bool AWiesbadenDennoShop::TryBuild()
 	// Die gebackene Wand selbst: waagerechter Strahl von der Strasse ins Haus.
 	FVector Wall;
 	FHitResult WallHit;
-	const bool bWall = World->LineTraceSingleByChannel(WallHit,
+	const bool bWall = World->LineTraceSingleByObjectType(WallHit,
 		FVector(Mid.X, Mid.Y, FloorZ + 150.0) + Outward * 600.0,
-		FVector(Mid.X, Mid.Y, FloorZ + 150.0) - Outward * 300.0, ECC_WorldStatic, Params)
+		FVector(Mid.X, Mid.Y, FloorZ + 150.0) - Outward * 300.0, StaticOnly, Params)
 		&& !Cast<ALandscapeProxy>(WallHit.GetActor())
 		&& IsPlausibleWall(WallHit.ImpactPoint, Mid, Outward);
 	switch (DecideBuild(bWall, Now - FirstAttemptSeconds))
@@ -394,5 +445,195 @@ void AWiesbadenDennoShop::PatchComponent(UMeshComponent* Mesh)
 		PatchedFacades.Add(Mesh);
 		UE_LOG(LogWbDennoShop, Log, TEXT("Dennos Laden: Fassade von %s ausgeschnitten."),
 			*Mesh->GetOwner()->GetName());
+	}
+}
+
+// -- Lieferauftraege -----------------------------------------------------------
+
+bool AWiesbadenDennoShop::IsInDeliveryReach(const FVector& PlayerLocalCm)
+{
+	// Vor der Front auf der Strassenseite (Y <= 0), ueber die ganze Ladenbreite
+	// und etwas darueber hinaus, nicht auf einem Dach oder unter einer Bruecke.
+	return FMath::Abs(PlayerLocalCm.X) <= ShopHalfWidthCm + 100.0
+		&& PlayerLocalCm.Y <= 50.0 && PlayerLocalCm.Y >= -DeliveryReachCm
+		&& FMath::Abs(PlayerLocalCm.Z) <= 300.0;
+}
+
+FString AWiesbadenDennoShop::BuildDeliveryPrompt(bool bMissionActive)
+{
+	return bMissionActive
+		? FString(TEXT("F   Denno: erst den laufenden Auftrag erledigen"))
+		: FString(TEXT("F   Lieferauftrag bei Denno annehmen"));
+}
+
+bool AWiesbadenDennoShop::IsPlayerInDeliveryReach(const FVector& PlayerWorldCm) const
+{
+	return bBuilt && IsInDeliveryReach(GetActorTransform().InverseTransformPosition(PlayerWorldCm));
+}
+
+bool AWiesbadenDennoShop::TryAcceptDelivery(const APawn* Player, FString& OutMessage)
+{
+	if (!Player || !IsPlayerInDeliveryReach(Player->GetActorLocation()))
+	{
+		return false;   // nicht am Laden - F gehoert dem Fahrzeugwechsel
+	}
+	FRandomStream Random(static_cast<int32>(FPlatformTime::Cycles()));
+	StartDelivery(Random, OutMessage);
+	return true;   // auch "laeuft schon": F am Laden steigt nicht ins Auto
+}
+
+void AWiesbadenDennoShop::RequestDevDelivery(int32 Seed)
+{
+	PendingDevSeed = Seed;
+	bPendingDevDelivery = true;   // der Tick loest ein, sobald der Laden steht
+}
+
+bool AWiesbadenDennoShop::StartDelivery(FRandomStream& Random, FString& OutMessage)
+{
+	UWorld* World = GetWorld();
+	UWiesbadenMissionSubsystem* Missions = World ? World->GetSubsystem<UWiesbadenMissionSubsystem>() : nullptr;
+	if (!Missions)
+	{
+		OutMessage = TEXT("Denno: Gerade keine Auftraege.");
+		return false;
+	}
+	if (Missions->HasActiveMission())
+	{
+		OutMessage = FString::Printf(TEXT("Denno: Erst den laufenden Auftrag erledigen - %s."),
+			*Missions->GetActiveMissionTitle());
+		UE_LOG(LogWbDennoShop, Log, TEXT("Dennos Lieferung abgelehnt: laufender Auftrag %s."),
+			*Missions->GetActiveMissionTitle());
+		return false;
+	}
+
+	const AWiesbadenWorldBuilder* Builder = nullptr;
+	for (TActorIterator<AWiesbadenWorldBuilder> It(World); It; ++It)
+	{
+		if (!It->RoadNetwork.Segments.IsEmpty() && !It->Buildings.IsEmpty())
+		{
+			Builder = *It;
+			break;
+		}
+	}
+	if (!Builder)
+	{
+		OutMessage = TEXT("Denno: Keine Adressen - die Stadt ist nicht geladen.");
+		UE_LOG(LogWbDennoShop, Warning, TEXT("Dennos Lieferung: kein WorldBuilder mit Gebaeuden und Strassennetz."));
+		return false;
+	}
+	if (DeliveryAddresses.IsEmpty())
+	{
+		DeliveryAddresses = WiesbadenDennoDelivery::CollectAddresses(Builder->Buildings);
+		UE_LOG(LogWbDennoShop, Log, TEXT("Dennos Lieferungen: %d belieferbare Adressen aus %d Gebaeuden."),
+			DeliveryAddresses.Num(), Builder->Buildings.Num());
+	}
+
+	// Zufaellige Adresse im Entfernungsband; liegt vor ihr keine befahrbare
+	// Strasse (Hinterhof, Park), die naechste ziehen.
+	const FVector ShopFront = GetActorLocation();
+	FDennoDeliveryJob Job;
+	TSet<int32> Excluded;
+	bool bFound = false;
+	for (int32 Attempt = 0; Attempt < 24 && !bFound; ++Attempt)
+	{
+		const int32 Index = WiesbadenDennoDelivery::PickAddress(DeliveryAddresses, ShopFront, Random, Excluded);
+		if (Index == INDEX_NONE)
+		{
+			break;
+		}
+		FRotator LaneRotation;
+		int32 LaneId = INDEX_NONE;
+		if (FWiesbadenCarSpawn::FindNearestDrivableLanePoint(Builder->RoadNetwork,
+			DeliveryAddresses[Index].Location, 6000.0, Job.DropPoint, LaneRotation, LaneId))
+		{
+			Job.Address = DeliveryAddresses[Index].Address;
+			Job.AddressLocation = DeliveryAddresses[Index].Location;
+			bFound = true;
+		}
+		else
+		{
+			Excluded.Add(Index);
+		}
+	}
+	if (!bFound)
+	{
+		OutMessage = TEXT("Denno: Heute keine Lieferungen.");
+		UE_LOG(LogWbDennoShop, Warning, TEXT("Dennos Lieferung: keine erreichbare Adresse im Band %.0f-%.0f m."),
+			WiesbadenDennoDelivery::MinDistanceCm / 100.0, WiesbadenDennoDelivery::MaxDistanceCm / 100.0);
+		return false;
+	}
+	Job.Cargo = WiesbadenDennoDelivery::PickCargo(Random);
+	Job.DistanceCm = FVector::Dist2D(ShopFront, Job.DropPoint);
+	Job.Payout = WiesbadenDennoDelivery::ComputePayout(Job.DistanceCm);
+
+	const FMission Mission = WiesbadenDennoDelivery::BuildMission(Job, ShopFront, ++DeliveryNumber);
+	if (!Missions->StartGeneratedMission(Mission))
+	{
+		OutMessage = TEXT("Denno: Gerade keine Auftraege.");
+		return false;
+	}
+	// Der Kunde wartet an der Adresse (erscheint, sobald der Spieler naeher kommt).
+	if (AWiesbadenDeliveryCustomer* Old = Customer.Get())
+	{
+		Old->Destroy();
+	}
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	if (AWiesbadenDeliveryCustomer* NewCustomer = World->SpawnActor<AWiesbadenDeliveryCustomer>(
+		AWiesbadenDeliveryCustomer::StaticClass(), Job.DropPoint, FRotator::ZeroRotator, SpawnParams))
+	{
+		NewCustomer->Setup(Mission.Id, Job.DropPoint, Job.AddressLocation, Random.RandRange(0, 1 << 20));
+		Customer = NewCustomer;
+	}
+	if (!MissionCompletedHandle.IsValid())
+	{
+		MissionCompletedHandle = Missions->OnMissionCompleted.AddUObject(this, &AWiesbadenDennoShop::OnMissionCompleted);
+	}
+	OutMessage = FString::Printf(TEXT("Denno: %s nach %s - %.1f km, %d EUR. Ziel auf der Karte (M)."),
+		*Job.Cargo, *Job.Address, Job.DistanceCm / 100000.0, AwardFor(Job.Payout));
+	UE_LOG(LogWbDennoShop, Log,
+		TEXT("Dennos Lieferung %d angenommen: %s nach %s, Abgabe bei (%.0f, %.0f, %.0f), Luftlinie %.0f m, %d EUR."),
+		DeliveryNumber, *Job.Cargo, *Job.Address, Job.DropPoint.X, Job.DropPoint.Y, Job.DropPoint.Z,
+		Job.DistanceCm / 100.0, Job.Payout);
+	return true;
+}
+
+void AWiesbadenDennoShop::OnMissionCompleted(const FMission& Completed)
+{
+	if (!Completed.Id.ToString().StartsWith(TEXT("denno_lieferung_")))
+	{
+		return;
+	}
+	const int32 Award = AwardFor(Completed.Reward.Guthaben);
+	UE_LOG(LogWbDennoShop, Log, TEXT("Dennos Lieferung abgegeben: %s, %d EUR (Grundpreis %d)."),
+		*Completed.Title, Award, Completed.Reward.Guthaben);
+	AWiesbadenDeliveryCustomer* Waiting = Customer.Get();
+	if (!Waiting)
+	{
+		ShowHint(FString::Printf(TEXT("Geliefert! Denno zahlt %d EUR."), Award));
+		return;
+	}
+	FString Thanks;
+	const int32 Tip = Waiting->ThankAndTip(Completed.Reward.Guthaben, Completed.DeadlineSeconds, Thanks);
+	ShowHint(Tip > 0
+		? FString::Printf(TEXT("Kunde: \"%s\"  +%d EUR Trinkgeld.  Denno zahlt %d EUR."), *Thanks, Tip, Award)
+		: FString::Printf(TEXT("Kunde: \"%s\"  Denno zahlt %d EUR."), *Thanks, Award));
+}
+
+int32 AWiesbadenDennoShop::AwardFor(int32 BaseReward) const
+{
+	const UGameInstance* GI = GetGameInstance();
+	const UWiesbadenGameStateSubsystem* GameState = GI ? GI->GetSubsystem<UWiesbadenGameStateSubsystem>() : nullptr;
+	const bool bLicensed = GameState && GameState->HasUnlock(FWiesbadenStore::KurierlizenzId());
+	return FWiesbadenStore::ApplyLicenseBonus(BaseReward, bLicensed);
+}
+
+void AWiesbadenDennoShop::ShowHint(const FString& Text) const
+{
+	const UWorld* World = GetWorld();
+	const APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (AWiesbadenVehicleHUD* HUD = PC ? Cast<AWiesbadenVehicleHUD>(PC->GetHUD()) : nullptr)
+	{
+		HUD->ShowTransientHint(Text);
 	}
 }

@@ -41,10 +41,17 @@ public:
 	 *  leer ist). */
 	bool RequestNextMission();
 
+	/** Startet einen ausserhalb des Pools erzeugten Auftrag (z. B. Dennos
+	 *  Lieferungen), WENN gerade keiner laeuft. Frist, Anzeige und Auszahlung wie
+	 *  bei jedem Auftrag. false, wenn schon einer aktiv ist oder er keine Ziele hat. */
+	bool StartGeneratedMission(const FMission& Mission);
+
 	/** Aktuelles Ziel oder nullptr (keine aktive Mission). Fuer HUD/Minimap. */
 	const FMissionObjective* GetCurrentObjective() const;
 
 	FString GetActiveMissionTitle() const;
+	/** Id des laufenden Auftrags (NAME_None ohne Auftrag). */
+	FName GetActiveMissionId() const { return bHasActiveMission ? ActiveMission.Id : NAME_None; }
 	bool HasActiveMission() const { return bHasActiveMission; }
 
 	/** Wie viele Auftraege in dieser Sitzung bereits abgeschlossen wurden. */

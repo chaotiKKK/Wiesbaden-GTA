@@ -21,6 +21,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "NPC/WiesbadenStoreMerchant.h"
+#include "World/WiesbadenDennoShop.h"
 #include "Vehicles/WiesbadenCar.h"
 #include "Vehicles/WiesbadenVehicleControl.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
@@ -940,6 +941,9 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 		TArray<AActor*> Helicopters;
 		TArray<AActor*> Funiculars;
 		TArray<AActor*> Merchants;
+		TArray<AActor*> Shops;
+		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenDennoShop::StaticClass(), Shops);
+		CachedDennoShop = Shops.IsEmpty() ? nullptr : Cast<AWiesbadenDennoShop>(Shops[0]);
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenCar::StaticClass(), Cars);
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenHelicopter::StaticClass(), Helicopters);
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenNerobergbahn::StaticClass(), Funiculars);
@@ -965,9 +969,19 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 		FootPromptScanAge = 0.0f;
 	}
 
-	const FString Prompt = BuildFootPrompt(
+	FString Prompt = BuildFootPrompt(
 		CachedFootVehicleCm, CachedFootFunicularCm,
 		FootVehicleReachCm, FootFunicularReachCm, bCachedFootVehicleIsHelicopter);
+	// Vor Dennos Laden gehoert F der Auftragsannahme (GameMode::TryDennoDelivery
+	// hat Vorrang vor dem Einsteigen) - der Hinweis sagt dasselbe.
+	if (const AWiesbadenDennoShop* Shop = CachedDennoShop.Get())
+	{
+		if (Shop->IsPlayerInDeliveryReach(Here))
+		{
+			const UWiesbadenMissionSubsystem* Missions = HudWorld->GetSubsystem<UWiesbadenMissionSubsystem>();
+			Prompt = AWiesbadenDennoShop::BuildDeliveryPrompt(Missions && Missions->HasActiveMission());
+		}
+	}
 
 	if (Prompt.IsEmpty())
 	{
@@ -2662,6 +2676,26 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 			DrawText(FString::Printf(TEXT("Wegpunkt  %s"), *FormatMapDistance(Dist)),
 				MapWaypoint, M.X + 12.0f, M.Y - 8.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
 		}
+	}
+
+	// Aktives Missionsziel (z. B. Dennos Lieferadresse) - dieselbe Bernstein-Raute
+	// wie auf der Minikarte, damit man die Adresse auf dem Stadtplan findet.
+	const UWiesbadenMissionSubsystem* MapMissions =
+		GetWorld() ? GetWorld()->GetSubsystem<UWiesbadenMissionSubsystem>() : nullptr;
+	const FMissionObjective* MapObjective = MapMissions ? MapMissions->GetCurrentObjective() : nullptr;
+	if (MapObjective && Proj.IsValid())
+	{
+		const FLinearColor MissionMarker(1.0f, 0.72f, 0.20f, 1.0f);
+		const FVector2D M = Proj.Project(MapObjective->Location);
+		constexpr float D = 9.0f;
+		DrawLine(M.X, M.Y - D, M.X + D, M.Y, MissionMarker, 3.0f);
+		DrawLine(M.X + D, M.Y, M.X, M.Y + D, MissionMarker, 3.0f);
+		DrawLine(M.X, M.Y + D, M.X - D, M.Y, MissionMarker, 3.0f);
+		DrawLine(M.X - D, M.Y, M.X, M.Y - D, MissionMarker, 3.0f);
+		const APawn* ObjPawn = MapPC ? MapPC->GetPawn() : nullptr;
+		const double Dist = ObjPawn ? FVector::Dist2D(MapObjective->Location, ObjPawn->GetActorLocation()) : 0.0;
+		DrawText(FString::Printf(TEXT("%s  %s"), *MapObjective->Label, *FormatMapDistance(Dist)),
+			MissionMarker, M.X + 13.0f, M.Y - 8.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
 	}
 
 	// Chrome.
