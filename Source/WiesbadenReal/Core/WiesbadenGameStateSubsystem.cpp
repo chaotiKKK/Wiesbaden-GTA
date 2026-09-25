@@ -69,6 +69,24 @@ void UWiesbadenGameStateSubsystem::GrantUnlock(FName UnlockId)
 	OnUnlocksChanged.Broadcast();
 }
 
+bool UWiesbadenGameStateSubsystem::RecordCourierDelivery(int32 Tip, bool bFast)
+{
+	const bool bRecord = WiesbadenCourierStats::RecordDelivery(CourierStats, Tip, bFast);
+	UE_LOG(LogWbCore, Log, TEXT("Kurier-Bilanz: %d geliefert (%d flott), %d verpasst, Trinkgeld %d EUR (Rekord %d%s)."),
+		CourierStats.Delivered, CourierStats.Fast, CourierStats.Missed, CourierStats.TipTotal,
+		CourierStats.TipRecord, bRecord ? TEXT(", neu") : TEXT(""));
+	Save();
+	return bRecord;
+}
+
+void UWiesbadenGameStateSubsystem::RecordCourierMissed()
+{
+	WiesbadenCourierStats::RecordMissed(CourierStats);
+	UE_LOG(LogWbCore, Log, TEXT("Kurier-Bilanz: Frist verpasst (%d geliefert, %d verpasst)."),
+		CourierStats.Delivered, CourierStats.Missed);
+	Save();
+}
+
 namespace
 {
 	const TCHAR* const GSaveSlot = TEXT("WiesbadenReal");
@@ -85,6 +103,7 @@ void UWiesbadenGameStateSubsystem::Save() const
 	}
 	SaveObj->Guthaben = Guthaben;
 	SaveObj->OwnedUnlocks = OwnedUnlocks.Array();
+	SaveObj->CourierStats = CourierStats;
 	if (UGameplayStatics::SaveGameToSlot(SaveObj, GSaveSlot, GSaveUserIndex))
 	{
 		UE_LOG(LogWbCore, Log, TEXT("Guthaben gespeichert: %d (Freischaltungen: %d)."),
@@ -105,6 +124,7 @@ void UWiesbadenGameStateSubsystem::Load()
 		{
 			Guthaben = SaveObj->Guthaben;
 			OwnedUnlocks = TSet<FName>(SaveObj->OwnedUnlocks);
+			CourierStats = SaveObj->CourierStats;   // aelterer Stand: leere Bilanz
 			UE_LOG(LogWbCore, Log, TEXT("Guthaben geladen: %d (Freischaltungen: %d)."),
 				Guthaben, OwnedUnlocks.Num());
 			return;
@@ -112,5 +132,6 @@ void UWiesbadenGameStateSubsystem::Load()
 	}
 	Guthaben = WiesbadenEconomy::InitialGuthaben(false, 0);
 	OwnedUnlocks.Empty();
+	CourierStats = FWbCourierStats();
 	UE_LOG(LogWbCore, Log, TEXT("Kein Speicherstand - starte mit %d Guthaben."), Guthaben);
 }

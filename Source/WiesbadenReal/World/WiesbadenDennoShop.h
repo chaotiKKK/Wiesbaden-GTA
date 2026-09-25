@@ -146,6 +146,9 @@ private:
 	/** Auftrag auswuerfeln und starten; false + Grund in OutMessage, wenn nicht. */
 	bool StartDelivery(FRandomStream& Random, FString& OutMessage);
 	void OnMissionCompleted(const FMission& Completed);
+	/** Frist verpasst: in der Kurier-Bilanz verbuchen. */
+	void OnMissionFailed(const FMission& Failed);
+	class UWiesbadenGameStateSubsystem* GetGameState() const;
 	void ShowHint(const FString& Text) const;
 	/** Was tatsaechlich gutgeschrieben wird (Kurierlizenz +50 %, wie das Missionssystem). */
 	int32 AwardFor(int32 BaseReward) const;
@@ -156,6 +159,7 @@ private:
 	int32 PendingDevSeed = 0;
 	bool bPendingDevDelivery = false;
 	FDelegateHandle MissionCompletedHandle;
+	FDelegateHandle MissionFailedHandle;
 	/** Der wartende Kunde der laufenden Lieferung. */
 	TWeakObjectPtr<class AWiesbadenDeliveryCustomer> Customer;
 

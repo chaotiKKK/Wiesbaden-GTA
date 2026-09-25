@@ -203,11 +203,10 @@ void AWiesbadenDeliveryCustomer::ShowPose(int32 Pose)
 	ShownPose = Pose;
 }
 
-int32 AWiesbadenDeliveryCustomer::ThankAndTip(int32 Payout, double DeadlineSeconds, FString& OutThanks)
+FDennoTip AWiesbadenDeliveryCustomer::ThankAndTip(int32 Payout, double DeadlineSeconds)
 {
 	bThanked = true;
 	const FDennoTip Tip = WiesbadenDennoDelivery::ComputeTip(Payout, LastRemainingSeconds, DeadlineSeconds);
-	OutThanks = Tip.Thanks;
 	if (Tip.Amount > 0)
 	{
 		const UGameInstance* GI = GetGameInstance();
@@ -220,7 +219,7 @@ int32 AWiesbadenDeliveryCustomer::ThankAndTip(int32 Payout, double DeadlineSecon
 		TEXT("Kunde bedankt sich (%s): Restzeit %.0f von %.0f s, Trinkgeld %d EUR - \"%s\"."),
 		*MissionId.ToString(), LastRemainingSeconds, DeadlineSeconds, Tip.Amount, *Tip.Thanks);
 	BeginWalkHome();
-	return Tip.Amount;
+	return Tip;
 }
 
 void AWiesbadenDeliveryCustomer::BeginWalkHome()
