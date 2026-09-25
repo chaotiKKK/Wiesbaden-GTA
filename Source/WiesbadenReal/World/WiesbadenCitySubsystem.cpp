@@ -3904,9 +3904,13 @@ bool UWiesbadenCitySubsystem::TryApplyGotoTarget()
 
 	// Blickrichtung optional mitgeben. Die Kamera haengt am Pawn und folgt ihm
 	// ohnehin - das hier richtet sie aus, damit das Bild nicht zufaellig steht.
+	// Auch den Pawn selbst drehen: sonst behielt ein Fahrzeug die Gier vom
+	// Startplatz (Garagenhof 116 Grad), und ein Fahrlauf mit WbDrive fuhr
+	// schraeg ins naechste Haus statt die gewuenschte Strasse entlang.
 	float GotoYaw = 0.0f;
 	if (FParse::Value(FCommandLine::Get(), TEXT("WbGotoYaw="), GotoYaw))
 	{
+		Pawn->SetActorRotation(FRotator(0.0f, GotoYaw, 0.0f), ETeleportType::TeleportPhysics);
 		PC->SetControlRotation(FRotator(0.0f, GotoYaw, 0.0f));
 	}
 
@@ -4561,6 +4565,9 @@ void UWiesbadenCitySubsystem::InitializeCity()
 				if (BuildingCollision && Builder->Buildings.Num() > 0)
 				{
 					BuildingCollision->SetBuildings(Builder->Buildings);
+					// Kaesten, die ueber Fahrbahnen reichen (Ueberbauung LuisenForum,
+					// L-Grundrisse an Ecken), an der Strasse abschneiden.
+					BuildingCollision->ClipAgainstRoads(Builder->RoadNetwork);
 					UE_LOG(LogWbCore, Log,
 						TEXT("Gebaeude-Kollision: %d Grundrisse uebernommen."),
 						Builder->Buildings.Num());

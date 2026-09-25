@@ -226,3 +226,53 @@ bool FBuildingCollisionSelectionTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+/**
+ * Grundriss-Kaesten an Fahrspuren kuerzen: der Kasten des LuisenForums (L-Form,
+ * Arm ueber der Schwalbacher Strasse) stand als unsichtbare Wand auf allen Spuren.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildingCollisionRoadClipTest,
+	"WiesbadenReal.World.BuildingCollisionRoadClip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FBuildingCollisionRoadClipTest::RunTest(const FString& Parameters)
+{
+	using EBoxClip = UBuildingCollisionSpawnerComponent::EBoxClip;
+	// Kasten 60 x 20 m (Halbmasse 3000 x 1000 cm) um den Ursprung, nicht gedreht.
+	// Eine Strasse quert ihn in Y-Richtung bei X = +2200 .. +2600 (zwei Spuren).
+	TArray<FVector2D> Road;
+	for (double Y = -3000.0; Y <= 3000.0; Y += 200.0)
+	{
+		Road.Add(FVector2D(2200.0, Y));
+		Road.Add(FVector2D(2600.0, Y));
+	}
+	FVector2D C(0.0, 0.0), E(3000.0, 1000.0);
+	TestTrue(TEXT("Strasse im Kasten -> gekuerzt"),
+		UBuildingCollisionSpawnerComponent::ClipBoxAgainstPoints(C, E, 0.0f, Road, 300.0, 0.3) == EBoxClip::Clipped);
+	TestTrue(TEXT("Kasten endet 3 m vor der ersten Spur (X max 1900)"), FMath::IsNearlyEqual(C.X + E.X, 1900.0, 1.0));
+	TestTrue(TEXT("Westkante bleibt (X min -3000)"), FMath::IsNearlyEqual(C.X - E.X, -3000.0, 1.0));
+	TestTrue(TEXT("quer unveraendert"), FMath::IsNearlyEqual(E.Y, 1000.0, 1.0) && FMath::IsNearlyEqual(C.Y, 0.0, 1.0));
+
+	// Gedreht (90 Grad): dieselbe Lage, Kasten-X zeigt nach Welt +Y.
+	TArray<FVector2D> RoadRot;
+	for (const FVector2D& P : Road) { RoadRot.Add(FVector2D(-P.Y, P.X)); }
+	FVector2D CR(0.0, 0.0), ER(3000.0, 1000.0);
+	TestTrue(TEXT("gedreht: gekuerzt"),
+		UBuildingCollisionSpawnerComponent::ClipBoxAgainstPoints(CR, ER, 90.0f, RoadRot, 300.0, 0.3) == EBoxClip::Clipped);
+	TestTrue(TEXT("gedreht: Kante 3 m vor der Spur"), FMath::IsNearlyEqual(CR.Y + ER.X, 1900.0, 1.0));
+
+	// Strasse fern: unberuehrt.
+	TArray<FVector2D> Far = { FVector2D(9000.0, 0.0), FVector2D(9000.0, 500.0) };
+	FVector2D CF(0.0, 0.0), EF(3000.0, 1000.0);
+	TestTrue(TEXT("Strasse ausserhalb -> unberuehrt"),
+		UBuildingCollisionSpawnerComponent::ClipBoxAgainstPoints(CF, EF, 0.0f, Far, 300.0, 0.3) == EBoxClip::Untouched
+		&& EF == FVector2D(3000.0, 1000.0));
+
+	// Strasse mitten durch (Brueckenteil): zu wenig Rest -> ohne Kasten.
+	TArray<FVector2D> Middle;
+	for (double Y = -3000.0; Y <= 3000.0; Y += 200.0) { Middle.Add(FVector2D(-1500.0, Y)); Middle.Add(FVector2D(1500.0, Y)); }
+	FVector2D CM(0.0, 0.0), EM(3000.0, 1000.0);
+	TestTrue(TEXT("Strasse ueber die ganze Breite -> ohne Kasten"),
+		UBuildingCollisionSpawnerComponent::ClipBoxAgainstPoints(CM, EM, 0.0f, Middle, 300.0, 0.3) == EBoxClip::Removed);
+	return true;
+}
