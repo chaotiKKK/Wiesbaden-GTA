@@ -20,8 +20,8 @@
 # Exit 0 = alle Pruefungen bestanden, sonst Exit 1.
 
 param(
-    # Ordner UEBER dem Projekt - aus dem Ort dieses Skripts (auch im Gate-Worktree).
-    [string]$Root = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),
+    # Leer = Ordner ueber dem Projekt (siehe unten, damit das Gate im Worktree dessen Stand prueft).
+    [string]$Root = "",
     # Die INSTALLIERTE Engine, mit der auch Gate 1 baut (Tools\pruefe_engine.py).
     [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8",
     # Perf-Regression-Schranken (aus dem 8-s-Diagnoseblock am Boden), die den
@@ -53,6 +53,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Ordner UEBER dem Projekt aus dem Ort dieses Skripts (Tools\ im Projekt) - im
+# RUMPF bestimmt, nicht als Parameter-Vorgabe: mit [CmdletBinding()] ist
+# $PSScriptRoot dort unter PowerShell 5.1 LEER (gemessen 25.09.2026 im
+# Gate-Worktree: "Split-Path: leere Zeichenfolge").
+if (-not $Root) { $Root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
+
 $Exe    = Join-Path $EngineRoot "Engine\Binaries\Win64\UnrealEditor.exe"
 $Proj   = Join-Path $Root "WiesbadenReal\WiesbadenReal.uproject"
 $LogDir = Join-Path $Root "WiesbadenReal\Saved\Logs"

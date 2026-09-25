@@ -33,15 +33,20 @@
 # stundenlange Release-Build durch (im Playtest so beobachtet).
 [CmdletBinding()]
 param(
-    # Ordner UEBER dem Projekt - aus dem Ort dieses Skripts (Tools\ im Projekt),
-    # damit dieselbe Pipeline im sauberen Push-Worktree dessen Stand prueft.
-    [string]$Root = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),
+    # Leer = Ordner ueber dem Projekt (siehe unten, damit das Gate im Worktree dessen Stand prueft).
+    [string]$Root = "",
     [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8",
     [switch]$GatesOnly,
     [switch]$Rollback
 )
 
 $ErrorActionPreference = "Stop"
+# Ordner UEBER dem Projekt aus dem Ort dieses Skripts (Tools\ im Projekt) - im
+# RUMPF bestimmt, nicht als Parameter-Vorgabe: mit [CmdletBinding()] ist
+# $PSScriptRoot dort unter PowerShell 5.1 LEER (gemessen 25.09.2026 im
+# Gate-Worktree: "Split-Path: leere Zeichenfolge").
+if (-not $Root) { $Root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
+
 
 # INSTALLIERTE Engine, NICHT die Kopie unter $Root.
 #
