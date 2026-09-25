@@ -54,6 +54,23 @@ struct WIESBADENREAL_API FWbTrafficCarType
 	FWiesbadenVehiclePhysics MakePhysics() const;
 };
 
+/**
+ * Eine Lackfarbe des Stadtverkehrs. Die Karosserie-Materialien
+ * (M_WbTrafficCarLack, Tools/import_traffic_cars.py) faerben je Instanz NUR die
+ * Lack-Texel um - Scheiben, Reifen, Chrom und Leuchten stehen in der Lackmaske
+ * auf 0 (Tools/traffic_paint_masks.py).
+ */
+struct WIESBADENREAL_API FWbTrafficPaint
+{
+	const TCHAR* Name = TEXT("");
+	/** Lack in sRGB wie ein Farbfaecher; ungenutzt beim Werkslack. */
+	FColor Srgb = FColor::White;
+	/** Anteil am Verkehr (relativ). */
+	float Weight = 1.0f;
+	/** Werkslack = die Farbe des Tripo-Modells bleibt. */
+	bool bFactory = false;
+};
+
 /** Was der Fahrer eines Verkehrsautos sieht - aus Simulation (Soll) und Physik (Ist). */
 struct WIESBADENREAL_API FWbTrafficDriverView
 {
@@ -91,6 +108,17 @@ namespace WiesbadenTrafficCars
 
 	/** Typ eines Fahrzeugs aus seiner Id - deterministisch, nach Weight gewichtet. */
 	WIESBADENREAL_API int32 SelectType(int32 VehicleId);
+
+	/** Lackfarben; Eintrag 0 ist der Werkslack. Gewichte etwa nach dem deutschen Bestand
+	 *  (Grau/Silber, Schwarz, Weiss vorn, bunte Lacke selten). */
+	WIESBADENREAL_API const TArray<FWbTrafficPaint>& Paints();
+
+	/** Lack eines Fahrzeugs aus seiner Id - deterministisch, nach Weight gewichtet und
+	 *  unabhaengig von SelectType (sonst haette jeder Typ nur wenige Farben). */
+	WIESBADENREAL_API int32 SelectPaint(int32 VehicleId);
+
+	/** PerInstanceCustomData 0-3 der Karosserie: lineare Lackfarbe, 3 = umfaerben (0 beim Werkslack). */
+	WIESBADENREAL_API FLinearColor PaintCustomData(int32 PaintIndex);
 
 	/** Radnamen in Mesh-Reihenfolge: FL, FR, RL, RR. */
 	WIESBADENREAL_API const TCHAR* WheelName(int32 Wheel);

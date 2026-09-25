@@ -15,6 +15,40 @@ namespace
 	/** Im Stand: naeher als das an der Sollposition = halten (cm). */
 	constexpr double HoldDistanceCm = 40.0;
 
+	uint32 HashId(int32 VehicleId, uint32 A, uint32 B)
+	{
+		uint32 H = static_cast<uint32>(VehicleId) * A;
+		H ^= (H >> 15);
+		H *= B;
+		H ^= (H >> 13);
+		return H;
+	}
+
+	/** Index nach relativen Gewichten aus einem Hash. */
+	int32 PickWeighted(const TArray<float>& Weights, uint32 Hash)
+	{
+		float Total = 0.0f;
+		for (const float W : Weights)
+		{
+			Total += FMath::Max(0.0f, W);
+		}
+		if (Total <= 0.0f)
+		{
+			return 0;
+		}
+		const float Pick = (static_cast<float>(Hash % 1000000u) / 1000000.0f) * Total;
+		float Acc = 0.0f;
+		for (int32 I = 0; I < Weights.Num(); ++I)
+		{
+			Acc += FMath::Max(0.0f, Weights[I]);
+			if (Pick < Acc)
+			{
+				return I;
+			}
+		}
+		return Weights.Num() - 1;
+	}
+
 	FWiesbadenPowertrainSpec Golf3()
 	{
 		// VW Golf III 1.8 (66 kW / 90 PS, 145 Nm bei 2.500/min), 5-Gang.
@@ -173,32 +207,54 @@ namespace WiesbadenTrafficCars
 
 	int32 SelectType(int32 VehicleId)
 	{
-		const TArray<FWbTrafficCarType>& All = Types();
-		float Total = 0.0f;
-		for (const FWbTrafficCarType& T : All)
+		TArray<float> Weights;
+		for (const FWbTrafficCarType& T : Types())
 		{
-			Total += FMath::Max(0.0f, T.Weight);
-		}
-		if (Total <= 0.0f)
-		{
-			return 0;
+			Weights.Add(T.Weight);
 		}
 		// Ganzzahl-Hash bricht "Id mod N": benachbarte Ids bekommen verschiedene Typen.
-		uint32 H = static_cast<uint32>(VehicleId) * 2654435761u;
-		H ^= (H >> 15);
-		H *= 2246822519u;
-		H ^= (H >> 13);
-		const float Pick = (static_cast<float>(H % 1000000u) / 1000000.0f) * Total;
-		float Acc = 0.0f;
-		for (int32 I = 0; I < All.Num(); ++I)
+		return PickWeighted(Weights, HashId(VehicleId, 2654435761u, 2246822519u));
+	}
+
+	const TArray<FWbTrafficPaint>& Paints()
+	{
+		static const TArray<FWbTrafficPaint> Palette = {
+			{ TEXT("Werkslack"),   FColor::White,         20.0f, true },
+			{ TEXT("Schwarz"),     FColor(18, 18, 20),    18.0f },
+			{ TEXT("Silber"),      FColor(184, 186, 191), 16.0f },
+			{ TEXT("Anthrazit"),   FColor(76, 79, 84),    14.0f },
+			{ TEXT("Weiss"),       FColor(235, 235, 232), 14.0f },
+			{ TEXT("Dunkelblau"),  FColor(20, 41, 89),     7.0f },
+			{ TEXT("Hellblau"),    FColor(77, 128, 184),   3.0f },
+			{ TEXT("Rot"),         FColor(178, 20, 20),    4.0f },
+			{ TEXT("Dunkelgruen"), FColor(26, 71, 46),     2.0f },
+			{ TEXT("Champagner"),  FColor(184, 168, 140),  1.5f },
+			{ TEXT("Gelb"),        FColor(242, 199, 31),   0.5f },
+		};
+		return Palette;
+	}
+
+	int32 SelectPaint(int32 VehicleId)
+	{
+		TArray<float> Weights;
+		for (const FWbTrafficPaint& P : Paints())
 		{
-			Acc += FMath::Max(0.0f, All[I].Weight);
-			if (Pick < Acc)
-			{
-				return I;
-			}
+			Weights.Add(P.Weight);
 		}
-		return All.Num() - 1;
+		// Andere Hash-Konstanten als SelectType: Lack und Typ sind unabhaengig.
+		return PickWeighted(Weights, HashId(VehicleId, 2246822519u, 3266489917u));
+	}
+
+	FLinearColor PaintCustomData(int32 PaintIndex)
+	{
+		const TArray<FWbTrafficPaint>& All = Paints();
+		if (!All.IsValidIndex(PaintIndex) || All[PaintIndex].bFactory)
+		{
+			return FLinearColor(0.0f, 0.0f, 0.0f, 0.0f);
+		}
+		FLinearColor Linear(All[PaintIndex].Srgb);   // sRGB -> linear
+		Linear.A = 1.0f;
+		return Linear;
 	}
 
 	const TCHAR* WheelName(int32 Wheel)

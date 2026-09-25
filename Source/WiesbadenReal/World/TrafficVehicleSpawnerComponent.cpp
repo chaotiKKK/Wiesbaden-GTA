@@ -21,6 +21,9 @@ namespace
 	/** Teile je Typ: Karosserie + vier Raeder. */
 	constexpr int32 PartsPerType = 5;
 
+	/** Karosserie: Lackfarbe linear (0-2) + umfaerben (3), gelesen von M_WbTrafficCarLack. */
+	constexpr int32 PaintCustomDataFloats = 4;
+
 	/** Freier Instanzplatz: winzig und tief unter der Stadt. */
 	const FTransform HiddenTransform(FQuat::Identity, FVector(0.0, 0.0, -1.0e6), FVector(0.001));
 }
@@ -107,6 +110,10 @@ void UTrafficVehicleSpawnerComponent::EnsureInstancePools()
 			Instances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 			Instances->SetCastShadow(true);
 			Instances->SetMobility(EComponentMobility::Movable);
+			if (Part == 0)
+			{
+				Instances->NumCustomDataFloats = PaintCustomDataFloats;
+			}
 			Instances->RegisterComponent();
 			Pool.Parts.Add(Instances);
 			PoolComponents.Add(Instances);
@@ -553,6 +560,11 @@ void UTrafficVehicleSpawnerComponent::UpdateVehicles(
 			Pool.SlotVehicle[NextFree] = V->VehicleId;
 			Pool.VehicleSlot.Add(V->VehicleId, NextFree);
 			Teleport.AddUnique(NextFree);
+			// Lack je Fahrzeug; den Renderzustand markiert die Teleport-Lage unten.
+			const FLinearColor Paint = WiesbadenTrafficCars::PaintCustomData(
+				WiesbadenTrafficCars::SelectPaint(V->VehicleId));
+			const float PaintData[PaintCustomDataFloats] = { Paint.R, Paint.G, Paint.B, Paint.A };
+			Pool.Parts[0]->SetCustomData(NextFree, MakeArrayView(PaintData), /*bMarkRenderStateDirty=*/false);
 		}
 
 		// Lagen aller Plaetze: Karosserie + vier Raeder.

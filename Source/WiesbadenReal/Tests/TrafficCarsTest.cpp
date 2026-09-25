@@ -6,6 +6,8 @@
 #include "Vehicles/WiesbadenTrafficCars.h"
 #include "World/TrafficVehicleSpawnerComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture.h"
+#include "Materials/MaterialInterface.h"
 
 using namespace WiesbadenTrafficCars;
 
@@ -259,6 +261,120 @@ bool FTrafficCarsMeshDimsTest::RunTest(const FString& Parameters)
 				bLeft ? C.Y < -0.4 * Type.TrackCm : C.Y > 0.4 * Type.TrackCm);
 			TestTrue(FString::Printf(TEXT("%s %s: Radmitte %.1f ~ Radius %.1f cm"), Type.Name, WheelName(W), C.Z, Type.WheelRadiusCm),
 				FMath::Abs(C.Z - Type.WheelRadiusCm) < 1.5);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficCarsPaintTest,
+	"WiesbadenReal.Vehicles.TrafficCars.Paint",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficCarsPaintTest::RunTest(const FString& Parameters)
+{
+	// Je Fahrzeug ein Lack: deterministisch, nach Gewicht verteilt, und
+	// unabhaengig vom Typ - sonst gaebe es z. B. nur schwarze Golfs.
+	const TArray<FWbTrafficPaint>& All = Paints();
+	TestTrue(TEXT("mindestens acht Lacke"), All.Num() >= 8);
+	TestTrue(TEXT("Eintrag 0 = Werkslack"), All.Num() > 0 && All[0].bFactory);
+	float Total = 0.0f;
+	for (int32 P = 0; P < All.Num(); ++P)
+	{
+		Total += All[P].Weight;
+		const FLinearColor CD = PaintCustomData(P);
+		TestEqual(FString::Printf(TEXT("%s: umfaerben nur ohne Werkslack"), All[P].Name), CD.A, All[P].bFactory ? 0.0f : 1.0f);
+		TestTrue(FString::Printf(TEXT("%s: linear 0..1"), All[P].Name),
+			CD.R >= 0.0f && CD.R <= 1.0f && CD.G >= 0.0f && CD.G <= 1.0f && CD.B >= 0.0f && CD.B <= 1.0f);
+	}
+	// sRGB -> linear: Silber 184 ~ 0,48, nicht 0,72.
+	const int32 Silber = All.IndexOfByPredicate([](const FWbTrafficPaint& P) { return FCString::Strcmp(P.Name, TEXT("Silber")) == 0; });
+	if (TestTrue(TEXT("Silber im Faecher"), Silber != INDEX_NONE))
+	{
+		TestTrue(TEXT("Silber linear ~0,48"), FMath::IsNearlyEqual(PaintCustomData(Silber).R, 0.48f, 0.02f));
+	}
+	TestEqual(TEXT("ungueltiger Index = Werkslack"), PaintCustomData(-1).A, 0.0f);
+
+	constexpr int32 N = 20000;
+	TArray<int32> Counts;
+	Counts.Init(0, All.Num());
+	TArray<TSet<int32>> PaintsPerType;
+	PaintsPerType.SetNum(Types().Num());
+	int32 SameAsNeighbour = 0;
+	for (int32 Id = 0; Id < N; ++Id)
+	{
+		const int32 P = SelectPaint(Id);
+		if (!TestTrue(TEXT("Lack gueltig"), All.IsValidIndex(P)))
+		{
+			return false;
+		}
+		TestEqual(TEXT("gleiche Id -> gleicher Lack"), SelectPaint(Id), P);
+		Counts[P]++;
+		PaintsPerType[SelectType(Id)].Add(P);
+		SameAsNeighbour += (Id > 0 && SelectPaint(Id - 1) == P) ? 1 : 0;
+	}
+	for (int32 P = 0; P < All.Num(); ++P)
+	{
+		const float Share = static_cast<float>(Counts[P]) / N;
+		TestTrue(FString::Printf(TEXT("%s: Anteil %.3f ~ %.3f"), All[P].Name, Share, All[P].Weight / Total),
+			FMath::Abs(Share - All[P].Weight / Total) < 0.02f);
+	}
+	for (int32 T = 0; T < PaintsPerType.Num(); ++T)
+	{
+		TestEqual(FString::Printf(TEXT("%s: jeder Lack kommt vor"), Types()[T].Name), PaintsPerType[T].Num(), All.Num());
+	}
+	TestTrue(FString::Printf(TEXT("Nachbar-Ids selten gleich lackiert (%d von %d)"), SameAsNeighbour, N),
+		SameAsNeighbour < N / 4);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficCarsPaintMaterialTest,
+	"WiesbadenReal.Vehicles.TrafficCars.PaintMaterial",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficCarsPaintMaterialTest::RunTest(const FString& Parameters)
+{
+	// Lack nur an der Karosserie (M_WbTrafficCarLack mit Maske), nie an den
+	// Raedern - dort blieben sonst Reifen und Felgen im Lackton.
+	const UMaterialInterface* LackMaster = LoadObject<UMaterialInterface>(nullptr,
+		TEXT("/Game/Vehicles/Traffic/Mats/M_WbTrafficCarLack.M_WbTrafficCarLack"));
+	if (!TestNotNull(TEXT("M_WbTrafficCarLack"), LackMaster))
+	{
+		return false;
+	}
+	auto IsLack = [LackMaster](UMaterialInterface* M) { return M && M->GetBaseMaterial() == LackMaster; };
+	for (const FWbTrafficCarType& Type : Types())
+	{
+		const UStaticMesh* Body = LoadObject<UStaticMesh>(nullptr, *BodyMeshPath(Type));
+		if (!TestNotNull(*FString::Printf(TEXT("SM_%s_Body"), Type.Name), Body))
+		{
+			continue;
+		}
+		int32 Lack = 0;
+		for (const FStaticMaterial& Slot : Body->GetStaticMaterials())
+		{
+			if (!IsLack(Slot.MaterialInterface))
+			{
+				continue;
+			}
+			++Lack;
+			UTexture* Mask = nullptr;
+			Slot.MaterialInterface->GetTextureParameterValue(FHashedMaterialParameterInfo(TEXT("LackMaske")), Mask);
+			TestTrue(FString::Printf(TEXT("%s %s: eigene Lackmaske"), Type.Name, *Slot.MaterialSlotName.ToString()),
+				Mask && Mask->GetName().StartsWith(FString::Printf(TEXT("L_%s_Part"), Type.Name)));
+			TestFalse(FString::Printf(TEXT("%s: Maske linear"), Type.Name), Mask && Mask->SRGB);
+		}
+		TestTrue(FString::Printf(TEXT("%s: Karosserie hat Lack-Schlitze (%d)"), Type.Name, Lack), Lack > 0);
+		for (int32 W = 0; W < 4; ++W)
+		{
+			const UStaticMesh* Wheel = LoadObject<UStaticMesh>(nullptr, *WheelMeshPath(Type, W));
+			if (!Wheel)
+			{
+				continue;
+			}
+			for (const FStaticMaterial& Slot : Wheel->GetStaticMaterials())
+			{
+				TestFalse(FString::Printf(TEXT("%s %s: Rad ohne Lack"), Type.Name, WheelName(W)), IsLack(Slot.MaterialInterface));
+			}
 		}
 	}
 	return true;

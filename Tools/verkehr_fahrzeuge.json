@@ -1,5 +1,5 @@
 {
-  "_zweck": "Die Fahrzeuge des Stadtverkehrs (Tripo-Modelle). Tools/Blender/build_traffic_cars.py trennt je Modell die vier Raeder ab (Tripo-Teile, die den Boden beruehren, samt der Teile in ihrem Umriss), skaliert auf die echte Laenge, dreht die Front nach +X und legt den Ursprung in die Radstandmitte am Boden; Ergebnis Data/Raw/Verkehr/<Name>/SM_<Name>_Body.fbx + SM_<Name>_Wheel_{FL,FR,RL,RR}.fbx + tex/ + masse.json. Tools/import_traffic_cars.py legt sie nach /Game/Vehicles/Traffic/<Name>. Die Masse aus masse.json stehen in C++ in WiesbadenTrafficCarTypes (Test Vehicles.TrafficCars.MeshDims prueft sie gegen die Meshes). laenge_m = echte Laenge des Vorbilds (Massstab); spur_m = echte Spurweite vorn - Tripo-Modelle sind oft zu breit, die Breite wird darauf gestaucht (nur Y: die Raeder bleiben rund); dreiecke = Ziel fuer die Karosserie (Nanite), rad_dreiecke je Rad; hauptteil_textur = Kante der groessten Textur, alle anderen hoechstens nebenteil_textur.",
+  "_zweck": "Die Fahrzeuge des Stadtverkehrs (Tripo-Modelle). Tools/Blender/build_traffic_cars.py trennt je Modell die vier Raeder ab (Tripo-Teile, die den Boden beruehren, samt der Teile in ihrem Umriss), skaliert auf die echte Laenge, dreht die Front nach +X und legt den Ursprung in die Radstandmitte am Boden; Ergebnis Data/Raw/Verkehr/<Name>/SM_<Name>_Body.fbx + SM_<Name>_Wheel_{FL,FR,RL,RR}.fbx + tex/ + masse.json. Tools/import_traffic_cars.py legt sie nach /Game/Vehicles/Traffic/<Name>. Die Masse aus masse.json stehen in C++ in WiesbadenTrafficCarTypes (Test Vehicles.TrafficCars.MeshDims prueft sie gegen die Meshes). laenge_m = echte Laenge des Vorbilds (Massstab); spur_m = echte Spurweite vorn - Tripo-Modelle sind oft zu breit, die Breite wird darauf gestaucht (nur Y: die Raeder bleiben rund); dreiecke = Ziel fuer die Karosserie (Nanite), rad_dreiecke je Rad; hauptteil_textur = Kante der groessten Textur, alle anderen hoechstens nebenteil_textur. lack = Grundlack des Modells fuer die Umlackierung je Fahrzeug (Tools/traffic_paint_masks.py): rgb = Referenzfarbe; bunter Lack: farbton_grad = erlaubte Farbwinkel-Abweichung + saettigung_min; unbunter Lack (weiss/grau): farbton = erlaubter Chromatizitaets-Abstand; hell_min/hell_max = erlaubte Helligkeit relativ zur Referenz (schliesst Glas, Gummi, Chrom aus). lampen = Leuchtenzonen (Tools/Blender/traffic_lamp_zones.py, Meter): heck_z/front_z Hoehenband, tiefe_m ab Stossstange, innen_m Mindestabstand zur Mitte - dort wird Leuchtenfarbe nie umlackiert.",
   "fahrzeuge": {
     "Golf": {
       "quelle": "Data/Raw/Verkehr/Golf/golf_source.glb",
@@ -7,7 +7,30 @@
       "laenge_m": 4.02,
       "dreiecke": 150000,
       "rad_dreiecke": 12000,
-      "spur_m": 1.427
+      "spur_m": 1.427,
+      "lack": {
+        "rgb": [
+          0.83,
+          0.1,
+          0.21
+        ],
+        "farbton_grad": 14,
+        "saettigung_min": 0.35,
+        "hell_min": 0.3,
+        "hell_max": 1.8
+      },
+      "lampen": {
+        "heck_z": [
+          0.72,
+          0.98
+        ],
+        "front_z": [
+          0.5,
+          0.8
+        ],
+        "tiefe_m": 0.15,
+        "innen_m": 0.38
+      }
     },
     "Peugeot": {
       "quelle": "Data/Raw/Verkehr/Peugeot/peugeot_source.glb",
@@ -15,7 +38,18 @@
       "laenge_m": 4.03,
       "dreiecke": 150000,
       "rad_dreiecke": 12000,
-      "spur_m": 1.475
+      "spur_m": 1.475,
+      "lack": {
+        "rgb": [
+          0.057,
+          0.44,
+          0.7
+        ],
+        "farbton_grad": 16,
+        "saettigung_min": 0.3,
+        "hell_min": 0.3,
+        "hell_max": 2.0
+      }
     },
     "Transporter": {
       "quelle": "Data/Raw/Verkehr/Transporter/transporter_source.glb",
@@ -23,7 +57,17 @@
       "laenge_m": 4.904,
       "dreiecke": 150000,
       "rad_dreiecke": 12000,
-      "spur_m": 1.628
+      "spur_m": 1.628,
+      "lack": {
+        "rgb": [
+          0.87,
+          0.875,
+          0.91
+        ],
+        "farbton": 0.035,
+        "hell_min": 0.55,
+        "hell_max": 1.2
+      }
     }
   }
 }
