@@ -1,5 +1,5 @@
 @echo off
-call "%~dp0cleanup_unreal_processes.cmd"
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name run_bus_fahrbahn
 if errorlevel 1 exit /b 1
 rem Beleglauf: Sitzen die Busse auf der FAHRBAHN? (Audit + Wendezeit + Bilder)
 rem

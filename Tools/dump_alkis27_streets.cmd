@@ -1,5 +1,5 @@
 @echo off
-call "%~dp0cleanup_unreal_processes.cmd"
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name dump_alkis27_streets
 if errorlevel 1 exit /b 1
 REM Strassennetz von Alkis27 auslesen (Saved/Diagnose/Strassenalkis27.csv).
 REM Zweck: Der Spieltest braucht eine FAHRBAHNMITTE + Richtung, um den

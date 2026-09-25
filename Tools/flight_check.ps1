@@ -27,12 +27,29 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Nur Editoren DIESES Projektordners beenden. "Get-Process UnrealEditor* |
+# Stop-Process" haette am Ende jeder Sitzung auch die eines fremden Laufs
+# abgeschossen - derselbe Fehler wie im roten Push-Lauf vom 25.09.2026, nur
+# ohne den Lock davor.
+function Stop-ProjectEditors([string]$ProjectFile) {
+    $want = $ProjectFile.Replace('/', '\')
+    Get-CimInstance Win32_Process -Filter "Name LIKE 'UnrealEditor%'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine.Replace('/', '\') -like "*$want*" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
 $Exe  = "C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
 $Proj = Join-Path $Root "WiesbadenReal\WiesbadenReal.uproject"
 $Log  = Join-Path $Root "WiesbadenReal\Saved\Logs\wb_flight_$Name.log"
 
 if (-not (Test-Path $Exe))  { Write-Host "ABBRUCH: Editor nicht gefunden: $Exe"; exit 2 }
 if (-not (Test-Path $Proj)) { Write-Host "ABBRUCH: Projekt nicht gefunden: $Proj"; exit 2 }
+
+# Engine-Lock fuer die ganze Sitzung: ein paralleler Lauf darf diesen Editor
+# nicht beenden (Tools\engine_run_lock.ps1, der Cleanup unten fasst den Lock
+# danach als "eigen" und darf aufraeumen).
+& "$PSScriptRoot\engine_run_lock.ps1" -Modus Nehmen -Name flight_check
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & "$PSScriptRoot\cleanup_unreal_processes.cmd"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -59,7 +76,7 @@ while ((Get-Date) -lt $deadline) {
 Write-Host ("{0} Mast-Messpunkte; beende Sitzung." -f $n)
 
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process -Force
+Stop-ProjectEditors $Proj
 Start-Sleep -Seconds 1
 
 # Kurzbefund auf der Konsole (volle Zeilen stehen im Log). Auch die Dev-Echos,

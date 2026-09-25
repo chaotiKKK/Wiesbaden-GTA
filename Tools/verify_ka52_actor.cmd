@@ -1,5 +1,5 @@
 @echo off
-call "%~dp0cleanup_unreal_processes.cmd"
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name verify_ka52_actor
 if errorlevel 1 exit /b 1
 cd /d "%~dp0.."
 REM Installierte Engine (siehe Tools\build_gate1.cmd: niemals die beiden

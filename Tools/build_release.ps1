@@ -150,6 +150,19 @@ function Fail([string]$Gate, [string]$Detail, [string]$LogHint) {
 Write-Host "======== Release-Pipeline WiesbadenReal ========"
 Write-Host ("Modus: {0}" -f ($(if ($GatesOnly) { "nur Gates 0-3 (-GatesOnly)" } else { "voll inkl. Paketierung" })))
 
+# ---- Engine-Lock ----------------------------------------------------------
+# VOR Gate 0, nicht erst vor Gate 2: Gate 1 beendet mit Stop-ProjectEditors
+# die Editoren DIESES Projektordners - und im Gate-Worktree ist genau dieser
+# Ordner der geteilte Arbeitsplatz zweier Sessions. Am 25.09.2026 hat ein
+# zweiter, paralleler Gate-Lauf genau so den Editor des ersten Laufs abgeschossen
+# (Gate 1 des zweiten, waehrend Gate 2 des ersten lief): der erste Lauf meldete
+# 0 Fehler und "kein Abschluss-Marker". Mit dem Lock von Anfang an bricht der
+# zweite Lauf stattdessen sofort und verstaendlich ab.
+# Freigabe ist nicht noetig - der Lock stirbt mit diesem Prozess; Gate 3
+# (Rauchtest) nimmt ihn darunter reentrant.
+& (Join-Path $PSScriptRoot "engine_run_lock.ps1") -Modus Nehmen -Name build_release
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 # ---- Gate 0: Engine-Pfade ------------------------------------------------
 #
 # Sekunden, und ganz vorn: dieses Gate haette den Lauf vom 21.09.2026 gespart.

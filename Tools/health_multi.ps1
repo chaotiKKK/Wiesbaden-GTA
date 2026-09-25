@@ -15,6 +15,13 @@ param(
 $ErrorActionPreference = "Continue"
 $hc = Join-Path $PSScriptRoot "health_check.ps1"
 
+# Engine-Lock fuer die MEHRERE Laeufe (Tools\engine_run_lock.ps1). health_check
+# nimmt ihn darunter ebenfalls - reentrant, weil der Besitzer dann ein Vorfahre
+# ist. Waere er nicht gehalten, wuerde ein paralleler Gate-/Bake-Lauf den
+# Health-Editor mitten in der Sitzung beenden.
+& "$PSScriptRoot\engine_run_lock.ps1" -Modus Nehmen -Name health_multi
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 function Wait-PortFree([int]$Port, [int]$MaxSec = 60) {
     for ($w = 0; $w -lt ($MaxSec / 2); $w++) {
         Start-Sleep -Seconds 2

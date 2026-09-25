@@ -1,5 +1,5 @@
 @echo off
-call "%~dp0cleanup_unreal_processes.cmd"
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name playtest_alkis27_runover
 if errorlevel 1 exit /b 1
 REM Skriptgestuetzter Spieltest auf Alkis27: Passanten ueberfahren, Ton,
 REM Fahndungskonto, zwei Bilder. 25.09.2026.

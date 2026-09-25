@@ -1,5 +1,5 @@
 @echo off
-call "%~dp0cleanup_unreal_processes.cmd"
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name rebake_alkis25
 if errorlevel 1 exit /b 1
 REM Voll-Bake Alkis25 aus Alkis16 (NICHT live), 25.09.2026.
 REM Gleiche Datenquellen und Parameter wie der Alkis24-Bake - der

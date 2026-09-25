@@ -1,5 +1,5 @@
 @echo off
-call "%~dp0cleanup_unreal_processes.cmd"
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name run_ankunft_probe
 if errorlevel 1 exit /b 1
 REM Die drei Ankunftswege des SebboTower in der ECHTEN Stadt abtasten.
 REM

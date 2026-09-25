@@ -1,6 +1,12 @@
 [CmdletBinding()]
 param(
-    [switch]$DryRun
+    [switch]$DryRun,
+    # Abweichender Lock-Pfad (nur Tests). Leer = maschinenweiter Engine-Lock.
+    [string]$LockPfad = "",
+    # NOTAUSGANG: auch beenden, wenn ein fremder Lauf den Lock haelt. Nur, wenn
+    # dieser Lauf bewusst aufgegeben wird - der andere laeuft dann in einen
+    # abrupten Abbruch seiner Sitzung.
+    [switch]$SperreIgnorieren
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +21,25 @@ function Get-EngineReste {
 function Stop-EngineReste($Prozesse) {
     foreach ($prozess in @($Prozesse)) {
         Stop-Process -Id $prozess.Id -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# -- Engine-Lock -----------------------------------------------------------
+# Dieser Cleanup ist bewusst global (er raeumt den ZenServer-Limbo aus fremden
+# Restprozessen) - genau deshalb hat er am 25.09.2026 einen bereits als rot
+# gemeldeten Gate-Lauf mitgerissen: dessen Rauchtest-Editor wurde beendet, waehrend
+# der zweite Push seine Gates fuhr. Solange ein fremder Lauf den Engine-Lock
+# haelt, wird deshalb GAR NICHTS beendet und der Lauf bricht verstaendlich ab.
+# Gehoert der Lock diesem Lauf (Gate -> Rauchtest -> Cleanup), ist er "eigen" und
+# das Beenden bleibt erlaubt.
+if (-not $SperreIgnorieren) {
+    & "$PSScriptRoot\engine_run_lock.ps1" -Modus Status -LockPfad $LockPfad
+    if ($LASTEXITCODE -eq 3) {
+        throw ("Engine-Lock ist von einem anderen Lauf belegt (Besitzer siehe Zeile oben). " +
+               "Ein Beenden wuerde diesen Lauf mitten in der Sitzung zerstoeren. " +
+               "Auf ihn warten: endet er, ist die Sperre verwaist und wird beim " +
+               "naechsten Start automatisch uebernommen. Nur mit -SperreIgnorieren " +
+               "bewusst darueber hinweg beenden.")
     }
 }
 

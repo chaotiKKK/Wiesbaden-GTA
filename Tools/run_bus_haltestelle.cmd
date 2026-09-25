@@ -1,5 +1,5 @@
 @echo off
-call "%~dp0cleanup_unreal_processes.cmd"
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name run_bus_haltestelle
 if errorlevel 1 exit /b 1
 rem Belegbilder "Bus steht an der Halte auf der Fahrbahn": parkt je einen Wagen
 rem beider Richtungen an Halt N (-WbBusParkStop) und macht Bilder aus der Naehe.

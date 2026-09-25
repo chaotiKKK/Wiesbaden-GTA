@@ -1,5 +1,5 @@
 @echo off
-call "%~dp0cleanup_unreal_processes.cmd"
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name rebake_alkis23
 if errorlevel 1 exit /b 1
 REM Voll-Bake Alkis23 aus Alkis16 (NICHT live), Stand 24.09.2026 abends; abgenommen 21:00. Traegt den aktuellen Stand
 REM der Pipeline: per-Gebaeude-Dachdeckung (Vertexfarbe R) + neue per-Gebaeude-

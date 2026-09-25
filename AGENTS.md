@@ -3945,13 +3945,41 @@ FALLSTRICKE in derselben Kette:
 - Ein laufender UnrealEditor (auch aus einer fremden Session) sperrt die
   Modul-DLL: Build endet mit LNK1104 und der Test laeuft still gegen das ALTE
   Binary. Deshalb ruft jeder Bake-/Testwrapper ueber
-  `Tools\cleanup_unreal_processes.cmd` vor dem Engine-Start ALLE
-  `UnrealEditor*` und `zenserver` auf, wartet mindestens 3 s, fasst einen
-  langsamen Shutdown mit einem zweiten Kill und bis zu 10 s Wartefrist nach und
-  verweigert den Start erst, wenn wirklich ein Prozess zurueckbleibt.
+  `Tools\engine_run_lock.cmd -Modus Start` vor dem Engine-Start den Lock und
+  danach ALLE `UnrealEditor*` und `zenserver` auf, wartet mindestens 3 s, fasst
+  einen langsamen Shutdown mit einem zweiten Kill und bis zu 10 s Wartefrist
+  nach und verweigert den Start erst, wenn wirklich ein Prozess zurueckbleibt.
   `build_release.ps1` beendet dagegen bewusst nur Editoren
   dieses Projektordners - der Kompilier-Gate soll keine fremde Sitzung
   zerstoeren.
+- DER GLOBALE CLEANUP IST DESHALB GESPERRT: Am 25.09.2026 hat er den
+  Editor eines bereits als rot gemeldeten Gate-Laufs abgeschossen und den
+  zweiten (gruenen) Push mitgerissen. Jeder Bake-/Test-/Gate-Lauf haelt
+  deshalb den `Engine-Lock`: `Tools\engine_run_lock.cmd -Modus Start -Name
+  <lauf>` (ersetzt in den Wrappern den cleanup-Aufruf 1:1; der Rauchtest,
+  die Health-Checks und `build_release.ps1` nehmen ihn mit `-Modus Nehmen`).
+  Datei: `%LOCALAPPDATA%\WiesbadenReal\Locks\engine_run.lock` - MASCHINENweit,
+  nicht pro Projekt, damit sich zwei Sitzungen (Hauptordner und Gate-Worktree)
+  sehen. Drei Regeln, an denen die Sperre haengt:
+  * Besitzer ist der AUFRUFENDE Prozess (die cmd.exe bzw. powershell.exe des
+    Laufs), nicht der kurzlebige PowerShell-Kindprozess, der die Datei
+    anlegt. Nur so lebt die Sperre genau so lange wie der Lauf - eine
+    Freigabe am Ende ist damit ueberfluessig.
+  * Ein Besitzer, dessen Prozess nicht mehr existiert (oder dessen
+    Startzeit zu einem recycelten PID passt), gilt als VERWAIST: die Sperre
+    wird uebernommen. Ein abgebrochener Lauf blockiert also nicht.
+  * Gehoert der Besitzer zur eigenen Prozesskette (Gate -> Rauchtest ->
+    Cleanup), ist die Sperre EIGEN und das Beenden bleibt erlaubt - ohne das
+    wuerde sich das Gate selbst sperren.
+  Bei belegtem Lock bricht der Cleanup VOR dem Kill ab (Exit 3, Meldung nennt
+  Label/PID des Besitzers). Notausgänge, beide bewusst: der Cleanup mit
+  `-SperreIgnorieren` und `engine_run_lock.cmd -Modus Freigeben -Gewalt`.
+  `build_release.ps1` nimmt den Lock schon VOR Gate 0: sein
+  `Stop-ProjectEditors` in Gate 1 ist zwar projektlokal, trifft im GEMEINSAMEN
+  Gate-Worktree (`.gate-worktree\WiesbadenReal`, ein fester Pfad fuer alle
+  Sitzungen) aber den Editor eines zweiten Gate-Laufs. Genau das hat am
+  25.09.2026 den ersten Lauf zerstoert: der zweite meldete 0 Fehler und "kein
+  Abschluss-Marker". Zwei Pushes laufen also nie gleichzeitig.
 
 ---
 

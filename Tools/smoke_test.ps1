@@ -70,6 +70,15 @@ $HealthJson = Join-Path $LogDir "WbHealth.json"
 if (-not (Test-Path $Exe))  { Write-Host "ABBRUCH: Editor nicht gefunden: $Exe"; exit 2 }
 if (-not (Test-Path $Proj)) { Write-Host "ABBRUCH: Projekt nicht gefunden: $Proj"; exit 2 }
 
+# -- Engine-Lock -------------------------------------------------------------
+# Dieser Lauf haelt den Lock ueber alle drei Sitzungen. Ohne ihn wuerde ein
+# zweiter Lauf (Push-Gate, Bake, Health-Check) beim Start genau diesen Editor
+# beenden - am 25.09.2026 hat das einen bereits als rot gemeldeten Gate-Lauf
+# mitgerissen. Freigabe ist nicht noetig: der Lock stirbt mit diesem Prozess,
+# ein verwaistes File uebernimmt der naechste Lauf selbst.
+& "$PSScriptRoot\engine_run_lock.ps1" -Modus Nehmen -Name smoke_test
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 # Zwischen den Sitzungen beenden wir nur Editoren DIESES Projektordners. Am
 # Start jeder Sitzung ruft der Wrapper dagegen den globalen Cleanup auf: genau
 # das verhindert den ZenServer-Limbo aus einem fremden Restprozess. Im

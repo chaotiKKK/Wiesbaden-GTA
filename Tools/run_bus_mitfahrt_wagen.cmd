@@ -1,5 +1,5 @@
 @echo off
-call "%~dp0cleanup_unreal_processes.cmd"
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name run_bus_mitfahrt_wagen
 if errorlevel 1 exit /b 1
 rem Beleglauf MITFAHRT auf einem BESTIMMTEN Wagen (-WbBusRideWagon), ohne
 rem Fenster: die Automatik setzt den Fahrgast neben Wagen 601/301 und steigt

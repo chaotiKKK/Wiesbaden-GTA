@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -206,10 +207,15 @@ class HookWegTest(unittest.TestCase):
     def test_build_release_bleibt_projektlokal_und_smoke_nutzt_den_helper(self):
         build = (WURZEL / "Tools" / "build_release.ps1").read_text(encoding="utf-8")
         smoke = (WURZEL / "Tools" / "smoke_test.ps1").read_text(encoding="utf-8")
+        flight = (WURZEL / "Tools" / "flight_check.ps1").read_text(encoding="utf-8")
         self.assertNotIn("Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process", build)
         self.assertIn("Stop-ProjectEditors $Proj", build)
         self.assertIn('& "$PSScriptRoot\\cleanup_unreal_processes.cmd"', smoke)
         self.assertIn("Stop-ProjectEditors $Proj", smoke)
+        # flight_check beendete am Ende JEDEN Editor auf dem Rechner - auch den
+        # eines fremden Laufs, den es gar nicht gestartet hatte.
+        self.assertNotIn("Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process", flight)
+        self.assertIn("Stop-ProjectEditors $Proj", flight)
 
     def test_der_cleanup_helfer_raeumt_zenserver_und_wartet_drei_sekunden(self):
         ps1 = (WURZEL / "Tools" / "cleanup_unreal_processes.ps1").read_text(encoding="utf-8")
@@ -223,7 +229,7 @@ class HookWegTest(unittest.TestCase):
         self.assertIn("cleanup_unreal_processes.ps1", batch)
         self.assertIn("%*", batch)
 
-    def test_alle_bake_und_test_wrapper_reinigen_vor_dem_engine_start(self):
+    def test_alle_bake_und_test_wrapper_sichern_den_engine_lock(self):
         cmd_wrapper = (
             "dump_alkis27_streets.cmd",
             "playtest_alkis27_runover.cmd",
@@ -245,23 +251,211 @@ class HookWegTest(unittest.TestCase):
             "verify_ka52.cmd",
             "verify_ka52_actor.cmd",
         )
-        aufruf = 'call "%~dp0cleanup_unreal_processes.cmd"'
+        aufruf = 'call "%~dp0engine_run_lock.cmd" -Modus Start -Name {name}'
         for name in cmd_wrapper:
             text = (WURZEL / "Tools" / name).read_text(encoding="utf-8")
-            self.assertIn(aufruf, text, name)
+            # Das Label ist der Wrapper-Name OHNE Endung (im Log besser lesbar).
+            self.assertIn(aufruf.replace("{name}", name[:-4]), text, name)
+            # Der Lock-Aufruf nimmt die Bereinigung mit (Modus Start) - ein
+            # zweiter, ungeschuetzter Aufruf waere wieder das gegenseitige
+            # Beenden fremder Editoren.
+            self.assertNotIn("cleanup_unreal_processes", text, name)
             starts = [i for i in (text.find("UnrealEditor.exe"),
                                   text.find("UnrealEditor-Cmd.exe")) if i >= 0]
             self.assertTrue(starts, name)
-            self.assertLess(text.index(aufruf), min(starts), name)
+            self.assertLess(text.index(aufruf.replace("{name}", name[:-4])), min(starts), name)
 
         ps1_wrapper = ("flight_check.ps1", "health_check.ps1",
                        "health_multi.ps1", "smoke_test.ps1")
-        ps_aufruf = '& "$PSScriptRoot\\cleanup_unreal_processes.cmd"'
         for name in ps1_wrapper:
             text = (WURZEL / "Tools" / name).read_text(encoding="utf-8")
-            self.assertIn(ps_aufruf, text, name)
-            if "Start-Process" in text:
-                self.assertLess(text.index(ps_aufruf), text.index("Start-Process"), name)
+            self.assertIn('& "$PSScriptRoot\\engine_run_lock.ps1" -Modus Nehmen -Name', text, name)
+            # Der Lock kommt VOR dem globalen Cleanup und vor dem Engine-Start.
+            for spaeter in ('& "$PSScriptRoot\\cleanup_unreal_processes.cmd"', "Start-Process"):
+                if spaeter in text:
+                    self.assertLess(text.index("engine_run_lock.ps1"), text.index(spaeter), name)
+
+    def test_die_pipeline_und_der_cleanup_achten_auf_den_lock(self):
+        build = (WURZEL / "Tools" / "build_release.ps1").read_text(encoding="utf-8")
+        ps1 = (WURZEL / "Tools" / "cleanup_unreal_processes.ps1").read_text(encoding="utf-8")
+        # VOR Gate 0, nicht erst vor Gate 2: Gate 1 beendet ueber
+        # Stop-ProjectEditors die Editoren DIESES Projektordners, und im
+        # Gate-Worktree ist genau dieser Ordner der geteilte Arbeitsplatz
+        # zweier Sessions. Ein zweiter Gate-Lauf muss also schon dort abbrechen.
+        self.assertIn('engine_run_lock.ps1") -Modus Nehmen -Name build_release', build)
+        self.assertLess(build.index("engine_run_lock.ps1"), build.index('Section 0 "Engine-Pfade'))
+        self.assertLess(build.index("engine_run_lock.ps1"), build.index("Stop-ProjectEditors $Proj"))
+        # Der Cleanup fragt den Lock, BEVOR er etwas beendet, und bricht bei
+        # belegtem Lock ab statt den fremden Editor zu killen.
+        self.assertIn('-Modus Status -LockPfad $LockPfad', ps1)
+        self.assertLess(ps1.index("engine_run_lock.ps1"), ps1.index("$prozesse = @(Get-EngineReste)"))
+        self.assertIn("SperreIgnorieren", ps1)
+        self.assertIn("belegt", ps1)
+
+
+class EngineLockTest(unittest.TestCase):
+    """Der Engine-Lock in der Tat: Tools/engine_run_lock.ps1 gegen echte Prozesse.
+
+    Anlass ist der rote Push-Lauf vom 25.09.2026: der globale Cleanup beendete
+    den Editor eines bereits als fehlgeschlagen gemeldeten Gate-Laufs und riss
+    dadurch den zweiten, gruenen Push mit. Geprueft wird deshalb nicht nur der
+    Code, sondern das Verhalten zwischen zwei wirklich laufenden Prozessen -
+    mit einer temporaeren Lock-Datei, damit der maschinenweite Engine-Lock
+    unberuehrt bleibt.
+    """
+
+    LOCK = WURZEL / "Tools" / "engine_run_lock.ps1"
+    CLEANUP = WURZEL / "Tools" / "cleanup_unreal_processes.ps1"
+
+    def ps(self, skript, *args):
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(skript)] + list(args),
+            capture_output=True, text=True, timeout=120)
+
+    def felder(self, pfad):
+        text = Path(pfad).read_text(encoding="utf-8")
+        return dict(zeile.split("=", 1) for zeile in text.splitlines() if "=" in zeile)
+
+    def lebender_fremder(self):
+        """Ein Prozess, der lebt und NICHT Vorfahre dieses Tests ist."""
+        return subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(120)"],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    def test_freier_lock_ist_frei_nimmt_an_und_bleibt_reentrant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pfad = str(Path(tmp) / "engine_run.lock")
+            frei = self.ps(self.LOCK, "-Modus", "Status", "-LockPfad", pfad)
+            self.assertEqual(frei.returncode, 0, frei.stdout + frei.stderr)
+            self.assertIn("frei", frei.stdout)
+
+            erst = self.ps(self.LOCK, "-Modus", "Nehmen", "-LockPfad", pfad, "-Name", "unittest")
+            self.assertEqual(erst.returncode, 0, erst.stdout + erst.stderr)
+            # Besitzer ist der AUFRUFPROZESS (dieser Test), nicht der
+            # kurzlebige PowerShell-Kindprozess - sonst waere der Lock nach dem
+            # Aufruf schon wieder frei.
+            felder = self.felder(pfad)
+            self.assertEqual(int(felder["OwnerPid"]), os.getpid())
+            self.assertEqual(felder["Label"], "unittest")
+
+            # Derselbe Lauf darf den Lock wiederholt nehmen (Gate -> Rauchtest
+            # -> Cleanup): das ist der Reentrant-Fall, ohne den sich das Gate
+            # selbst blockieren wuerde.
+            nochmal = self.ps(self.LOCK, "-Modus", "Nehmen", "-LockPfad", pfad, "-Name", "unittest")
+            self.assertEqual(nochmal.returncode, 0, nochmal.stdout + nochmal.stderr)
+            self.assertIn("bereits", nochmal.stdout)
+
+            frei_gibt = self.ps(self.LOCK, "-Modus", "Freigeben", "-LockPfad", pfad)
+            self.assertEqual(frei_gibt.returncode, 0, frei_gibt.stdout + frei_gibt.stderr)
+            self.assertFalse(os.path.exists(pfad))
+
+    def test_fremder_lauf_sperrt_und_ein_verwaister_wird_uebernommen(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pfad = str(Path(tmp) / "engine_run.lock")
+            fremder = self.lebender_fremder()
+            try:
+                Path(pfad).write_text(
+                    "LockVersion=1\nOwnerPid=%d\nLabel=rebake_alkis25\nTakenAt=2026-09-25 11:00:00\n"
+                    "Host=TEST\n" % fremder.pid, encoding="utf-8")
+                status = self.ps(self.LOCK, "-Modus", "Status", "-LockPfad", pfad)
+                self.assertEqual(status.returncode, 3, status.stdout + status.stderr)
+                self.assertIn("BELEGT", status.stdout)
+                self.assertIn("rebake_alkis25", status.stdout)
+
+                nehmen = self.ps(self.LOCK, "-Modus", "Nehmen", "-LockPfad", pfad, "-Name", "unittest")
+                self.assertEqual(nehmen.returncode, 3, nehmen.stdout + nehmen.stderr)
+                self.assertIn("NICHT", nehmen.stdout.upper())  # "startet NICHT"
+            finally:
+                fremder.terminate()
+                fremder.wait(timeout=30)
+
+            # Besitzer weg -> verwaist -> der naechste Lauf uebernimmt, statt
+            # sich an einem toten Lock zu versacken.
+            uebernehmen = self.ps(self.LOCK, "-Modus", "Nehmen", "-LockPfad", pfad, "-Name", "unittest")
+            self.assertEqual(uebernehmen.returncode, 0, uebernehmen.stdout + uebernehmen.stderr)
+            self.assertIn("verwaist", uebernehmen.stdout)
+            self.assertEqual(self.felder(pfad)["Label"], "unittest")
+
+    def test_start_modus_nimmt_den_lock_und_reinigt_trocken(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pfad = str(Path(tmp) / "engine_run.lock")
+            lauf = self.ps(self.LOCK, "-Modus", "Start", "-LockPfad", pfad,
+                           "-Name", "unittest", "-DryRun")
+            self.assertEqual(lauf.returncode, 0, lauf.stdout + lauf.stderr)
+            self.assertIn("Prozessbereinigung", lauf.stdout)
+            self.assertEqual(self.felder(pfad)["OwnerPid"], str(os.getpid()))
+
+    def test_der_cleanup_bricht_bei_fremdem_lock_ab(self):
+        # -DryRun: der Abbruch muss auch im Probelauf greifen. Damit kann der
+        # Test laufen, ohne dass im Fehlerfall ein Prozess getroffen wuerde.
+        with tempfile.TemporaryDirectory() as tmp:
+            pfad = str(Path(tmp) / "engine_run.lock")
+            fremder = self.lebender_fremder()
+            try:
+                Path(pfad).write_text(
+                    "LockVersion=1\nOwnerPid=%d\nLabel=rebake_alkis25\nTakenAt=2026-09-25 11:00:00\n"
+                    "Host=TEST\n" % fremder.pid, encoding="utf-8")
+                lauf = self.ps(self.CLEANUP, "-LockPfad", pfad, "-DryRun")
+            finally:
+                fremder.terminate()
+                fremder.wait(timeout=30)
+            ausgabe = lauf.stdout + lauf.stderr
+            self.assertNotEqual(lauf.returncode, 0, ausgabe)
+            self.assertIn("BELEGT", ausgabe)
+            self.assertIn("belegt", ausgabe)
+            # Und ohne fremden Lock laeuft derselbe Aufruf durch.
+            frei = self.ps(self.CLEANUP, "-LockPfad", pfad, "-DryRun")
+            self.assertEqual(frei.returncode, 0, frei.stdout + frei.stderr)
+            self.assertIn("Prozessbereinigung", frei.stdout)
+
+    def test_der_cleanup_roettet_bei_fremdem_lock_nicht(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pfad = str(Path(tmp) / "engine_run.lock")
+            # Echter Prozess mit dem Namen, den der Cleanup abschiesst: eine
+            # Kopie von ping.exe. Nur so laesst sich BEWEISEN, dass der Abbruch
+            # vor dem Kill greift.
+            attribut = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-Process -Name 'UnrealEditor*','zenserver' -ErrorAction SilentlyContinue).Count"],
+                capture_output=True, text=True)
+            if attribut.stdout.strip() not in ("0", ""):
+                self.skipTest("Es laeuft ein echter Editor/zenserver - der Test wuerde ihn nicht "
+                              "gefaehrden, laesst sich aber nicht sauber messbar.")
+            fake = Path(tmp) / "UnrealEditor.exe"
+            fake.write_bytes(Path(os.environ["SystemRoot"], "System32", "ping.exe").read_bytes())
+            prozess = subprocess.Popen([str(fake), "-t", "127.0.0.1"],
+                                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            try:
+                time.sleep(2)
+                laeuft = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     "(Get-Process -Name 'UnrealEditor*' -ErrorAction SilentlyContinue).Count"],
+                    capture_output=True, text=True)
+                if laeuft.stdout.strip() != "1":
+                    self.skipTest("Der nachgemalte Editorprozess laesst sich nicht starten.")
+
+                fremder = self.lebender_fremder()
+                try:
+                    Path(pfad).write_text(
+                        "LockVersion=1\nOwnerPid=%d\nLabel=rebake_alkis25\nTakenAt=2026-09-25 11:00:00\n"
+                        "Host=TEST\n" % fremder.pid, encoding="utf-8")
+                    lauf = self.ps(self.CLEANUP, "-LockPfad", pfad)
+                finally:
+                    fremder.terminate()
+                    fremder.wait(timeout=30)
+
+                ausgabe = lauf.stdout + lauf.stderr
+                self.assertNotEqual(lauf.returncode, 0, ausgabe)
+                self.assertIn("belegt", ausgabe)
+                # Das eigentliche Kriterium: der Editor des fremden Laufs lebt.
+                nachher = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     "if (Get-Process -Id %d -ErrorAction SilentlyContinue) { 'LEBT' }" % prozess.pid],
+                    capture_output=True, text=True).stdout
+                self.assertIn("LEBT", nachher)
+            finally:
+                prozess.terminate()
+                prozess.wait(timeout=30)
 
 
 if __name__ == "__main__":

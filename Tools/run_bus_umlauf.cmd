@@ -1,5 +1,5 @@
 @echo off
-call "%~dp0cleanup_unreal_processes.cmd"
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name run_bus_umlauf
 if errorlevel 1 exit /b 1
 rem Beleglauf "Umlauf": ein Wagen faehrt seine Linie durch, mit 2-s-Protokoll.
 rem
