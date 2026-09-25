@@ -198,6 +198,10 @@ class HookWegTest(unittest.TestCase):
         for name in ("build_release.ps1", "smoke_test.ps1"):
             text = (WURZEL / "Tools" / name).read_text(encoding="utf-8")
             self.assertIn("$PSScriptRoot", text, name)
+            # Nicht in der Parameter-Vorgabe: mit [CmdletBinding()] ist $PSScriptRoot
+            # dort unter PowerShell 5.1 leer (erster Worktree-Lauf, 25.09.2026).
+            self.assertNotIn("$Root = (Split-Path", text, name)
+            self.assertIn("if (-not $Root)", text, name)
 
     def test_nur_eigene_editoren_werden_beendet(self):
         for name in ("build_release.ps1", "smoke_test.ps1"):
