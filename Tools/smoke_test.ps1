@@ -20,7 +20,10 @@
 # Exit 0 = alle Pruefungen bestanden, sonst Exit 1.
 
 param(
-    [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
+    # Ordner UEBER dem Projekt - aus dem Ort dieses Skripts (auch im Gate-Worktree).
+    [string]$Root = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),
+    # Die INSTALLIERTE Engine, mit der auch Gate 1 baut (Tools\pruefe_engine.py).
+    [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8",
     # Perf-Regression-Schranken (aus dem 8-s-Diagnoseblock am Boden), die den
     # WP-Streaming-Fix (hoehenadaptiver Radius, 1a8f34c) festnageln.
     # PRIMAeRES Signal = die DETERMINISTISCHEN Zaehler: Komponenten/Instanzen sind
@@ -50,7 +53,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Exe    = Join-Path $Root "UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
+$Exe    = Join-Path $EngineRoot "Engine\Binaries\Win64\UnrealEditor.exe"
 $Proj   = Join-Path $Root "WiesbadenReal\WiesbadenReal.uproject"
 $LogDir = Join-Path $Root "WiesbadenReal\Saved\Logs"
 $CarLog  = Join-Path $LogDir "smoke_car.log"
@@ -60,6 +63,18 @@ $HealthJson = Join-Path $LogDir "WbHealth.json"
 
 if (-not (Test-Path $Exe))  { Write-Host "ABBRUCH: Editor nicht gefunden: $Exe"; exit 2 }
 if (-not (Test-Path $Proj)) { Write-Host "ABBRUCH: Projekt nicht gefunden: $Proj"; exit 2 }
+
+# Nur Editoren DIESES Projektordners beenden - nicht jeden auf dem Rechner.
+# Frueher traf "Get-Process UnrealEditor* | Stop-Process" auch fremde, laufende
+# Arbeit (andere Agenten, offene Editoren); darum wartete der Push-Waechter, bis
+# keiner mehr lief. Im Gate-Worktree (Tools\gate_worktree.py) haelt ohnehin nur
+# der eigene Editor dessen Binaries fest.
+function Stop-ProjectEditors([string]$ProjectFile) {
+    $want = $ProjectFile.Replace('/', '\')
+    Get-CimInstance Win32_Process -Filter "Name LIKE 'UnrealEditor%'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine.Replace('/', '\') -like "*$want*" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
 
 $Checks = New-Object System.Collections.ArrayList
 function Add-Check([string]$Name, [bool]$Ok, [string]$Detail) {
@@ -96,7 +111,7 @@ function Measure-LoadFactor([int]$Iter, [int]$Samples, [double]$RefMs, [double]$
 # dann beenden. ExtraArgs sind zusaetzliche Kommandozeilen-Schalter.
 function Invoke-Session([string[]]$ExtraArgs, [string]$ExecCmds, [string]$LogFile,
                         [string]$WaitPattern, [int]$MinCount, [int]$TimeoutSec) {
-    Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process -Force
+    Stop-ProjectEditors $Proj
     Start-Sleep -Seconds 3
     Remove-Item $LogFile -ErrorAction SilentlyContinue
 
@@ -117,7 +132,7 @@ function Invoke-Session([string[]]$ExtraArgs, [string]$ExecCmds, [string]$LogFil
     }
     Write-Host ("    {0} Treffer fuer '{1}'; beende Sitzung." -f $n, $WaitPattern)
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process -Force
+    Stop-ProjectEditors $Proj
     Start-Sleep -Seconds 1
 }
 

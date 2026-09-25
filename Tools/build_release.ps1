@@ -33,7 +33,9 @@
 # stundenlange Release-Build durch (im Playtest so beobachtet).
 [CmdletBinding()]
 param(
-    [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
+    # Ordner UEBER dem Projekt - aus dem Ort dieses Skripts (Tools\ im Projekt),
+    # damit dieselbe Pipeline im sauberen Push-Worktree dessen Stand prueft.
+    [string]$Root = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),
     [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8",
     [switch]$GatesOnly,
     [switch]$Rollback
@@ -114,6 +116,18 @@ foreach ($p in @($BuildBat, $CmdExe, $Proj)) {
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Force -Path $LogDir | Out-Null }
 
 $Start = Get-Date
+
+# Nur Editoren DIESES Projektordners beenden - nicht jeden auf dem Rechner.
+# Frueher traf "Get-Process UnrealEditor* | Stop-Process" auch fremde, laufende
+# Arbeit (andere Agenten, offene Editoren); darum wartete der Push-Waechter, bis
+# keiner mehr lief. Im Gate-Worktree (Tools\gate_worktree.py) haelt ohnehin nur
+# der eigene Editor dessen Binaries fest.
+function Stop-ProjectEditors([string]$ProjectFile) {
+    $want = $ProjectFile.Replace('/', '\')
+    Get-CimInstance Win32_Process -Filter "Name LIKE 'UnrealEditor%'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine.Replace('/', '\') -like "*$want*" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
 function Section([int]$Num, [string]$Title) {
     Write-Host ""
     Write-Host ("==== Gate {0}: {1} ====" -f $Num, $Title)
@@ -158,7 +172,7 @@ if (Test-Path $EngineCheck) {
 Section 1 "Kompilieren (WiesbadenRealEditor Win64 Development)"
 $BuildLog = Join-Path $LogDir "release_build.log"
 Remove-Item $BuildLog -ErrorAction SilentlyContinue
-Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process -Force
+Stop-ProjectEditors $Proj
 Start-Sleep -Seconds 2
 # WICHTIG (PS 5.1): UBT schreibt routinemaessig auf stderr (auch bei Warnungen).
 # Unter $ErrorActionPreference='Stop' wuerde eine ueber 2>&1 gepipte stderr-Zeile als
@@ -204,7 +218,7 @@ Write-Host "  Gate 2 gruen: alle Unit-Tests bestanden."
 Section 3 "Rauchtest (Tools\smoke_test.ps1)"
 $SmokePs1 = Join-Path $ProjDir "Tools\smoke_test.ps1"
 if (-not (Test-Path $SmokePs1)) { Fail "Gate 3 (Rauchtest)" "smoke_test.ps1 fehlt." "" }
-& powershell -NoProfile -ExecutionPolicy Bypass -File $SmokePs1
+& powershell -NoProfile -ExecutionPolicy Bypass -File $SmokePs1 -Root $Root -EngineRoot $EngineRoot
 if ($LASTEXITCODE -ne 0) {
     Fail "Gate 3 (Rauchtest)" ("Rauchtest Exit {0} - mindestens eine Pruefung durchgefallen." -f $LASTEXITCODE) `
         (Join-Path $LogDir "smoke_heli.log")

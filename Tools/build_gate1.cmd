@@ -15,5 +15,13 @@ REM ab - die "Deklaration"-Notes nennen dann den fremden Engine-Pfad.
 REM Deshalb: IMMER die installierte Engine verwenden (wie alle anderen
 REM .cmd-Dateien des Projekts). Bei Baumwechsel vorher die PCH-Dateien unter
 REM WiesbadenReal\Intermediate\Build\...\*.pch loeschen.
-"c:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat" WiesbadenRealEditor Win64 Development -project="C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject" -waitmutex > "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Saved\Logs\wb_build_gate1.log" 2>&1
-echo EXITCODE %ERRORLEVEL% >> "C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Saved\Logs\wb_build_gate1.log"
+REM
+REM Projekt = Ordner ueber Tools\ (nicht fest verdrahtet): so baut das Gate im
+REM sauberen Push-Worktree (Tools\gate_worktree.py) SEINEN Code, nicht den des
+REM Hauptordners.
+for %%I in ("%~dp0..") do set "WBPROJ=%%~fI"
+if not exist "%WBPROJ%\Saved\Logs" mkdir "%WBPROJ%\Saved\Logs"
+call "c:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat" WiesbadenRealEditor Win64 Development -project="%WBPROJ%\WiesbadenReal.uproject" -waitmutex > "%WBPROJ%\Saved\Logs\wb_build_gate1.log" 2>&1
+set "WBEXIT=%ERRORLEVEL%"
+echo EXITCODE %WBEXIT% >> "%WBPROJ%\Saved\Logs\wb_build_gate1.log"
+exit /b %WBEXIT%

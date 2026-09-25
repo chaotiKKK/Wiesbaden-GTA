@@ -3,6 +3,7 @@ r"""Die Release-Gates fahren, BEVOR ein Commit entsteht - nicht erst beim Paket.
     python Tools/vor_dem_commit.py                # schnelle Stufe (Vorgabe)
     python Tools/vor_dem_commit.py --stufe voll   # zusaetzlich Gates 2 und 3
     python Tools/vor_dem_commit.py --gestaged     # nur was git vorgemerkt hat
+    python Tools/vor_dem_commit.py --stufe voll --push-refs   # pre-push: im sauberen Worktree
 
 WOFUER: Die Gates gab es schon, aber sie liefen erst in `build_release.cmd` -
 also erst, wenn jemand ein Paket wollte. Ein Fehler von heute fiel damit
@@ -38,6 +39,12 @@ DIE PYTHON-SUITEN LIEGEN AUF DER VOLLEN STUFE, und zwar aus zwei Gruenden:
 Sie sind VERSCHOBEN, NICHT GESTRICHEN: build_release.cmd kennt sie nicht,
 darum faehrt die volle Stufe sie selbst. Nichts verlaesst den Rechner, ohne
 dass sie gelaufen sind.
+
+BEIM PUSH IM SAUBEREN WORKTREE (--push-refs, seit 25.09.2026): der
+pre-push-Hook reicht die zu pushenden Commits herein, und die volle Stufe
+laeuft in einem eigenen Worktree auf genau diesen Commits
+(Tools/gate_worktree.py) - fremde laufende Arbeit im Arbeitsbaum kann den
+Push weder faelschlich rot machen noch blockieren.
 
 Notausgang: `git commit --no-verify` oder `WB_KEINE_GATES=1`. Er ist
 absichtlich da - ein Wachposten ohne Tuer wird eingerissen, nicht benutzt.
@@ -242,11 +249,20 @@ def hauptprogramm(argv=None):
     p.add_argument("--stufe", choices=("schnell", "voll"), default="schnell")
     p.add_argument("--gestaged", action="store_true",
                    help="nur vorgemerkte Dateien betrachten (fuer den Hook)")
+    p.add_argument("--push-refs", action="store_true",
+                   help="pre-push: Commits von stdin lesen und im sauberen Worktree pruefen")
     a = p.parse_args(argv)
 
     if os.environ.get("WB_KEINE_GATES") == "1":
         print("WB_KEINE_GATES=1 - Gates uebersprungen.")
         return 0
+
+    # Push: NICHT den Arbeitsbaum pruefen - dort liegt fremde laufende Arbeit.
+    # Die Commits, die hinausgehen, kommen vom Hook auf stdin und werden in
+    # einem eigenen Worktree gebaut, getestet und geraucht.
+    if a.push_refs:
+        import gate_worktree
+        return gate_worktree.push_pruefen(WURZEL, sys.stdin.read())
 
     # WELCHE Dateien beurteilt werden, haengt an der Stufe - nicht am Zufall
     # des Arbeitsbaums.
