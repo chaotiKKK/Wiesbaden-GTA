@@ -3013,3 +3013,502 @@ bool FRoofToneTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+/**
+ * HANGSTRASSE: Fahrbahnrand und Gehweg-Aussenkante duerfen weder im Gras
+ * stecken noch in der Luft haengen.
+ *
+ * Gemeldet 25.09.2026 fuer die Emser Strasse (Aufnahme): "Warum ist die
+ * Strasse so kaputt ueberall ... Gehwege auf der Strasse ... Loecher ... in der
+ * Luft". Gemessen gegen die gebackene Landscape (Tools/gelaende_probe.py):
+ * 17 % der Fahrbahnrand-Proben lagen UNTER dem Gras (bis 170 cm), 31 %
+ * schwebten mehr als 40 cm (bis 204 cm). Die Strassenmitte - die einzige
+ * Stelle, die FTerrainRoadFlattenClearanceTest und die Pipeline pruefen - war
+ * dabei unauffaellig.
+ *
+ * Ursache: Das Landscape-Raster hat 7,81 m Maschenweite. Quer zum Hang steigt
+ * das bilinear interpolierte Gelaende innerhalb einer Masche vom eingeebneten
+ * Stuetzpunkt zum naechsten am Hang an - mitten durch Gehweg und Fahrbahnrand.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainRoadCrossSlopeEdgeTest,
+	"WiesbadenReal.GIS.Terrain.HangstrasseRaender",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTerrainRoadCrossSlopeEdgeTest::RunTest(const FString& Parameters)
+{
+	FTerrainTile Tile;
+	Tile.GridSize = 48;
+	Tile.CellSizeCm = 781.0;   // wie die gebackene Stadt (4033 Stuetzpunkte)
+	Tile.WorldMinXY = FVector2D(0.0, 0.0);
+	Tile.HeightsCm.Init(0.0f, Tile.GridSize * Tile.GridSize);
+
+	// Querhang: 15 % Steigung in Y, die Strasse laeuft in X (quer zum Gefaelle)
+	// und schraeg 4 % bergan - wie die Emser Strasse.
+	auto HangZ = [](double X, double Y) { return Y * 0.15 + X * 0.04; };
+	for (int32 Y = 0; Y < Tile.GridSize; ++Y)
+	{
+		for (int32 X = 0; X < Tile.GridSize; ++X)
+		{
+			Tile.HeightsCm[Y * Tile.GridSize + X] =
+				static_cast<float>(HangZ(X * Tile.CellSizeCm, Y * Tile.CellSizeCm));
+		}
+	}
+
+	constexpr double RoadSurfaceOffsetCm = 20.0;
+	FRoadSegment Segment;
+	Segment.SegmentId = 1;
+	Segment.HighwayType = EOSMHighwayType::Tertiary;
+	Segment.CarriagewayWidthCm = 650.0;
+	Segment.SidewalkType = EOSMSidewalkType::Both;
+	Segment.SidewalkWidthCm = 250.0;
+	Segment.KerbHeightCm = 4.0;
+	// Mittellinie NICHT auf einem Rasterpunkt (ein Drittel einer Masche daneben)
+	// und alle 2,2 m ein Stuetzpunkt - wie MaxSegmentLengthCm.
+	const double AxisY = 20.33 * Tile.CellSizeCm;
+	for (double X = 5.0 * Tile.CellSizeCm; X <= 40.0 * Tile.CellSizeCm; X += 220.0)
+	{
+		Segment.Centerline.Add(FVector(X, AxisY, HangZ(X, AxisY) + RoadSurfaceOffsetCm));
+	}
+	Segment.TrimmedCenterline = Segment.Centerline;
+
+	FRoadNetwork Network;
+	Network.Segments.Add(Segment);
+
+	UTerrainGenerator* Generator = NewObject<UTerrainGenerator>();
+	FTerrainGenerationSettings Settings;
+	Settings.GridSize = Tile.GridSize;
+	Generator->FlattenUnderRoads(Network, Settings, Tile);
+
+	// Proben wie Tools/gelaende_probe.py: 30 cm innerhalb der Kante, beidseitig,
+	// dazu alle 55 cm entlang der Strasse (auch zwischen den Stuetzpunkten).
+	const double Half = Segment.CarriagewayWidthCm * 0.5;
+	struct FProbe { const TCHAR* Art; double Off; double Dz; };
+	const FProbe Proben[] = {
+		{ TEXT("Fahrbahnrand"), Half - 30.0, 0.0 },
+		{ TEXT("Gehweg-Aussenkante"), Half + Segment.SidewalkWidthCm - 30.0, Segment.KerbHeightCm },
+	};
+	for (const FProbe& P : Proben)
+	{
+		int32 Gras = 0, Schwebt = 0, Anzahl = 0;
+		double SchlimmstesGras = 0.0, SchlimmstesSchweben = 0.0;
+		for (double X = 8.0 * Tile.CellSizeCm; X <= 37.0 * Tile.CellSizeCm; X += 55.0)
+		{
+			const double PflasterZ = HangZ(X, AxisY) + RoadSurfaceOffsetCm + P.Dz;
+			for (const double Seite : { -1.0, 1.0 })
+			{
+				const double Boden = Tile.SampleHeightBilinearCm(FVector2D(X, AxisY + Seite * P.Off));
+				const double D = Boden - PflasterZ;   // > 0: Gras ueber dem Pflaster
+				++Anzahl;
+				if (D > 2.0) { ++Gras; SchlimmstesGras = FMath::Max(SchlimmstesGras, D); }
+				if (D < -40.0) { ++Schwebt; SchlimmstesSchweben = FMath::Min(SchlimmstesSchweben, D); }
+			}
+		}
+		TestEqual(FString::Printf(TEXT("%s: kein Gras ueber dem Pflaster (schlimmster Fall %+.0f cm, %d von %d Proben)"),
+			P.Art, SchlimmstesGras, Gras, Anzahl), Gras, 0);
+		TestEqual(FString::Printf(TEXT("%s: nirgends mehr als 40 cm Luft darunter (schlimmster Fall %+.0f cm, %d von %d Proben)"),
+			P.Art, SchlimmstesSchweben, Schwebt, Anzahl), Schwebt, 0);
+	}
+	return true;
+}
+
+/**
+ * Laengsprofil mit V-Delle (Emser Strasse, 25.09.2026).
+ *
+ * Gemessen: die Fahrbahnachse fiel auf 8 m um 90 cm und stieg wieder an
+ * (6300 -> 6217 -> 6307 cm) - ein einzelner zu tiefer Rasterpunkt. Das
+ * 7,81-m-Gelaende kann das nicht abbilden, im Spiel stand Gras ueber der
+ * Fahrbahn. Die Glaettung muss die Delle entfernen, ein gleichmaessiges
+ * Gefaelle und eine echte Wanne aber (fast) unveraendert lassen, die Enden
+ * festhalten und die getrimmte Linie mitnehmen.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoadProfileDipTest,
+	"WiesbadenReal.GIS.Roads.LaengsprofilDelle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRoadProfileDipTest::RunTest(const FString& Parameters)
+{
+	auto Trend = [](double S) { return 6000.0 + 0.10 * S; };
+	auto Delle = [](double S)
+	{
+		const double D = FMath::Abs(S - 4000.0);
+		return D < 400.0 ? -90.0 * (1.0 - D / 400.0) : 0.0;
+	};
+	auto Linie = [](TFunctionRef<double(double)> Z, double Von, double Bis)
+	{
+		TArray<FVector> L;
+		for (double S = Von; S <= Bis + 0.1; S += 208.0)
+		{
+			L.Add(FVector(S, 0.0, Z(S)));
+		}
+		return L;
+	};
+
+	// 1) Delle auf 10-%-Gefaelle
+	{
+		auto Z = [&](double S) { return Trend(S) + Delle(S); };
+		TArray<FVector> Mitte = Linie(Z, 0.0, 8000.0);
+		TArray<FVector> Getrimmt;
+		for (double S = 650.0; S <= 7400.0; S += 173.0) { Getrimmt.Add(FVector(S, 0.0, Z(S))); }
+		const FVector Anfang = Mitte[0];
+		const FVector Ende = Mitte.Last();
+		URoadNetworkGenerator::SmoothLongitudinalProfile(Mitte, Getrimmt, 1000.0);
+		double Rest = 0.0;
+		for (const FVector& P : Mitte) { Rest = FMath::Max(Rest, FMath::Abs(P.Z - Trend(P.X))); }
+		TestTrue(FString::Printf(TEXT("Delle entfernt (Rest %.0f cm von 90)"), Rest), Rest < 15.0);
+		TestEqual(TEXT("Anfang bleibt"), Mitte[0].Z, Anfang.Z);
+		TestEqual(TEXT("Ende bleibt"), Mitte.Last().Z, Ende.Z);
+		double RestGetrimmt = 0.0;
+		for (const FVector& P : Getrimmt) { RestGetrimmt = FMath::Max(RestGetrimmt, FMath::Abs(P.Z - Trend(P.X))); }
+		TestTrue(FString::Printf(TEXT("Delle auch aus der getrimmten Linie entfernt (Rest %.0f cm)"), RestGetrimmt), RestGetrimmt < 15.0);
+	}
+
+	// 2) Reines Gefaelle bleibt
+	{
+		TArray<FVector> Mitte = Linie(Trend, 0.0, 8000.0);
+		TArray<FVector> Leer;
+		const double Aenderung = URoadNetworkGenerator::SmoothLongitudinalProfile(Mitte, Leer, 1000.0);
+		TestTrue(FString::Printf(TEXT("gleichmaessiges Gefaelle unveraendert (%.2f cm)"), Aenderung), Aenderung < 0.5);
+	}
+
+	// 3) Echte Wanne (Kuppen-/Wannenhalbmesser 300 m) bleibt nahezu
+	{
+		auto Wanne = [](double S) { const double D = S - 4000.0; return 6000.0 + D * D / (2.0 * 30000.0); };
+		TArray<FVector> Mitte = Linie(Wanne, 0.0, 8000.0);
+		TArray<FVector> Leer;
+		const double Aenderung = URoadNetworkGenerator::SmoothLongitudinalProfile(Mitte, Leer, 1000.0);
+		TestTrue(FString::Printf(TEXT("Wanne R=300 m kaum veraendert (%.1f cm)"), Aenderung), Aenderung < 6.0);
+	}
+	return true;
+}
+
+/**
+ * Separat erfasster Fussweg im Gehwegstreifen (Emser Strasse, 25.09.2026).
+ *
+ * Gemessen: der OSM-Fussweg lag 0,8-1,1 m neben dem erzeugten Gehweg, aber
+ * 1,9 m tiefer. Er wurde als zweiter Gehweg gebaut und zog bei der Einebnung
+ * das Gelaende unter dem Strassengehweg nach unten - der schwebte bis 2,5 m.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCompanionFootwayTest,
+	"WiesbadenReal.GIS.Terrain.BegleitenderFussweg",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FCompanionFootwayTest::RunTest(const FString& Parameters)
+{
+	FTerrainTile Tile;
+	Tile.GridSize = 48;
+	Tile.CellSizeCm = 781.0;
+	Tile.WorldMinXY = FVector2D(0.0, 0.0);
+	Tile.HeightsCm.Init(0.0f, Tile.GridSize * Tile.GridSize);
+	auto HangZ = [](double X, double Y) { return Y * 0.15 + X * 0.04; };
+	for (int32 Y = 0; Y < Tile.GridSize; ++Y)
+	{
+		for (int32 X = 0; X < Tile.GridSize; ++X)
+		{
+			Tile.HeightsCm[Y * Tile.GridSize + X] =
+				static_cast<float>(HangZ(X * Tile.CellSizeCm, Y * Tile.CellSizeCm));
+		}
+	}
+
+	constexpr double Offset = 20.0;
+	const double AxisY = 20.33 * Tile.CellSizeCm;
+	FRoadSegment Strasse;
+	Strasse.SegmentId = 1;
+	Strasse.HighwayType = EOSMHighwayType::Tertiary;
+	Strasse.CarriagewayWidthCm = 650.0;
+	Strasse.SidewalkType = EOSMSidewalkType::Both;
+	Strasse.SidewalkWidthCm = 250.0;
+	for (double X = 5.0 * Tile.CellSizeCm; X <= 40.0 * Tile.CellSizeCm; X += 220.0)
+	{
+		Strasse.Centerline.Add(FVector(X, AxisY, HangZ(X, AxisY) + Offset));
+	}
+	Strasse.TrimmedCenterline = Strasse.Centerline;
+
+	// Fussweg talseitig (kleineres Y = tiefer) 5,5 m neben der Achse, 190 cm
+	// unter der Strasse - so wie ihn die Hoehenprojektion aus dem DGM legt.
+	FRoadSegment Fussweg;
+	Fussweg.SegmentId = 2;
+	Fussweg.HighwayType = EOSMHighwayType::Footway;
+	Fussweg.CarriagewayWidthCm = 180.0;
+	const double FussY = AxisY - 550.0;
+	for (double X = 6.0 * Tile.CellSizeCm; X <= 39.0 * Tile.CellSizeCm; X += 220.0)
+	{
+		Fussweg.Centerline.Add(FVector(X, FussY, HangZ(X, AxisY) + Offset - 190.0));
+	}
+	Fussweg.TrimmedCenterline = Fussweg.Centerline;
+
+	// Gegenprobe: ein Fussweg 25 m weiter weg bleibt, wie er ist.
+	FRoadSegment Fern = Fussweg;
+	Fern.SegmentId = 3;
+	for (FVector& P : Fern.Centerline) { P.Y -= 2500.0; }
+	Fern.TrimmedCenterline = Fern.Centerline;
+
+	FRoadNetwork Network;
+	Network.Segments = { Strasse, Fussweg, Fern };
+
+	auto SchwebtAmGehweg = [&](const FTerrainTile& T)
+	{
+		int32 N = 0;
+		for (double X = 8.0 * T.CellSizeCm; X <= 37.0 * T.CellSizeCm; X += 55.0)
+		{
+			const double Off = Strasse.CarriagewayWidthCm * 0.5 + Strasse.SidewalkWidthCm - 30.0;
+			const double Pflaster = HangZ(X, AxisY) + Offset + Strasse.KerbHeightCm;
+			N += (T.SampleHeightBilinearCm(FVector2D(X, AxisY - Off)) - Pflaster) < -40.0 ? 1 : 0;
+		}
+		return N;
+	};
+
+	// Gegenprobe gegen den alten Stand: OHNE den Durchgang und ohne das
+	// Anschmiegen zieht der tiefe Fussweg das Gelaende weg - der Test muss den
+	// Fehler also sehen koennen. (Mit Anschmiegen allein haelt schon der
+	// Fahrbahn-Vorrang den Gehweg; der Durchgang verhindert zusaetzlich den
+	// doppelt gebauten Gehweg.)
+	{
+		FTerrainTile Alt = Tile;
+		FTerrainGenerationSettings AltSettings;
+		AltSettings.GridSize = Alt.GridSize;
+		AltSettings.bConformToPavement = false;
+		NewObject<UTerrainGenerator>()->FlattenUnderRoads(Network, AltSettings, Alt);
+		const int32 AltSchwebt = SchwebtAmGehweg(Alt);
+		TestTrue(FString::Printf(TEXT("Gegenprobe: ohne Durchgang und Anschmiegen schwebt der Gehweg (%d Proben)"), AltSchwebt), AltSchwebt > 0);
+
+		FTerrainTile Vorrang = Tile;
+		FTerrainGenerationSettings VorrangSettings;
+		VorrangSettings.GridSize = Vorrang.GridSize;
+		NewObject<UTerrainGenerator>()->FlattenUnderRoads(Network, VorrangSettings, Vorrang);
+		TestEqual(TEXT("Fahrbahn-Vorrang haelt den Gehweg schon ohne Durchgang"), SchwebtAmGehweg(Vorrang), 0);
+	}
+
+	int32 Angehoben = 0;
+	const int32 Begleitwege = URoadNetworkGenerator::AlignCompanionFootways(Network, true, &Angehoben);
+	TestEqual(TEXT("genau ein Fussweg als Begleitweg erkannt"), Begleitwege, 1);
+	TestTrue(TEXT("der nahe Fussweg ist markiert"), Network.Segments[1].bBegleitweg);
+	TestFalse(TEXT("der ferne Fussweg nicht"), Network.Segments[2].bBegleitweg);
+	const FVector& FP = Network.Segments[1].Centerline[10];
+	TestTrue(FString::Printf(TEXT("Begleitweg liegt auf Gehweghoehe (%.0f statt %.0f cm)"),
+		FP.Z, HangZ(FP.X, AxisY) + Offset + Strasse.KerbHeightCm),
+		FMath::IsNearlyEqual(FP.Z, HangZ(FP.X, AxisY) + Offset + Strasse.KerbHeightCm, 2.0));
+	TestTrue(TEXT("der ferne Fussweg behaelt seine Hoehe"),
+		FMath::IsNearlyEqual(Network.Segments[2].Centerline[10].Z, Fern.Centerline[10].Z, 0.01));
+
+	UTerrainGenerator* Generator = NewObject<UTerrainGenerator>();
+	FTerrainGenerationSettings Settings;
+	Settings.GridSize = Tile.GridSize;
+	Generator->FlattenUnderRoads(Network, Settings, Tile);
+
+	const double Half = Strasse.CarriagewayWidthCm * 0.5;
+	int32 Gras = 0, Schwebt = 0, Anzahl = 0;
+	double Min = 0.0, Max = -1e9;
+	for (double X = 8.0 * Tile.CellSizeCm; X <= 37.0 * Tile.CellSizeCm; X += 55.0)
+	{
+		for (const double Off : { Half - 30.0, Half + Strasse.SidewalkWidthCm - 30.0 })
+		{
+			for (const double Seite : { -1.0, 1.0 })
+			{
+				const double Pflaster = HangZ(X, AxisY) + Offset + (Off > Half ? Strasse.KerbHeightCm : 0.0);
+				const double D = Tile.SampleHeightBilinearCm(FVector2D(X, AxisY + Seite * Off)) - Pflaster;
+				++Anzahl;
+				Gras += D > 2.0 ? 1 : 0;
+				Schwebt += D < -40.0 ? 1 : 0;
+				Min = FMath::Min(Min, D);
+				Max = FMath::Max(Max, D);
+			}
+		}
+	}
+	TestEqual(FString::Printf(TEXT("kein Gras ueber Fahrbahnrand/Gehweg (hoechstes Gelaende %+.0f cm, %d von %d)"), Max, Gras, Anzahl), Gras, 0);
+	TestEqual(FString::Printf(TEXT("nichts schwebt mehr als 40 cm (tiefstes Gelaende %+.0f cm, %d von %d)"), Min, Schwebt, Anzahl), Schwebt, 0);
+	return true;
+}
+
+/**
+ * Kreuzung am Hang (Emser Strasse, 25.09.2026): die schlimmsten Schwebestellen
+ * (bis 2,5 m) lagen an Kreuzungen. Die Kreuzungsregel setzt je Zelle das
+ * MINIMUM der nahen Plattenecken - am Hang zieht das die Umgebung der Platte
+ * unter die Fahrbahnen der Arme. Das Anschmiegen ans Pflaster
+ * (FTerrainGenerationSettings::bConformToPavement) muss das beheben; die
+ * Gegenprobe ohne ihn muss den Fehler zeigen.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainJunctionOnSlopeTest,
+	"WiesbadenReal.GIS.Terrain.KreuzungAmHang",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTerrainJunctionOnSlopeTest::RunTest(const FString& Parameters)
+{
+	FTerrainTile Basis;
+	Basis.GridSize = 48;
+	Basis.CellSizeCm = 781.0;
+	Basis.WorldMinXY = FVector2D(0.0, 0.0);
+	Basis.HeightsCm.Init(0.0f, Basis.GridSize * Basis.GridSize);
+	auto HangZ = [](double X, double Y) { return Y * 0.12 + X * 0.06; };
+	for (int32 Y = 0; Y < Basis.GridSize; ++Y)
+	{
+		for (int32 X = 0; X < Basis.GridSize; ++X)
+		{
+			Basis.HeightsCm[Y * Basis.GridSize + X] = static_cast<float>(HangZ(X * Basis.CellSizeCm, Y * Basis.CellSizeCm));
+		}
+	}
+
+	constexpr double Offset = 20.0;
+	const FVector2D Mitte(20.4 * 781.0, 20.6 * 781.0);
+	const double Kuerzung = 900.0;   // Arme enden 9 m vor der Mitte (Platte dazwischen)
+	FRoadNetwork Network;
+	int32 Id = 1;
+	for (const FVector2D Richtung : { FVector2D(1, 0), FVector2D(-1, 0), FVector2D(0, 1), FVector2D(0, -1) })
+	{
+		FRoadSegment S;
+		S.SegmentId = Id++;
+		S.HighwayType = EOSMHighwayType::Tertiary;
+		S.CarriagewayWidthCm = 650.0;
+		S.SidewalkType = EOSMSidewalkType::Both;
+		S.SidewalkWidthCm = 250.0;
+		for (double D = Kuerzung; D <= 9000.0; D += 220.0)
+		{
+			const FVector2D P = Mitte + Richtung * D;
+			S.Centerline.Add(FVector(P.X, P.Y, HangZ(P.X, P.Y) + Offset));
+		}
+		S.TrimmedCenterline = S.Centerline;
+		Network.Segments.Add(S);
+	}
+	FRoadIntersection K;
+	K.Location = FVector(Mitte.X, Mitte.Y, HangZ(Mitte.X, Mitte.Y) + Offset);
+	K.RadiusCm = Kuerzung;
+	for (const FVector2D E : { FVector2D(1, 1), FVector2D(-1, 1), FVector2D(-1, -1), FVector2D(1, -1) })
+	{
+		const FVector2D P = Mitte + E * Kuerzung;
+		K.Polygon.Add(FVector(P.X, P.Y, HangZ(P.X, P.Y) + Offset));
+	}
+	for (int32 i = 0; i < 4; ++i) { FIntersectionArm Arm; Arm.SegmentId = i; K.Arms.Add(Arm); }
+	Network.Intersections.Add(K);
+
+	// Proben: Fahrbahnrand und Gehweg-Aussenkante der Arme in den ersten 25 m.
+	// AbDcm: Proben erst ab diesem Abstand von der Mitte (Naht zur Platte
+	// ausklammern bzw. getrennt messen).
+	auto Zaehle = [&](const FTerrainTile& T, double AbDcm, double BisDcm, int32& OutGras, int32& OutSchwebt, double& OutMin, double& OutMax)
+	{
+		OutGras = OutSchwebt = 0; OutMin = 0.0; OutMax = -1e9;
+		for (const FVector2D Richtung : { FVector2D(1, 0), FVector2D(-1, 0), FVector2D(0, 1), FVector2D(0, -1) })
+		{
+			const FVector2D Quer(Richtung.Y, -Richtung.X);
+			for (double D = AbDcm; D <= BisDcm; D += 55.0)
+			{
+				for (const double Off : { 295.0, 545.0 })
+				{
+					for (const double Seite : { -1.0, 1.0 })
+					{
+						const FVector2D P = Mitte + Richtung * D + Quer * (Seite * Off);
+						const FVector2D Achse = Mitte + Richtung * D;
+						const double Pflaster = HangZ(Achse.X, Achse.Y) + Offset + (Off > 325.0 ? FRoadSegment().KerbHeightCm : 0.0);
+						const double Diff = T.SampleHeightBilinearCm(P) - Pflaster;
+						OutGras += Diff > 2.0 ? 1 : 0;
+						OutSchwebt += Diff < -40.0 ? 1 : 0;
+						OutMin = FMath::Min(OutMin, Diff);
+						OutMax = FMath::Max(OutMax, Diff);
+					}
+				}
+			}
+		}
+	};
+
+	UTerrainGenerator* Generator = NewObject<UTerrainGenerator>();
+	FTerrainTile Alt = Basis;
+	FTerrainGenerationSettings AltSettings;
+	AltSettings.GridSize = Alt.GridSize;
+	AltSettings.bConformToPavement = false;
+	Generator->FlattenUnderRoads(Network, AltSettings, Alt);
+	FTerrainTile Neu = Basis;
+	FTerrainGenerationSettings Settings;
+	Settings.GridSize = Neu.GridSize;
+	Generator->FlattenUnderRoads(Network, Settings, Neu);
+
+	// Die Naht zur Platte (bis eine Masche hinter dem Plattenrand) getrennt:
+	// dort treffen zwei Pflasterflaechen verschiedener Neigung aufeinander -
+	// Arme quer flach, Platte dem Hang folgend. Das ist eine Frage der
+	// Strassengeometrie, nicht der Einebnung.
+	const double NahtBis = Kuerzung + Basis.CellSizeCm;
+	int32 Gras = 0, Schwebt = 0;
+	double Min = 0.0, Max = 0.0;
+	Zaehle(Alt, NahtBis, Kuerzung + 2500.0, Gras, Schwebt, Min, Max);
+	AddInfo(FString::Printf(TEXT("ohne Anschmiegen, Arme: Gras %d, schwebt %d (%+.0f..%+.0f cm)"), Gras, Schwebt, Min, Max));
+	TestTrue(TEXT("Gegenprobe: ohne Anschmiegen ist der Fehler an den Armen sichtbar"), Gras + Schwebt > 0);
+	const int32 AltFehler = Gras + Schwebt;
+
+	Zaehle(Neu, NahtBis, Kuerzung + 2500.0, Gras, Schwebt, Min, Max);
+	AddInfo(FString::Printf(TEXT("mit Anschmiegen, Arme: Gras %d, schwebt %d (%+.0f..%+.0f cm)"), Gras, Schwebt, Min, Max));
+	TestEqual(FString::Printf(TEXT("Arme: kein Gras ueber dem Pflaster (hoechstes %+.0f cm)"), Max), Gras, 0);
+	TestEqual(FString::Printf(TEXT("Arme: nichts schwebt ueber 40 cm (tiefstes %+.0f cm)"), Min), Schwebt, 0);
+
+	int32 NahtGrasAlt = 0, NahtSchwebtAlt = 0, NahtGras = 0, NahtSchwebt = 0;
+	double NMin = 0.0, NMax = 0.0;
+	Zaehle(Alt, Kuerzung + 100.0, NahtBis, NahtGrasAlt, NahtSchwebtAlt, NMin, NMax);
+	AddInfo(FString::Printf(TEXT("ohne Anschmiegen, Naht: Gras %d, schwebt %d (%+.0f..%+.0f cm)"), NahtGrasAlt, NahtSchwebtAlt, NMin, NMax));
+	Zaehle(Neu, Kuerzung + 100.0, NahtBis, NahtGras, NahtSchwebt, NMin, NMax);
+	AddInfo(FString::Printf(TEXT("mit Anschmiegen, Naht: Gras %d, schwebt %d (%+.0f..%+.0f cm)"), NahtGras, NahtSchwebt, NMin, NMax));
+	TestTrue(TEXT("Naht: nicht schlechter als vorher"), NahtGras + NahtSchwebt <= NahtGrasAlt + NahtSchwebtAlt);
+	TestTrue(TEXT("Naht: hoechstens 25 cm Gras und 50 cm Luft"), NMax <= 25.0 && NMin >= -50.0);
+	(void)AltFehler;
+	return true;
+}
+
+/**
+ * Zwei Pflasterflaechen verschiedener Hoehe in derselben Masche: eine Strasse
+ * und 4 m daneben ein 60 cm tieferer Parallelweg. Mit "naechste Probe gewinnt"
+ * stach das Gras durch das tiefere Pflaster; "tiefere gewinnt" (Alkis29) liess
+ * dafuer an der Emser Strasse die Fahrbahn schweben (Mitte an 34 % der freien
+ * Proben). Die Fahrbahn hat darum Vorrang vor eigenstaendigen Wegen.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainTwoLevelsOneCellTest,
+	"WiesbadenReal.GIS.Terrain.ZweiHoehenEineMasche",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTerrainTwoLevelsOneCellTest::RunTest(const FString& Parameters)
+{
+	FTerrainTile Tile;
+	Tile.GridSize = 40;
+	Tile.CellSizeCm = 781.0;
+	Tile.WorldMinXY = FVector2D(0.0, 0.0);
+	Tile.HeightsCm.Init(1000.0f, Tile.GridSize * Tile.GridSize);
+
+	const double AxisY = 18.4 * Tile.CellSizeCm;
+	FRoadSegment Strasse;
+	Strasse.SegmentId = 1;
+	Strasse.HighwayType = EOSMHighwayType::Residential;
+	Strasse.CarriagewayWidthCm = 500.0;
+	FRoadSegment Weg;
+	Weg.SegmentId = 2;
+	Weg.HighwayType = EOSMHighwayType::Footway;
+	Weg.CarriagewayWidthCm = 180.0;
+	for (double X = 4.0 * Tile.CellSizeCm; X <= 34.0 * Tile.CellSizeCm; X += 220.0)
+	{
+		Strasse.Centerline.Add(FVector(X, AxisY, 1020.0));
+		Weg.Centerline.Add(FVector(X, AxisY + 400.0, 960.0));
+	}
+	Strasse.TrimmedCenterline = Strasse.Centerline;
+	Weg.TrimmedCenterline = Weg.Centerline;
+	FRoadNetwork Network;
+	Network.Segments = { Strasse, Weg };
+
+	FTerrainGenerationSettings Settings;
+	Settings.GridSize = Tile.GridSize;
+	NewObject<UTerrainGenerator>()->FlattenUnderRoads(Network, Settings, Tile);
+
+	// Beide teilen sich eine Masche; beide zugleich zu treffen ist unmoeglich.
+	// Die Fahrbahn hat Vorrang: kein Gras darauf und kein Luftspalt darunter.
+	// Der 60 cm tiefere Weg verschwindet dafuer teilweise unter der Boeschung.
+	int32 Gras = 0;
+	int32 Schwebt = 0;
+	double Max = -1e9;
+	double Min = 1e9;
+	for (double X = 6.0 * Tile.CellSizeCm; X <= 32.0 * Tile.CellSizeCm; X += 55.0)
+	{
+		for (const double Y : { AxisY, AxisY + 220.0, AxisY - 220.0 })
+		{
+			const double D = Tile.SampleHeightBilinearCm(FVector2D(X, Y)) - 1020.0;
+			Gras += D > 2.0 ? 1 : 0;
+			Schwebt += D < -40.0 ? 1 : 0;
+			Max = FMath::Max(Max, D);
+			Min = FMath::Min(Min, D);
+		}
+	}
+	TestEqual(FString::Printf(TEXT("kein Gras auf der Fahrbahn (hoechstes %+.0f cm)"), Max), Gras, 0);
+	TestEqual(FString::Printf(TEXT("Fahrbahn schwebt nirgends ueber 40 cm (tiefstes %+.0f cm)"), Min), Schwebt, 0);
+	return true;
+}

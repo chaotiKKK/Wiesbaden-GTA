@@ -605,6 +605,14 @@ int32 UTerrainGenerator::FlattenUnderRoads(
 			continue;
 		}
 
+		// Begleitweg (Doppel des erzeugten Gehwegs, siehe AlignCompanionFootways):
+		// hat kein eigenes Pflaster und darf das Gelaende unter dem Strassengehweg
+		// nicht an sich ziehen - genau das liess den Gehweg am Hang schweben.
+		if (Segment.bBegleitweg)
+		{
+			continue;
+		}
+
 		const TArray<FVector>& Centerline = Segment.TrimmedCenterline.Num() >= 2
 			? Segment.TrimmedCenterline
 			: Segment.Centerline;
@@ -921,6 +929,201 @@ int32 UTerrainGenerator::FlattenUnderRoads(
 		G.DeckelCm = static_cast<float>(PlateauCm);
 		Grundrisse.Add(G);
 	}
+
+	// GELAENDE AN DAS PFLASTER ANSCHMIEGEN (25.09.2026).
+	//
+	// Alle Regeln oben arbeiten mit Zellen und "naechstgelegenem Stuetzpunkt".
+	// Das Landscape interpoliert aber bilinear zwischen VIER Eckpunkten einer
+	// 7,81-m-Masche - und die gehoeren oft verschiedenen Regeln: der naechsten
+	// Nachbarstrasse, dem Minimum einer Kreuzungsplatte, einem Fussweg am Hang.
+	// Gemessen an der Emser Strasse (Tools/gelaende_probe.py) stach dadurch Gras
+	// durch Fahrbahnrand und Gehweg und hingen Raender bis 2,5 m in der Luft,
+	// waehrend die Strassenmitte unauffaellig war.
+	//
+	// Darum zuletzt: Proben AUF dem Pflaster (Fahrbahnmitte, -rand, Gehweg-
+	// mitte, -aussenkante, Kreuzungsplatte) mit ihrer echten Oberflaechenhoehe.
+	// Jede Probe beansprucht die vier Eckpunkte ihrer Masche; je Eckpunkt
+	// gewinnt die NAECHSTE Probe. Teilen sich eine Fahrbahn und ein
+	// eigenstaendiger Fuss-, Rad- oder Treppenweg eine Masche, hat die FAHRBAHN
+	// Vorrang (samt ihrem Gehweg und den Kreuzungsplatten): am Hang liegen solche
+	// Wege oft 1-2 m tiefer direkt daneben, und "naechste gewinnt" bzw. "tiefere
+	// gewinnt" liess dann die Fahrbahn in der Luft haengen (Emser Strasse,
+	// Alkis29: Fahrbahnmitte schwebte an 34 % der freien Proben). Der Weg
+	// verschwindet dort eher unter der Boeschung - das kleinere Uebel.
+	// Der Eckpunkt wird genau auf die Zielhoehe minus RoadFlattenSinkCm gesetzt -
+	// nach oben wie nach unten. Damit liegt das
+	// bilinear interpolierte Gelaende unter dem Pflaster ueberall knapp darunter,
+	// statt einmal im Gras und einmal in der Luft. Der Grundriss-Schutz der
+	// Bauplateaus (unten) gilt weiter.
+	struct FPflasterZiel
+	{
+		double DistSq = TNumericLimits<double>::Max();
+		float HeightCm = 0.0f;
+	};
+	TMap<int32, FPflasterZiel> PflasterZiele;   // naechste Probe der Fahrbahnen, ihrer Gehwege und Kreuzungen
+	TMap<int32, FPflasterZiel> WegZiele;        // naechste Probe eigenstaendiger Fuss-/Rad-/Treppenwege
+	auto IstFahrbahn = [](const FRoadSegment& S)
+	{
+		return (uint8)S.HighwayType <= (uint8)EOSMHighwayType::Pedestrian;
+	};
+	auto Beanspruche = [&Tile, &Settings](TMap<int32, FPflasterZiel>& Ziele, double X, double Y, double PflasterZ)
+	{
+		const double FX = (X - Tile.WorldMinXY.X) / Tile.CellSizeCm;
+		const double FY = (Y - Tile.WorldMinXY.Y) / Tile.CellSizeCm;
+		if (FX < 0.0 || FY < 0.0 || FX >= Tile.GridSize - 1 || FY >= Tile.GridSize - 1)
+		{
+			return;
+		}
+		const int32 X0 = FMath::FloorToInt(FX);
+		const int32 Y0 = FMath::FloorToInt(FY);
+		for (int32 DY = 0; DY <= 1; ++DY)
+		{
+			for (int32 DX = 0; DX <= 1; ++DX)
+			{
+				const FVector2D Ecke = Tile.CellToWorld(X0 + DX, Y0 + DY);
+				const double DistSq = FVector2D::DistSquared(Ecke, FVector2D(X, Y));
+				FPflasterZiel& Ziel = Ziele.FindOrAdd(Tile.GetIndex(X0 + DX, Y0 + DY));
+				if (DistSq < Ziel.DistSq)
+				{
+					Ziel.DistSq = DistSq;
+					Ziel.HeightCm = static_cast<float>(PflasterZ - Settings.RoadFlattenSinkCm);
+				}
+			}
+		}
+	};
+
+	const double ProbenAbstandCm = FMath::Max(Tile.CellSizeCm / 3.0, 50.0);
+	for (const FRoadSegment& Segment : Network.Segments)
+	{
+		if (!Settings.bConformToPavement)
+		{
+			break;
+		}
+		if (Segment.bIsBridge || Segment.bIsTunnel || Segment.Layer != 0 || Segment.bIsArea || Segment.bBegleitweg)
+		{
+			continue;
+		}
+		const TArray<FVector>& Linie = Segment.TrimmedCenterline.Num() >= 2
+			? Segment.TrimmedCenterline : Segment.Centerline;
+		if (Linie.Num() < 2)
+		{
+			continue;
+		}
+
+		// Querproben: Mitte, Fahrbahnrand und - wo die Strasse ihren Gehweg
+		// selbst baut - Gehwegmitte und Aussenkante (Fahrbahn + Bordstein).
+		const double Halb = Segment.CarriagewayWidthCm * 0.5;
+		const bool bLinks = Segment.SidewalkType == EOSMSidewalkType::Both || Segment.SidewalkType == EOSMSidewalkType::Left;
+		const bool bRechts = Segment.SidewalkType == EOSMSidewalkType::Both || Segment.SidewalkType == EOSMSidewalkType::Right;
+		const double Gehweg = FMath::Max(Segment.SidewalkWidthCm, 100.0);
+		struct FQuer { double Seite; double Abstand; double Dz; };
+		TArray<FQuer> Quer = { { 1.0, 0.0, 0.0 }, { 1.0, Halb, 0.0 }, { -1.0, Halb, 0.0 } };
+		for (const double Seite : { 1.0, -1.0 })
+		{
+			if ((Seite > 0.0 && bLinks) || (Seite < 0.0 && bRechts))
+			{
+				Quer.Add({ Seite, Halb + Gehweg * 0.5, Segment.KerbHeightCm });
+				Quer.Add({ Seite, Halb + Gehweg, Segment.KerbHeightCm });
+			}
+		}
+
+		TMap<int32, FPflasterZiel>& Ziele = IstFahrbahn(Segment) ? PflasterZiele : WegZiele;
+		for (int32 Step = 1; Step < Linie.Num(); ++Step)
+		{
+			const FVector& A = Linie[Step - 1];
+			const FVector& B = Linie[Step];
+			const FVector2D AB(B.X - A.X, B.Y - A.Y);
+			const double Laenge = AB.Size();
+			if (Laenge < 1.0)
+			{
+				continue;
+			}
+			// Links = (Dir.Y, -Dir.X) wie FPolygonUtils::GetLeftNormal - dieselbe
+			// Seite, auf der BuildSidewalk(1.0) den linken Gehweg anlegt.
+			const FVector2D Dir = AB / Laenge;
+			const FVector2D Links(Dir.Y, -Dir.X);
+			const int32 Teile = FMath::Max(1, FMath::CeilToInt(Laenge / ProbenAbstandCm));
+			for (int32 T = 0; T <= Teile; ++T)
+			{
+				const double F = static_cast<double>(T) / Teile;
+				const FVector P = FMath::Lerp(A, B, F);
+				for (const FQuer& Q : Quer)
+				{
+					const FVector2D XY = FVector2D(P.X, P.Y) + Links * (Q.Seite * Q.Abstand);
+					Beanspruche(Ziele, XY.X, XY.Y, P.Z + Q.Dz);
+				}
+			}
+		}
+	}
+
+	// Kreuzungsplatten: Faecher vom Schwerpunkt zu den Randpunkten (wie
+	// URoadNetworkGenerator::BuildIntersectionMesh) - Proben auf jedem Dreieck.
+	for (const FRoadIntersection& Intersection : Network.Intersections)
+	{
+		if (!Settings.bConformToPavement || Intersection.Polygon.Num() < 3)
+		{
+			continue;
+		}
+		bool bBauwerk = false;
+		bool bMitFahrbahn = false;
+		for (const FIntersectionArm& Arm : Intersection.Arms)
+		{
+			if (Network.Segments.IsValidIndex(Arm.SegmentId))
+			{
+				const FRoadSegment& S = Network.Segments[Arm.SegmentId];
+				bBauwerk |= S.bIsBridge || S.bIsTunnel || S.Layer != 0;
+				bMitFahrbahn |= IstFahrbahn(S);
+			}
+		}
+		if (bBauwerk)
+		{
+			continue;
+		}
+		FVector Mitte = FVector::ZeroVector;
+		for (const FVector& P : Intersection.Polygon) { Mitte += P; }
+		Mitte /= static_cast<double>(Intersection.Polygon.Num());
+		for (int32 i = 0; i < Intersection.Polygon.Num(); ++i)
+		{
+			const FVector& B = Intersection.Polygon[i];
+			const FVector& C = Intersection.Polygon[(i + 1) % Intersection.Polygon.Num()];
+			const double Groesse = FMath::Max(FVector::Dist2D(Mitte, B), FVector::Dist2D(B, C));
+			const int32 N = FMath::Max(1, FMath::CeilToInt(Groesse / ProbenAbstandCm));
+			for (int32 U = 0; U <= N; ++U)
+			{
+				for (int32 V = 0; V <= N - U; ++V)
+				{
+					const double Wb = static_cast<double>(U) / N;
+					const double Wc = static_cast<double>(V) / N;
+					const FVector P = Mitte * (1.0 - Wb - Wc) + B * Wb + C * Wc;
+					Beanspruche(bMitFahrbahn ? PflasterZiele : WegZiele, P.X, P.Y, P.Z);
+				}
+			}
+		}
+	}
+
+	// Zielhoehen uebernehmen: das Pflaster hat das letzte Wort ueber seine
+	// Eckpunkte - Nachbarstrassen-Obergrenzen und Kreuzungsminima gelten dort
+	// nicht mehr (sie waren die Ursache der schwebenden Raender).
+	int32 NurWeg = 0;
+	for (const TPair<int32, FPflasterZiel>& Ziel : WegZiele)
+	{
+		if (!PflasterZiele.Contains(Ziel.Key))
+		{
+			PflasterZiele.Add(Ziel.Key, Ziel.Value);
+			++NurWeg;
+		}
+	}
+	for (const TPair<int32, FPflasterZiel>& Ziel : PflasterZiele)
+	{
+		FCellTarget& Target = TargetHeightCm.FindOrAdd(Ziel.Key);
+		Target.HeightCm = Ziel.Value.HeightCm;
+		Target.NearestDistSq = 0.0;
+		PavedCeilingCm.Remove(Ziel.Key);
+	}
+	UE_LOG(LogWbTerrain, Log,
+		TEXT("Gelaende an Pflaster angeschmiegt: %d Rasterpunkte genau %.0f cm unter die naechste Pflasterprobe gesetzt, ")
+		TEXT("davon %d nur von Fuss-/Radwegen beansprucht, %d Wegpunkte an eine Fahrbahn abgegeben."),
+		PflasterZiele.Num(), Settings.RoadFlattenSinkCm, NurWeg, WegZiele.Num() - NurWeg);
 
 	int32 ModifiedCount = 0;
 	int32 CeilingApplied = 0;

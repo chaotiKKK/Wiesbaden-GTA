@@ -39,7 +39,7 @@ struct WIESBADENREAL_API FRoadTypeDefinition
 
 	/** Bordsteinhoehe in Metern. Regelhoehe in Deutschland: 10-12 cm. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Road")
-	double KerbHeightMeters = 0.12;
+	double KerbHeightMeters = 0.04;   // flacher Bordstein (25.09.2026, vorher 0.12)
 
 	/** Radwegbreite in Metern, wenn cycleway vorhanden. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Road")

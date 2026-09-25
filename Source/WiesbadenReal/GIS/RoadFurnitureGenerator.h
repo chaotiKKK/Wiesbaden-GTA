@@ -340,7 +340,7 @@ struct WIESBADENREAL_API FRoadFurnitureSettings
 	 * als die Fahrbahn; Markierungen liegen auf der Fahrbahn (ohne Bordstein).
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture", meta = (ClampMin = "0.0"))
-	double KerbHeightCm = 12.0;
+	double KerbHeightCm = 4.0;
 
 	/** Schildunterkante ueber dem Boden (cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture", meta = (ClampMin = "0.0"))

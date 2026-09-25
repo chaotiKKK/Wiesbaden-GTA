@@ -197,6 +197,23 @@ struct WIESBADENREAL_API FRoadGenerationSettings
 	int32 SmoothingIterations = 2;
 
 	/**
+	 * Halbe Fensterbreite in cm, ueber die das Laengsprofil ebenerdiger
+	 * Strassen geglaettet wird (robuste Gerade je Punkt, siehe
+	 * SmoothLongitudinalProfile). 0 schaltet die Glaettung ab. 10 m entfernen
+	 * die gemessene 8-m-Delle bei jedem Punktabstand; eine echte Wanne mit
+	 * 300 m Halbmesser aendert sich um hoechstens 6 cm.
+	 *
+	 * WARUM: Die Fahrbahnhoehe wird punktweise aus dem Gelaenderaster
+	 * (7,81 m) abgetastet. Ein einzelner zu tiefer DEM-Punkt direkt an der
+	 * Strasse ergab an der Emser Strasse eine V-Delle von 90 cm auf 8 m
+	 * (6300 -> 6217 -> 6307 cm). Das Raster kann ein so schmales V nicht
+	 * abbilden: zwischen den Stuetzpunkten stand das Gras ueber der Fahrbahn
+	 * (im Spiel ein gruener Fleck quer ueber beide Spuren).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
+	double ProfileSmoothingHalfWindowCm = 1000.0;
+
+	/**
 	 * Hoehe der Fahrbahndecke ueber dem Terrain in cm.
 	 *
 	 * Hier standen 8 cm - zu wenig. Das Landscape loest mit 7,81 m je Quad
@@ -449,6 +466,42 @@ public:
 	/** Ordnet beide privaten Ziele derselben naeheren Strasse zu. */
 	static FResolvedRoadAccess ResolveRoadAccess(
 		const FRoadNetwork& Network, const FRoadAccessOverride& Override);
+
+	/**
+	 * Separat erfasste Fusswege, die im Gehwegstreifen einer Fahrbahn parallel
+	 * laufen, auf die Hoehe dieses Gehwegs legen (Fahrbahnhoehe + Bordstein).
+	 * Hat die Fahrbahn ihren Gehweg auf dieser Seite schon selbst, wird der
+	 * Fussweg als Begleitweg markiert (FRoadSegment::bBegleitweg): kein zweites
+	 * Pflaster, keine eigene Gelaende-Einebnung.
+	 *
+	 * WARUM: An der Emser Strasse (Hanglage) lag der OSM-Fussweg 0,8-1,1 m neben
+	 * dem erzeugten Gehweg, aber fast 2 m tiefer (auf seiner eigenen
+	 * Gelaendehoehe). Er wurde als zweiter Gehweg gebaut ("Gehwege
+	 * uebereinander") und gewann bei der Einebnung die Rasterpunkte - der
+	 * Strassengehweg schwebte bis 2,5 m ueber dem Gras bzw. steckte bergseitig
+	 * darin (gemessen mit Tools/gelaende_probe.py).
+	 *
+	 * Muss nach der Hoehenprojektion und vor den Kreuzungsplatten laufen.
+	 * @return Zahl der markierten Begleitwege.
+	 */
+	static int32 AlignCompanionFootways(FRoadNetwork& Network, bool bSidewalksGenerated,
+		int32* OutRaisedSegments = nullptr);
+
+	/**
+	 * Laengsprofil einer ebenerdigen Strasse glaetten: je Punkt eine robuste
+	 * Gerade durch das Fenster +-HalfWindowCm (Median der Einzelsteigungen,
+	 * Median der bereinigten Hoehen) - entfernt schmale Dellen und Hoecker aus
+	 * dem Hoehenmodell, laesst ein Gefaelle exakt stehen -, danach ein Mittel
+	 * ueber die halbe Breite.
+	 * Die Segmentenden bleiben unveraendert und die Wirkung waechst ueber
+	 * HalfWindowCm auf - so passen die Enden benachbarter Segmente an den
+	 * Knoten weiter aufeinander. TrimmedCenterline erhaelt dieselbe Aenderung
+	 * (ueber ihre Bogenposition auf der Centerline interpoliert).
+	 * Segmente kuerzer als 2 * HalfWindowCm bleiben unberuehrt.
+	 * @return groesste Hoehenaenderung in cm.
+	 */
+	static double SmoothLongitudinalProfile(TArray<FVector>& Centerline, TArray<FVector>& TrimmedCenterline,
+		double HalfWindowCm);
 
 	/** Bordsteinhoehe an einem Meshpunkt; nur die konfigurierte Gehwegseite wird abgesenkt. */
 	static double GetRoadAccessKerbHeightCm(const FResolvedRoadAccess& Access,

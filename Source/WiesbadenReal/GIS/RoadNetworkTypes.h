@@ -298,8 +298,10 @@ struct WIESBADENREAL_API FRoadSegment
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	double SidewalkWidthCm = 250.0;
 
+	/** Bordsteinhoehe. 4 cm statt 12 (25.09.2026): der hohe Absatz stand im
+	 *  Spiel als "Kante" zwischen Fahrbahn und Gehweg - Nutzerwunsch: weg. */
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
-	double KerbHeightCm = 12.0;
+	double KerbHeightCm = 4.0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	double MaxSpeedKmh = 50.0;
@@ -316,6 +318,16 @@ struct WIESBADENREAL_API FRoadSegment
 
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	bool bIsRoundabout = false;
+
+	/**
+	 * Separat erfasster Fussweg, der im Gehwegstreifen einer Fahrbahn parallel
+	 * laeuft, die ihren Gehweg auf dieser Seite schon selbst erzeugt
+	 * (URoadNetworkGenerator::AlignCompanionFootways). Er bekommt die Hoehe des
+	 * Strassengehwegs, wird aber NICHT als zweites Pflaster gebaut und ebnet das
+	 * Gelaende nicht ein - Fussgaenger duerfen ihn weiter benutzen.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	bool bBegleitweg = false;
 
 	/** OSM-Node am Anfang bzw. Ende des Segments. */
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
