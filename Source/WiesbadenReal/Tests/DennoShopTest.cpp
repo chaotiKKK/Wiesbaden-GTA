@@ -20,6 +20,9 @@
 #if WITH_EDITOR
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/SkeletalMesh.h"
+#include "Animation/AnimSequence.h"
+#include "AnimationRuntime.h"
 #include "Engine/Texture2D.h"
 #endif
 
@@ -364,15 +367,20 @@ namespace DennoAssetHygiene
 	/** Zielordner je Asset-Art; leer = gehoert nicht in den Laden-Ordner. */
 	FString FolderFor(const FString& Class)
 	{
-		if (Class == TEXT("StaticMesh")) { return TEXT("Meshes"); }
+		if (Class == TEXT("StaticMesh") || Class == TEXT("SkeletalMesh") || Class == TEXT("Skeleton")) { return TEXT("Meshes"); }
+		if (Class == TEXT("AnimSequence")) { return TEXT("Animations"); }
 		if (Class.StartsWith(TEXT("Material"))) { return TEXT("Materials"); }
 		if (Class.StartsWith(TEXT("Texture"))) { return TEXT("Textures"); }
 		return FString();
 	}
 
-	FString PrefixFor(const FString& Folder)
+	/** Namenspraefix je Asset-Art (Skelett und Skelett-Mesh: SK_, Bewegung: A_). */
+	FString PrefixFor(const FString& Class)
 	{
-		return Folder == TEXT("Meshes") ? TEXT("SM_") : Folder == TEXT("Materials") ? TEXT("M_") : TEXT("T_");
+		if (Class == TEXT("StaticMesh")) { return TEXT("SM_"); }
+		if (Class == TEXT("SkeletalMesh") || Class == TEXT("Skeleton")) { return TEXT("SK_"); }
+		if (Class == TEXT("AnimSequence")) { return TEXT("A_"); }
+		return Class.StartsWith(TEXT("Material")) ? TEXT("M_") : TEXT("T_");
 	}
 
 	/** Nur ASCII-Buchstaben, Ziffern und '_' - kein '+', Leerzeichen, Umlaut. */
@@ -423,9 +431,9 @@ namespace DennoAssetHygiene
 			{
 				Issues.Add(FString::Printf(TEXT("gehoert nach %s/: %s"), *Target, *Where));
 			}
-			if (!A.Name.StartsWith(PrefixFor(Target), ESearchCase::CaseSensitive))
+			if (!A.Name.StartsWith(PrefixFor(A.Class), ESearchCase::CaseSensitive))
 			{
-				Issues.Add(FString::Printf(TEXT("Praefix %s fehlt: %s"), *PrefixFor(Target), *Where));
+				Issues.Add(FString::Printf(TEXT("Praefix %s fehlt: %s"), *PrefixFor(A.Class), *Where));
 			}
 			if (Target == TEXT("Textures") && A.TextureEdge > MaxTextureEdge)
 			{
@@ -490,7 +498,11 @@ bool FDennoShopAssetRulesTest::RunTest(const FString& Parameters)
 		{ TEXT("Materials"), TEXT("M_Denno_Brass"), TEXT("Material") },
 		{ TEXT("Materials"), TEXT("M_Denno_Part0"), TEXT("MaterialInstanceConstant") },
 		{ TEXT("Textures"), TEXT("T_Denno_Part0"), TEXT("Texture2D"), 512 },
-		{ TEXT("Textures"), TEXT("T_Denno_Part5"), TEXT("Texture2D"), 128 } };
+		{ TEXT("Textures"), TEXT("T_Denno_Part5"), TEXT("Texture2D"), 128 },
+		// Eine animierte Figur (Iris): Skelett-Mesh, Skelett, Bewegung.
+		{ TEXT("Meshes"), TEXT("SK_Iris"), TEXT("SkeletalMesh") },
+		{ TEXT("Meshes"), TEXT("SK_Iris_Skeleton"), TEXT("Skeleton") },
+		{ TEXT("Animations"), TEXT("A_Iris_Walk"), TEXT("AnimSequence") } };
 	const TArray<FString> CleanIssues = FindIssues(Clean);
 	TestEqual(TEXT("Sauberer Stand: keine Meldung"), CleanIssues.Num(), 0);
 	for (const FString& Issue : CleanIssues)
@@ -574,51 +586,146 @@ bool FDennoShopAssetHygieneTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDennoCustomerIrisAssetsTest,
-	"WiesbadenReal.World.DennoShop.CustomerIris",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDennoCustomerFiguresAssetsTest,
+	"WiesbadenReal.World.DennoShop.CustomerFigures",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 
-bool FDennoCustomerIrisAssetsTest::RunTest(const FString& Parameters)
+bool FDennoCustomerFiguresAssetsTest::RunTest(const FString& Parameters)
 {
 	using namespace DennoAssetHygiene;
-	// Iris, die Kundin der Lieferungen, nach denselben Ordnerregeln wie Dennos
-	// Laden. Schlaegt er fehl: Tools/import_customer_iris.py erneut ausfuehren.
-	const TCHAR* const IrisRoot = TEXT("/Game/Assets/People/Iris");
-	const TArray<FAssetInfo> Assets = ScanFolder(IrisRoot, *this);
-	for (const FString& Issue : FindIssues(Assets))
-	{
-		AddError(TEXT("Iris-Ordner: ") + Issue);
-	}
+	// Die Kundenfiguren (Lieferkunden und Ladengaeste), die das Spiel selbst
+	// findet - jede nach denselben Ordnerregeln wie Dennos Laden. Schlaegt er
+	// fehl: Tools/Blender/build_customer_figure.py und Tools/import_tripo_figure.py
+	// (WB_FIGUR=kunden) erneut ausfuehren.
+	const TArray<FString> Names = WiesbadenCustomerFigures::FindNames();
+	AddInfo(FString::Printf(TEXT("Kundenfiguren: %s"), *FString::Join(Names, TEXT(", "))));
+	TestTrue(FString::Printf(TEXT("mindestens zwei Kundenfiguren zum Abwechseln (%d)"), Names.Num()), Names.Num() >= 2);
+	TestTrue(TEXT("Iris ist dabei"), Names.Contains(TEXT("Iris")));
+	TestEqual(TEXT("jede gefundene Figur ist vollstaendig"), WiesbadenCustomerFigures::LoadAll().Num(), Names.Num());
 
-	// Die Gangphasen: 1 und 3 stehend (dasselbe Mesh), 0 und 2 im Schritt -
-	// ein Schritt ist deutlich tiefer als der Stand, alle gleich hoch, Fuesse auf 0.
-	const TCHAR* Stand = AWiesbadenDeliveryCustomer::IrisPosePath(1);
-	TestEqual(TEXT("Phase 3 = Phase 1 (stehend)"), FString(AWiesbadenDeliveryCustomer::IrisPosePath(3)), FString(Stand));
-	TestNotEqual(TEXT("Zwei verschiedene Schritte"), FString(AWiesbadenDeliveryCustomer::IrisPosePath(0)),
-		FString(AWiesbadenDeliveryCustomer::IrisPosePath(2)));
-	const UStaticMesh* StandMesh = LoadObject<UStaticMesh>(nullptr, Stand);
-	if (!TestNotNull(TEXT("Iris stehend"), StandMesh))
+	for (const FString& Name : Names)
 	{
-		return false;
-	}
-	const FBox StandBox = StandMesh->GetBoundingBox();
-	TestTrue(FString::Printf(TEXT("Iris ist 1,60-1,75 m gross (%.0f cm)"), StandBox.GetSize().Z),
-		StandBox.GetSize().Z > 160.0 && StandBox.GetSize().Z < 175.0);
-	TestTrue(TEXT("Fuesse auf dem Ursprung"), FMath::Abs(StandBox.Min.Z) < 2.0);
-	TestTrue(TEXT("Blick entlang X: schmal in X, breit in Y (Schultern)"), StandBox.GetSize().X < StandBox.GetSize().Y);
-	for (const int32 Phase : { 0, 2 })
-	{
-		const UStaticMesh* Stride = LoadObject<UStaticMesh>(nullptr, AWiesbadenDeliveryCustomer::IrisPosePath(Phase));
-		if (!TestNotNull(FString::Printf(TEXT("Iris Schritt %d"), Phase), Stride))
+		const FString Folder = FString(WiesbadenCustomerFigures::RootPath()) / Name;
+		for (const FString& Issue : FindIssues(ScanFolder(*Folder, *this)))
+		{
+			AddError(FString::Printf(TEXT("%s-Ordner: %s"), *Name, *Issue));
+		}
+
+		// Das Skelett: Knochen, die AWiesbadenDeliveryCustomer und die Bewegungen
+		// brauchen, in der Grundhaltung dort, wo eine 1,60-1,80-m-Figur sie hat.
+		const FWbCustomerFigure Figure = WiesbadenCustomerFigures::Load(Name);
+		const USkeletalMesh* Mesh = Figure.Mesh;
+		if (!TestNotNull(*FString::Printf(TEXT("SK_%s"), *Name), Mesh)
+			|| !TestNotNull(*FString::Printf(TEXT("%s: Skelett"), *Name), Mesh->GetSkeleton()))
 		{
 			continue;
 		}
-		const FBox Box = Stride->GetBoundingBox();
-		TestTrue(FString::Printf(TEXT("Schritt %d tiefer als der Stand (%.0f vs %.0f cm)"), Phase,
-			Box.GetSize().X, StandBox.GetSize().X), Box.GetSize().X > StandBox.GetSize().X + 30.0);
-		TestTrue(FString::Printf(TEXT("Schritt %d: Fuesse auf dem Ursprung"), Phase), FMath::Abs(Box.Min.Z) < 2.0);
-		TestTrue(FString::Printf(TEXT("Schritt %d nicht verschoben (Mitte %.0f cm)"), Phase, Box.GetCenter().Y),
-			FMath::Abs(Box.GetCenter().Y - StandBox.GetCenter().Y) < 5.0);
+		const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+		auto BoneZ = [&Ref](const TCHAR* Bone) -> FVector
+		{
+			const int32 Index = Ref.FindBoneIndex(FName(Bone));
+			return Index == INDEX_NONE ? FVector(NAN) : FAnimationRuntime::GetComponentSpaceTransformRefPose(Ref, Index).GetLocation();
+		};
+		for (const TCHAR* Bone : { TEXT("Root"), TEXT("Hips"), TEXT("Head"), TEXT("UpperArm_L"), TEXT("UpperArm_R"),
+			TEXT("LowerArm_R"), TEXT("Hand_R"), TEXT("Thigh_L"), TEXT("Shin_L"), TEXT("Foot_L"), TEXT("Foot_R") })
+		{
+			TestTrue(FString::Printf(TEXT("%s: Knochen %s"), *Name, Bone), Ref.FindBoneIndex(FName(Bone)) != INDEX_NONE);
+		}
+		TestTrue(FString::Printf(TEXT("%s: Wurzel am Boden (%.0f cm)"), *Name, BoneZ(TEXT("Root")).Z),
+			FMath::Abs(BoneZ(TEXT("Root")).Z) < 1.0);
+		TestTrue(FString::Printf(TEXT("%s: Kopfansatz 1,30-1,55 m (%.0f cm)"), *Name, BoneZ(TEXT("Head")).Z),
+			BoneZ(TEXT("Head")).Z > 130.0 && BoneZ(TEXT("Head")).Z < 155.0);
+		TestTrue(FString::Printf(TEXT("%s: Knoechel knapp ueber dem Boden (%.0f cm)"), *Name, BoneZ(TEXT("Foot_L")).Z),
+			BoneZ(TEXT("Foot_L")).Z > 2.0 && BoneZ(TEXT("Foot_L")).Z < 14.0);
+		TestTrue(FString::Printf(TEXT("%s: Arme haengen (Hand unter der Schulter, auf Hueftenhoehe)"), *Name),
+			BoneZ(TEXT("Hand_R")).Z < BoneZ(TEXT("UpperArm_R")).Z - 40.0 && BoneZ(TEXT("Hand_R")).Z < BoneZ(TEXT("Hips")).Z + 20.0);
+		const FVector Shoulders = BoneZ(TEXT("UpperArm_L")) - BoneZ(TEXT("UpperArm_R"));
+		// Unreal: X vorn, Y RECHTS - wer nach +X blickt, hat die linke Schulter bei -Y.
+		TestTrue(FString::Printf(TEXT("%s: Blick nach +X, linke Schulter links (-Y) (%.0f / %.0f cm)"), *Name, Shoulders.Y, Shoulders.X),
+			Shoulders.Y < -30.0 && FMath::Abs(Shoulders.X) < 10.0);
+
+		// Die Bewegungen: auf DIESEM Skelett, Schleifenlaengen wie gebaut - alle
+		// Figuren gleich, damit das Spiel sie gleich behandeln kann.
+		const struct { ECustomerAnim Anim; double Seconds; } Expected[] = {
+			{ ECustomerAnim::Idle, WiesbadenDennoDelivery::CustomerIdleLoopSeconds }, { ECustomerAnim::Walk, 1.0 },
+			{ ECustomerAnim::Wave, 2.4 }, { ECustomerAnim::Sit, 4.2 } };
+		for (const auto& E : Expected)
+		{
+			const TCHAR* Kind = WiesbadenCustomerFigures::AnimName(E.Anim);
+			const UAnimSequence* Seq = Figure.Anim(E.Anim);
+			if (!TestNotNull(*FString::Printf(TEXT("A_%s_%s"), *Name, Kind), Seq))
+			{
+				continue;
+			}
+			TestTrue(FString::Printf(TEXT("A_%s_%s auf dem eigenen Skelett"), *Name, Kind), Seq->GetSkeleton() == Mesh->GetSkeleton());
+			TestTrue(FString::Printf(TEXT("A_%s_%s dauert %.1f s (%.2f)"), *Name, Kind, E.Seconds, Seq->GetPlayLength()),
+				FMath::IsNearlyEqual(Seq->GetPlayLength(), E.Seconds, 0.05));
+		}
+		TestTrue(FString::Printf(TEXT("%s: vollstaendig"), *Name), Figure.IsComplete());
+	}
+	TestTrue(TEXT("Winken kuerzer als die Pause nach dem Dank"), 2.4 <= WiesbadenDennoDelivery::CustomerThankPauseSeconds);
+	TestEqual(TEXT("Kundinnen atmen in Dennos Takt"), WiesbadenDennoDelivery::CustomerIdleLoopSeconds,
+		AWiesbadenDennoShop::BreathPeriodSeconds);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDennoSkeletalFigureTest,
+	"WiesbadenReal.World.DennoShop.DennoSkeletal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FDennoSkeletalFigureTest::RunTest(const FString& Parameters)
+{
+	using namespace DennoAssetHygiene;
+	// Denno mit Skelett (Tools/Blender/rig_denno.py, Tools/import_tripo_figure.py
+	// WB_FIGUR=Denno) nach denselben Ordnerregeln wie Dennos Laden.
+	const TArray<FAssetInfo> Assets = ScanFolder(TEXT("/Game/Assets/People/Denno"), *this);
+	for (const FString& Issue : FindIssues(Assets))
+	{
+		AddError(TEXT("Denno-Ordner: ") + Issue);
+	}
+	const USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, AWiesbadenDennoShop::DennoMeshPath());
+	if (!TestNotNull(TEXT("SK_Denno"), Mesh) || !TestNotNull(TEXT("Skelett"), Mesh->GetSkeleton()))
+	{
+		return false;
+	}
+	const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+	auto Bone = [&Ref](const TCHAR* Name) -> FVector
+	{
+		const int32 Index = Ref.FindBoneIndex(FName(Name));
+		return Index == INDEX_NONE ? FVector(NAN) : FAnimationRuntime::GetComponentSpaceTransformRefPose(Ref, Index).GetLocation();
+	};
+	// Das Augenlid fuers Zwinkern sitzt vorn im Gesicht, auf Augenhoehe, rechts.
+	const FVector Eye = Bone(TEXT("Eye_R"));
+	TestTrue(TEXT("Augenlid-Knochen Eye_R vorhanden"), Ref.FindBoneIndex(TEXT("Eye_R")) != INDEX_NONE);
+	TestTrue(FString::Printf(TEXT("Auge auf 1,50-1,65 m (%.0f cm)"), Eye.Z), Eye.Z > 150.0 && Eye.Z < 165.0);
+	TestTrue(FString::Printf(TEXT("Auge vorn im Gesicht (X %.0f cm)"), Eye.X), Eye.X > 3.0);
+	TestTrue(FString::Printf(TEXT("rechtes Auge (Unreal: rechts = +Y, %.1f cm)"), Eye.Y), Eye.Y > 1.5);
+	// Huefte anatomisch (Schritt vorgegeben, nicht gesucht): 0,80-0,95 m.
+	TestTrue(FString::Printf(TEXT("Huefte 0,80-0,95 m (%.0f cm)"), Bone(TEXT("Hips")).Z),
+		Bone(TEXT("Hips")).Z > 80.0 && Bone(TEXT("Hips")).Z < 95.0);
+
+	// Alle Bewegungen des Arbeitsplans, auf diesem Skelett.
+	for (int32 I = 0; I < static_cast<int32>(EDennoAnim::Count); ++I)
+	{
+		const TCHAR* Path = AWiesbadenDennoShop::DennoAnimPath(static_cast<EDennoAnim>(I));
+		const UAnimSequence* Seq = LoadObject<UAnimSequence>(nullptr, Path);
+		if (!TestNotNull(FString::Printf(TEXT("Bewegung %s"), Path), Seq))
+		{
+			continue;
+		}
+		TestTrue(FString::Printf(TEXT("%s auf dem Denno-Skelett"), Path), Seq->GetSkeleton() == Mesh->GetSkeleton());
+		TestTrue(FString::Printf(TEXT("%s dauert 0,5-5 s (%.2f)"), Path, Seq->GetPlayLength()),
+			Seq->GetPlayLength() > 0.5 && Seq->GetPlayLength() < 5.0);
+	}
+	// Die Zeitpunkte, an denen C++ Paket und Tasse loslaesst, liegen IN der Bewegung.
+	const UAnimSequence* Handover = LoadObject<UAnimSequence>(nullptr, AWiesbadenDennoShop::DennoAnimPath(EDennoAnim::Handover));
+	const UAnimSequence* Serve = LoadObject<UAnimSequence>(nullptr, AWiesbadenDennoShop::DennoAnimPath(EDennoAnim::Serve));
+	if (Handover && Serve)
+	{
+		TestTrue(TEXT("Paket wird waehrend der Uebergabe losgelassen"),
+			WiesbadenDennoWork::HandoverReleaseSeconds < Handover->GetPlayLength());
+		TestTrue(TEXT("Tasse wird waehrend des Servierens abgestellt"),
+			WiesbadenDennoWork::ServeReleaseSeconds < Serve->GetPlayLength());
 	}
 	return true;
 }

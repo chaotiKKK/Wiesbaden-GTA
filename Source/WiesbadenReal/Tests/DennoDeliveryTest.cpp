@@ -273,5 +273,12 @@ bool FDennoDeliveryWalkHomeTest::RunTest(const FString& Parameters)
 		TestEqual(FString::Printf(TEXT("Pose nach %.0f cm"), Walked), ComputeWalkPose(Walked), Expected[Step]);
 	}
 	TestEqual(TEXT("Negative Strecke = Wartepose"), ComputeWalkPose(-20.0), 1);
+
+	// Der Schrittzyklus der Kundenfiguren folgt dem Gehtempo - die Fuesse gleiten nicht.
+	TestEqual(TEXT("Gebautes Tempo = Abspieltempo 1"), ComputeWalkPlayRate(CustomerWalkAnimSpeedCmS), 1.0f);
+	TestTrue(TEXT("Gehtempo der Kundin: knapp schneller"),
+		FMath::IsNearlyEqual(ComputeWalkPlayRate(CustomerWalkSpeedCmS), 135.0f / 130.0f, 1e-4f));
+	TestEqual(TEXT("Stillstand: nicht einfrieren, halbes Tempo"), ComputeWalkPlayRate(0.0), 0.5f);
+	TestEqual(TEXT("Rennen: hoechstens doppelt"), ComputeWalkPlayRate(1000.0), 2.0f);
 	return true;
 }

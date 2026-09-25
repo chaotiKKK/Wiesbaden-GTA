@@ -5,22 +5,29 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Missions/WiesbadenDennoDelivery.h"
+#include "World/WiesbadenCustomerFigures.h"
 #include "WiesbadenDeliveryCustomer.generated.h"
 
+class UInstancedStaticMeshComponent;
+class USkeletalMeshComponent;
 class UStaticMesh;
-class UStaticMeshComponent;
 
 /**
  * Der Kunde einer Denno-Lieferung: wartet an der Zieladresse vor dem Haus,
  * bedankt sich bei der Abgabe und gibt Trinkgeld nach Puenktlichkeit
  * (WiesbadenDennoDelivery::ComputeTip).
  *
- * Die Kundin ist Iris (/Game/Assets/People/Iris, Tools/Blender/
- * build_customer_iris.py): eine Tripo-Figur ohne Skelett, in Blender zu drei
- * Posen gebogen - stehend und zwei Schrittstellungen -, die sich auf das
- * Vier-Phasen-Schema der Fussgaenger legen (IrisPosePath). Fehlt Iris, steht
- * die Fussgaenger-Figur (SM_WbPed2_*) mit eigener Kleidung da - als EINE
- * Instanz, weil deren Material die Kleidungsfarben aus Per-Instanz-Daten liest.
+ * Wer kommt, waehlt der Laden: eine der Kundenfiguren (WiesbadenCustomerFigures,
+ * /Game/Assets/People/Kunden/<Name>, z. B. Iris und Mira), abwechselnd von
+ * Lieferung zu Lieferung. Jede ist eine Tripo-Figur mit eigenem Skelett und
+ * denselben Bewegungen - sie wartet mit A_<Name>_Idle (Atmen; Gewicht verlagern
+ * und Umschauen wie Denno im Cafe per AWiesbadenDennoShop::ComputeDennoIdle als
+ * Drehung der ganzen Figur, ohne Asset-Byte), dankt mit A_<Name>_Wave (winken
+ * oder, bei starren Armen, nicken) und geht mit A_<Name>_Walk heim, dessen Takt
+ * dem Gehtempo folgt.
+ * Gibt es keine Kundenfigur, steht die Fussgaenger-Figur (SM_WbPed2_*) mit eigener Kleidung da
+ * - als EINE Instanz, weil deren Material die Kleidungsfarben aus
+ * Per-Instanz-Daten liest - und geht mit deren vier Schrittposen.
  *
  * Er erscheint erst, wenn der Spieler auf CustomerAppearCm heran ist (vorher
  * ist sein Boden womoeglich nicht gestreamt), schaut zur Strasse und dreht sich
@@ -38,8 +45,10 @@ public:
 	AWiesbadenDeliveryCustomer();
 	virtual void Tick(float DeltaSeconds) override;
 
-	/** Vom Laden direkt nach dem Spawnen: zu welchem Auftrag er gehoert und wo er wartet. */
-	void Setup(FName InMissionId, const FVector& InDropPoint, const FVector& InAddressLocation, int32 InSeed);
+	/** Vom Laden direkt nach dem Spawnen: zu welchem Auftrag er gehoert, wo er
+	 *  wartet und wer er ist (unvollstaendige Figur: Fussgaenger-Figur). */
+	void Setup(FName InMissionId, const FVector& InDropPoint, const FVector& InAddressLocation, int32 InSeed,
+		const FWbCustomerFigure& InLook);
 
 	/**
 	 * Abgabe: Trinkgeld nach der zuletzt gemessenen Restzeit gutschreiben, den
@@ -53,15 +62,15 @@ public:
 	static constexpr double FacePlayerCm = 2500.0;
 
 	bool IsStanding() const { return bPlaced; }
-
-	/** Iris-Mesh je Gangphase 0..3 (Schritt, stehend, Schritt gespiegelt, stehend). */
-	static const TCHAR* IrisPosePath(int32 Pose);
+	/** Name der Kundenfigur (leer: Fussgaenger-Figur). */
+	const FString& GetFigureName() const { return Look.Name; }
 
 private:
 	bool TryPlace(const FVector& PlayerLocation);
-	/** Colors = Kleidungsfarben der Fussgaenger-Figur (Instanz-Daten); nullptr = Iris
-	 *  mit eigenen Texturen als gewoehnliche Mesh-Komponente. */
-	void CreateFigure(const TArray<float>* Colors);
+	/** Die Kundenfigur mit Skelett aufstellen (wartet mit Idle); false, wenn sie unvollstaendig ist. */
+	bool CreateSkeletal();
+	/** Ersatz: die Fussgaenger-Figur als EINE Instanz, Kleidung in den Instanz-Daten. */
+	void CreateFigure(const TArray<float>& Colors);
 	/**
 	 * Gangphase zeigen: EINE Komponente tauscht ihr Mesh. Vier abwechselnd
 	 * sichtbare Komponenten verwischten beim Gehen - eine eingeblendete hatte
@@ -69,7 +78,10 @@ private:
 	 * Bild, Schritte zurueck.
 	 */
 	void ShowPose(int32 Pose);
-	bool HasFigure() const { return Figure != nullptr; }
+	bool HasFigure() const { return Figure != nullptr || SkelFigure != nullptr; }
+	/** Kundenfigur: Dennos Gewicht-verlagern-und-Umschauen auf die Figur legen; nach
+	 *  dem Dank in CustomerIdleFadeSeconds ausblenden. */
+	void ApplyIdleSway();
 	/** Zum Spieler drehen, wenn er nah ist, sonst zur Strasse. */
 	void FacePlayerOrStreet(const FVector& PlayerLocation, float DeltaSeconds);
 	/** Haustuer per Wandstrahl bestimmen, Heimweg starten. */
@@ -77,7 +89,10 @@ private:
 	void TickWalkHome(float DeltaSeconds);
 
 	UPROPERTY(Transient) USceneComponent* Root = nullptr;
-	UPROPERTY(Transient) UStaticMeshComponent* Figure = nullptr;
+	/** Die Kundenfigur - oder, wenn sie fehlt, die Fussgaenger-Figur (Figure + PoseMeshes). */
+	UPROPERTY(Transient) FWbCustomerFigure Look;
+	UPROPERTY(Transient) USkeletalMeshComponent* SkelFigure = nullptr;
+	UPROPERTY(Transient) UInstancedStaticMeshComponent* Figure = nullptr;
 	/** Index = Gangphase 0..3; fehlende Posen bleiben leer. */
 	UPROPERTY(Transient) TArray<UStaticMesh*> PoseMeshes;
 
@@ -96,4 +111,7 @@ private:
 	FVector DoorPoint = FVector::ZeroVector;
 	double WalkedCm = 0.0;
 	double WalkDistanceCm = 0.0;
+	bool bSkelWalking = false;
+	/** Eigener Zeitversatz je Kundin fuer ComputeDennoIdle (aus dem Seed). */
+	double IdleTimeOffset = 0.0;
 };

@@ -135,14 +135,24 @@ void AWiesbadenDennoShop::Tick(float DeltaSeconds)
 		NextPatchSeconds = Now + 1.0;
 		PatchFacades();
 	}
-	// Vorgemerkter Entwickler-Auftrag (WbDennoAuftrag kam vor dem Aufbau).
-	if (bPendingDevDelivery)
+	// Vorgemerkte Entwickler-Auftraege (WbDennoAuftrag kam vor dem Aufbau, mit
+	// Verzoegerung oder waehrend ein Auftrag lief).
+	if (!PendingDev.IsEmpty() && Now >= PendingDev[0].AtSeconds)
 	{
-		bPendingDevDelivery = false;
-		FRandomStream Random(PendingDevSeed);
-		FString Message;
-		StartDelivery(Random, Message);
-		ShowHint(Message);
+		const UWiesbadenMissionSubsystem* Missions = GetWorld()->GetSubsystem<UWiesbadenMissionSubsystem>();
+		if (!Missions || !Missions->HasActiveMission())
+		{
+			FRandomStream Random(PendingDev[0].Seed);
+			PendingDev.RemoveAt(0);
+			FString Message;
+			StartDelivery(Random, Message);
+			ShowHint(Message);
+		}
+	}
+	if (DennoSkel)
+	{
+		TickLife(DeltaSeconds);
+		return;
 	}
 	// Denno bewegt sich nur, wenn jemand hinsieht - sonst kostet sie nichts.
 	if (DennoFigure && DennoFigure->WasRecentlyRendered(0.25f))
@@ -302,8 +312,13 @@ bool AWiesbadenDennoShop::TryBuild()
 	AddPart(TEXT("DennoShopCafe"), TEXT("/Game/Buildings/DennoShop/Meshes/SM_DennoShop_Cafe.SM_DennoShop_Cafe"), FVector::ZeroVector, 0.0f);
 	AddPart(TEXT("DennoShopSalon"), TEXT("/Game/Buildings/DennoShop/Meshes/SM_DennoShop_Salon.SM_DennoShop_Salon"), FVector::ZeroVector, 0.0f);
 	AddPart(TEXT("DennoShopGlass"), TEXT("/Game/Buildings/DennoShop/Meshes/SM_DennoShop_Glass.SM_DennoShop_Glass"), FVector::ZeroVector, 0.0f);
-	DennoFigure = AddPart(TEXT("Denno"), TEXT("/Game/Buildings/DennoShop/Meshes/SM_Denno.SM_Denno"),
-		FVector(DennoXCm, DennoYCm, 0.0), DennoYawDeg);
+	// Denno mit Skelett und Arbeitstag (WiesbadenDennoShopLife.cpp); fehlen die
+	// Skelett-Assets, steht wie bisher die atmende Figur ohne Skelett.
+	if (!CreateLife())
+	{
+		DennoFigure = AddPart(TEXT("Denno"), TEXT("/Game/Buildings/DennoShop/Meshes/SM_Denno.SM_Denno"),
+			FVector(DennoXCm, DennoYCm, 0.0), DennoYawDeg);
+	}
 
 	// Warmes Ladenlicht: je Laden zwei Leuchten unter der Decke. Ohne sie
 	// waere der Raum hinter der Scheibe ein schwarzes Loch - die Stadt hat
@@ -482,10 +497,14 @@ bool AWiesbadenDennoShop::TryAcceptDelivery(const APawn* Player, FString& OutMes
 	return true;   // auch "laeuft schon": F am Laden steigt nicht ins Auto
 }
 
-void AWiesbadenDennoShop::RequestDevDelivery(int32 Seed)
+void AWiesbadenDennoShop::RequestDevDelivery(int32 Seed, float DelaySeconds)
 {
-	PendingDevSeed = Seed;
-	bPendingDevDelivery = true;   // der Tick loest ein, sobald der Laden steht
+	// Der Tick loest ein, sobald der Laden steht und kein Auftrag mehr laeuft -
+	// mehrere Aufrufe stehen hintereinander an (Kunden nacheinander pruefen).
+	FPendingDevDelivery Pending;
+	Pending.Seed = Seed;
+	Pending.AtSeconds = (GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0) + FMath::Max(0.0f, DelaySeconds);
+	PendingDev.Add(Pending);
 }
 
 bool AWiesbadenDennoShop::StartDelivery(FRandomStream& Random, FString& OutMessage)
@@ -582,7 +601,13 @@ bool AWiesbadenDennoShop::StartDelivery(FRandomStream& Random, FString& OutMessa
 	if (AWiesbadenDeliveryCustomer* NewCustomer = World->SpawnActor<AWiesbadenDeliveryCustomer>(
 		AWiesbadenDeliveryCustomer::StaticClass(), Job.DropPoint, FRotator::ZeroRotator, SpawnParams))
 	{
-		NewCustomer->Setup(Mission.Id, Job.DropPoint, Job.AddressLocation, Random.RandRange(0, 1 << 20));
+		// Die Kundenfiguren wechseln sich ab: nie dieselbe zweimal hintereinander.
+		const TArray<FWbCustomerFigure>& Figures = GetCustomerFigures();
+		const int32 FigureIndex = WiesbadenCustomerFigures::PickFigure(Figures.Num(), { LastDeliveryFigure },
+			static_cast<uint32>(Random.RandRange(0, 1 << 20)));
+		LastDeliveryFigure = FigureIndex;
+		NewCustomer->Setup(Mission.Id, Job.DropPoint, Job.AddressLocation, Random.RandRange(0, 1 << 20),
+			Figures.IsValidIndex(FigureIndex) ? Figures[FigureIndex] : FWbCustomerFigure());
 		Customer = NewCustomer;
 	}
 	if (!MissionCompletedHandle.IsValid())
@@ -599,9 +624,12 @@ bool AWiesbadenDennoShop::StartDelivery(FRandomStream& Random, FString& OutMessa
 		*Job.Cargo, *Job.Address, Job.DistanceCm / 100000.0, AwardFor(Job.Payout),
 		*WiesbadenCourierStats::Describe(GameState ? GameState->GetCourierStats() : FWbCourierStats()));
 	UE_LOG(LogWbDennoShop, Log,
-		TEXT("Dennos Lieferung %d angenommen: %s nach %s, Abgabe bei (%.0f, %.0f, %.0f), Luftlinie %.0f m, %d EUR."),
+		TEXT("Dennos Lieferung %d angenommen: %s nach %s, Abgabe bei (%.0f, %.0f, %.0f), Luftlinie %.0f m, %d EUR, Kunde %s."),
 		DeliveryNumber, *Job.Cargo, *Job.Address, Job.DropPoint.X, Job.DropPoint.Y, Job.DropPoint.Z,
-		Job.DistanceCm / 100.0, Job.Payout);
+		Job.DistanceCm / 100.0, Job.Payout,
+		Customer.IsValid() && !Customer->GetFigureName().IsEmpty() ? *Customer->GetFigureName() : TEXT("Fussgaenger-Figur"));
+	// Denno holt das Paket und reicht es an der Cafetuer - mit Zwinkern.
+	QueueHandover();
 	return true;
 }
 

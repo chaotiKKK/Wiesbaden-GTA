@@ -5,12 +5,36 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Missions/WiesbadenDennoDelivery.h"
+#include "World/WiesbadenCustomerFigures.h"
+#include "World/WiesbadenDennoWork.h"
 #include "WiesbadenDennoShop.generated.h"
 
 class UGeoCoordinateConverter;
 class UStaticMeshComponent;
 class UPointLightComponent;
 class UMeshComponent;
+class USkeletalMeshComponent;
+class USkeletalMesh;
+class UAnimSequence;
+
+/** Ein Gast im Laden (eine Kundenfigur mit Skelett): kommt herein, sitzt, geht. */
+struct FDennoGuest
+{
+	enum class EPhase : uint8 { Entering, Seated, Leaving };
+	USkeletalMeshComponent* Mesh = nullptr;
+	/** Index in AWiesbadenDennoShop::CustomerFigures. */
+	int32 Figure = INDEX_NONE;
+	UStaticMeshComponent* Cup = nullptr;
+	int32 Seat = INDEX_NONE;
+	EPhase Phase = EPhase::Entering;
+	TArray<FVector2D> Path;
+	int32 PathIndex = 0;
+	FVector2D Pos = FVector2D::ZeroVector;
+	double Yaw = 0.0;
+	double Timer = 0.0;       // seit dem Hinsetzen bzw. seit dem Bedienen
+	double Linger = 0.0;      // so lange bleibt er nach dem Bedienen
+	bool bServed = false;
+};
 
 /** Was der Laden mit dem Ergebnis der Wandsuche tut. */
 enum class EDennoShopBuild : uint8
@@ -124,9 +148,22 @@ public:
 	bool TryAcceptDelivery(const APawn* Player, FString& OutMessage);
 	/** Entwicklerpfad (WbDennoAuftrag): ohne Reichweite, fester Zufallswert; vor
 	 *  dem Aufbau vorgemerkt und danach eingeloest. */
-	void RequestDevDelivery(int32 Seed);
+	void RequestDevDelivery(int32 Seed, float DelaySeconds = 0.0f);
 
 	bool IsBuilt() const { return bBuilt; }
+
+	// -- Dennos Arbeitstag (WiesbadenDennoShopLife.cpp) -------------------------
+	// Mit Skelett (/Game/Assets/People/Denno, Tools/Blender/rig_denno.py)
+	// arbeitet Denno hektisch nach WiesbadenDennoWork: fegen, Tische wischen,
+	// aufraeumen, Gaeste bedienen (Kundenfiguren als Cafe- und Friseurgaeste) - und beim
+	// Annehmen eines Lieferauftrags reicht sie das Paket an der Cafetuer und
+	// zwinkert. Ohne Skelett-Assets steht wie bisher die atmende Figur SM_Denno.
+	static const TCHAR* DennoMeshPath();
+	static const TCHAR* DennoAnimPath(EDennoAnim Anim);
+	/** Dennos Aufgabe gerade (Tests, Diagnose). */
+	EDennoTask GetDennoTask() const { return CurrentPick.Task; }
+	/** So weit vom Laden (cm) kommen Gaeste; weiter weg arbeitet Denno allein. */
+	static constexpr double GuestRangeCm = 8000.0;
 
 private:
 	bool TryBuild();
@@ -153,11 +190,35 @@ private:
 	/** Was tatsaechlich gutgeschrieben wird (Kurierlizenz +50 %, wie das Missionssystem). */
 	int32 AwardFor(int32 BaseReward) const;
 
+	// -- Dennos Arbeitstag (WiesbadenDennoShopLife.cpp) -------------------------
+	/** Denno mit Skelett, Bewegungen, Requisiten, Gast-Assets; false = Rueckfall SM_Denno. */
+	bool CreateLife();
+	UStaticMeshComponent* AddProp(FName Name, const TCHAR* ShapePath, const TCHAR* MaterialName);
+	void TickLife(float DeltaSeconds);
+	void NextTask();
+	void StartTask(const FDennoTaskPick& Pick);
+	/** Weg ueber das Wegenetz vom aktuellen Knoten zum Platz. */
+	void WalkTo(const FDennoSpot& Spot);
+	void PlayDenno(EDennoAnim Anim, bool bLoop, float Rate = 1.0f);
+	void UpdateProps();
+	void TickGuests(float DeltaSeconds);
+	void SpawnGuest(bool bSalon);
+	const TArray<FWbCustomerFigure>& GetCustomerFigures();
+	TArray<FDennoGuestView> GuestViews() const;
+	FDennoGuest* GuestAtSeat(int32 Seat);
+	/** Lieferauftrag angenommen: Paket holen und an der Cafetuer ueberreichen. */
+	void QueueHandover();
+	FVector ShopToWorld(const FVector2D& Local, double Z) const;
+	/** Hand-Mitte (Handgelenk + 8 cm Richtung Finger), Weltkoordinaten. */
+	FVector HandCentre(bool bRight) const;
+
 	/** Belieferbare Adressen der Stadt - einmal beim ersten Auftrag gesammelt. */
 	TArray<FDennoDeliveryAddress> DeliveryAddresses;
 	int32 DeliveryNumber = 0;
-	int32 PendingDevSeed = 0;
-	bool bPendingDevDelivery = false;
+	/** Vorgemerkte Entwickler-Auftraege (WbDennoAuftrag), in Reihenfolge: jeder
+	 *  wird eingeloest, sobald seine Zeit da ist UND kein Auftrag mehr laeuft. */
+	struct FPendingDevDelivery { int32 Seed = 0; double AtSeconds = 0.0; };
+	TArray<FPendingDevDelivery> PendingDev;
 	FDelegateHandle MissionCompletedHandle;
 	FDelegateHandle MissionFailedHandle;
 	/** Der wartende Kunde der laufenden Lieferung. */
@@ -169,6 +230,45 @@ private:
 	UPROPERTY(Transient) TArray<UPointLightComponent*> Lights;
 	/** Denno selbst - die einzige Komponente, die sich jedes Bild bewegt. */
 	UPROPERTY(Transient) UStaticMeshComponent* DennoFigure = nullptr;
+	UPROPERTY(Transient) USkeletalMeshComponent* DennoSkel = nullptr;
+	UPROPERTY(Transient) TArray<UAnimSequence*> DennoAnims;
+	/**
+	 * Die Kundenfiguren (WiesbadenCustomerFigures), beim ersten Bedarf geladen:
+	 * Lieferkunden wechseln sich ab, jeder Gast ist eine davon.
+	 */
+	UPROPERTY(Transient) TArray<FWbCustomerFigure> CustomerFigures;
+	bool bCustomerFiguresLoaded = false;
+	/** Zuletzt gelieferte bzw. zuletzt eingetretene Figur (Index in CustomerFigures). */
+	int32 LastDeliveryFigure = INDEX_NONE;
+	int32 LastGuestFigure = INDEX_NONE;
+	/** Requisiten aus Grundformen und Laden-Materialien - kein neues Asset. */
+	UPROPERTY(Transient) UStaticMeshComponent* PropBroomStick = nullptr;
+	UPROPERTY(Transient) UStaticMeshComponent* PropBroomHead = nullptr;
+	UPROPERTY(Transient) UStaticMeshComponent* PropTray = nullptr;
+	UPROPERTY(Transient) UStaticMeshComponent* PropTrayCup = nullptr;
+	UPROPERTY(Transient) UStaticMeshComponent* PropPackage = nullptr;
+	UPROPERTY(Transient) UStaticMeshComponent* PropScissors = nullptr;
+	UPROPERTY(Transient) UStaticMeshComponent* PropCloth = nullptr;
+	/** Gaeste-Komponenten (gehoeren dem Actor; hier fuer die Speicherbereinigung). */
+	UPROPERTY(Transient) TArray<UActorComponent*> GuestComponents;
+	TArray<FDennoGuest> Guests;
+
+	FDennoTaskPick CurrentPick;
+	int32 LastSpotIndex = INDEX_NONE;
+	int32 DennoNode = INDEX_NONE;
+	FVector2D DennoPos = FVector2D::ZeroVector;
+	double DennoYaw = 0.0;
+	TArray<FVector2D> WalkPath;
+	int32 WalkIndex = 0;
+	bool bWalking = false;
+	double TaskElapsed = 0.0;
+	bool bPendingHandover = false;
+	bool bReleased = false;          // Tasse abgestellt / Paket uebergeben
+	EDennoAnim PlayingAnim = EDennoAnim::Count;
+	bool bPlayingLoop = false;
+	double NextGuestSeconds = 0.0;
+	FRandomStream LifeRandom;
+
 	/** Bereits umgestellte Chunk-Komponenten (Streaming kann sie ersetzen). */
 	TSet<TWeakObjectPtr<UMeshComponent>> PatchedFacades;
 

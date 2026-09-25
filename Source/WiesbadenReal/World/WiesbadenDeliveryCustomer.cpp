@@ -6,7 +6,11 @@
 #include "Missions/WiesbadenDennoDelivery.h"
 #include "Missions/WiesbadenMissionSubsystem.h"
 #include "World/PedestrianSpawnerComponent.h"
+#include "World/WiesbadenDennoShop.h"
+#include "Animation/AnimSequence.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/GameInstance.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
@@ -38,13 +42,6 @@ namespace
 		},
 	};
 	constexpr int32 StandingPose = 1;
-	/** Iris: drei Posen, auf die vier Gangphasen gelegt (stehend = Durchgangsstellung). */
-	const TCHAR* IrisPaths[4] = {
-		TEXT("/Game/Assets/People/Iris/Meshes/SM_Iris_StrideA.SM_Iris_StrideA"),
-		TEXT("/Game/Assets/People/Iris/Meshes/SM_Iris_Stand.SM_Iris_Stand"),
-		TEXT("/Game/Assets/People/Iris/Meshes/SM_Iris_StrideB.SM_Iris_StrideB"),
-		TEXT("/Game/Assets/People/Iris/Meshes/SM_Iris_Stand.SM_Iris_Stand"),
-	};
 	/** Hemd RGB, Hose RGB, Hautton - dieselbe Belegung wie im Fussgaenger-Spawner. */
 	constexpr int32 CustomDataFloats = 7;
 	/** Drehgeschwindigkeit zum Spieler (Grad/s). */
@@ -61,11 +58,6 @@ namespace
 	FCollisionObjectQueryParams StaticWorld() { return FCollisionObjectQueryParams(ECC_WorldStatic); }
 }
 
-const TCHAR* AWiesbadenDeliveryCustomer::IrisPosePath(int32 Pose)
-{
-	return IrisPaths[FMath::Clamp(Pose, 0, 3)];
-}
-
 AWiesbadenDeliveryCustomer::AWiesbadenDeliveryCustomer()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -75,8 +67,9 @@ AWiesbadenDeliveryCustomer::AWiesbadenDeliveryCustomer()
 }
 
 void AWiesbadenDeliveryCustomer::Setup(FName InMissionId, const FVector& InDropPoint,
-	const FVector& InAddressLocation, int32 InSeed)
+	const FVector& InAddressLocation, int32 InSeed, const FWbCustomerFigure& InLook)
 {
+	Look = InLook;
 	MissionId = InMissionId;
 	DropPoint = InDropPoint;
 	AddressLocation = InAddressLocation;
@@ -94,6 +87,7 @@ void AWiesbadenDeliveryCustomer::Tick(float DeltaSeconds)
 	if (bThanked)
 	{
 		TickWalkHome(DeltaSeconds);
+		ApplyIdleSway();
 		return;
 	}
 	const UWiesbadenMissionSubsystem* Missions = World->GetSubsystem<UWiesbadenMissionSubsystem>();
@@ -123,6 +117,24 @@ void AWiesbadenDeliveryCustomer::Tick(float DeltaSeconds)
 		return;
 	}
 	FacePlayerOrStreet(PlayerLocation, DeltaSeconds);
+	ApplyIdleSway();
+}
+
+void AWiesbadenDeliveryCustomer::ApplyIdleSway()
+{
+	UWorld* World = GetWorld();
+	if (!SkelFigure || !World)
+	{
+		return;
+	}
+	const double Now = World->GetTimeSeconds();
+	const double Weight = bThanked
+		? 1.0 - FMath::Clamp((Now - ThankedAtSeconds) / WiesbadenDennoDelivery::CustomerIdleFadeSeconds, 0.0, 1.0)
+		: 1.0;
+	// Dieselbe Rechnung wie Denno im Cafe: um die Fuesse (Ursprung der Figur)
+	// kippen und sich umschauen, in Perioden ohne gemeinsamen Takt.
+	const FDennoIdlePose Pose = AWiesbadenDennoShop::ComputeDennoIdle(Now + IdleTimeOffset);
+	SkelFigure->SetRelativeRotation(FRotator(Pose.Rotation.Pitch, Pose.Rotation.Yaw, Pose.Rotation.Roll) * Weight);
 }
 
 void AWiesbadenDeliveryCustomer::FacePlayerOrStreet(const FVector& PlayerLocation, float DeltaSeconds)
@@ -148,35 +160,32 @@ bool AWiesbadenDeliveryCustomer::TryPlace(const FVector& PlayerLocation)
 		return false;   // Boden noch nicht gestreamt - naechster Tick
 	}
 
-	// Iris, wenn ihre Figur da ist; sonst die Fussgaenger-Figur mit eigener Kleidung.
-	const bool bIris = LoadObject<UStaticMesh>(nullptr, IrisPosePath(StandingPose)) != nullptr;
-	if (!bIris)
+	// Die Kundenfigur, wenn sie vollstaendig da ist; sonst die Fussgaenger-Figur mit eigener Kleidung.
+	const bool bSkeletal = CreateSkeletal();
+	if (!bSkeletal)
 	{
-		UE_LOG(LogWbDeliveryCustomer, Warning, TEXT("Kundin Iris fehlt (%s) - Fussgaenger-Figur statt ihrer."),
-			IrisPosePath(StandingPose));
-	}
-	const int32 Body = FMath::Abs(Seed) % 2;
-	FLinearColor Shirt, Trouser;
-	float SkinT = 0.5f;
-	UPedestrianSpawnerComponent::ComputePedestrianColors(Seed, Shirt, Trouser, SkinT);
-	const TArray<float> Colors = { Shirt.R, Shirt.G, Shirt.B, Trouser.R, Trouser.G, Trouser.B, SkinT };
-	PoseMeshes.SetNumZeroed(4);
-	for (int32 Pose = 0; Pose < 4; ++Pose)
-	{
-		const TCHAR* Path = bIris ? IrisPosePath(Pose) : PosePaths[Body][Pose];
-		PoseMeshes[Pose] = LoadObject<UStaticMesh>(nullptr, Path);
-		if (!PoseMeshes[Pose])
+		const int32 Body = FMath::Abs(Seed) % 2;
+		FLinearColor Shirt, Trouser;
+		float SkinT = 0.5f;
+		UPedestrianSpawnerComponent::ComputePedestrianColors(Seed, Shirt, Trouser, SkinT);
+		const TArray<float> Colors = { Shirt.R, Shirt.G, Shirt.B, Trouser.R, Trouser.G, Trouser.B, SkinT };
+		PoseMeshes.SetNumZeroed(4);
+		for (int32 Pose = 0; Pose < 4; ++Pose)
 		{
-			// Fehlt eine Gangphase, bleibt beim Gehen die vorige stehen.
-			UE_LOG(LogWbDeliveryCustomer, Warning, TEXT("Kunde: Figur fehlt (%s)."), Path);
+			PoseMeshes[Pose] = LoadObject<UStaticMesh>(nullptr, PosePaths[Body][Pose]);
+			if (!PoseMeshes[Pose])
+			{
+				// Fehlt eine Gangphase, bleibt beim Gehen die vorige stehen.
+				UE_LOG(LogWbDeliveryCustomer, Warning, TEXT("Kunde: Figur fehlt (%s)."), PosePaths[Body][Pose]);
+			}
 		}
+		if (!PoseMeshes[StandingPose])
+		{
+			bPlaced = true;   // nicht jeden Tick erneut suchen; Trinkgeld gibt es trotzdem
+			return false;
+		}
+		CreateFigure(Colors);
 	}
-	if (!PoseMeshes[StandingPose])
-	{
-		bPlaced = true;   // nicht jeden Tick erneut suchen; Trinkgeld gibt es trotzdem
-		return false;
-	}
-	CreateFigure(bIris ? nullptr : &Colors);
 
 	// Die Figur blickt nach +X; zur Strasse (Abgabepunkt) drehen.
 	StandYawDeg = (DropPoint - Spot).GetSafeNormal2D().Rotation().Yaw;
@@ -184,32 +193,49 @@ bool AWiesbadenDeliveryCustomer::TryPlace(const FVector& PlayerLocation)
 	bPlaced = true;
 	UE_LOG(LogWbDeliveryCustomer, Log,
 		TEXT("Kunde wartet fuer %s (%s) bei (%.0f, %.0f, %.0f), %.0f m vom Abgabepunkt, Spieler %.0f m entfernt."),
-		*MissionId.ToString(), bIris ? TEXT("Iris") : TEXT("Fussgaenger-Figur"), Ground.ImpactPoint.X, Ground.ImpactPoint.Y, Ground.ImpactPoint.Z,
+		*MissionId.ToString(), bSkeletal ? *Look.Name : TEXT("Fussgaenger-Figur"), Ground.ImpactPoint.X, Ground.ImpactPoint.Y, Ground.ImpactPoint.Z,
 		FVector::Dist2D(Ground.ImpactPoint, DropPoint) / 100.0, FVector::Dist2D(PlayerLocation, DropPoint) / 100.0);
 	return true;
 }
 
-void AWiesbadenDeliveryCustomer::CreateFigure(const TArray<float>* Colors)
+bool AWiesbadenDeliveryCustomer::CreateSkeletal()
 {
-	// Iris: gewoehnliche Mesh-Komponente mit ihren Texturen. Fussgaenger-Figur:
+	// Nur vollstaendig: eine Figur, die in Grundhaltung ueber den Gehweg
+	// gleitet, waere schlechter als die gehende Fussgaenger-Figur.
+	if (!Look.IsComplete())
+	{
+		UE_LOG(LogWbDeliveryCustomer, Warning, TEXT("Keine vollstaendige Kundenfigur (%s) - Fussgaenger-Figur statt ihrer."),
+			Look.Name.IsEmpty() ? TEXT("keine gefunden") : *Look.Name);
+		return false;
+	}
+	UAnimSequence* IdleAnim = Look.Anim(ECustomerAnim::Idle);
+	// Der Wurzelknochen steht auf dem Boden, Blick +X - wie die
+	// Fussgaenger-Figuren; kein Versatz noetig.
+	SkelFigure = NewObject<USkeletalMeshComponent>(this, TEXT("CustomerSkeletal"));
+	SkelFigure->SetupAttachment(Root);
+	SkelFigure->SetSkeletalMeshAsset(Look.Mesh);
+	SkelFigure->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	SkelFigure->RegisterComponent();
+	SkelFigure->PlayAnimation(IdleAnim, /*bLooping=*/true);
+	// Jede Kundin atmet und schaut in ihrem eigenen Takt (goldener Schnitt des
+	// Seeds): nicht jede Lieferung beginnt mit demselben Blick.
+	const float Spread = FMath::Frac(FMath::Abs(Seed) * 0.6180339f);
+	SkelFigure->SetPosition(Spread * IdleAnim->GetPlayLength(), /*bFireNotifies=*/false);
+	IdleTimeOffset = Spread * 60.0;
+	return true;
+}
+
+void AWiesbadenDeliveryCustomer::CreateFigure(const TArray<float>& Colors)
+{
 	// EINE Instanz, deren Material die Kleidung aus den Instanz-Daten liest.
-	Figure = Colors
-		? NewObject<UInstancedStaticMeshComponent>(this, TEXT("CustomerFigure"))
-		: NewObject<UStaticMeshComponent>(this, TEXT("CustomerFigure"));
+	Figure = NewObject<UInstancedStaticMeshComponent>(this, TEXT("CustomerFigure"));
 	Figure->SetupAttachment(Root);
 	Figure->SetStaticMesh(PoseMeshes[StandingPose]);
 	Figure->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	if (UInstancedStaticMeshComponent* Instanced = Cast<UInstancedStaticMeshComponent>(Figure))
-	{
-		Instanced->NumCustomDataFloats = CustomDataFloats;
-		Instanced->RegisterComponent();
-		Instanced->AddInstance(FTransform::Identity, /*bWorldSpace=*/false);
-		Instanced->SetCustomData(0, *Colors, /*bMarkRenderStateDirty=*/true);
-	}
-	else
-	{
-		Figure->RegisterComponent();
-	}
+	Figure->NumCustomDataFloats = CustomDataFloats;
+	Figure->RegisterComponent();
+	Figure->AddInstance(FTransform::Identity, /*bWorldSpace=*/false);
+	Figure->SetCustomData(0, Colors, /*bMarkRenderStateDirty=*/true);
 	ShownPose = INDEX_NONE;
 	ShowPose(StandingPose);
 }
@@ -228,14 +254,7 @@ void AWiesbadenDeliveryCustomer::ShowPose(int32 Pose)
 	// Figur auf ihre Unterkante heben (Ursprung nicht zwingend an den Fuessen).
 	const FBoxSphereBounds Bounds = Mesh->GetBounds();
 	const FTransform Lift(FVector(0.0, 0.0, -(Bounds.Origin.Z - Bounds.BoxExtent.Z)));
-	if (UInstancedStaticMeshComponent* Instanced = Cast<UInstancedStaticMeshComponent>(Figure))
-	{
-		Instanced->UpdateInstanceTransform(0, Lift, /*bWorldSpace=*/false, /*bMarkRenderStateDirty=*/true);
-	}
-	else
-	{
-		Figure->SetRelativeTransform(Lift);
-	}
+	Figure->UpdateInstanceTransform(0, Lift, /*bWorldSpace=*/false, /*bMarkRenderStateDirty=*/true);
 	ShownPose = Pose;
 }
 
@@ -290,6 +309,11 @@ void AWiesbadenDeliveryCustomer::BeginWalkHome()
 			WallCm = Wall.Distance;
 		}
 	}
+	if (SkelFigure)
+	{
+		// Die Pause nach dem Dank (CustomerThankPauseSeconds) deckt das Winken ab.
+		SkelFigure->PlayAnimation(Look.Anim(ECustomerAnim::Wave), /*bLooping=*/false);
+	}
 	DoorPoint = WiesbadenDennoDelivery::ComputeDoorPoint(GetActorLocation(), AddressLocation, WallCm);
 	WalkDistanceCm = FVector::Dist2D(GetActorLocation(), DoorPoint);
 	WalkedCm = 0.0;
@@ -321,6 +345,14 @@ void AWiesbadenDeliveryCustomer::TickWalkHome(float DeltaSeconds)
 			FacePlayerOrStreet(Player->GetActorLocation(), DeltaSeconds);
 		}
 		return;
+	}
+
+	if (SkelFigure && !bSkelWalking)
+	{
+		// Auch das Umdrehen zur Tuer geschieht mit Schritten, nicht als Drehteller.
+		SkelFigure->PlayAnimation(Look.Anim(ECustomerAnim::Walk), /*bLooping=*/true);
+		SkelFigure->SetPlayRate(WiesbadenDennoDelivery::ComputeWalkPlayRate(WiesbadenDennoDelivery::CustomerWalkSpeedCmS));
+		bSkelWalking = true;
 	}
 
 	const FVector Here = GetActorLocation();

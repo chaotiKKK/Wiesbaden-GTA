@@ -117,6 +117,15 @@ namespace WiesbadenDennoDelivery
 	 *  1,35 m/s, 75 cm je Gangzyklus). */
 	constexpr double CustomerWalkSpeedCmS = 135.0;
 	constexpr double CustomerStrideCm = 75.0;
+	/** Tempo, fuer das der Schrittzyklus A_<Name>_Walk JEDER Kundenfigur gebaut
+	 *  ist (1 s Schleife, Tools/Blender/build_customer_figure.py: WALK_SPEED_MPS). */
+	constexpr double CustomerWalkAnimSpeedCmS = 130.0;
+	/** Laenge der Warte-Schleife A_<Name>_Idle (s): ein Atemzug, Dennos Takt
+	 *  (AWiesbadenDennoShop::BreathPeriodSeconds). Gewicht verlagern und
+	 *  Umschauen kommen aus AWiesbadenDennoShop::ComputeDennoIdle. */
+	constexpr double CustomerIdleLoopSeconds = 4.2;
+	/** So schnell blendet das Umschauen nach dem Dank aus (s). */
+	constexpr double CustomerIdleFadeSeconds = 0.5;
 	/** Abstand der Haustuer vor der gemessenen Wand (cm) - dort verschwindet er. */
 	constexpr double DoorWallGapCm = 35.0;
 	/** Ohne Wandtreffer: hoechstens so weit Richtung Schwerpunkt (cm). */
@@ -137,4 +146,10 @@ namespace WiesbadenDennoDelivery
 	 * gewartet hat -, damit der erste Schritt nicht springt.
 	 */
 	int32 ComputeWalkPose(double WalkedCm);
+
+	/**
+	 * Abspieltempo des Schrittzyklus bei einem Gehtempo (cm/s): die Fuesse
+	 * sollen nicht ueber den Gehweg gleiten. Begrenzt auf 0,5..2.
+	 */
+	float ComputeWalkPlayRate(double SpeedCmS);
 }
