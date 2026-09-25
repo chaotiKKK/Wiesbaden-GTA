@@ -7,17 +7,20 @@
 #include "Missions/WiesbadenDennoDelivery.h"
 #include "WiesbadenDeliveryCustomer.generated.h"
 
-class UInstancedStaticMeshComponent;
 class UStaticMesh;
+class UStaticMeshComponent;
 
 /**
  * Der Kunde einer Denno-Lieferung: wartet an der Zieladresse vor dem Haus,
  * bedankt sich bei der Abgabe und gibt Trinkgeld nach Puenktlichkeit
  * (WiesbadenDennoDelivery::ComputeTip).
  *
- * Er ist die Fussgaenger-Figur (SM_WbPed2_*) mit eigener Kleidung - als EINE
- * Instanz, weil das Figurmaterial die Kleidungsfarben aus Per-Instanz-Daten
- * liest. Kein neues Asset.
+ * Die Kundin ist Iris (/Game/Assets/People/Iris, Tools/Blender/
+ * build_customer_iris.py): eine Tripo-Figur ohne Skelett, in Blender zu drei
+ * Posen gebogen - stehend und zwei Schrittstellungen -, die sich auf das
+ * Vier-Phasen-Schema der Fussgaenger legen (IrisPosePath). Fehlt Iris, steht
+ * die Fussgaenger-Figur (SM_WbPed2_*) mit eigener Kleidung da - als EINE
+ * Instanz, weil deren Material die Kleidungsfarben aus Per-Instanz-Daten liest.
  *
  * Er erscheint erst, wenn der Spieler auf CustomerAppearCm heran ist (vorher
  * ist sein Boden womoeglich nicht gestreamt), schaut zur Strasse und dreht sich
@@ -51,10 +54,14 @@ public:
 
 	bool IsStanding() const { return bPlaced; }
 
+	/** Iris-Mesh je Gangphase 0..3 (Schritt, stehend, Schritt gespiegelt, stehend). */
+	static const TCHAR* IrisPosePath(int32 Pose);
+
 private:
 	bool TryPlace(const FVector& PlayerLocation);
-	/** Die Figur als EINE Instanz, Kleidungsfarben in den Instanz-Daten. */
-	void CreateFigure(const TArray<float>& Colors);
+	/** Colors = Kleidungsfarben der Fussgaenger-Figur (Instanz-Daten); nullptr = Iris
+	 *  mit eigenen Texturen als gewoehnliche Mesh-Komponente. */
+	void CreateFigure(const TArray<float>* Colors);
 	/**
 	 * Gangphase zeigen: EINE Komponente tauscht ihr Mesh. Vier abwechselnd
 	 * sichtbare Komponenten verwischten beim Gehen - eine eingeblendete hatte
@@ -70,7 +77,7 @@ private:
 	void TickWalkHome(float DeltaSeconds);
 
 	UPROPERTY(Transient) USceneComponent* Root = nullptr;
-	UPROPERTY(Transient) UInstancedStaticMeshComponent* Figure = nullptr;
+	UPROPERTY(Transient) UStaticMeshComponent* Figure = nullptr;
 	/** Index = Gangphase 0..3; fehlende Posen bleiben leer. */
 	UPROPERTY(Transient) TArray<UStaticMesh*> PoseMeshes;
 

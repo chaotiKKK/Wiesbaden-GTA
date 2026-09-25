@@ -7,6 +7,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "World/WiesbadenDennoShop.h"
+#include "World/WiesbadenDeliveryCustomer.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionConstant.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
@@ -18,6 +19,7 @@
 #include "Materials/MaterialExpressionWorldPosition.h"
 #if WITH_EDITOR
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
 #endif
 
@@ -437,6 +439,42 @@ namespace DennoAssetHygiene
 	{
 		return Issues.ContainsByPredicate([Needle](const FString& S) { return S.Contains(Needle); });
 	}
+
+#if WITH_EDITOR
+	/** Alle Assets unter Folder (echter Ordner, Asset-Registry), Texturkanten gemessen. */
+	TArray<FAssetInfo> ScanFolder(const TCHAR* Folder, FAutomationTestBase& Test)
+	{
+		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+		Registry.ScanPathsSynchronous({ FString(Folder) }, true);
+		TArray<FAssetData> Found;
+		Registry.GetAssetsByPath(FName(Folder), Found, true);
+
+		TArray<FAssetInfo> Assets;
+		const FString RootPrefix = FString(Folder) + TEXT("/");
+		for (const FAssetData& Data : Found)
+		{
+			FAssetInfo Info;
+			const FString Path = Data.PackagePath.ToString();
+			Info.Folder = Path.StartsWith(RootPrefix) ? Path.RightChop(RootPrefix.Len()) : FString();
+			Info.Name = Data.AssetName.ToString();
+			Info.Class = Data.AssetClassPath.GetAssetName().ToString();
+			if (FolderFor(Info.Class) == TEXT("Textures"))
+			{
+				if (const UTexture2D* Texture = Cast<UTexture2D>(Data.GetAsset()))
+				{
+#if WITH_EDITORONLY_DATA
+					Info.TextureEdge = static_cast<int32>(FMath::Max(Texture->Source.GetSizeX(), Texture->Source.GetSizeY()));
+#else
+					Info.TextureEdge = FMath::Max(Texture->GetSizeX(), Texture->GetSizeY());
+#endif
+				}
+				Test.AddInfo(FString::Printf(TEXT("Textur %s: %d px"), *Info.Name, Info.TextureEdge));
+			}
+			Assets.Add(Info);
+		}
+		return Assets;
+	}
+#endif
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDennoShopAssetRulesTest,
@@ -514,34 +552,7 @@ bool FDennoShopAssetHygieneTest::RunTest(const FString& Parameters)
 	// Der ECHTE Laden-Ordner nach denselben Regeln wie AssetRules. Schlaegt er
 	// fehl: Tools/import_denno_shop.py erneut ausfuehren (er loescht den Ordner
 	// und legt ihn sauber neu an), bzw. die Blender-Skripte anpassen.
-	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
-	Registry.ScanPathsSynchronous({ FString(Root) }, true);
-	TArray<FAssetData> Found;
-	Registry.GetAssetsByPath(FName(Root), Found, true);
-
-	TArray<FAssetInfo> Assets;
-	const FString RootPrefix = FString(Root) + TEXT("/");
-	for (const FAssetData& Data : Found)
-	{
-		FAssetInfo Info;
-		const FString Path = Data.PackagePath.ToString();
-		Info.Folder = Path.StartsWith(RootPrefix) ? Path.RightChop(RootPrefix.Len()) : FString();
-		Info.Name = Data.AssetName.ToString();
-		Info.Class = Data.AssetClassPath.GetAssetName().ToString();
-		if (FolderFor(Info.Class) == TEXT("Textures"))
-		{
-			if (const UTexture2D* Texture = Cast<UTexture2D>(Data.GetAsset()))
-			{
-#if WITH_EDITORONLY_DATA
-				Info.TextureEdge = static_cast<int32>(FMath::Max(Texture->Source.GetSizeX(), Texture->Source.GetSizeY()));
-#else
-				Info.TextureEdge = FMath::Max(Texture->GetSizeX(), Texture->GetSizeY());
-#endif
-			}
-			AddInfo(FString::Printf(TEXT("Textur %s: %d px"), *Info.Name, Info.TextureEdge));
-		}
-		Assets.Add(Info);
-	}
+	const TArray<FAssetInfo> Assets = ScanFolder(Root, *this);
 
 	// Die fuenf Meshes, die AWiesbadenDennoShop laedt, muessen da sein.
 	static const TCHAR* Meshes[] = { TEXT("SM_DennoShop_Shell"), TEXT("SM_DennoShop_Cafe"),
@@ -560,6 +571,55 @@ bool FDennoShopAssetHygieneTest::RunTest(const FString& Parameters)
 		AddError(TEXT("Laden-Ordner: ") + Issue);
 	}
 	TestEqual(FString::Printf(TEXT("%s: %d Assets ohne Verstoss"), Root, Assets.Num()), Issues.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDennoCustomerIrisAssetsTest,
+	"WiesbadenReal.World.DennoShop.CustomerIris",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FDennoCustomerIrisAssetsTest::RunTest(const FString& Parameters)
+{
+	using namespace DennoAssetHygiene;
+	// Iris, die Kundin der Lieferungen, nach denselben Ordnerregeln wie Dennos
+	// Laden. Schlaegt er fehl: Tools/import_customer_iris.py erneut ausfuehren.
+	const TCHAR* const IrisRoot = TEXT("/Game/Assets/People/Iris");
+	const TArray<FAssetInfo> Assets = ScanFolder(IrisRoot, *this);
+	for (const FString& Issue : FindIssues(Assets))
+	{
+		AddError(TEXT("Iris-Ordner: ") + Issue);
+	}
+
+	// Die Gangphasen: 1 und 3 stehend (dasselbe Mesh), 0 und 2 im Schritt -
+	// ein Schritt ist deutlich tiefer als der Stand, alle gleich hoch, Fuesse auf 0.
+	const TCHAR* Stand = AWiesbadenDeliveryCustomer::IrisPosePath(1);
+	TestEqual(TEXT("Phase 3 = Phase 1 (stehend)"), FString(AWiesbadenDeliveryCustomer::IrisPosePath(3)), FString(Stand));
+	TestNotEqual(TEXT("Zwei verschiedene Schritte"), FString(AWiesbadenDeliveryCustomer::IrisPosePath(0)),
+		FString(AWiesbadenDeliveryCustomer::IrisPosePath(2)));
+	const UStaticMesh* StandMesh = LoadObject<UStaticMesh>(nullptr, Stand);
+	if (!TestNotNull(TEXT("Iris stehend"), StandMesh))
+	{
+		return false;
+	}
+	const FBox StandBox = StandMesh->GetBoundingBox();
+	TestTrue(FString::Printf(TEXT("Iris ist 1,60-1,75 m gross (%.0f cm)"), StandBox.GetSize().Z),
+		StandBox.GetSize().Z > 160.0 && StandBox.GetSize().Z < 175.0);
+	TestTrue(TEXT("Fuesse auf dem Ursprung"), FMath::Abs(StandBox.Min.Z) < 2.0);
+	TestTrue(TEXT("Blick entlang X: schmal in X, breit in Y (Schultern)"), StandBox.GetSize().X < StandBox.GetSize().Y);
+	for (const int32 Phase : { 0, 2 })
+	{
+		const UStaticMesh* Stride = LoadObject<UStaticMesh>(nullptr, AWiesbadenDeliveryCustomer::IrisPosePath(Phase));
+		if (!TestNotNull(FString::Printf(TEXT("Iris Schritt %d"), Phase), Stride))
+		{
+			continue;
+		}
+		const FBox Box = Stride->GetBoundingBox();
+		TestTrue(FString::Printf(TEXT("Schritt %d tiefer als der Stand (%.0f vs %.0f cm)"), Phase,
+			Box.GetSize().X, StandBox.GetSize().X), Box.GetSize().X > StandBox.GetSize().X + 30.0);
+		TestTrue(FString::Printf(TEXT("Schritt %d: Fuesse auf dem Ursprung"), Phase), FMath::Abs(Box.Min.Z) < 2.0);
+		TestTrue(FString::Printf(TEXT("Schritt %d nicht verschoben (Mitte %.0f cm)"), Phase, Box.GetCenter().Y),
+			FMath::Abs(Box.GetCenter().Y - StandBox.GetCenter().Y) < 5.0);
+	}
 	return true;
 }
 #endif

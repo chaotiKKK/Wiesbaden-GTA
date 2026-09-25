@@ -38,6 +38,13 @@ namespace
 		},
 	};
 	constexpr int32 StandingPose = 1;
+	/** Iris: drei Posen, auf die vier Gangphasen gelegt (stehend = Durchgangsstellung). */
+	const TCHAR* IrisPaths[4] = {
+		TEXT("/Game/Assets/People/Iris/Meshes/SM_Iris_StrideA.SM_Iris_StrideA"),
+		TEXT("/Game/Assets/People/Iris/Meshes/SM_Iris_Stand.SM_Iris_Stand"),
+		TEXT("/Game/Assets/People/Iris/Meshes/SM_Iris_StrideB.SM_Iris_StrideB"),
+		TEXT("/Game/Assets/People/Iris/Meshes/SM_Iris_Stand.SM_Iris_Stand"),
+	};
 	/** Hemd RGB, Hose RGB, Hautton - dieselbe Belegung wie im Fussgaenger-Spawner. */
 	constexpr int32 CustomDataFloats = 7;
 	/** Drehgeschwindigkeit zum Spieler (Grad/s). */
@@ -52,6 +59,11 @@ namespace
 	constexpr double WallProbeHeightCm = 100.0;
 
 	FCollisionObjectQueryParams StaticWorld() { return FCollisionObjectQueryParams(ECC_WorldStatic); }
+}
+
+const TCHAR* AWiesbadenDeliveryCustomer::IrisPosePath(int32 Pose)
+{
+	return IrisPaths[FMath::Clamp(Pose, 0, 3)];
 }
 
 AWiesbadenDeliveryCustomer::AWiesbadenDeliveryCustomer()
@@ -136,6 +148,13 @@ bool AWiesbadenDeliveryCustomer::TryPlace(const FVector& PlayerLocation)
 		return false;   // Boden noch nicht gestreamt - naechster Tick
 	}
 
+	// Iris, wenn ihre Figur da ist; sonst die Fussgaenger-Figur mit eigener Kleidung.
+	const bool bIris = LoadObject<UStaticMesh>(nullptr, IrisPosePath(StandingPose)) != nullptr;
+	if (!bIris)
+	{
+		UE_LOG(LogWbDeliveryCustomer, Warning, TEXT("Kundin Iris fehlt (%s) - Fussgaenger-Figur statt ihrer."),
+			IrisPosePath(StandingPose));
+	}
 	const int32 Body = FMath::Abs(Seed) % 2;
 	FLinearColor Shirt, Trouser;
 	float SkinT = 0.5f;
@@ -144,7 +163,7 @@ bool AWiesbadenDeliveryCustomer::TryPlace(const FVector& PlayerLocation)
 	PoseMeshes.SetNumZeroed(4);
 	for (int32 Pose = 0; Pose < 4; ++Pose)
 	{
-		const TCHAR* Path = PosePaths[Body][Pose];
+		const TCHAR* Path = bIris ? IrisPosePath(Pose) : PosePaths[Body][Pose];
 		PoseMeshes[Pose] = LoadObject<UStaticMesh>(nullptr, Path);
 		if (!PoseMeshes[Pose])
 		{
@@ -157,30 +176,40 @@ bool AWiesbadenDeliveryCustomer::TryPlace(const FVector& PlayerLocation)
 		bPlaced = true;   // nicht jeden Tick erneut suchen; Trinkgeld gibt es trotzdem
 		return false;
 	}
-	CreateFigure(Colors);
+	CreateFigure(bIris ? nullptr : &Colors);
 
 	// Die Figur blickt nach +X; zur Strasse (Abgabepunkt) drehen.
 	StandYawDeg = (DropPoint - Spot).GetSafeNormal2D().Rotation().Yaw;
 	SetActorLocationAndRotation(Ground.ImpactPoint, FRotator(0.0f, StandYawDeg, 0.0f));
 	bPlaced = true;
 	UE_LOG(LogWbDeliveryCustomer, Log,
-		TEXT("Kunde wartet fuer %s bei (%.0f, %.0f, %.0f), %.0f m vom Abgabepunkt, Spieler %.0f m entfernt."),
-		*MissionId.ToString(), Ground.ImpactPoint.X, Ground.ImpactPoint.Y, Ground.ImpactPoint.Z,
+		TEXT("Kunde wartet fuer %s (%s) bei (%.0f, %.0f, %.0f), %.0f m vom Abgabepunkt, Spieler %.0f m entfernt."),
+		*MissionId.ToString(), bIris ? TEXT("Iris") : TEXT("Fussgaenger-Figur"), Ground.ImpactPoint.X, Ground.ImpactPoint.Y, Ground.ImpactPoint.Z,
 		FVector::Dist2D(Ground.ImpactPoint, DropPoint) / 100.0, FVector::Dist2D(PlayerLocation, DropPoint) / 100.0);
 	return true;
 }
 
-void AWiesbadenDeliveryCustomer::CreateFigure(const TArray<float>& Colors)
+void AWiesbadenDeliveryCustomer::CreateFigure(const TArray<float>* Colors)
 {
+	// Iris: gewoehnliche Mesh-Komponente mit ihren Texturen. Fussgaenger-Figur:
 	// EINE Instanz, deren Material die Kleidung aus den Instanz-Daten liest.
-	Figure = NewObject<UInstancedStaticMeshComponent>(this, TEXT("CustomerFigure"));
+	Figure = Colors
+		? NewObject<UInstancedStaticMeshComponent>(this, TEXT("CustomerFigure"))
+		: NewObject<UStaticMeshComponent>(this, TEXT("CustomerFigure"));
 	Figure->SetupAttachment(Root);
 	Figure->SetStaticMesh(PoseMeshes[StandingPose]);
 	Figure->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	Figure->NumCustomDataFloats = CustomDataFloats;
-	Figure->RegisterComponent();
-	Figure->AddInstance(FTransform::Identity, /*bWorldSpace=*/false);
-	Figure->SetCustomData(0, Colors, /*bMarkRenderStateDirty=*/true);
+	if (UInstancedStaticMeshComponent* Instanced = Cast<UInstancedStaticMeshComponent>(Figure))
+	{
+		Instanced->NumCustomDataFloats = CustomDataFloats;
+		Instanced->RegisterComponent();
+		Instanced->AddInstance(FTransform::Identity, /*bWorldSpace=*/false);
+		Instanced->SetCustomData(0, *Colors, /*bMarkRenderStateDirty=*/true);
+	}
+	else
+	{
+		Figure->RegisterComponent();
+	}
 	ShownPose = INDEX_NONE;
 	ShowPose(StandingPose);
 }
@@ -199,7 +228,14 @@ void AWiesbadenDeliveryCustomer::ShowPose(int32 Pose)
 	// Figur auf ihre Unterkante heben (Ursprung nicht zwingend an den Fuessen).
 	const FBoxSphereBounds Bounds = Mesh->GetBounds();
 	const FTransform Lift(FVector(0.0, 0.0, -(Bounds.Origin.Z - Bounds.BoxExtent.Z)));
-	Figure->UpdateInstanceTransform(0, Lift, /*bWorldSpace=*/false, /*bMarkRenderStateDirty=*/true);
+	if (UInstancedStaticMeshComponent* Instanced = Cast<UInstancedStaticMeshComponent>(Figure))
+	{
+		Instanced->UpdateInstanceTransform(0, Lift, /*bWorldSpace=*/false, /*bMarkRenderStateDirty=*/true);
+	}
+	else
+	{
+		Figure->SetRelativeTransform(Lift);
+	}
 	ShownPose = Pose;
 }
 
