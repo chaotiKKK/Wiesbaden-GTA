@@ -3946,3 +3946,149 @@ FALLSTRICKE in derselben Kette:
   endet mit LNK1104 und der Test laeuft still gegen das ALTE Binary. Vor
   Testlaeufen `Get-Process UnrealEditor*` pruefen, fremde Editoren nicht
   beenden, warten.
+
+---
+
+## Destillat aus dem Setup-Thread (25.09.2026)
+
+Kompaktes Merkbuch aus `C:\freebuff\WiesbadenReal_Sicherung\AGENTS.md`,
+hier als Anhang an die ausfuehrliche Projektdoku. Inhaltlich uebernommen; nur
+die Default-Karte ist auf den aktuellen Stand `Alkis27` berichtigt.
+
+### Environment (Windows 11, Git Bash shell, project root C:\freebuff\WiesbadenReal_Sicherung)
+- No system ffmpeg. Get a static binary via `pip install imageio-ffmpeg`, then `python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"`.
+- Python 3.14 at C:\Python314 with almost no packages; pip installs land in AppData\Roaming\Python\Python314 (Scripts dir not on PATH).
+- GPU is an RTX 5070 Laptop (8 GB, sm_120) but ctranslate2 4.8.2 CUDA kernels only support up to sm_90 → faster-whisper must run `device="cpu", compute_type="int8"`; do not waste time on CUDA debugging.
+- CPU: 16 logical cores. Fastest Whisper setup: 2 parallel worker processes × cpu_threads=8 → ~8× realtime with large-v3-turbo.
+- pyannote.audio installs on Python 3.14 (torch 2.14+cpu wheels exist), but its HF models (`pyannote/segmentation-3.0`, wespeaker) are license-gated → `GatedRepoError 401` without an HF token; this machine has NO HF token (no `~/.cache/huggingface/token`, no `HF_TOKEN`).
+- torchaudio/torchcodec cannot load WAVs here (no FFmpeg DLLs: RuntimeError "Could not load libtorchcodec") — read PCM WAVs with the stdlib `wave` module + numpy instead of torchaudio/soundfile.
+
+### Long-running jobs in this harness
+- run_terminal_command caps at ~600 s and `process_type: BACKGROUND` is not implemented → launch detached with `(python job.py > log 2>&1 &)` inside the command, then poll with `sleep N; tail log` in later calls.
+- Structure long jobs as resumable chunks: one output file per chunk (e.g. `parts/chunk_0004.json`), skip existing outputs on relaunch.
+- A detached `(python job.py > log 2>&1 &)` launch can die with a PyAV/DLL load error (Windows app-control policy) while the identical import works foreground — if a detached Whisper/pyannote job fails on DLL load, rerun it in the foreground rather than debugging the code.
+- read_files truncates files at ~20k estimated tokens — read big files in offset/limit windows instead.
+- For UE editor commandlets (headless builds, re-bakes): launch detached via `powershell Start-Process` with a .cmd wrapper (e.g. `anchor_bounds.cmd`), then poll log mtime / external-actor package-save counts; the script's result file only flushes at the very end, and the process can outlive the session — always poll, never assume death.
+
+### World-Partition Streaming (WP): Bounds-Diagnose & Re-Bake
+- Empty components (0-instance HISM/ISM, empty mesh) get POINT bounds at their own position (UE 5.8 `SceneComponent.cpp`); chunk actors spawn at the origin, so unanchored empties re-span the origin and inflate `GetComponentsBoundingBox` to km scale. Anchor empties at the cell's content centroid (mesh sections, else region-asset points).
+- `Streaming-Diagnose` fires after ~8 s gameplay from the subsystem tick and lands in `Saved/Logs/WiesbadenReal.log` — NOT in stdout redirects, and engine log timestamps are UTC (23:00 UTC = 01:00 local). `diag_wp.cmd` must run the current baked map at the default 2-km loading range (the old 4-km range override blurs the metric). **Map names move fast, always check before use:** `Alkis4` no longer exists (deleted 2026-09-19, together with Alkis2/3/7/8/9/10-13/15); the live default in `Config/DefaultEngine.ini` is `Alkis27` (Stand 25.09.2026), and `Alkis16`..`Alkis27` exist. Pick the map from `Config/DefaultEngine.ini` / `ls Content/Maps/*.umap`, never from memory.
+- WP cell assignment is baked into the chunk external-actor packages: C++ fixes need a re-bake (`anchor_bounds.cmd` → `Tools/anchor_chunk_bounds.py`, ~2 h for ~2060 chunks; umap itself never changes). Programmatic `SetWorldLocation` does NOT dirty packages — C++ `Modify(true)` must mark the chunk package or `save_dirty_packages` saves nothing; Python prints never reach the cmd stream, verification must go to a file (result lands at `anchor_bounds_result.txt` in the repo root, not Tools/).
+- **Anchoring only survives if it is an ANCHOR property, not a component transform (fixed 2026-09-25, verified in a fresh process).** `AWiesbadenCityChunk` sits at (0,0,0) and carries world coords in its components, so `SetWorldLocation(Anchor)` stores the world anchor as a *relative* delta; the next load adds the actor origin again and the empties drift to 2x the cell. Fix: `StreamingAnchorCm` + `bHasStreamingAnchor` as serialized UPROPERTYs, applied in `PostRegisterAllComponents()`/`BeginPlay` (never `OnRegister` — that is a `USceneComponent` hook, it does not exist on the actor); `AnchorStreamingBounds()` only recomputes and stores. Proof: 20 404 empty components, 0 near the map origin (`Tools/verify_anchor_state.py`); UE 5.8 Python has **no** per-actor save (`EditorActorSubsystem.save_actor` and `EditorLoadingAndSavingUtils.save_actor` do not exist) — only `save_dirty_packages`/`save_current_level`, so an in-session "ok" is not evidence. Measure empty components, not `GetComponentsBoundingBox`: in `-run=pythonscript` the baked StaticMesh assets are unloaded and their components report POINT bounds at (0,0,0), which fakes a 2010/2010 origin hit.
+- Anchor functions must sweep ALL HISM components of the owner class-wide (`GetComponentsByClass`): tracked arrays like `VariedInstances` are populated only by `SpawnVaried()` at build time, and on a loaded map `BeginPlay` skips `SpawnRegionAssets` for empty cells — so serialized variant components (`Trees_01..06`/`Bushes_01..06`) stay untracked at origin. Residual "Bounds-ueber-Ursprung" counts after a pass are NOT stale render state — verify per-component in a fresh process before assuming success.
+
+### Debugging: HuggingFace model-download race (misleading silence)
+- Two processes loading the same model concurrently race on the blob download: one finishes `model.bin`, the other hangs forever re-downloading a stale `.incomplete` blob — with NO error and NO log output.
+- Symptom: python process idle (~1 GB RAM, no CPU time), still at the "loaded" log line → blocked on download, not computing.
+- Fix: kill both, delete `~/.cache/huggingface/hub/models--*/blobs/*.incomplete`, confirm `snapshots/*/model.bin` is intact, relaunch with `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`.
+
+### Nerobergbahn: OSM-Linien sind Punkt-für-Punkt gepaart, nicht bogenlangengleich
+- `TRACK_A`/`TRACK_B` (die OSM-Ways) sind die WAGENMITTEN: sie liegen auf 385 von
+  434 m exakt 1,00 m auseinander (= Spurweite), in der Ausweiche bis 4,15 m.
+  Daraus folgt der Querschnitt: 3 Laufschienen (Mitte + ±1,00 m), 2 Zahnstangen
+  bei ±0,50 m, Seilkanal bei 0, Schwellen 2,40 m, Bettkrone 2,60 m.
+- `BuildTracks()` dünnt je Linie Punkte unter 3 m aus — die beiden Ketten sind
+  danach bis ~3,7 m gegeneinander verschoben. Ein Vergleich bei GLEICHER
+  Bogenlänge vergleicht deshalb Punkte, die bis 3,8 m auseinanderliegen: die
+  Ausweiche erschien damit 138 m statt 35 m lang (`9`/`12`-Rasterfehler solcher
+  Art erst nach dem Zählen der Instanzen im Log auffallen). Richtig ist die
+  Zuordnung über denselben Index; die Bogenlänge der Mitte kommt von Linie A,
+  damit Fahrt und Gleis dieselbe Parametrisierung nutzen.
+- Einzelne OSM-Knoten liegen bis 34 cm neben der Spurweite. Für die gemeinsame
+  Mittelschiene muss der Abstand EXAKT eine Spurweite sein, sonst liegen dort
+  zwei Schienen 30 cm nebeneinander — der gemessene Wert wird darum auf 50 cm
+  gerundet, solange er in der Nähe liegt (nur die echte Ausweiche bleibt).
+- Trassen-Assets sind WERKZEUG: `mesh Z=0` = Schienenoberkante in Trassenmitte,
+  X entlang, Y quer; der Platzer hebt nur noch um `RailTopCm` (= `CarFloorCm`,
+  damit das Rad genau auf der Schiene läuft) und schiebt quer.
+- Die Trasse liegt im unteren Drittel 5-6 m über dem Gelände (Dammmauer):
+  flache Kameras von der Seite schauen gegen die Mauer. Querschnittsbilder
+  deshalb steil von oben (`-WbAerial`, Pitch -30..-55), sonst sieht man nichts.
+
+### Nerobergbahn-Wagen: aufgemalte Graphik (Schriftzug, Wasserstandsskala)
+- Schrift und Skala sind im Vorbild AUF die gelbe Wand gemalt: transparente PNG
+  (`Tools/make_nerobergbahn_textures.py`, Pillow) auf einer Flaeche 1 cm vor der
+  Wand, im UE-Material per Alpha maskiert und zweiseitig (`M_WbNb_Decal`) - so
+  bleibt der gelbe Kasten zwischen den Buchstaben sichtbar.
+- `MeshBuilder.quad_tex()`: die vier Ecken werden "von aussen gelesen"
+  uebergeben, die UV-Werte muessen dazu (0,0) (1,0) (1,1) (0,1) sein. Mit der
+  vertauschten Reihenfolge stand die Schrift 180 Grad verdreht - im Blender-
+  Render sofort zu sehen, im Spiel erst nach dem Import. Merksatz: Blender-UV
+  und UE-UV stimmen ueberein, ein V-Flip ist NICHT noetig.
+- Der Wagen traegt die Graphik auf beiden Seiten und ordnet die Ecken je Seite
+  anders; eine Seite allein zu pruefen reicht nicht (Ansichten
+  `vorschau_wagen_wand.png` / `_wand_gegen.png` in 1920 px).
+- Kleine aufgemalte Details sind in der Gesamtansicht nur 1-2 Pixel breit und
+  wirken dort heller/verwaschen - vor einem Farbfehler erst die Pixelwerte
+  vergleichen (blaueste Pixel der Skala 61/115/174 vs. Schrift 62/114/172).
+
+### Nerobergbahn-Wagen: Innenraum, Mitfahr-Modus, Pruefungen
+- `build_wagen()` kippt das GANZE Mesh mit `tilt_grade()` in die Steigung; eine
+  Hoehe im Mesh-System zu messen ist um `x * 19 %` falsch (bei x = 1,7 m: 32 cm
+  — genug, um „Tacho auf/unter Augenhoehe“ zu vertauschen). `Zurueckdrehen`
+  (x' = x·ca + z·sa, z' = −x·sa + z·ca) und erst dann gegen die C++-Werte
+  pruefen: Wagenboden 0,85 m, Augenhöhe der Mitfahrkamera 2,45 m (Kopfreiheit
+  2,62 m), Sitz 0,45 m, Lehne 0,85 m.
+- Kastenende ist `5,40/2 − 0,85 = 1,85 m`; der Kommentar im Builder sagte 1,95 m.
+  Pruefungen holen solche Bezugslinien aus der Geometrie (Innenboden + 2 cm),
+  nicht aus Kommentaren.
+- Der Wagen laeuft OHNE Kollision (`Car->SetCollisionEnabled(NoCollision)`) —
+  nur deshalb kann der Fahrgast im Wagen umherlaufen. Der Einsteige-Versatz ist
+  Wagenmitte + 1,75 m (Boden 85 + halbe Kapsel 90); mit 1,50 m stand er 25 cm im
+  Boden, was erst mit eingerichtetem Innenraum sichtbar wurde.
+- Bewuchs steht IM Wagen, weil `FWiesbadenRoadClearance` nur aus
+  **Strassen**segmenten gebaut wird (`WiesbadenRegionAssets.cpp`, 150 cm
+  Zuschlag) — der Bahnkorridor ist nicht enthalten. Fix = zweites Freihaltenetz
+  aus der Bahnachse + Neubake der Kacheln; kein Renderlauf-Fehler.
+
+### Nerobergbahn-Stationen: Bahnsteighalle und die Trassenmoebel
+- EIN Asset `SM_WbNbBahnsteighalle` fuer beide Stationen: Laenge entlang X,
+  Ursprung = Schienenoberkante in der Mitte ZWISCHEN den Gleisen (nicht auf
+  TrackA oder TrackB), erstes Joch ohne Balustrade = offene Einstiegsseite. Die
+  Berghalle wird um 180 Grad gedreht, damit die Oeffnung auch dort am Wagen
+  liegt. Der Actor loggt die Weltkoordinaten (`Nerobergbahn: Halle Tal/Berg auf
+  (...) cm`, Trassenlaenge A 43439 / B 43075 cm) - Posen-Dateien brauchen sie,
+  und aus der Bogenlaenge selbst gerechnet liegen sie ~2 m falsch (die
+  ausgeduennten OSM-Punkte).
+- `BuildTrackMeshes` baut Backsteinmauer, Klinkerband, Handlauf und Wimpel fuer
+  die GANZE Trasse, auch im Hallenbereich. `BedHalf` = 130 cm ist zugleich die
+  halbe Wagenbreite: die Mauer stand mitten im Gleistrog und der Handlauf auf
+  Fensterhoehe im fahrenden Wagen, die Wimpel hingen als schraege Platten in der
+  Kabine. Jetzt: keine Mauer und kein Gelaender +-7 m um beide Hallen, und das
+  Gelaender steht 45 cm weiter aussen (`RailOutCm`) auf der Mauerkrone.
+- Runtime-Geometrie der Trasse (Mauer, Gelaender, Roste, Boeschung) braucht
+  KEINEN Neubake - der Actor baut sie bei jedem Start. Ein Neubake ist nur fuer
+  die Staedte-Streuung noetig (Baeume, Laternen und Schilder stehen in Halle und
+  Wagen: `FWiesbadenRoadClearance` kennt den Bahnkorridor nicht) und fuer die
+  OSM-Gebaeude.
+- Die beiden OSM-Wege `Nerobergbahn Talstation` (145208459) und
+  `Nerobergbahn Bergstation` (396465632, building=service) erzeugt die
+  Gebaeude-Pipeline als mehrgeschossige Bloecke - an der Bergstation steht der
+  Block IM Hallengrundriss (Dach bei 192 m gegen 172,85 m Schienenoberkante).
+  Beide Namen treffen auch die Landmarkenliste; das ist nur eine Markierung.
+- Posen fuer Stationsaufnahmen: `Saved/Diagnose/poses_nerobergbahn_stationen
+  /berstation/halle_nah/hallen.txt` (Format: Hoehe_m, AtX_cm, AtY_cm, Yaw,
+  Pitch, Vorwaerts_m, LookYaw, LookPitch). `Yaw` ist die Richtung des
+  Vorwaerts-Versatzes, geblickt wird mit `LookYaw`; bergan ist Yaw -53, quer von
+  rechts 217. Vorsicht: die Kamera ankert Z am **Bodentrace**, nicht an der
+  Schienenoberkante - an Daemmen steht sie tiefer als gedacht, ueber Gebaeuden
+  landet sie auf dem Dach.
+
+### Shell quirks (bash → PowerShell)
+- Bash expands `$_` inside double quotes — wrap the whole PowerShell call in single quotes: `powershell -NoProfile -Command 'Get-Process python | ...'`.
+- Git Bash `tail -N file1 file2` fails ("option used in invalid context"); tail one file per call.
+
+### Tool quirks in this build
+- Preview keeps the page's JS context across preview_navigate: monkeypatched window globals (e.g. window.scrollTo) survive navigation and silently eat later interactions — `location.reload()` via preview_evaluate resets them. Top-level `let`/`const` of the page are invisible to preview_evaluate (new Function scope); reference only DOM nodes or window properties.
+- code_search is broken (vendored rg.exe missing, ENOENT) → use `find`/`grep` via run_terminal_command or read_files instead.
+- A UCLASS header without its matching .cpp breaks the module at LINK time (constructor never defined); the error can look unrelated — check for orphaned headers (e.g. dropped mid-work) before deep compile debugging.
+- File tools accept absolute paths OUTSIDE the project root (e.g. C:\Users\HP\Documents\...) despite project-root scoping.
+- Serve the player/recorder with `python _analyse/range_server.py 8791` from `Audioaufzeichnungen` (takes a port arg; binds 127.0.0.1). Plain `python -m http.server` does NOT work here: Python 3.14.7 stdlib ignores Range headers (200 full-file, no 206) → Chrome media seeks silently reset to ~0 (looks like a player/SW bug, is the server). Detached launches can die silently (empty log) — verify the listener (netstat grep "abh" on German Windows, not "LIST").
+- Replacing a registered preview whose pid is the dev server can kill that server ("dev server stopped responding while the previous preview was being released") — after a failed replace, restart the server before re-registering.
+- preview_navigate to a same-page hash does NOT reload (hashchange on the live page); use `location.reload()` via preview_evaluate for a true reload. Harness round trips between preview_evaluate calls cost ~30-70 s of wall time — never infer playback rate from probe-to-probe deltas; read time state inside one evaluate with a short Promise+setTimeout (≤1.5 s, longer times out at 10 s).
+
+### Reusable assets
+- German audio-transcription pipeline (chunked, resumable, 2× parallel workers): C:\Users\HP\Documents\Audioaufzeichnungen\_analyse\ — worker.py + assemble.py; outputs Transkript.md / transcript_full.json / Analyse.md for "Aufzeichnung (2).m4a". Speaker labels: label_speakers.py (curated time-window map, role labels incl. "Unbekannt", OVERRIDES dict for sub-second boundary fixes) → transcript_with_speakers.json + speaker-prefixed Transkript.md. Speaker stats: Mutter ~67 % of words, Gesprächspartner:in ~22 %, Leo ~6 %, Vater (Telefon) ~1 %, Unbekannt ~3 %.
+- M1 pipeline (2026-09-03): `python _analyse/archiv.py process "<Audioaufzeichnungen/<Stem>.m4a>"` runs convert→transcribe→assemble→retranscribe+splice→label→build, skip-if-done, SHA-256 check via `archiv.py check <m4a>`; artifacts `_analyse/<Stem>/`, config `<Stem>.archiv.json` beside the m4a. `speaker_mode` default `unknown` = all "Unbekannt", `builtin` = embedded curated windows, `json` = ARCHIV_SPEAKER_FILE. Scripts are parametrized via ARCHIV_* env (worker: MODEL/CPU_THREADS/CHUNK_SEC/LANGUAGE/BEAM_SIZE; label: SRC/OUT/OUT_MD/TITLE/SPEAKER_MODE/SPEAKER_FILE/OVERRIDES_FILE; build: SRC/OUT/AUDIO/TITLE; retranscribe: WAV/WINDOWS_JSON).
+- M1 regression expectations: label rebuild keeps transcript_with_speakers.json byte-identical but changes Transkript.md's Duration line (computed 2:14:51 vs old hardcoded 2:16:35) — expected, not drift. Unit tests: `python -m unittest tests.test_archiv_lib -v` from _analyse.
+- M1 edges: silent recordings → 0 segments → label/build stats prints divide by zero (now guarded); `load_config` raises on unknown keys (plan's sample test contradicted this — typo-tolerant configs are dangerous); a failed step's outputs are deleted so resume re-runs it (mtime skips alone can't detect "failed after writing"). Post-migration player depth: AUDIO `../../../<Stem>.m4a`, recorder link `../../recorder.html` — the plan's "Tiefe unverändert" was wrong.
