@@ -1,7 +1,7 @@
 """Verkehrsfahrzeuge (Tools/Blender/build_traffic_cars.py) nach Unreal.
 
 Je Fahrzeug aus Tools/verkehr_fahrzeuge.json (Umgebungsvariable WB_FAHRZEUG =
-<Name> oder alle, Vorgabe alle) nach /Game/Vehicles/Traffic/<Name>:
+<Name>, <Name1>,<Name2> oder alle, Vorgabe alle) nach /Game/Vehicles/Traffic/<Name>:
 
   Meshes/     SM_<Name>_Body, SM_<Name>_Wheel_FL/FR/RL/RR  (Nanite)
   Materials/  M_<Name>_PartN  (Instanzen von /Game/Vehicles/Traffic/Mats/M_WbTrafficCar)
@@ -366,7 +366,7 @@ master = build_master()
 lack_master = build_lack_master()
 nur_lack = os.environ.get('WB_NUR_LACK') == '1'
 choice = os.environ.get('WB_FAHRZEUG', 'alle')
-names = list(REGISTRY) if choice == 'alle' else [choice]
+names = list(REGISTRY) if choice == 'alle' else [n.strip() for n in choice.split(',') if n.strip()]
 report = []
 for vehicle in names:
     if vehicle not in REGISTRY:

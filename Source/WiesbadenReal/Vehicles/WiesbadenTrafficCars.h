@@ -103,7 +103,7 @@ struct WIESBADENREAL_API FWbTrafficDriverView
  */
 namespace WiesbadenTrafficCars
 {
-	/** Die Verkehrsfahrzeuge: 0 Golf, 1 Peugeot, 2 Transporter. */
+	/** Die Verkehrsfahrzeuge: 0 Golf, 1 Peugeot, 2 Transporter, 3 Kaefer, 4 BMW E46 blau, 5 BMW E46 anthrazit. */
 	WIESBADENREAL_API const TArray<FWbTrafficCarType>& Types();
 
 	/** Typ eines Fahrzeugs aus seiner Id - deterministisch, nach Weight gewichtet. */

@@ -100,6 +100,40 @@ namespace
 		return S;
 	}
 
+	FWiesbadenPowertrainSpec BmwE46_320i()
+	{
+		// BMW 320i E46 (2,2 l, 125 kW / 170 PS, 210 Nm bei 3.500/min), 5-Gang, Heckantrieb.
+		FWiesbadenPowertrainSpec S;
+		S.MaxTorqueNm = 210.0f;
+		S.MaxRpm = 6500.0f;
+		S.IdleRpm = 750.0f;
+		S.TorqueCurveNormalized = {
+			FVector2D(800.0, 0.55), FVector2D(1500.0, 0.72), FVector2D(2500.0, 0.88),
+			FVector2D(3500.0, 1.00), FVector2D(4500.0, 0.97), FVector2D(5500.0, 0.90), FVector2D(6500.0, 0.72) };
+		S.ForwardGearRatios = { 4.23f, 2.52f, 1.66f, 1.22f, 1.00f };
+		S.ReverseGearRatio = 4.04f;
+		S.FinalDriveRatio = 3.07f;
+		S.MassKg = 1470.0f;
+		return S;
+	}
+
+	FWiesbadenPowertrainSpec BmwE46_330d()
+	{
+		// BMW 330d E46 (3,0 l Diesel, 135 kW / 184 PS, 390 Nm bei 1.750-3.000/min), 5-Gang, Heckantrieb.
+		FWiesbadenPowertrainSpec S;
+		S.MaxTorqueNm = 390.0f;
+		S.MaxRpm = 4750.0f;
+		S.IdleRpm = 800.0f;
+		S.TorqueCurveNormalized = {
+			FVector2D(800.0, 0.45), FVector2D(1250.0, 0.75), FVector2D(1750.0, 1.00),
+			FVector2D(3000.0, 1.00), FVector2D(3750.0, 0.85), FVector2D(4250.0, 0.70), FVector2D(4750.0, 0.50) };
+		S.ForwardGearRatios = { 4.23f, 2.52f, 1.66f, 1.22f, 1.00f };
+		S.ReverseGearRatio = 4.04f;
+		S.FinalDriveRatio = 2.56f;
+		S.MassKg = 1560.0f;
+		return S;
+	}
+
 	TArray<FWbTrafficCarType> BuildTypes()
 	{
 		TArray<FWbTrafficCarType> Types;
@@ -108,7 +142,7 @@ namespace
 		FWbTrafficCarType Golf;
 		Golf.Name = TEXT("Golf");
 		Golf.Model = TEXT("VW Golf III 5-Tuerer");
-		Golf.Weight = 40.0f;
+		Golf.Weight = 22.0f;
 		Golf.FrontCm = 204.8;
 		Golf.RearCm = 197.2;
 		Golf.BodyWidthCm = 169.5;
@@ -129,7 +163,7 @@ namespace
 		FWbTrafficCarType Peugeot;
 		Peugeot.Name = TEXT("Peugeot");
 		Peugeot.Model = TEXT("Peugeot 207 3-Tuerer");
-		Peugeot.Weight = 35.0f;
+		Peugeot.Weight = 20.0f;
 		Peugeot.FrontCm = 208.5;
 		Peugeot.RearCm = 194.5;
 		Peugeot.BodyWidthCm = 172.0;
@@ -150,7 +184,7 @@ namespace
 		FWbTrafficCarType Van;
 		Van.Name = TEXT("Transporter");
 		Van.Model = TEXT("VW T6 California");
-		Van.Weight = 25.0f;
+		Van.Weight = 14.0f;
 		Van.FrontCm = 244.2;
 		Van.RearCm = 246.2;
 		Van.BodyWidthCm = 190.4;
@@ -169,6 +203,65 @@ namespace
 		Van.ShiftUpRpm = 2200.0f;
 		Van.ShiftDownRpm = 1100.0f;
 		Types.Add(Van);
+
+		// Der Kaefer im Verkehr faehrt mit DEMSELBEN Antrieb wie der des Spielers
+		// (FWiesbadenPowertrainSpec::Kaefer1302, Heckmotor, hecklastig).
+		FWbTrafficCarType Kaefer;
+		Kaefer.Name = TEXT("Kaefer");
+		Kaefer.Model = TEXT("VW Kaefer 1303");
+		Kaefer.Weight = 12.0f;
+		Kaefer.FrontCm = 196.6;
+		Kaefer.RearCm = 214.5;
+		Kaefer.BodyWidthCm = 158.5;
+		Kaefer.WheelbaseCm = 237.7;
+		Kaefer.TrackCm = 137.9;
+		Kaefer.WheelRadiusCm = 34.1;
+		Kaefer.HeadLampCm = FVector(166.0, -54.0, 70.0);
+		Kaefer.TailLampCm = FVector(-199.0, -58.0, 78.0);
+		Kaefer.Powertrain = FWiesbadenPowertrainSpec::Kaefer1302();
+		Kaefer.bFrontWheelDrive = false;
+		Kaefer.DragCoeffAreaM2 = 1.05f;
+		Kaefer.FrontWeightFraction = 0.42f;
+		Kaefer.CgHeightM = 0.45f;
+		Kaefer.YawInertiaKgM2 = 1150.0f;
+		Kaefer.CorneringStiffnessNPerRad = 33000.0f;
+		Kaefer.MaxSteerAngleDeg = 35.0f;
+		Types.Add(Kaefer);
+
+		FWbTrafficCarType BmwBlau;
+		BmwBlau.Name = TEXT("BmwBlau");
+		BmwBlau.Model = TEXT("BMW 320i E46 Limousine");
+		BmwBlau.Weight = 16.0f;
+		BmwBlau.FrontCm = 215.4;
+		BmwBlau.RearCm = 231.7;
+		BmwBlau.BodyWidthCm = 173.9;
+		BmwBlau.WheelbaseCm = 267.4;
+		BmwBlau.TrackCm = 148.1;
+		BmwBlau.WheelRadiusCm = 34.85;
+		BmwBlau.HeadLampCm = FVector(202.0, -60.0, 68.0);
+		BmwBlau.TailLampCm = FVector(-220.0, -65.0, 88.0);
+		BmwBlau.Powertrain = BmwE46_320i();
+		BmwBlau.bFrontWheelDrive = false;
+		BmwBlau.DragCoeffAreaM2 = 0.62f;
+		BmwBlau.FrontWeightFraction = 0.51f;
+		BmwBlau.CgHeightM = 0.52f;
+		BmwBlau.YawInertiaKgM2 = 2200.0f;
+		BmwBlau.CorneringStiffnessNPerRad = 80000.0f;
+		BmwBlau.MaxSteerAngleDeg = 32.0f;
+		Types.Add(BmwBlau);
+
+		FWbTrafficCarType BmwGrau = BmwBlau;
+		BmwGrau.Name = TEXT("BmwGrau");
+		BmwGrau.Model = TEXT("BMW 330d E46 Limousine");
+		BmwGrau.FrontCm = 214.5;
+		BmwGrau.RearCm = 232.7;
+		BmwGrau.WheelbaseCm = 268.0;
+		BmwGrau.WheelRadiusCm = 33.7;
+		BmwGrau.Powertrain = BmwE46_330d();
+		BmwGrau.YawInertiaKgM2 = 2300.0f;
+		BmwGrau.ShiftUpRpm = 2200.0f;
+		BmwGrau.ShiftDownRpm = 1100.0f;
+		Types.Add(BmwGrau);
 		return Types;
 	}
 }

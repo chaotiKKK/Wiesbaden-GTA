@@ -68,6 +68,62 @@
         "hell_min": 0.55,
         "hell_max": 1.2
       }
+    },
+    "Kaefer": {
+      "quelle": "Data/Raw/Verkehr/Kaefer/kaefer_source.glb",
+      "vorbild": "VW Kaefer 1303",
+      "laenge_m": 4.11,
+      "dreiecke": 150000,
+      "rad_dreiecke": 12000,
+      "spur_m": 1.38,
+      "lack": {
+        "rgb": [
+          0.42,
+          0.51,
+          0.6
+        ],
+        "farbton_grad": 22,
+        "saettigung_min": 0.1,
+        "hell_min": 0.4,
+        "hell_max": 1.9
+      }
+    },
+    "BmwBlau": {
+      "quelle": "Data/Raw/Verkehr/BmwBlau/bmwblau_source.glb",
+      "vorbild": "BMW 3er Limousine E46 (1998-2005), blau",
+      "laenge_m": 4.471,
+      "dreiecke": 150000,
+      "rad_dreiecke": 12000,
+      "spur_m": 1.481,
+      "lack": {
+        "rgb": [
+          0.1,
+          0.36,
+          0.6
+        ],
+        "farbton_grad": 20,
+        "saettigung_min": 0.14,
+        "hell_min": 0.3,
+        "hell_max": 2.3
+      }
+    },
+    "BmwGrau": {
+      "quelle": "Data/Raw/Verkehr/BmwGrau/bmwgrau_source.glb",
+      "vorbild": "BMW 3er Limousine E46 (1998-2005), anthrazit",
+      "laenge_m": 4.471,
+      "dreiecke": 150000,
+      "rad_dreiecke": 12000,
+      "spur_m": 1.481,
+      "lack": {
+        "rgb": [
+          0.6,
+          0.59,
+          0.56
+        ],
+        "farbton": 0.03,
+        "hell_min": 0.45,
+        "hell_max": 1.35
+      }
     }
   }
 }

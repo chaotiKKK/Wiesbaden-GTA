@@ -18,7 +18,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficCarsTypesTest,
 bool FTrafficCarsTypesTest::RunTest(const FString& Parameters)
 {
 	const TArray<FWbTrafficCarType>& All = Types();
-	TestEqual(TEXT("drei Verkehrsfahrzeuge"), All.Num(), 3);
+	TestEqual(TEXT("sechs Verkehrsfahrzeuge"), All.Num(), 6);
 	for (const FWbTrafficCarType& T : All)
 	{
 		const double Length = T.FrontCm + T.RearCm;
@@ -30,12 +30,16 @@ bool FTrafficCarsTypesTest::RunTest(const FString& Parameters)
 			&& T.HeadLampCm.Y < 0.0 && T.TailLampCm.Y < 0.0
 			&& FMath::Abs(T.HeadLampCm.Y) < 0.5 * T.BodyWidthCm && FMath::Abs(T.TailLampCm.Y) < 0.5 * T.BodyWidthCm);
 		const FWiesbadenVehiclePhysics P = T.MakePhysics();
-		TestTrue(FString::Printf(TEXT("%s: Frontantrieb, voller Tank, erster Gang"), T.Name),
-			P.bFrontWheelDrive && P.HasFuel() && P.Gear == 1 && P.SpeedMetersPerS == 0.0f);
+		TestTrue(FString::Printf(TEXT("%s: Antriebsachse wie im Katalog, voller Tank, erster Gang"), T.Name),
+			P.bFrontWheelDrive == T.bFrontWheelDrive && P.HasFuel() && P.Gear == 1 && P.SpeedMetersPerS == 0.0f);
 		TestEqual(FString::Printf(TEXT("%s: Radradius Physik = Mesh"), T.Name), P.WheelRadiusM, static_cast<float>(T.WheelRadiusCm / 100.0));
 	}
 	// Der T6 ist schwerer und traeger als der Golf.
 	TestTrue(TEXT("Transporter schwerer als Golf"), All[2].Powertrain.MassKg > 1.8f * All[0].Powertrain.MassKg);
+	// Kaefer und BMW treiben hinten an; der Verkehrs-Kaefer faehrt mit dem Antrieb des Spielers.
+	TestTrue(TEXT("Kaefer und BMW mit Heckantrieb"), !All[3].bFrontWheelDrive && !All[4].bFrontWheelDrive && !All[5].bFrontWheelDrive);
+	TestEqual(TEXT("Verkehrs-Kaefer = Spieler-Antrieb"), All[3].Powertrain.MaxTorqueNm,
+		FWiesbadenPowertrainSpec::Kaefer1302().MaxTorqueNm);
 
 	// Typwahl: deterministisch, Verteilung nach den Gewichten.
 	TArray<int32> Counts;

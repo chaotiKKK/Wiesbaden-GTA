@@ -99,6 +99,13 @@ def find_wheels(name, parts):
         round_ = 0.7 < ext.y / max(ext.z, 1e-6) < 1.4
         if lo.z < GROUND_TOL and round_ and ext.x < 0.12 and ext.z < 0.25:
             tires.append(o)
+    # Ein Kandidat ganz im Umriss eines anderen ist dessen Radkappe/Felge, kein
+    # eigener Reifen (BMW E46: die Nabe reicht bis 1,7 cm an den Boden).
+    def innen(a, b):
+        alo, ahi = boxes[a.name]
+        blo, bhi = boxes[b.name]
+        return all(alo[i] >= blo[i] - CONTAIN_TOL and ahi[i] <= bhi[i] + CONTAIN_TOL for i in range(3))
+    tires = [t for t in tires if not any(o is not t and innen(t, o) for o in tires)]
     if len(tires) != 4:
         raise RuntimeError('%s: %d Reifen statt 4: %s' % (name, len(tires), [o.name for o in tires]))
     groups = {}
