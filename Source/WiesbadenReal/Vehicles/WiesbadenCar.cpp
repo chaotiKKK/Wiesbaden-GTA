@@ -940,6 +940,7 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 			if (Hit > 0)
 			{
 				UE_LOG(LogWbVehicles, Log, TEXT("Ueberfahren: %d Fussgaenger."), Hit);
+				City->PlayPedestrianBurstSound(Front);
 				// Jedes Ueberfahren ist eine Tat ins Fahndungskonto - sonst
 				// wuerde die Polizei nur auf Schuesse reagieren, nicht auf
 				// den drastischsten Fall.

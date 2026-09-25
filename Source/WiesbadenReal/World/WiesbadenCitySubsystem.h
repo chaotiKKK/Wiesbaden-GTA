@@ -23,6 +23,7 @@ class AWiesbadenStreamingSource;
 class AWiesbadenWorldBuilder;
 class UBuildingCollisionSpawnerComponent;
 class UWiesbadenGameInstance;
+class USoundBase;
 
 /**
  * Per-Welt-Orchestrierung der Stadt (UWorldSubsystem).
@@ -266,6 +267,25 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Polizei")
 	double GetWantedPoints() const { return WantedState.Points; }
 
+	// -- Passanten-Audio (Treffer) ---------------------------------------------
+
+	/**
+	 * Treffer auf einen Fussgaenger hoeren (echte Aufnahme).
+	 *
+	 * Rufen die Gewalt-Quellen, die zugleich melden: Waffen-Aufschlag,
+	 * Explosion, Saegenhieb, Ueberfahren. bHeavy waehlt den lauteren Treffer
+	 * mit Sturz (Explosion, Volltreffer), sonst den weichen; das Zerplatzen
+	 * unter Rad und Saege hat einen eigenen Ton.
+	 *
+	 * Die Samples kommen aus /Game/Audio/Samples und werden beim ersten
+	 * Bedarf geladen und hier gepuffert - derselbe Weg wie beim Schussklang,
+	 * nur an einer Stelle fuer alle Quellen.
+	 */
+	void PlayPedestrianHitSound(const FVector& At, bool bHeavy);
+
+	/** Zerplatzen eines Fussgaengers (Ueberfahren, Saege). */
+	void PlayPedestrianBurstSound(const FVector& At);
+
 	/** Momentaufnahme der Verkehrs-Simulation (HUD/Blueprint). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Traffic")
 	FWiesbadenTrafficReport GetTrafficReport() const { return TrafficSimulation.Report; }
@@ -335,6 +355,16 @@ private:
 
 	float PedestrianReportDelay = 0.0f;
 	bool bPedestriansReported = false;
+
+	/** Passanten-Trefferklaenge aus /Game/Audio/Samples (Cache, Uebergang). */
+	UPROPERTY(Transient)
+	USoundBase* PedestrianHitSample = nullptr;
+
+	UPROPERTY(Transient)
+	USoundBase* PedestrianHitHeavySample = nullptr;
+
+	UPROPERTY(Transient)
+	USoundBase* PedestrianBurstSample = nullptr;
 
 	bool bGeometryReported = false;
 

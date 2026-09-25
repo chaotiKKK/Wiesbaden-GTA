@@ -584,6 +584,11 @@ void UWiesbadenWeaponComponent::ReportPedestrianAndWanted(UWorld* World,
 		const double StrikeRadius = FMath::Clamp(60.0 + Damage, 70.0, 150.0);
 		const int32 Felled = City->PedestrianSimulation.StrikeNear(
 			ImpactPoint, StrikeRadius, /*DownForSeconds=*/12.0f);
+		if (Felled > 0)
+		{
+			// Mehrere Figuren auf einmal = schwerer Trefferklang.
+			City->PlayPedestrianHitSound(ImpactPoint, Felled > 1);
+		}
 		for (int32 HitIndex = 0; HitIndex < Felled; ++HitIndex)
 		{
 			City->ReportCrime(EWiesbadenCrimeEvent::PedestrianDowned);
@@ -662,6 +667,10 @@ void UWiesbadenWeaponComponent::ApplyExplosionAt(const FVector& Centre, const FW
 	{
 		const int32 Felled = City->PedestrianSimulation.StrikeNear(
 			Centre, P.BlastRadiusCm, /*DownForSeconds=*/12.0f);
+		if (Felled > 0)
+		{
+			City->PlayPedestrianHitSound(Centre, /*bHeavy=*/true);
+		}
 		for (int32 HitIndex = 0; HitIndex < Felled; ++HitIndex)
 		{
 			City->ReportCrime(EWiesbadenCrimeEvent::PedestrianDowned);

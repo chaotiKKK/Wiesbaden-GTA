@@ -42,6 +42,13 @@ CLIPS = {
     "A_CarDoor":             ("VEHDoor_Car door 4 (ID 1526)_BigSoundBank.com.wav", -6.0, False),
     "A_CarStart":            ("VEHCar_Car starting and departure (ID 0189)_BigSoundBank.com.wav", -8.0, False),
     "A_Servo":               ("MOTRSrvo_Servomotor 2 90 2 (ID 2920)_BigSoundBank.com.wav", -9.0, False),
+    # Passanten-Treffer (Nutzerwunsch 2026-09): die drei Gore-Clips decken den
+    # weichen Treffer (Gewicht auf den Fuss, GORESrce), das Zerplatzen unter
+    # Rad/Saege und den schweren Treffer mit Sturz (GOREBone) ab. Leichte
+    # Clips werden lauter gemischt (Umgebung ist laut).
+    "A_PedestrianBurst":     ("GORESrce_Gore zucchini 1 (ID 2582)_BigSoundBank.com.wav", -4.0, False),
+    "A_PedestrianHit":       ("GOREBone_Gore pepper 2 (ID 2594)_BigSoundBank.com.wav", -3.0, False),
+    "A_PedestrianHitHeavy":  ("GOREBone_Gore pepper 4 (ID 2596)_BigSoundBank.com.wav", -3.0, False),
 }
 
 

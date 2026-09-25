@@ -36,6 +36,9 @@ CLIPS = {
     "A_CarDoor": False,
     "A_CarStart": False,
     "A_Servo": False,
+    "A_PedestrianBurst": False,
+    "A_PedestrianHit": False,
+    "A_PedestrianHitHeavy": False,
 }
 
 report_path = os.path.join(unreal.Paths.project_saved_dir(), "Diagnose", "audio_samples_import.txt")

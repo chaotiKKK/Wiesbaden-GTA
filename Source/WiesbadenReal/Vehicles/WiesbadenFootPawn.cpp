@@ -835,6 +835,10 @@ void AWiesbadenFootPawn::DoMeleeHit()
 		const int32 Felled = City->PedestrianSimulation.BurstNear(
 			Centre, MeleeRadiusCm + MeleeRangeCm * 0.5);
 		Struck += Felled;
+		if (Felled > 0)
+		{
+			City->PlayPedestrianBurstSound(Centre);
+		}
 
 		// Jede zerplatze Figur ist eine Tat ins Fahndungskonto.
 		for (int32 HitIndex = 0; HitIndex < Felled; ++HitIndex)

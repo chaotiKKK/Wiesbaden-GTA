@@ -2,6 +2,8 @@
 
 #include "World/WiesbadenCitySubsystem.h"
 #include "Camera/PlayerCameraManager.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 #include "Vehicles/WiesbadenTrafficCars.h"
 #include "World/WiesbadenStreamingCost.h"
 
@@ -388,6 +390,54 @@ void UWiesbadenCitySubsystem::ReportCrime(EWiesbadenCrimeEvent Event)
 			TEXT("Fahndung: Stufe %d (%.0f Punkte) nach Ereignis %d."),
 			WantedState.Level, WantedState.Points, static_cast<int32>(Event));
 	}
+}
+
+void UWiesbadenCitySubsystem::PlayPedestrianHitSound(const FVector& At, bool bHeavy)
+{
+	USoundBase*& Cache = bHeavy ? PedestrianHitHeavySample : PedestrianHitSample;
+	const TCHAR* Name = bHeavy ? TEXT("A_PedestrianHitHeavy") : TEXT("A_PedestrianHit");
+	if (!Cache)
+	{
+		const FString Path = FString::Printf(TEXT("/Game/Audio/Samples/%s.%s"), Name, Name);
+		Cache = LoadObject<USoundBase>(nullptr, *Path);
+		if (!Cache)
+		{
+			UE_LOG(LogWbVehicles, Warning,
+				TEXT("Passanten-Treffer: Aufnahme '%s' fehlt - der Treffer bleibt stumm."), Name);
+		}
+	}
+	if (!Cache)
+	{
+		return;
+	}
+
+	// Zufalls-Pitch: zwei Treffer kurz nacheinander sollen nicht wie derselbe
+	// Clip klingen (dieselbe Absicht wie bei den Schuss-Samples).
+	UGameplayStatics::SpawnSoundAtLocation(this, Cache, At, FRotator::ZeroRotator,
+		1.0f, FMath::FRandRange(0.94f, 1.06f));
+	UE_LOG(LogWbVehicles, Log, TEXT("Passanten-Treffer: Aufnahme '%s' gespielt."), Name);
+}
+
+void UWiesbadenCitySubsystem::PlayPedestrianBurstSound(const FVector& At)
+{
+	if (!PedestrianBurstSample)
+	{
+		PedestrianBurstSample = LoadObject<USoundBase>(nullptr,
+			TEXT("/Game/Audio/Samples/A_PedestrianBurst.A_PedestrianBurst"));
+		if (!PedestrianBurstSample)
+		{
+			UE_LOG(LogWbVehicles, Warning,
+				TEXT("Ueberfahren: Aufnahme 'A_PedestrianBurst' fehlt - der Treffer bleibt stumm."));
+		}
+	}
+	if (!PedestrianBurstSample)
+	{
+		return;
+	}
+
+	UGameplayStatics::SpawnSoundAtLocation(this, PedestrianBurstSample, At,
+		FRotator::ZeroRotator, 1.0f, FMath::FRandRange(0.92f, 1.08f));
+	UE_LOG(LogWbVehicles, Log, TEXT("Ueberfahren: Aufnahme 'A_PedestrianBurst' gespielt."));
 }
 
 void UWiesbadenCitySubsystem::Tick(float DeltaTime)

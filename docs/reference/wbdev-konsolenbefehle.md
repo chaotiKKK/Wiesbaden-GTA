@@ -55,6 +55,8 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 | `WbOptionen` | `WbOptionen` | HUD vorhanden | Optionsfenster auf/zu; protokolliert alle Zeilen mit Index und Wert |
 | `WbOption` | `WbOption <Zeile> <Schritte>` | HUD vorhanden | Eine Zeile des Optionsfensters verstellen (Vorzeichen = Richtung) |
 | `WbDennoAuftrag` | `WbDennoAuftrag [Seed] [VerzoegerungS]` | Denno-Laden in der Welt | Lieferauftrag bei Denno annehmen, ohne dort zu stehen (fester Zufallswert); Denno reicht das Paket an der Cafetuer |
+| `WbFussAnsicht` | `WbFussAnsicht <0/1/2>` | zu Fuss (FootPawn besessen) | Kamera zu Fuss: 0 Schulter, 1 Ego, 2 umschalten (wie Taste C) |
+| `WbFussWaffe` | `WbFussWaffe <0-8>` | zu Fuss (FootPawn besessen) | Waffe 0..8 waehlen (wie Tasten 1-9; 8 = Kettensaege) |
 
 ---
 
@@ -303,6 +305,40 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
     bewirkt, faellt damit im Protokoll auf und nicht erst im Bild.
 - **Beispiel:** `-ExecCmds="WbOptionen,WbOption 1 -4,WbOption 15 23"` setzt die
   Schatten auf die unterste Stufe und die Tageszeit auf 22 Uhr.
+
+---
+
+## WbFussAnsicht
+
+- **Signatur:** `WbFussAnsicht <0/1/2>`
+- **Wirkung:** Kamera des FootPawns umschalten: 0 = Schulter, 1 = Ego (erste
+  Person an den Augen, Waffe am Bildrand), 2 = umschalten wie Taste C. In der
+  Ego-Ansicht verschwindet der eigene Koerper (`OwnerNoSee`); an Fahrzeugen
+  gibt es den Modus nicht, dort gilt nur die Schulterkamera.
+- **Voraussetzung:** zu Fuss, also ein besessener `AWiesbadenFootPawn`.
+- **Log-Nachweis:**
+  - `WbDev: WbFussAnsicht - gesetzt auf Ego oder Schulter.`
+  - `WbDev: WbFussAnsicht - umgeschaltet, jetzt Ego oder Schulter.`
+  - `WbDev: WbFussAnsicht - zu Fuss nicht aktiv (Pawn ist kein FootPawn).`
+- **Beispiel:** `-ExecCmds="WbFussAnsicht 1"` springt ohne Tastendruck in die
+  Ego-Ansicht - praktisch fuer Aufnahmen, die im Bild keine Hand auf der
+  Taste zeigen sollen.
+
+---
+
+## WbFussWaffe
+
+- **Signatur:** `WbFussWaffe <0-8>`
+- **Wirkung:** Waffe des FootPawns waehlen (Index wie Taste 1-9, 0 = erste
+  Waffe der Tabelle, 8 = Kettensaege). Der Wechsel loescht laufende Projektile
+  und setzt die Waffenanzeige neu; Schaden und Mündungsgeschwindigkeit der
+  gewaehlten Waffe stehen im Protokoll.
+- **Voraussetzung:** zu Fuss, also ein besessener `AWiesbadenFootPawn`.
+- **Log-Nachweis:**
+  - `WbDev: WbFussWaffe - Waffe 3 (Rifle) gewaehlt, Schaden 34, V 90000 cm/s.`
+  - `WbDev: WbFussWaffe 9 - ausserhalb der Tabelle (0..8).`
+  - `WbDev: WbFussWaffe - zu Fuss nicht aktiv.`
+- **Beispiel:** `-ExecCmds="WbFussWaffe 8"` hebt die Kettensaege.
 
 ---
 
