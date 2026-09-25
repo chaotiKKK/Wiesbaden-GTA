@@ -46,6 +46,20 @@ public:
 
 	virtual void Tick(float DeltaSeconds) override;
 
+	/**
+	 * Passanten unter dem Wagen: Treffer, Aufnahme, Fahndungskonto.
+	 *
+	 * Derselbe dreiteilige Pfad wie im kinematischen Kaefer
+	 * (AWiesbadenCar::ApplyVehiclePhysics) - Simulation fragen, Aufnahme
+	 * spielen, Tat melden. Er stand vorher NUR am kinematischen Wagen, also
+	 * blieb die ganze Passanten-Audiokette im echten Spiel stumm: der
+	 * Spieler faehrt den Chaos-Wagen (-WbChaosCar), und genau dort gehoert
+	 * sie gefeuert. Passanten tragen keine Kollision (Instanzen einer
+	 * gemeinsamen Komponente), ein Sweep trifft sie grundsaetzlich nicht -
+	 * deshalb die Simulation direkt statt einer Abfrage der Welt.
+	 */
+	void CheckPedestrianRunOver();
+
 	// -- Gemeinsame Steuernaht (IWiesbadenVehicleControl) --------------------
 	// Speichert den externen Befehl; im Tick wird er bei aktivem externem
 	// Control statt der Tastatur an die Chaos-Bewegungskomponente gelegt.

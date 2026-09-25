@@ -7,6 +7,8 @@ Nicht-offensichtliche Fakten, die sich nicht aus Code/Doku rekonstruieren lassen
 - **Neuer Rechner (ab 2026-09-01, Benutzer HP):** einzige Arbeitskopie unter `C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal`; verbindliche Engine ist die Launcher-Installation **5.8.2 (CL 56702186)** unter `C:\Program Files\Epic Games\UE_5.8` - alle `.cmd`/`Tools`/Doku zeigen dorthin. Die Plattenkopie `C:\freebuff\WiesbadenReal_Sicherung\UE_5.8` (5.8.1, CL 56057345) bleibt nur als Rueckfall (dann Rebuild noetig, da `Intermediate`/`Binaries` gegen 5.8.2 gebaut sind). Build HIER moeglich (VS 2022 + MSVC 14.44 + Win11-SDK 26100). Die alten `ssonn`/`aivideo`-Pfade und BEIDE Worktrees (`D:\freebuff_city_wi`, `C:\Users\ssonn\aivideo\WiesbadenReal`) existieren hier NICHT; `verify-worktree-sync.mjs` ist damit gegenstandslos.
 - **FALLE: die beiden UE-5.8-Baeme niemals mischen (Symptom 2026-09-17).** Baut man den Editor mit der Plattenkopie (`C:\freebuff\...\UE_5.8`, 5.8.1) statt mit der Launcher-Installation (5.8.2), scheitert JEDE Uebersetzungseinheit mit Typneudefinitionen in Engine-Headern: `GenericPlatform.h error C2953 "SelectIntPointerType" ... bereits definiert`, `error C2011 "FGenericPlatformTypes"`, `fatal error C1189: #error: PLATFORM_32BITS should not be defined`. Die `note: Siehe Deklaration`-Zeilen nennen dann `C:\Program Files\Epic Games\UE_5.8\...` als ERSTE Deklaration - das ist der Fingerzeig. Ursache ist NICHT der Code, nicht UBA und nicht die Toolchain: das **gemeinsame PCH liegt im Projekt-`Intermediate`** und traegt die Headerpfade der Engine, mit der es erzeugt wurde; der andere Baum parst dieselben (bytegleichen) Header ein zweites Mal. Weder `-NoUBA`, noch das Loeschen der Projekt-PCHs hilft dauerhaft - nur derselbe Baum. Praktisch: `Tools/build_gate1.cmd` ruft die installierte Engine; bei einem Baumwechsel vorher `WiesbadenReal\Intermediate\Build\...\*.pch` loeschen. PCH-Wiederverwendung ist danach stabil (inkrementeller Lauf: 0 Aktionen, `Result: Succeeded`).
 - git-Repo vorhanden (Branch `main`); `.gitignore` haelt `Content/__ExternalActors__` (26 GB gebackene Karte), `Data/Raw`, UE-Build-Ausgaben und `*.log` draussen.
+- **Speicher/Pagefile (am Rechner verifiziert 2026-09-25):** 31,0 GiB RAM (33.307.574.272 B), `AutomaticManagedPagefile=False`, feste `C:\pagefile.sys` mit 98.304 MB (96 GiB) Initial **und** Maximum. Genau das ermoeglicht den Voll-Bake im Editor (Speicherspitze ~19 GB; der Commandlet-Weg starb an 42 GiB virtuell). Merksatz dazu: eine Pagefile-Aenderung wirkt erst NACH einem Neustart - im Thread-Export steht deshalb noch "die 96-GiB-Datei laeuft noch nicht, aktuell 64-GB-Stand"; das ist ueberholt. Vor groesseren Laeufen nicht aufraeumen (kein Smaller-Memory-Tuning), die 96 GiB sind der Grund, dass der Bake ueberhaupt durchlaeuft.
+- **Vor jedem Editor-/Commandlet-Lauf die Prozessreste raeumen (Messung 14.09.2026):** `zenserver` + alle `UnrealEditor*` beenden, 3 s warten, dann starten. Back-to-back-Betrieb blaeht die Ladezeit auf ~8 min auf; aus dem sauberen Zustand war derselbe Start nach **~94 s** durch. Eine "haengende" Ladezeit ist also fast immer ein Restprozess und kein Projektproblem - und die 94 s sind die Vergleichsgroesse, mit der man einen echten Regressionsverdacht erst ausschliesst.
 - `WiesbadenReal.Build.cs` setzt **`bUseUnity = false`**: gleichnamige anonyme-Namespace-Helfer in mehreren `.cpp` (`FLatLon`, `MakeLane`, `WriteTempText`, `Dt`, `NextNoise`, `SamplesPerPush`, `BytesPerSample`) kollidieren, sobald der Unity-Build TUs zusammenfasst; neue Quelldateien verschieben die Chunk-Grenzen und decken latente Kollisionen auf. Non-Unity kompiliert sauber (Projekt IWYU-tauglich) - nicht ohne Dedup dieser Helfer wieder einschalten.
 - **Warnungen sind FEHLER** (u. a. C4458 Variablen-Shadowing bricht den Build ab). Falle: `AGameModeBase::GameState` ist ein Member (der AGameStateBase*-Actor) - eine lokale `GameState` in einer GameMode-Methode verdeckt ihn -> Build-Abbruch. Lokale anders benennen (`GS`).
 - In diesem Freebuff-Worktree (`D:\freebuff_city_wi`) ist **kein UE-Build möglich**: nur Quellen, keine Binaries/Intermediate/.sln. Code wird statisch geprüft, nicht kompiliert.
@@ -45,6 +47,8 @@ Nicht-offensichtliche Fakten, die sich nicht aus Code/Doku rekonstruieren lassen
 ## Verkehrs-Simulation
 
 - `GIS/WiesbadenTrafficSimulation` (`FWiesbadenTrafficSimulation`, USTRUCT, datenrein/deterministisch): Fahrzeuge folgen dem Spur-Graph von `FRoadNetwork` (Spur-Centerline -> `FLaneConnection::ConnectionPath` -> Folgespur). **LaneId == Index in `Network->Lanes`** (wie `FRoadNetwork::GetLane`) - Tests bauen Netze deshalb per Index. An Kreuzungen waehlt ein Fahrzeug deterministisch per FNV-1a-Hash(FahrzeugId, KnotenId) unter den nicht-restricted Nachfolgern; Sackgassen entfernen es. Spawn-Rate = `MaxSpawnRatePerSecond` * `TrafficDensity` (Round-Robin ueber befahrbare Spuren; blockierter Spur-Anfang < MinGap verschiebt den Spawn). Kopf-zu-Schwanz je Bahn (Sortierung absteigend nach Distanz, bei Gleichstand nach FahrzeugId - totale Ordnung fuer Determinismus). WICHTIG: `Initialize` haelt einen `const FRoadNetwork*` - die Pipeline konfiguriert nur `FWiesbadenCityData::TrafficSettings` (Dichte aus Prompt), initialisieren/ticken darf nur das `UWiesbadenCitySubsystem` beim Stadt-Spawn auf dem finalen GameInstance-Container (Move wuerde den Zeiger stale machen). Blueprint: `GetTrafficReport()`/`GetTrafficVehicles()`. Node-Port (`verify-traffic-sim.js`) und C++-Test `TrafficSimulationTest.cpp` teilen dieselben Erwartungen (2/7/10-Spawns, MinGap-Kette 300/900 cm/s, keine UE_Logs im Sim-Modul).
+
+- **Grounding: es gibt KEINEN Punkt-zu-Punkt-Wegfinder (am Code geprueft 2026-09-25).** Vorhanden ist nur der Spur-Graph `FRoadNetwork::GetSuccessors`/`LaneSuccessors` (`GIS/RoadNetworkTypes.h`) fuer die Fahrzeugbewegung. `FWiesbadenTrafficSimulation::FindPathCrossing`/`FindPathProximity` sind **Konflikt-Geometrie** (Ueberschneidung zweier Fahrwege), KEIN Routing - der Name taeuscht. Kein OpenSet, kein CameFrom/Reconstruct, kein A*, kein GPS-Routing im ganzen Baum. Eine notierte "GPS-A*-Idee" ist Absicht, kein Code: jede neue Routen-Aufgabe (Bus ueber seine Halte, Polizei-Verfolgung, Lieferroute) beginnt mit einem Graphen-Aufbau plus Kostenfunktion, nicht mit dem "Einschalten" von etwas Vorhandenem.
 
 ## Flug & Audio
 
@@ -2666,6 +2670,7 @@ naechsten Lauf (auch die Default-Karte wird dann nicht geladen).
   einem nicht greifenden Override ABBRICHT: `WB_OSM_FILE` (Original + nachgeholte Wald-Relationen),
   `WB_ALKIS_FILE` (LoD2-Hoehen/Daecher), `WB_DEM_FILE` (DGM1; setzt `import_dem` mit auf True),
   `WB_USE_OSM_TREES=1`, `WB_MAX_SEGMENT_CM=220`.
+- **DGM1: die Datei im Repo ist bereits auf WGS84 umprojiziert - die Rohdaten sind es nicht.** Verifiziert 2026-09-25: `Data/Raw/DEM/wiesbaden_dgm1.asc` traegt `xllcorner 8.1041334645`, `yllcorner 49.9908818744`, `cellsize 0.000096409474` (~10,7 m), 2925x1698 Zellen. Das sind **lon/lat-Grad**, keine UTM32-Meter. `FHeightmapRaster::SampleBilinearGeo(Longitude, Latitude, ...)` in `GIS/HeightmapImporter.cpp` tastet genau in diesem Geo-Raum ab, der Welt-Sampler rechnet ueber `FRasterHeightSampler` ebenfalls lon/lat - ein unprojiziertes DGM1 (UTM32, Zone 32N) passt also nicht in dieses Raster. Die Umprojektion steckt in `Tools/fetch_dgm1_asc.py` (TIF-Tie-Points 33922, Quelle 436000/5538000 -> 456000/5556000 Wiesbaden UTM32, geschrieben wird `xllcorner` in Grad). Wer die Datei ersetzt, muss diesen Schritt wiederholen - und die ~10,7-m-Rasterung bedenken: das ist NICHT die 1-m-DGM1-Aufloesung, auch wenn der Quelldatensatz so heisst.
 - **Fertig erkennt man den Lauf NICHT am Prozess**, sondern an der neuen Zeile in
   `Saved/BuildHistory/CityBuilds.csv` (`MapPath`, `Result=ok`) und an
   `###WBSTADT### FERTIG - Karte ... liegt vor.` im `rebake_alkis16.log`; Ausgabe kommt gepuffert,
@@ -3818,3 +3823,126 @@ Stellungen des Schalters (Vorgabe: eine Gruppe; streng: sechs) und
 zusaetzlich die Invariante, die unter BEIDEN gelten muss - sich KREUZENDE
 Wege bleiben getrennt. Ein Schalter, dessen zweite Stellung niemand testet,
 ist eine Behauptung.
+
+## MetaSound-Graph per Commandlet: Obertone, WaveShaper, Enum-Konstanten (25.09.2026)
+
+- **Bausteine fuer die Zuednpuls-Synthese (WbAudioAssetsCommandlet.cpp):** der
+  Standard-Node "Additive Synth" (`{Namespace, "Additive Synth", FName()}` -
+  Variante ist NAME_None, nicht "Audio"!) summiert Sinusoiden auf Vielfachen
+  der "Base Frequency"; "HarmonicMultipliers"/"Amplitudes" sind Float-ARRAYS,
+  leere Pan-Liste = volle Pegel auf beiden Ausgaengen ("Out Left Audio" als
+  Mono-Summe nehmen). Amplituden sind auf [0,1] begrenzt. "WaveShaper"
+  (Variante "Audio") rechnet `tanh((x+Bias)*Amount)/tanh(Amount)` - fuer
+  exakt `tanh(k*x)`: Amount=k, OutputGain=tanh(k); Typ-Pin "Type" ist ein
+  ENUM (EWaveShaperType {Sin=0, ATan=1, Tanh=2, Cubic=3, HardClip=4}).
+- **Enum-/Array-Konstanten am Node:** `UMetaSoundBuilderBase::SetNodeInputDefault`
+  (Template 4-Arg-Variante) mit `int32`- bzw. `TArray<float>`-Literal - Enums
+  sind mit ELiteralType::Integer registriert, das Integer-Literal konvertiert.
+  Die FGraph::Input()-Helfer koennen nur float; fuer alles andere
+  Default()-Helfer auf SetNodeInputDefault aufsetzen.
+- **Beweiszeilen fuer Motor-Hoerproben:** `LogWbVehicles "Motorsound: Asset
+  '...' wird verwendet."` hat Verbosity **Log** -> steht NUR in
+  `Saved/Logs/WiesbadenReal.log`, nie im stdout-Redirect `audio_drive_*.log`.
+  Nicht nach einem "fehlenden" Motorsound-Eintrag im Redirect suchen.
+- **Skripte sind umgezogen (Aufraeumung 24./25.09.):** `make_audio_assets.cmd`
+  liegt jetzt in `WiesbadenReal/Tools/` (Log dort: `Saved/Logs/make_audio_assets.log`,
+  Beweiszeile "WbAudioAssets fertig: 12/12 Pakete gespeichert"); `audio_drive.cmd`
+  und `vis_probe.cmd` sind nach `.planning/diagnose-reste-2026-09-24/`
+  archiviert, funktionieren von dort aber weiter (feste absolute Pfade).
+- **Offline-Renderer** `Tools/render_engineboxer.py` bildet den Graph 1:1 nach
+  (PINK-Noise ueber Frequenzgang, Einpol-TP b1=exp(-2*pi*fc/fs), Oberton-Stack,
+  Boxer-Modulation, tanh). Saetze: `alt|neu|oberton|dynamik|sport`,
+  `analyse` misst alle. Der Satz `dynamik` ist der aktuelle Graph;
+  `oberton` ist die menschlich freigegebene Endabnahme und darf nicht
+  ueberschrieben werden; `sport` ist eine Profil-Studie (nicht im Graph,
+  Uebertragung waere ein Konstanten-Satz).
+- **Clamp-Knoten (25.09.):** Klasse `FNodeClassName {"Clamp", "Clamp",
+  "float"}` - Namespace ist "Clamp", NICHT StandardNodes::Namespace, der
+  Aufruf im FGraph braucht ein drittes Namespace-Argument. Pins
+  `In`/`Min`/`Max` -> Ausgang `Value` (NICHT "Out"). Float-Konstanten
+  (Clamp-Grenzen) ueber SetNodeInputDefault(float).
+- **Graph-Eingabe fuer zwei Ketten (25.09.):** `Graph.Input()` legt die
+  Eingabe an UND verbindet; fuer die zweite Nutzung (z.B. Throttle oder
+  SpeedKmh in zwei Multiplikator-Ketten) einen Link()-Helfer auf
+  `ConnectGraphInputToNode` nutzen. **Reihenfolge:** Input() muss die
+  Eingabe vor der ersten Link() angelegt haben, sonst "Graph-Eingabe ...
+  (zweite Leitung) fehlgeschlagen" -> "MS_EngineBoxer nicht gebaut".
+- **make_audio_assets.cmd:** der stderr "Der Prozess kann nicht auf die
+  Datei zugreifen" erscheint auch bei erfolgreichem Lauf (exit 0) - er
+  kommt vom Log-Redirect. Einzige Belegquelle bleibt die Log-Zeile
+  "WbAudioAssets fertig: 12/12 Pakete gespeichert".
+- **InterpTo (25.09.):** Klasse `{Standard, "InterpTo", "Audio"}`, Pins
+  `Target`(float)/`Interp Time`(time)/`Value`(float), zustandsbehaftet -
+  startet bei Zielwert-Aenderung eine lineare Rampe ueber "Interp Time"
+  (Block-Rate). DAS Werkzeug fuer Parameter-Glaettung und Huellkurven
+  (z.B. 180-ms-Tor der Hupe) im Graph.
+- **Time-Pins haben keine Literale:** FMetasoundFrontendLiteral unterstuetzt
+  nur bool/int32/float/FString/UObject. Time-Eingaben ueber
+  Konvertierungs-Knoten speisen: die heissen
+  `Conversion{VonTypString}To{ZuTypString}` (Namespace StandardNodes,
+  leere Variante, Pins `In`/`Out`) mit den Data-Type-Strings
+  "Float"/"Time"/"Audio" - praktisch also **ConversionFloatToTime** und
+  **ConversionFloatToAudio**. Float-Konstante als Graph-Input -> Conversion
+  -> Time-Pin.
+- **Additive Synth:** die Einzel-Amplitudes sind auf [0,1] geklemmt, die
+  SUMME der Sinusoide aber weder normiert noch geklemmt - unnormierte
+  Referenz-Gewichte (z.B. Nebelhorn-Stack {1, 0.60, 0.32, 0.16}) sind 1:1
+  einsetzbar, die Pegelkontrolle kommt aus der spaeteren tanh-Saettigung.
+- **Regelbare Faerbung via Delta-Stab (25.09.):** die Amplitudes-Arrays
+  sind statisch - eine Oberton-Verschiebung mit einem Regler (Throttle)
+  laeuft ueber einen ZWEITEN Additive Synth: Betraege des Gewichts-Deltas
+  in Amplitudes, die VORZEICHEN als Phase 180 Grad, Ueberlagerung mit
+  dem Reglerfaktor (z.B. 2*Throttle-1) VOR der Boxer-Modulation.
+  Eichungsmuster: Faktor 0 in der Neutralstellung (halbes Gas) laesst die
+  freigegebene Referenz bit-identisch - so bleiben spaetere Aenderungen
+  zur Endabnahme rueckwaertskompatibel.
+
+## WP-Ankerpersistenz: Komponenten-Transforms sind RELATIV, der Chunk-Actor nicht (25.09.2026)
+
+BEFUND (Voll-Bake Alkis25 + Re-Bake-Versuche): Die Streaming-Verankerung der
+Stadt-Zellen hielt in KEINEM Zustand. `anchor_bounds.cmd` meldete "2010 Chunks
+verankert, Bounds ueber Ursprung 2010 -> 4", ein frischer Prozess
+(Tools/verify_anchor_state.py) sah danach wieder 2010/2010 - auf Alkis24 wie
+auf Alkis25. Zwei Ursachen, beide teuer:
+
+1. **Komponenten-Transform != Weltort.** Ein Komponenten-Transform wird
+   relativ zum Actor gespeichert. `SetWorldLocation(Anchor)` auf einem Actor,
+   der (wie per Bauplan jeder AWiesbadenCityChunk) auf (0,0,0) steht, schreibt
+   den Weltanker als relatives Delta in die Karte; beim naechsten Laden
+   addiert der Actor das Delta erneut. Nach mehreren Laeufen lagen die
+   Komponenten weit ausserhalb ihrer Zelle. FIX: der Anker liegt als
+   UPROPERTY `StreamingAnchorCm` im Actor-Paket und wird in
+   `PostRegisterAllComponents` (Actor-Hook - `OnRegister` ist
+   USceneComponent!) sowie in BeginPlay erneut angewendet. Wer Komponenten
+   positioniert, benutzt hier IMMER SetWorldLocation, nie SetRelativeLocation
+   auf einen Weltwert.
+2. **"Bounds ueber Ursprung" war kein WP-Mass im Commandlet.** Im
+   `-run=pythonscript`-Kontext sind die gebackenen StaticMesh-Assets NICHT
+   geladen; ihre Komponenten melden dann Punkt-Bounds an ihrer Komponenten-
+   Position (0,0,0) und ziehen die Actor-Box scheinbar bis zum Ursprung. Das
+   echte Mass ist mesh-unabhaengig: LEERE Komponenten (keine Sections, kein
+   Mesh, keine Instanzen) duerfen nicht nahe am Kartenursprung stehen. Nach
+   dem Fix auf Alkis25: 20.404 leere Komponenten, 0 am Ursprung.
+
+FALLSTRICKE in derselben Kette:
+- `AActor` hat KEIN `OnRegister`; `PostRegisterAllComponents()` ist der Hook
+  fuer "nach dem Laden/Stream-in".
+- `UHierarchicalInstancedStaticMeshComponent` ERBT von
+  `UStaticMeshComponent`: eine Typpruefung muss die HISM-Variante VOR der
+  StaticMesh-Variante abfragen, sonst gilt jedes HISM mit gesetztem Mesh als
+  "hat Inhalt" (der Test fiel genau daran).
+- UE 5.8 Python: `EditorActorSubsystem`/`EditorLoadingAndSavingUtils` haben
+  KEIN `save_actor` (Sonde: Tools/probe_save_api.py). `SceneComponent` hat
+  weder `get_component_location()` noch `get_world_location()` noch
+  `component_to_world`; `is_a` gibt es auf Python-Objekten nicht (nur
+  `isinstance`). Ein Diagnose-Skript darf an solchen Stellen nie den Lauf
+  abbrechen - try/except je Komponente, sonst bleibt das Ergebnisfile alt
+  und man prueft den VORLETZTEN Stand.
+- Nach dem Ankerlauf sind die Python-Actor-Referenzen tot ("ObjectInstance is
+  null") - im selben Prozess ist nichts mehr messbar, `load_level` liefert im
+  Commandlet 0 Zell-Actoren. Zaehlen VOR dem Speichern, gegenpruefen immer in
+  einem FRISCHEN Prozess.
+- Ein laufender UnrealEditor (fremde Session) sperrt die Modul-DLL: Build
+  endet mit LNK1104 und der Test laeuft still gegen das ALTE Binary. Vor
+  Testlaeufen `Get-Process UnrealEditor*` pruefen, fremde Editoren nicht
+  beenden, warten.
