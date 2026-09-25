@@ -156,9 +156,46 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fuss", meta = (ClampMin = "1.0"))
 	float FallThresholdCm = 45.0f;
 
-	/** Zeit zwischen zwei Schuessen in Sekunden (Feuerrate). */
+	/** Zeit zwischen zwei Schuessen in Sekunden (Feuerrate). Wird beim
+	 *  Waffenwechsel aus der Tabelle gesetzt; der Wert hier ist der Rueckfall. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "0.02"))
 	float FireIntervalSeconds = 0.12f;
+
+	/**
+	 * Ego-Modus: C schaltet Schulterkamera <-> Erste-Person.
+	 *
+	 * In der Ego-Ansicht sitzt die Kamera auf Augenhoehe im Kopf, die Figur
+	 * (Koerper/Kopf/Skelett) blendet sich fuer den Traeger aus, und die Waffe
+	 * wandert in Kameranaehe - die Shooter-Ueblichkeit: Man sieht die Waffe,
+	 * nicht den eigenen Ruecken.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "30.0"))
+	float EgoArmLengthCm = 0.0f;
+
+	/** Schulter-Abstand der Kamera im Ego-Modus (leicht rechts versetzt). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "0.0", ClampMax = "40.0"))
+	float EgoShoulderOffsetCm = 18.0f;
+
+	/** Waffe waehlen (Tasten 1-9); rueckwaerts zaehlt als Abwahl des Rings. */
+	void SelectWeapon(int32 Index);
+
+	/** Schaltet Schulter-/Ego-Ansicht um (Taste C, Flankenerkennung). */
+	void ToggleEgoCamera();
+
+	/** Ansicht abfragen/setzen (Dev-Exec, HUD); Setzen wendet sofort an. */
+	bool IsEgoCamera() const { return bEgoCamera; }
+
+	/** Laeuft gerade der Kettensaege-Modus (Slot 9)? (Pruef-Lauf, HUD.) */
+	bool IsUsingChainsaw() const { return bUsesChainsaw; }
+
+	void SetEgoCamera(bool bInEgo)
+	{
+		if (bInEgo != bEgoCamera)
+		{
+			bEgoCamera = bInEgo;
+			ApplyCameraMode();
+		}
+	}
 
 	/** Oeffnungswinkel der Handlampe in Grad. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Figur", meta = (ClampMin = "5.0", ClampMax = "80.0"))
@@ -252,6 +289,12 @@ private:
 	/** Gibt einen Schuss ab (zielt aus der Kamera). */
 	void FireWeapon();
 
+	/** Uebernimmt Kameraposition, Sichtbarkeiten und Waffenlage je Modus. */
+	void ApplyCameraMode();
+
+	/** Tasten 1-9 abfragen und Waffe umschalten (Flanken je Taste). */
+	void PollWeaponKeys(const APlayerController* PC);
+
 	/** Haelt die Figur auf dem Boden. */
 	void FollowGround(float DeltaSeconds);
 
@@ -291,6 +334,15 @@ private:
 
 	/** True, solange der Spieler in der Nerobergbahn mitfaehrt. */
 	bool bRiding = false;
+
+	/** Ego-Modus aktiv (C umgeschaltet)? Start: Schulterkamera wie bisher. */
+	bool bEgoCamera = false;
+
+	/** Flankenerkennung der C-Taste. */
+	bool bEgoKeyHeld = false;
+
+	/** Zuletzt gehaltene Zifferntasten 1-9 (Flanken je Taste). */
+	bool WeaponKeyHeld[9] = {};
 
 	/** Restzeit des laufenden Saegehiebs; 0 = kein Hieb. */
 	float SwingRemaining = 0.0f;

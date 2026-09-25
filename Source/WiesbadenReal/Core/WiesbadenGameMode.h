@@ -378,6 +378,25 @@ private:
 	/** Schon ausgestiegen? Sonst geschaehe es in jedem Bild erneut. */
 	bool bOnFootDone = false;
 
+	/**
+	 * Ego-Pruef-Lauf (-WbEgoProbe=<Sekunden>).
+	 *
+	 * Skriptbarer Ersatz fuer die C-Taste und die Zifferntasten 1-9: Tasten-
+	 * Injektion erreicht das D3D-Fenster nicht, also faehrt der GameMode die
+	 * KAMMERAD-KONVENTION hier ab: aussteigen (-WbZuFuss davor), Ansicht Ego,
+	 * Bild, Ansicht Schulter, Bild, Waffen 0-8 je kurz gewaehlt und im Log
+	 * verifiziert (Name + Masse gegen die Tabelle). Ergebnis: vier Bilder in
+	 * Saved/Diagnose + Log-Marker je Schritt.
+	 */
+	float EgoProbeAfterSeconds = -1.0f;
+	bool bEgoProbeDone = false;
+	float EgoProbeElapsed = 0.0f;
+	int32 EgoProbeStep = 0;
+	float EgoProbeStepElapsed = 0.0f;
+
+	/** Fuehrt einen Schritt des Ego-Pruef-Laufs aus (Tick). */
+	void TickEgoProbe(float DeltaSeconds);
+
 	/** Spielzeit seit BeginPlay in Sekunden. */
 	float ElapsedSeconds = 0.0f;
 

@@ -20,6 +20,9 @@
 #include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "Vehicles/WiesbadenFootPawn.h"
+#include "Weapons/WiesbadenWeaponSpec.h"
+#include "Weapons/WiesbadenWeaponComponent.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "NPC/WiesbadenStoreMerchant.h"
 #include "Missions/WiesbadenMissionSubsystem.h"
 #include "Vehicles/WiesbadenHelicopter.h"
@@ -28,6 +31,7 @@
 #include "Core/WiesbadenGameStateSubsystem.h"
 #include "Store/WiesbadenStore.h"
 #include "Engine/GameInstance.h"
+#include "UnrealClient.h"
 #include "World/WiesbadenStreamingSource.h"
 #include "WorldPartition/WorldPartitionSubsystem.h"
 #include "Engine/World.h"
@@ -746,6 +750,11 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 	// aus: Man sass nach dem Gespraech im Auto.
 	bEntryKeyHeld = bDown;
 
+	if (!FParse::Value(FCommandLine::Get(), TEXT("WbEgoProbe="), EgoProbeAfterSeconds))
+	{
+		EgoProbeAfterSeconds = -1.0f;
+	}
+
 	// Selbsttaetig aussteigen, wenn -WbZuFuss=<Sekunden> gesetzt ist.
 	//
 	// Erst nach Ablauf der Frist, nicht sofort: die Stadt laedt noch, und ein
@@ -757,6 +766,95 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 		TogglePlayerVehicle();
 		UE_LOG(LogWbVehicles, Log,
 			TEXT("-WbZuFuss: nach %.1f s ausgestiegen."), ElapsedSeconds);
+	}
+
+	// Ego-Pruef-Lauf (-WbEgoProbe=<Sekunden>): schaltet Ansichten/Waffen wie
+	// die C- und Zifferntasten, legt je Ansicht ein Bild ab und loggt jeden
+	// Schritt - die Skript-Variante der Tastaturprobe.
+	if (!bEgoProbeDone && EgoProbeAfterSeconds >= 0.0f && ElapsedSeconds >= EgoProbeAfterSeconds)
+	{
+		TickEgoProbe(DeltaSeconds);
+	}
+}
+
+void AWiesbadenGameMode::TickEgoProbe(float DeltaSeconds)
+{
+	// Der GameMode hat keinen eigenen Pawn-Zugriff: der Pawn gehoert dem
+	// PlayerController (gleicher Weg wie TogglePlayerVehicle oben).
+	AWiesbadenPlayerController* ProbePC = Cast<AWiesbadenPlayerController>(GetWorld()
+		? GetWorld()->GetFirstPlayerController() : nullptr);
+	AWiesbadenFootPawn* Foot = ProbePC ? Cast<AWiesbadenFootPawn>(ProbePC->GetPawn()) : nullptr;
+	if (!Foot)
+	{
+		// Erst aussteigen lassen (-WbZuFuss davor) - ohne FootPawn keine Probe.
+		return;
+	}
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// Schritte: 0 Ego an + Bild, 1 Schulter zurueck + Bild, 2..10 Waffen
+	// 0..8 waehlen (je 0,8 s, Log gegen die Tabelle), 11 fertig.
+	constexpr float StepSeconds = 0.8f;
+	EgoProbeStepElapsed += DeltaSeconds;
+	if (EgoProbeStepElapsed < StepSeconds)
+	{
+		return;
+	}
+	EgoProbeStepElapsed = 0.0f;
+
+	switch (EgoProbeStep)
+	{
+	case 0:
+	{
+		Foot->SetEgoCamera(true);
+		UE_LOG(LogWbVehicles, Log, TEXT("WbEgoProbe: Ego AN, Kameraarm %.0f cm, Waffe sichtbar=%d."),
+			Foot->CameraArm ? Foot->CameraArm->TargetArmLength : -1.0f,
+			Foot->Weapon && Foot->Weapon->IsVisible() ? 1 : 0);
+		break;
+	}
+	case 1:
+	{
+		FScreenshotRequest::RequestScreenshot(
+			FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("ego_ansicht"), true, true);
+		UE_LOG(LogWbVehicles, Log, TEXT("WbEgoProbe: Bild Ego gespeichert."));
+		Foot->SetEgoCamera(false);
+		UE_LOG(LogWbVehicles, Log, TEXT("WbEgoProbe: Schulter zurueck, Kameraarm %.0f cm."),
+			Foot->CameraArm ? Foot->CameraArm->TargetArmLength : -1.0f);
+		break;
+	}
+	case 2:
+	{
+		FScreenshotRequest::RequestScreenshot(
+			FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("schulter_ansicht"), true, true);
+		UE_LOG(LogWbVehicles, Log, TEXT("WbEgoProbe: Bild Schulter gespeichert."));
+		break;
+	}
+	default:
+	{
+		const int32 WeaponIndex = EgoProbeStep - 3;   // 2..10 -> 0..8
+		if (WeaponIndex < static_cast<int32>(EWiesbadenWeaponId::Count))
+		{
+			Foot->SelectWeapon(WeaponIndex);
+			const FWiesbadenWeaponSpec& Spec = WiesbadenWeapons::Spec(WeaponIndex);
+			UE_LOG(LogWbVehicles, Log,
+				TEXT("WbEgoProbe: Waffe %d (%s) gewaehlt - sichtbar=%d, Saege aktiv=%d."),
+				WeaponIndex, Spec.DisplayName,
+				Foot->Weapon && Foot->Weapon->IsVisible() ? 1 : 0,
+				Foot->IsUsingChainsaw() ? 1 : 0);
+		}
+		break;
+	}
+	}
+
+	++EgoProbeStep;
+	if (EgoProbeStep > 3 + static_cast<int32>(EWiesbadenWeaponId::Count))
+	{
+		bEgoProbeDone = true;
+		UE_LOG(LogWbVehicles, Log, TEXT("WbEgoProbe: fertig (Ansichten + %d Waffen durchprobiert)."),
+			static_cast<int32>(EWiesbadenWeaponId::Count));
 	}
 }
 

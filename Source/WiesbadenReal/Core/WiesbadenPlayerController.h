@@ -105,6 +105,18 @@ public:
 	UFUNCTION(Exec)
 	void WbDennoAuftrag(int32 Seed = 1, float DelaySeconds = 0.0f);
 
+	// Zu Fuss: Ansicht umschalten (0=Schulter, 1=Ego) - derselbe Pfad wie die
+	// C-Taste (ToggleEgoCamera). 2 = umschalten. Skriptbarer Ersatz fuer die
+	// Taste, weil Tastatur-Injektion das D3D-Fenster nicht erreicht.
+	UFUNCTION(Exec)
+	void WbFussAnsicht(int32 Modus = 2);
+
+	// Zu Fuss: Waffe aus der Tabelle waehlen (0-8 = Tasten 1-9). Derselbe Pfad
+	// wie SelectWeapon; Log-Marker nennen Anzeige und Masse der gewaehlten
+	// Waffe (Pruefung gegen WiesbadenWeapons::Table).
+	UFUNCTION(Exec)
+	void WbFussWaffe(int32 Index);
+
 private:
 	// Schreibt den Gesundheitsbericht JETZT (JSON + Log). Gemeinsame Endstrecke von
 	// WbHealth (sofort) und dem Gate-Poll.

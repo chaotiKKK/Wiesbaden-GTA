@@ -19,6 +19,9 @@
 #include "World/WiesbadenCitySubsystem.h"
 #include "NPC/WiesbadenPursuerActor.h"
 #include "World/WiesbadenDennoShop.h"
+#include "Vehicles/WiesbadenFootPawn.h"
+#include "Weapons/WiesbadenWeaponComponent.h"
+#include "Weapons/WiesbadenWeaponSpec.h"
 
 void AWiesbadenPlayerController::WbTeleport(int32 Ziel)
 {
@@ -340,6 +343,54 @@ void AWiesbadenPlayerController::WbSpawnPursuer()
 		AWiesbadenPursuerActor::StaticClass(), Spawn, FRotator::ZeroRotator, Sp);
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbSpawnPursuer - Verfolger %s bei (%.0f, %.0f)."),
 		Pursuer ? TEXT("gespawnt") : TEXT("NICHT gespawnt"), Spawn.X, Spawn.Y);
+}
+
+void AWiesbadenPlayerController::WbFussAnsicht(int32 Modus)
+{
+	AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(GetPawn());
+	if (!Foot)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbFussAnsicht - zu Fuss nicht aktiv (Pawn ist kein FootPawn)."));
+		return;
+	}
+	// 0/1 setzen die Ansicht ausdruecklich, 2 schaltet um - dieselbe
+	// Zustandsaenderung wie die C-Taste, nur skriptbar.
+	const bool bWant = Modus == 1;
+	if (Modus == 2)
+	{
+		Foot->ToggleEgoCamera();
+		UE_LOG(LogWbCore, Log, TEXT("WbDev: WbFussAnsicht - umgeschaltet, jetzt %s."),
+			Foot->IsEgoCamera() ? TEXT("Ego") : TEXT("Schulter"));
+	}
+	else
+	{
+		Foot->SetEgoCamera(bWant);
+		UE_LOG(LogWbCore, Log, TEXT("WbDev: WbFussAnsicht - gesetzt auf %s."),
+			bWant ? TEXT("Ego") : TEXT("Schulter"));
+	}
+}
+
+void AWiesbadenPlayerController::WbFussWaffe(int32 Index)
+{
+	AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(GetPawn());
+	if (!Foot)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbFussWaffe - zu Fuss nicht aktiv."));
+		return;
+	}
+	if (!UWiesbadenWeaponComponent::IsValidWeaponIndex(Index))
+	{
+		UE_LOG(LogWbCore, Warning,
+			TEXT("WbDev: WbFussWaffe %d - ausserhalb der Tabelle (0..%d)."), Index,
+			static_cast<int32>(EWiesbadenWeaponId::Count) - 1);
+		return;
+	}
+	Foot->SelectWeapon(Index);
+	const FWiesbadenWeaponSpec& Spec = WiesbadenWeapons::Spec(Index);
+	UE_LOG(LogWbCore, Log,
+		TEXT("WbDev: WbFussWaffe - Waffe %d (%s) gewaehlt, Schaden %.0f, V %.0f cm/s%s."),
+		Index, Spec.DisplayName, Spec.Damage, Spec.MuzzleVelocityCmPerS,
+		Spec.bMelee ? TEXT(", Nahkampf") : TEXT(""));
 }
 
 void AWiesbadenPlayerController::WbDennoAuftrag(int32 Seed, float DelaySeconds)

@@ -4,6 +4,7 @@
 
 #include "Vehicles/WiesbadenHelicopter.h"   // ApplyStickShaping: eine Kennlinie fuer alle Sticks
 #include "Weapons/WiesbadenWeaponComponent.h"
+#include "Weapons/WiesbadenWeaponSpec.h"
 
 #include "WiesbadenReal.h"
 
@@ -280,6 +281,16 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 		|| PC->IsInputKeyDown(EKeys::Enter)
 		|| PC->GetInputAnalogKeyState(EKeys::Gamepad_RightTriggerAxis) > 0.35f;
 
+	// Ansicht und Waffenwahl vor dem Feuern abfragen: ein Druck auf C oder
+	// eine Ziffer gilt im selben Bild schon fuer die neue Lage.
+	PollWeaponKeys(PC);
+	const bool bEgoDown = PC->IsInputKeyDown(EKeys::C);
+	if (bEgoDown && !bEgoKeyHeld)
+	{
+		ToggleEgoCamera();
+	}
+	bEgoKeyHeld = bEgoDown;
+
 	if (bUsesChainsaw)
 	{
 		// Kettensaege: EIN Hieb je Tastendruckphase, kein Dauerfeuer. Der
@@ -373,20 +384,17 @@ void AWiesbadenFootPawn::BuildBody()
 			FigureMesh->SetRelativeLocation(FVector(0.0f, 0.0f, -88.0f));
 			FigureMesh->PlayAnimation(IdleAnim, true);
 			CurrentLoop = 1;
-			bUsesChainsaw = true;
 
 			if (BodyMesh) { BodyMesh->SetVisibility(false); }
 			if (HeadMesh) { HeadMesh->SetVisibility(false); }
 
-			// Kettensaege statt Pistole: die Waffe wird gar nicht erst
-			// aufgebaut (SetupWeapon prueft die Sichtbarkeit nicht).
-			if (Weapon) { Weapon->SetVisibility(false, true); }
-
-			// Der Saegenmotor tuckert von Anfang an im Leerlauf.
-			if (SawAudio) { SawAudio->SetEngineRunning(true); }
+			// Die Kettensaege ist jetzt WAFFENSLOT 9 (Taste 9), nicht mehr
+			// Dauerzustand: Start ist die MP aus der Waffentabelle, die Saege
+			// (und ihr Zweitakter-Klang) kommt mit der Taste 9 zurueck.
+			bUsesChainsaw = false;
 
 			UE_LOG(LogWbVehicles, Log,
-				TEXT("Spielerfigur: SK_Sebbo animiert (Gehen + Kettensaege)."));
+				TEXT("Spielerfigur: SK_Sebbo animiert (Gehen + Schwung); Startwaffe MP, Saege auf Taste 9."));
 			return;
 		}
 
@@ -484,6 +492,131 @@ void AWiesbadenFootPawn::FireWeapon()
 	}
 
 	Weapon->Fire(Start, Direction);
+}
+
+void AWiesbadenFootPawn::ToggleEgoCamera()
+{
+	bEgoCamera = !bEgoCamera;
+	ApplyCameraMode();
+}
+
+void AWiesbadenFootPawn::ApplyCameraMode()
+{
+	if (!CameraArm || !Camera)
+	{
+		return;
+	}
+
+	if (bEgoCamera)
+	{
+		// Erste Person: Kamera auf Augenhoehe, leicht rechts (Schulter-Feel),
+		// Arm gestaucht. Der Arm folgt weiterhin der Maus (Pitch oben).
+		CameraArm->TargetArmLength = EgoArmLengthCm;
+		CameraArm->SetRelativeLocation(FVector(0.0f, EgoShoulderOffsetCm, 60.0f));
+
+		// Eigene Figur ausblenden (nur fuer diesen Spieler; Schatten bleiben,
+		// damit man in der Ego-Ansicht nicht sichtbar schwebt).
+		if (BodyMesh) { BodyMesh->SetOwnerNoSee(true); }
+		if (HeadMesh) { HeadMesh->SetOwnerNoSee(true); }
+		if (FigureMesh) { FigureMesh->SetOwnerNoSee(true); }
+
+		// Waffe an die Kamera: vorn rechts unterhalb des Blicks, leicht
+		// einwaerts gedreht - die uebliche Ego-Waffenlage. Die Teile sind
+		// StaticMeshComponents am eigenen Actor: OwnerNoSee versteckt sie
+		// fuer den Traeger NICHT, darum bleibt die Waffe sichtbar geschaltet
+		// und haengt nah genug, um im Bild zu bleiben.
+		if (Weapon)
+		{
+			Weapon->AttachToComponent(Camera,
+				FAttachmentTransformRules::KeepRelativeTransform);
+			Weapon->SetRelativeLocation(FVector(22.0f, 14.0f, -16.0f));
+			Weapon->SetRelativeRotation(FRotator(0.0f, -4.0f, 0.0f));
+		}
+	}
+	else
+	{
+		// Schulterkamera: die bekannte Verfolgerlage zurueck.
+		CameraArm->TargetArmLength = 300.0f;
+		CameraArm->SetRelativeLocation(FVector(0.0f, 0.0f, 60.0f));
+
+		if (BodyMesh) { BodyMesh->SetOwnerNoSee(false); }
+		if (HeadMesh) { HeadMesh->SetOwnerNoSee(false); }
+		if (FigureMesh) { FigureMesh->SetOwnerNoSee(false); }
+
+		if (Weapon)
+		{
+			Weapon->AttachToComponent(Capsule,
+				FAttachmentTransformRules::KeepRelativeTransform);
+			Weapon->SetRelativeLocation(FVector(30.0f, 26.0f, 2.0f));
+			Weapon->SetRelativeRotation(FRotator::ZeroRotator);
+		}
+	}
+}
+
+void AWiesbadenFootPawn::PollWeaponKeys(const APlayerController* PC)
+{
+	if (!PC || !Weapon)
+	{
+		return;
+	}
+
+	// Tasten 1-9 auf die Tabelle (Pistole .. Kettensaege). Flankenerkennung
+	// je Taste, damit Halten nicht springt.
+	static const FKey Keys[9] = {
+		EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
+		EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine };
+
+	for (int32 Index = 0; Index < 9; ++Index)
+	{
+		const bool bDown = PC->IsInputKeyDown(Keys[Index]);
+		if (bDown && !WeaponKeyHeld[Index] && UWiesbadenWeaponComponent::IsValidWeaponIndex(Index))
+		{
+			SelectWeapon(Index);
+		}
+		WeaponKeyHeld[Index] = bDown;
+	}
+}
+
+void AWiesbadenFootPawn::SelectWeapon(int32 Index)
+{
+	if (!Weapon || !UWiesbadenWeaponComponent::IsValidWeaponIndex(Index))
+	{
+		return;
+	}
+	if (Index == Weapon->WeaponIndex)
+	{
+		return;
+	}
+
+	Weapon->SetWeaponIndex(Index);
+
+	// Feuerrate des Pawns an die neue Waffe.
+	const FWiesbadenWeaponSpec& Spec = WiesbadenWeapons::Spec(Index);
+	FireCooldownSeconds = FMath::Max(FireCooldownSeconds, Spec.ShotIntervalSeconds());
+
+	// Die Kettensaege (Slot 9) schwingt die Figur und tuckert; jede andere
+		// Waffe zeigt die Waffenkomponente und feuert Projektile. Ein laufender
+		// Hieb gehoert zur Saege und wird beim Wechsel abgebrochen.
+	const bool bSaw = Index == static_cast<int32>(EWiesbadenWeaponId::Kettensaege)
+		&& SwingAnim != nullptr;
+	bUsesChainsaw = bSaw;
+	SwingRemaining = 0.0f;
+	bMeleeHitDone = false;
+
+	if (Weapon)
+	{
+		Weapon->SetVisibility(!bSaw, true);
+	}
+	if (SawAudio)
+	{
+		SawAudio->SetEngineRunning(bSaw);
+	}
+
+	// Waffenlage neu anwenden (Ego/Schulter bleibt erhalten).
+	ApplyCameraMode();
+
+	UE_LOG(LogWbVehicles, Log, TEXT("FootPawn: Waffe %d (%s) gewaehlt."),
+		Index, Spec.DisplayName);
 }
 
 void AWiesbadenFootPawn::FollowGround(float DeltaSeconds)
@@ -702,6 +835,12 @@ void AWiesbadenFootPawn::DoMeleeHit()
 		const int32 Felled = City->PedestrianSimulation.BurstNear(
 			Centre, MeleeRadiusCm + MeleeRangeCm * 0.5);
 		Struck += Felled;
+
+		// Jede zerplatze Figur ist eine Tat ins Fahndungskonto.
+		for (int32 HitIndex = 0; HitIndex < Felled; ++HitIndex)
+		{
+			City->ReportCrime(EWiesbadenCrimeEvent::PedestrianDowned);
+		}
 	}
 
 	if (Struck > 0)

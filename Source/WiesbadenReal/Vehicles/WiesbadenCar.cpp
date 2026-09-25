@@ -940,6 +940,13 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 			if (Hit > 0)
 			{
 				UE_LOG(LogWbVehicles, Log, TEXT("Ueberfahren: %d Fussgaenger."), Hit);
+				// Jedes Ueberfahren ist eine Tat ins Fahndungskonto - sonst
+				// wuerde die Polizei nur auf Schuesse reagieren, nicht auf
+				// den drastischsten Fall.
+				for (int32 HitIndex = 0; HitIndex < Hit; ++HitIndex)
+				{
+					City->ReportCrime(EWiesbadenCrimeEvent::PedestrianDowned);
+				}
 			}
 		}
 	}
