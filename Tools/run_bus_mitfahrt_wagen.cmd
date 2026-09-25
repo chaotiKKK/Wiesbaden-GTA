@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 rem Beleglauf MITFAHRT auf einem BESTIMMTEN Wagen (-WbBusRideWagon), ohne
 rem Fenster: die Automatik setzt den Fahrgast neben Wagen 601/301 und steigt
 rem ein, sobald der Wagen haelt. Umlauf-Protokoll und Mitfahrt-Zeilen landen

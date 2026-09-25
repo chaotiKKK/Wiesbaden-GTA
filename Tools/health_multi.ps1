@@ -26,7 +26,8 @@ function Wait-PortFree([int]$Port, [int]$MaxSec = 60) {
 
 for ($i = 1; $i -le $Runs; $i++) {
     Write-Host ("=== MULTI RUN {0} cleanup {1} ===" -f $i, (Get-Date -Format HH:mm:ss))
-    Get-Process UnrealEditor*, zenserver -ErrorAction SilentlyContinue | Stop-Process -Force
+    & "$PSScriptRoot\cleanup_unreal_processes.cmd"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     $free = Wait-PortFree 8558 60
     Write-Host ("  Port 8558 frei: {0}" -f $free)
 

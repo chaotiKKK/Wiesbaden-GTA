@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 REM Belegt den Bus-Materialfix (Tools/verify_bus_materials.py): Elternmaterial,
 REM Nanite-Flag, BaseColor-Eingang und die Texturen der 41 Instanzen.
 REM

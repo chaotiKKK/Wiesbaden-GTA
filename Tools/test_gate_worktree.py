@@ -203,11 +203,63 @@ class HookWegTest(unittest.TestCase):
             self.assertNotIn("$Root = (Split-Path", text, name)
             self.assertIn("if (-not $Root)", text, name)
 
-    def test_nur_eigene_editoren_werden_beendet(self):
-        for name in ("build_release.ps1", "smoke_test.ps1"):
+    def test_build_release_bleibt_projektlokal_und_smoke_nutzt_den_helper(self):
+        build = (WURZEL / "Tools" / "build_release.ps1").read_text(encoding="utf-8")
+        smoke = (WURZEL / "Tools" / "smoke_test.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process", build)
+        self.assertIn("Stop-ProjectEditors $Proj", build)
+        self.assertIn('& "$PSScriptRoot\\cleanup_unreal_processes.cmd"', smoke)
+        self.assertIn("Stop-ProjectEditors $Proj", smoke)
+
+    def test_der_cleanup_helfer_raeumt_zenserver_und_wartet_drei_sekunden(self):
+        ps1 = (WURZEL / "Tools" / "cleanup_unreal_processes.ps1").read_text(encoding="utf-8")
+        batch = (WURZEL / "Tools" / "cleanup_unreal_processes.cmd").read_text(encoding="utf-8")
+        self.assertIn('Get-Process -Name "UnrealEditor*"', ps1)
+        self.assertIn('Get-Process -Name "zenserver"', ps1)
+        self.assertIn("Start-Sleep -Seconds 3", ps1)
+        self.assertIn("Prozessbereinigung unvollstaendig", ps1)
+        self.assertIn("cleanup_unreal_processes.ps1", batch)
+        self.assertIn("%*", batch)
+
+    def test_alle_bake_und_test_wrapper_reinigen_vor_dem_engine_start(self):
+        cmd_wrapper = (
+            "dump_alkis27_streets.cmd",
+            "playtest_alkis27_runover.cmd",
+            "rebake_alkis23.cmd",
+            "rebake_alkis25.cmd",
+            "rebake_alkis27.cmd",
+            "run_ankunft_probe.cmd",
+            "run_automation_test.cmd",
+            "run_bus_audit.cmd",
+            "run_bus_fahrbahn.cmd",
+            "run_bus_ground.cmd",
+            "run_bus_haltestelle.cmd",
+            "run_bus_interior_proof.cmd",
+            "run_bus_mitfahrt.cmd",
+            "run_bus_mitfahrt_wagen.cmd",
+            "run_bus_umlauf.cmd",
+            "run_material_flags_proof.cmd",
+            "verify_bus_materials.cmd",
+            "verify_ka52.cmd",
+            "verify_ka52_actor.cmd",
+        )
+        aufruf = 'call "%~dp0cleanup_unreal_processes.cmd"'
+        for name in cmd_wrapper:
             text = (WURZEL / "Tools" / name).read_text(encoding="utf-8")
-            self.assertNotIn("Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process", text, name)
-            self.assertIn("Stop-ProjectEditors $Proj", text, name)
+            self.assertIn(aufruf, text, name)
+            starts = [i for i in (text.find("UnrealEditor.exe"),
+                                  text.find("UnrealEditor-Cmd.exe")) if i >= 0]
+            self.assertTrue(starts, name)
+            self.assertLess(text.index(aufruf), min(starts), name)
+
+        ps1_wrapper = ("flight_check.ps1", "health_check.ps1",
+                       "health_multi.ps1", "smoke_test.ps1")
+        ps_aufruf = '& "$PSScriptRoot\\cleanup_unreal_processes.cmd"'
+        for name in ps1_wrapper:
+            text = (WURZEL / "Tools" / name).read_text(encoding="utf-8")
+            self.assertIn(ps_aufruf, text, name)
+            if "Start-Process" in text:
+                self.assertLess(text.index(ps_aufruf), text.index("Start-Process"), name)
 
 
 if __name__ == "__main__":

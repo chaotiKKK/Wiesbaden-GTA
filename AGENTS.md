@@ -3942,10 +3942,14 @@ FALLSTRICKE in derselben Kette:
   null") - im selben Prozess ist nichts mehr messbar, `load_level` liefert im
   Commandlet 0 Zell-Actoren. Zaehlen VOR dem Speichern, gegenpruefen immer in
   einem FRISCHEN Prozess.
-- Ein laufender UnrealEditor (fremde Session) sperrt die Modul-DLL: Build
-  endet mit LNK1104 und der Test laeuft still gegen das ALTE Binary. Vor
-  Testlaeufen `Get-Process UnrealEditor*` pruefen, fremde Editoren nicht
-  beenden, warten.
+- Ein laufender UnrealEditor (auch aus einer fremden Session) sperrt die
+  Modul-DLL: Build endet mit LNK1104 und der Test laeuft still gegen das ALTE
+  Binary. Deshalb ruft jeder Bake-/Testwrapper ueber
+  `Tools\cleanup_unreal_processes.cmd` vor dem Engine-Start ALLE
+  `UnrealEditor*` und `zenserver` auf, wartet 3 s und prueft, dass keiner
+  zurueckbleibt. `build_release.ps1` beendet dagegen bewusst nur Editoren
+  dieses Projektordners - der Kompilier-Gate soll keine fremde Sitzung
+  zerstoeren.
 
 ---
 

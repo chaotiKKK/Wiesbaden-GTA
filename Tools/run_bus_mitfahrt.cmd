@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 rem Beleglauf Mitfahrt mit einem Wagen der neuen Nummernkreise (601+/301+):
 rem -WbZuFuss=8     Spieler steigt nach 8 s aus dem Auto (nur zu Fuss einsteigbar)
 rem -WbBusRide=18  die Automatik setzt ihn nach 18 s neben den gewaehlten Bus und

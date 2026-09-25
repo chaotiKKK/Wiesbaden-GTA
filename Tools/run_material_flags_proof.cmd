@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 REM Gegenprobe zu Tools\fix_material_flags.cmd: ein FENSTER-Lauf (nur der
 REM rendert Ka52 und Nerobergbahn; der kopflose Lauf sieht sie nicht) und danach
 REM im Log zaehlen:

@@ -34,8 +34,8 @@ $Log  = Join-Path $Root "WiesbadenReal\Saved\Logs\wb_flight_$Name.log"
 if (-not (Test-Path $Exe))  { Write-Host "ABBRUCH: Editor nicht gefunden: $Exe"; exit 2 }
 if (-not (Test-Path $Proj)) { Write-Host "ABBRUCH: Projekt nicht gefunden: $Proj"; exit 2 }
 
-Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Seconds 3
+& "$PSScriptRoot\cleanup_unreal_processes.cmd"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Remove-Item $Log -ErrorAction SilentlyContinue
 
 # Die Quotes um -ExecCmds MUSS dieses Skript setzen (fest verdrahtet): uebergeben

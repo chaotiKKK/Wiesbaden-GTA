@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 REM Voll-Bake Alkis25 aus Alkis16 (NICHT live), 25.09.2026.
 REM Gleiche Datenquellen und Parameter wie der Alkis24-Bake - der
 REM Unterschied ist der aktuelle Code-Stand (Passanten-Audio, Fahndung,

@@ -70,11 +70,11 @@ $HealthJson = Join-Path $LogDir "WbHealth.json"
 if (-not (Test-Path $Exe))  { Write-Host "ABBRUCH: Editor nicht gefunden: $Exe"; exit 2 }
 if (-not (Test-Path $Proj)) { Write-Host "ABBRUCH: Projekt nicht gefunden: $Proj"; exit 2 }
 
-# Nur Editoren DIESES Projektordners beenden - nicht jeden auf dem Rechner.
-# Frueher traf "Get-Process UnrealEditor* | Stop-Process" auch fremde, laufende
-# Arbeit (andere Agenten, offene Editoren); darum wartete der Push-Waechter, bis
-# keiner mehr lief. Im Gate-Worktree (Tools\gate_worktree.py) haelt ohnehin nur
-# der eigene Editor dessen Binaries fest.
+# Zwischen den Sitzungen beenden wir nur Editoren DIESES Projektordners. Am
+# Start jeder Sitzung ruft der Wrapper dagegen den globalen Cleanup auf: genau
+# das verhindert den ZenServer-Limbo aus einem fremden Restprozess. Im
+# Gate-Worktree (Tools\gate_worktree.py) haelt ohnehin nur der eigene Editor
+# dessen Binaries fest.
 function Stop-ProjectEditors([string]$ProjectFile) {
     $want = $ProjectFile.Replace('/', '\')
     Get-CimInstance Win32_Process -Filter "Name LIKE 'UnrealEditor%'" -ErrorAction SilentlyContinue |
@@ -117,8 +117,9 @@ function Measure-LoadFactor([int]$Iter, [int]$Samples, [double]$RefMs, [double]$
 # dann beenden. ExtraArgs sind zusaetzliche Kommandozeilen-Schalter.
 function Invoke-Session([string[]]$ExtraArgs, [string]$ExecCmds, [string]$LogFile,
                         [string]$WaitPattern, [int]$MinCount, [int]$TimeoutSec) {
+    & "$PSScriptRoot\cleanup_unreal_processes.cmd"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Stop-ProjectEditors $Proj
-    Start-Sleep -Seconds 3
     Remove-Item $LogFile -ErrorAction SilentlyContinue
 
     $sargs = @("`"$Proj`"", "-game", "-windowed", "-resx=1280", "-resy=720") `

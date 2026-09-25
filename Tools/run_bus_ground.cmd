@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 rem Beleglauf "Sitzen die Busse auf der Fahrbahn?" + Wendezeit am fernen Endpunkt.
 rem
 rem -WbBusGroundAudit misst je 25 m Fahrstrecke, WELCHE Flaeche den Bus traegt

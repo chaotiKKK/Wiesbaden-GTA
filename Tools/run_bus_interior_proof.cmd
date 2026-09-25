@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 rem Beleglauf "Der Bus-Innenraum hat Texturen": kurzer kopfloser Lauf, der den
 rem Bus-Actor seinen Innenraum bauen laesst. Im Log steht dann je Flaechenart
 rem eine Zeile der Form

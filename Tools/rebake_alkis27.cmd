@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 REM Voll-Bake Alkis27 - MERGE aus Alkis25 plus die Alkis26-Datenidee, 25.09.2026.
 REM
 REM Warum ein neuer Bake statt einem Merge der Kartendateien:

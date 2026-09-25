@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 cd /d "%~dp0.."
 REM Installierte Engine (siehe Tools\build_gate1.cmd: niemals die beiden
 REM UE-5.8-Baeume mischen, sonst PCH-Typneudefinitionen).

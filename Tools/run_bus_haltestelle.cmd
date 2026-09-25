@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 rem Belegbilder "Bus steht an der Halte auf der Fahrbahn": parkt je einen Wagen
 rem beider Richtungen an Halt N (-WbBusParkStop) und macht Bilder aus der Naehe.
 rem Halt 7 = Stadtstrasse (Bogen 2592 m), Halt 20 = Rheinbrueckenkopf.

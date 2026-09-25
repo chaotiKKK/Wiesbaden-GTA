@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 rem Kopfloser Boden-Audit: dieselbe Fahrbahn-Messung wie -WbBusGroundAudit im
 rem Spielbetrieb, aber OHNE Fenster (-nullrhi). Zwei Gruende:
 rem   * ein Spiel-Fenster im Hintergrund wird von der Engine gedrosselt; die

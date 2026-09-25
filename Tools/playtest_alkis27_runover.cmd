@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 REM Skriptgestuetzter Spieltest auf Alkis27: Passanten ueberfahren, Ton,
 REM Fahndungskonto, zwei Bilder. 25.09.2026.
 REM

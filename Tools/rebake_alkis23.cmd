@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 REM Voll-Bake Alkis23 aus Alkis16 (NICHT live), Stand 24.09.2026 abends; abgenommen 21:00. Traegt den aktuellen Stand
 REM der Pipeline: per-Gebaeude-Dachdeckung (Vertexfarbe R) + neue per-Gebaeude-
 REM Ton-Variation (Vertexfarbe G, RoofToneByte) + Service-Einspur-Fix. Die Default-Karte

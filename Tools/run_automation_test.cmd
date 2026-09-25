@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 REM Automation-Tests headless fahren. Ausgabe nach Saved\Logs\wb_test_<Log>.log -
 REM dort steht am Ende die Automation-Zusammenfassung ("TEST COMPLETE. EXIT CODE").
 REM

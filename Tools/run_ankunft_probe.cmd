@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 REM Die drei Ankunftswege des SebboTower in der ECHTEN Stadt abtasten.
 REM
 REM   run_ankunft_probe.cmd [Karte] [Logname] [Sekunden]

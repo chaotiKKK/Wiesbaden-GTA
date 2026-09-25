@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0cleanup_unreal_processes.cmd"
+if errorlevel 1 exit /b 1
 rem Beleglauf "Umlauf": ein Wagen faehrt seine Linie durch, mit 2-s-Protokoll.
 rem
 rem -WbBusLogWagon=601  je 2 s eine Zeile mit Bogenlaenge, Unterkante,
