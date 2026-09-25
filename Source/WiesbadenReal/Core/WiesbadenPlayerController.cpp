@@ -342,7 +342,7 @@ void AWiesbadenPlayerController::WbSpawnPursuer()
 		Pursuer ? TEXT("gespawnt") : TEXT("NICHT gespawnt"), Spawn.X, Spawn.Y);
 }
 
-void AWiesbadenPlayerController::WbDennoAuftrag(int32 Seed)
+void AWiesbadenPlayerController::WbDennoAuftrag(int32 Seed, float DelaySeconds)
 {
 	UWorld* World = GetWorld();
 	AWiesbadenDennoShop* Shop = nullptr;
@@ -356,7 +356,7 @@ void AWiesbadenPlayerController::WbDennoAuftrag(int32 Seed)
 		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbDennoAuftrag %d - kein Denno-Laden in der Welt."), Seed);
 		return;
 	}
-	Shop->RequestDevDelivery(Seed);
+	Shop->RequestDevDelivery(Seed, DelaySeconds);
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbDennoAuftrag %d - Lieferauftrag angefordert (Laden %s)."),
 		Seed, Shop->IsBuilt() ? TEXT("steht") : TEXT("noch im Aufbau, vorgemerkt"));
 }

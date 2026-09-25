@@ -133,6 +133,11 @@ int32 ComputeWalkPose(double WalkedCm)
 	return FMath::Clamp(FMath::FloorToInt32(Phase * 4.0), 0, 3);
 }
 
+float ComputeWalkPlayRate(double SpeedCmS)
+{
+	return static_cast<float>(FMath::Clamp(SpeedCmS / CustomerWalkAnimSpeedCmS, 0.5, 2.0));
+}
+
 FDennoTip ComputeTip(int32 Payout, double RemainingSeconds, double DeadlineSeconds)
 {
 	FDennoTip Tip;

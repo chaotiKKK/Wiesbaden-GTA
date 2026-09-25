@@ -54,7 +54,7 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 | `WbHeliOff` | `WbHeliOff` | Helikopter besessen | Autopilot aus, Steuerung zurueck an Eingabe |
 | `WbOptionen` | `WbOptionen` | HUD vorhanden | Optionsfenster auf/zu; protokolliert alle Zeilen mit Index und Wert |
 | `WbOption` | `WbOption <Zeile> <Schritte>` | HUD vorhanden | Eine Zeile des Optionsfensters verstellen (Vorzeichen = Richtung) |
-| `WbDennoAuftrag` | `WbDennoAuftrag [Seed]` | Denno-Laden in der Welt | Lieferauftrag bei Denno annehmen, ohne dort zu stehen (fester Zufallswert) |
+| `WbDennoAuftrag` | `WbDennoAuftrag [Seed] [VerzoegerungS]` | Denno-Laden in der Welt | Lieferauftrag bei Denno annehmen, ohne dort zu stehen (fester Zufallswert); Denno reicht das Paket an der Cafetuer |
 
 ---
 
@@ -245,20 +245,28 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 
 ## WbDennoAuftrag
 
-- **Signatur:** `WbDennoAuftrag [Seed:int = 1]`
+- **Signatur:** `WbDennoAuftrag [Seed:int = 1] [VerzoegerungS:float = 0]`
 - **Wirkung:** Nimmt bei Dennos Laden (Sedanplatz 5) einen Lieferauftrag an,
   als haette man zu Fuss vor dem Laden F gedrueckt - nur ohne dort zu stehen.
   Der Seed legt Adresse und Ware fest: derselbe Seed zieht dieselbe Adresse
   (solange sich Karte und Laden nicht aendern). Steht der Laden noch nicht
   (Haus nicht gestreamt), wird der Auftrag vorgemerkt und nach dem Aufbau
   eingeloest. Ziel 1 ist die Abholung vor dem Laden, Ziel 2 die Abgabe an
-  der Adresse; Frist und Auszahlung wie bei jedem Auftrag.
-- **Voraussetzung:** ein `AWiesbadenDennoShop` in der Welt; kein laufender
-  Auftrag (sonst lehnt Denno ab - Protokoll `Dennos Lieferung abgelehnt`).
+  der Adresse; Frist und Auszahlung wie bei jedem Auftrag. Denno (mit
+  Skelett) holt das Paket, reicht es in der Cafetuer und zwinkert.
+  `VerzoegerungS` schiebt die Annahme um so viele Sekunden auf - fuer
+  Aufnahmen, die die Uebergabe erst zeigen koennen, wenn die Kamera laeuft
+  (z. B. `-ExecCmds="WbDennoAuftrag 7 25"`). Mehrere Aufrufe stehen
+  hintereinander an: jeder wird eingeloest, sobald seine Verzoegerung um ist
+  UND kein Auftrag mehr laeuft - so lassen sich Kunden nacheinander pruefen
+  (`-ExecCmds="WbDennoAuftrag 7, WbDennoAuftrag 7 90"`; die Kundenfiguren
+  wechseln sich ab).
+- **Voraussetzung:** ein `AWiesbadenDennoShop` in der Welt. Vorgemerkte
+  Auftraege warten auf das Ende des laufenden.
 - **Log-Nachweis:**
   - Erfolg: `WbDev: WbDennoAuftrag <Seed> - Lieferauftrag angefordert (Laden steht).`
     bzw. `(Laden noch im Aufbau, vorgemerkt).` Danach vom Laden:
-    `Dennos Lieferung <n> angenommen: <Ware> nach <Adresse>, Abgabe bei (x, y, z), Luftlinie <m> m, <EUR> EUR.`
+    `Dennos Lieferung <n> angenommen: <Ware> nach <Adresse>, Abgabe bei (x, y, z), Luftlinie <m> m, <EUR> EUR, Kunde <Figur>.`
   - Kein Laden (Warning): `WbDev: WbDennoAuftrag <Seed> - kein Denno-Laden in der Welt.`
 
 ---
