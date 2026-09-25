@@ -127,8 +127,15 @@ def kurzname(pfad_oder_name):
     return str(pfad_oder_name).replace("\\", "/").rstrip("/").split("/")[-1]
 
 
-def plan(neu=None, vorgaenger=None):
+def plan(neu=None, vorgaenger=None, nur=None):
     """Was bleibt, was geht - ohne etwas anzufassen.
+
+    nur: wenn gesetzt, gehen AUSSCHLIESSLICH diese Karten (Kurznamen) weg;
+    alles andere bleibt, und die Sicherungen gelten weiter (die gespielte,
+    die neue und die Vorgaengerin sind auch dann unantastbar). Anlass
+    (26.09.2026): "raeum Alkis27 bis Alkis30 weg" - ohne diese Einschraenkung
+    haette das Werkzeug auch Alkis16 (Quelle jedes Neubaus und des
+    Release-Pakets) und die Probekarte einer anderen Sitzung geloescht.
 
     Rueckgabe: (behalten, weg, hinweise) - weg ist eine Liste
     (name, art, bytes, [pfade]).
@@ -189,6 +196,16 @@ def plan(neu=None, vorgaenger=None):
 
     # Sicherung 2: die gespielte Karte bleibt IMMER.
     behalten = {n for n in (neu, vorgaenger, live) if n}
+
+    if nur is not None:
+        auswahl = {kurzname(n) for n in nur}
+        vorhanden = set(alle_karten())
+        for name in sorted(auswahl - vorhanden):
+            hinweise.append("--nur %s: keine solche Karte auf der Platte." % name)
+        for name in sorted(auswahl & behalten):
+            hinweise.append("--nur %s: bleibt trotzdem (gespielte, neue oder Vorgaengerin)." % name)
+        # Alles ausserhalb der Auswahl bleibt ebenfalls.
+        behalten = behalten | (vorhanden - auswahl)
 
     weg = []
     for name in alle_karten():
@@ -268,10 +285,12 @@ def hauptprogramm(argv=None):
     p.add_argument("--vorgaenger", help="Name der Vorgaengerin (sonst aus dem Vorschlag)")
     p.add_argument("--loeschen", action="store_true", help="wirklich loeschen")
     p.add_argument("--ja", action="store_true", help="ohne Rueckfrage (fuer Skripte)")
+    p.add_argument("--nur", action="append", metavar="KARTE",
+                   help="nur diese Karte(n) loeschen, alles andere behalten (mehrfach angebbar)")
     a = p.parse_args(argv)
 
     try:
-        behalten, weg, hinweise = plan(a.neu, a.vorgaenger)
+        behalten, weg, hinweise = plan(a.neu, a.vorgaenger, a.nur)
     except Fehler as fehler:
         print("ABBRUCH: %s" % fehler, file=sys.stderr)
         return 2

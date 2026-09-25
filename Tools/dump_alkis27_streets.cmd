@@ -14,5 +14,5 @@ setlocal
 set UE=C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Saved\Logs\wb_streetdump_alkis27.log
-"%UE%" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis27 -game -WbDumpStreets=C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/Saved/Diagnose/Strassenalkis27.csv -WbQuitAfter=22 -windowed -ResX=1280 -ResY=720 -unattended -nop4 -abslog="%LOG%"
+"%UE%" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis31 -game -WbDumpStreets=C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/Saved/Diagnose/Strassenalkis27.csv -WbQuitAfter=22 -windowed -ResX=1280 -ResY=720 -unattended -nop4 -abslog="%LOG%"
 endlocal

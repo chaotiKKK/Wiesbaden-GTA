@@ -119,6 +119,31 @@ class PlanTest(Wegwerfbaum):
         self.assertIn("WiesbadenCity_Alkis16", behalten, "die gespielte Karte")
         self.assertNotIn("WiesbadenCity_Alkis16", self.namen_die_wegkommen(weg))
 
+    def test_nur_loescht_genau_die_genannten(self):
+        """--nur: "raeum Alkis27 bis 30 weg" darf Alkis16/22 nicht mitnehmen.
+
+        Ohne die Einschraenkung behielt das Werkzeug nur neu + Vorgaengerin und
+        haette die Neubau-Quelle Alkis16 geloescht (26.09.2026).
+        """
+        for n in ("WiesbadenCity_Alkis16", "WiesbadenCity_Alkis22", "WiesbadenCity_Alkis27",
+                  "WiesbadenCity_Alkis30", "WiesbadenCity_Alkis31"):
+            self.karte_anlegen(n, VOLL)
+        self.karte_anlegen("__StadtNeubau_3")
+        behalten, weg, hinweise = ka.plan(
+            neu="WiesbadenCity_Alkis31", vorgaenger="WiesbadenCity_Alkis30",
+            nur=["WiesbadenCity_Alkis27", "WiesbadenCity_Alkis30", "WiesbadenCity_Alkis99"])
+        self.assertEqual(self.namen_die_wegkommen(weg), ["WiesbadenCity_Alkis27"])
+        for bleibt in ("WiesbadenCity_Alkis16", "WiesbadenCity_Alkis22", "__StadtNeubau_3"):
+            self.assertIn(bleibt, behalten)
+        # Die Vorgaengerin bleibt auch mit --nur - und der Bericht sagt es.
+        self.assertIn("WiesbadenCity_Alkis30", behalten)
+        self.assertTrue(any("Alkis30" in h and "bleibt trotzdem" in h for h in hinweise))
+        self.assertTrue(any("Alkis99" in h and "keine solche Karte" in h for h in hinweise))
+        # Gegenprobe: ohne --nur waere Alkis22 weg (Alkis16 ist hier die
+        # gespielte Karte des Wegwerfbaums und darum ohnehin geschuetzt).
+        _, weg_ohne, _ = ka.plan(neu="WiesbadenCity_Alkis31", vorgaenger="WiesbadenCity_Alkis30")
+        self.assertIn("WiesbadenCity_Alkis22", self.namen_die_wegkommen(weg_ohne))
+
     def test_externe_actors_gehen_mit(self):
         """Ohne sie waere das Aufraeumen sinnlos - sie sind 1,9 GB je Karte."""
         self.karte_anlegen("WiesbadenCity_Alkis16", VOLL)

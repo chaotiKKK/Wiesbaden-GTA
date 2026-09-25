@@ -48,5 +48,5 @@ setlocal
 set UE=C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Saved\Logs\wb_playtest_alkis27.log
-"%UE%" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis27 -game -WbGoto=-196192,-724814 -WbGotoYaw=32.4 -WbPedDensity=8 -WbPedRadius=80 -WbShotWhenReady "-WbShotPoseFile=C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/Saved/Diagnose/poses_alkis27_runover.txt" -WbPoseSettle=3 -WbQuitAfter=95 -windowed -ResX=1920 -ResY=1080 -unattended -nop4 -ExecCmds="WbDrive 34" -abslog="%LOG%"
+"%UE%" "%PROJ%" /Game/Maps/WiesbadenCity_Alkis31 -game -WbGoto=-196192,-724814 -WbGotoYaw=32.4 -WbPedDensity=8 -WbPedRadius=80 -WbShotWhenReady "-WbShotPoseFile=C:/freebuff/WiesbadenReal_Sicherung/WiesbadenReal/Saved/Diagnose/poses_alkis27_runover.txt" -WbPoseSettle=3 -WbQuitAfter=95 -windowed -ResX=1920 -ResY=1080 -unattended -nop4 -ExecCmds="WbDrive 34" -abslog="%LOG%"
 endlocal
