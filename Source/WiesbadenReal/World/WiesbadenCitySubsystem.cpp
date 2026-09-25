@@ -378,9 +378,25 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 		SunsWithShadows, SkiesFilled);
 }
 
+void UWiesbadenCitySubsystem::ReportCrime(EWiesbadenCrimeEvent Event)
+{
+	const int32 Before = WantedState.Level;
+	WantedState = FWiesbadenWanted::AddEvent(WantedState, WantedParams, Event);
+	if (WantedState.Level != Before)
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("Fahndung: Stufe %d (%.0f Punkte) nach Ereignis %d."),
+			WantedState.Level, WantedState.Points, static_cast<int32>(Event));
+	}
+}
+
 void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	// Fahndungskonto: Abbau nach Grace, Stufe nachziehen. Kostet ein paar
+	// Flops - die Polizei-Reaktion (Spawns/Feuerdisziplin) dockt spaeter an.
+	WantedState = FWiesbadenWanted::Step(WantedState, WantedParams, DeltaTime);
 
 	// Gesamtzeit dieses Subsystems messen.
 	//

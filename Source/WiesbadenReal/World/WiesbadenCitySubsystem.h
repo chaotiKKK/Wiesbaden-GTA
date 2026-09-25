@@ -8,6 +8,7 @@
 #include "Core/WiesbadenCityData.h"
 #include "GIS/WiesbadenBuildSummary.h"
 #include "GIS/WiesbadenPedestrianSimulation.h"
+#include "NPC/WiesbadenWanted.h"
 #include "World/WiesbadenHealthReport.h"
 #include "World/WiesbadenFrameProfiler.h"
 #include "World/WiesbadenFallThroughMonitor.h"
@@ -235,8 +236,35 @@ public:
 	/** Gemeldete Aussetzer - gedeckelt, damit eine lange Fahrt das Protokoll nicht flutet. */
 	int32 HitchesReported = 0;
 
+	/** Fahndungskonto (Stufe, Punkte, Grace-Zeit) - FWiesbadenWanted::Step tickt es. */
+	FWiesbadenWantedState WantedState;
+	FWiesbadenWantedParams WantedParams;
+
 	/** Fussgaenger auf den Gehwegen. Laeuft parallel zum Verkehr. */
 	FWiesbadenPedestrianSimulation PedestrianSimulation;
+
+	// -- Fahndungskonto (Polizei) ---------------------------------------------
+
+	/**
+	 * MeldeTat: Ein Verbrechen ins Fahndungskonto buchen.
+	 *
+	 * Rufen die Gewalt-Quellen auf (Waffen-Aufschlag, Explosion, Saegenhieb,
+	 * spaeter: zerstoerte Fahrzeuge, getroffene Beamte). Das Konto lebt hier,
+	 * weil es weltpersistent sein muss - laenger als jeder Pawn/Actor - und
+	 * das Subsystem ohnehin tickt (Abbau dort).
+	 *
+	 * Bewusst KEIN UFUNCTION: der Enum-Typ ist absichtlich nicht reflektiert
+	 * (datenreines Modul wie FWiesbadenPursuer); gerufen wird nur aus C++.
+	 */
+	void ReportCrime(EWiesbadenCrimeEvent Event);
+
+	/** Fahndungsstand (Stufe 0..6) fuer HUD/Blueprint. */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Polizei")
+	int32 GetWantedLevel() const { return WantedState.Level; }
+
+	/** Punktekonto (Diagnose/Tests). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Polizei")
+	double GetWantedPoints() const { return WantedState.Points; }
 
 	/** Momentaufnahme der Verkehrs-Simulation (HUD/Blueprint). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Traffic")
