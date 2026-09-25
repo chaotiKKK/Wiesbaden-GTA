@@ -3946,8 +3946,10 @@ FALLSTRICKE in derselben Kette:
   Modul-DLL: Build endet mit LNK1104 und der Test laeuft still gegen das ALTE
   Binary. Deshalb ruft jeder Bake-/Testwrapper ueber
   `Tools\cleanup_unreal_processes.cmd` vor dem Engine-Start ALLE
-  `UnrealEditor*` und `zenserver` auf, wartet 3 s und prueft, dass keiner
-  zurueckbleibt. `build_release.ps1` beendet dagegen bewusst nur Editoren
+  `UnrealEditor*` und `zenserver` auf, wartet mindestens 3 s, fasst einen
+  langsamen Shutdown mit einem zweiten Kill und bis zu 10 s Wartefrist nach und
+  verweigert den Start erst, wenn wirklich ein Prozess zurueckbleibt.
+  `build_release.ps1` beendet dagegen bewusst nur Editoren
   dieses Projektordners - der Kompilier-Gate soll keine fremde Sitzung
   zerstoeren.
 

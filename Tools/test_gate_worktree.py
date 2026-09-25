@@ -217,6 +217,8 @@ class HookWegTest(unittest.TestCase):
         self.assertIn('Get-Process -Name "UnrealEditor*"', ps1)
         self.assertIn('Get-Process -Name "zenserver"', ps1)
         self.assertIn("Start-Sleep -Seconds 3", ps1)
+        self.assertIn("AddSeconds(10)", ps1)
+        self.assertIn("zweiter Versuch", ps1)
         self.assertIn("Prozessbereinigung unvollstaendig", ps1)
         self.assertIn("cleanup_unreal_processes.ps1", batch)
         self.assertIn("%*", batch)
