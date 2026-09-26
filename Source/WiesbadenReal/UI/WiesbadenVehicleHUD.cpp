@@ -1081,6 +1081,7 @@ void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString
 	OutLines.Add(TEXT("W A S D             Gehen"));
 	OutLines.Add(TEXT("Umschalt links      Rennen"));
 	OutLines.Add(TEXT("Leertaste           Springen"));
+	OutLines.Add(TEXT("X (halten)          Ducken"));
 	OutLines.Add(TEXT("Maus / Pfeiltasten  Umsehen"));
 	OutLines.Add(TEXT("Linke Maustaste     Kettensaege schwingen"));
 	OutLines.Add(TEXT("F                   Einsteigen - auch in Verkehrsautos"));

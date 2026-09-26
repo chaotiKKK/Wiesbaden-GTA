@@ -609,6 +609,13 @@ private:
 	 */
 	bool TryApplyGotoTarget();
 
+public:
+	/** -WbGoto noch einmal ausfuehren - fuer die Figurprobe, die damit den
+	 *  FUSS-Pawn versetzt (beim Start trifft Goto das Auto). */
+	void RepeatGoto() { bGotoApplied = false; GotoWaitSeconds = 0.0f; }
+
+private:
+
 	/**
 	 * Setzt die Ansicht auf eine Kamera ueber dem Spieler (-WbAerial=<Meter>).
 	 *

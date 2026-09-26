@@ -124,6 +124,63 @@ namespace
 	}
 }
 
+bool AWiesbadenSebboHq::GetStairWalk(FVector& OutStart, FRotator& OutFacing, TArray<FVector>& OutWaypoints) const
+{
+	const UWorld* World = GetWorld();
+	if (!World || !bBuilt)
+	{
+		return false;
+	}
+	// Masse wie in ProbeStaircase (dort begruendet).
+	const double Innen = Dimensions.CoreCm * 0.5 - 25.0;
+	const double Trennung = 12.5;
+	const double TrennY = (-Innen + -Trennung) * 0.5;
+	const double LaufY = (-Innen + 20.0 + TrennY - 5.0) * 0.5;
+	const double PodestY = (TrennY + -Trennung) * 0.5;
+	const double LaufX0 = -Innen + 40.0;
+	const double LaufX1 = Innen - 40.0;
+	const int32 Stufenzahl = 16;
+	const double Stufenhoehe = Dimensions.FloorHeightCm / Stufenzahl;
+	const double Auftritt = ((Innen * 2.0) - 40.0) / Stufenzahl;
+
+	OutFacing = FRotator(0.0, HeadingDegrees, 0.0);
+	const auto NachWelt = [&](double X, double Y, double Z) { return BuiltBase + OutFacing.RotateVector(FVector(X, Y, Z)); };
+
+	// Erste Stufe ueber dem Gelaende (am Hang schneidet es die unteren).
+	double GelaendeUeberFuss = 0.0;
+	FHitResult Boden;
+	FCollisionQueryParams P(SCENE_QUERY_STAT(WbTreppenWeg), true);
+	P.AddIgnoredActor(this);
+	const FVector Oben = NachWelt(LaufX0, LaufY, 20000.0);
+	if (World->LineTraceSingleByChannel(Boden, Oben, Oben - FVector(0.0, 0.0, 40000.0), ECC_WorldStatic, P))
+	{
+		GelaendeUeberFuss = Boden.Location.Z - BuiltBase.Z;
+	}
+	int32 Erste = 0;
+	while (20.0 + (Erste + 1) * Stufenhoehe < GelaendeUeberFuss + 10.0 && Erste < Stufenzahl - 2)
+	{
+		++Erste;
+	}
+	OutStart = NachWelt(-Innen + 20.0 + (Erste + 0.5) * Auftritt, LaufY, 20.0 + (Erste + 1) * Stufenhoehe + 2.0 + 90.0);
+
+	// Z = Sollhoehe der Fuesse dort (oberste Stufe = Podest des naechsten
+	// Geschosses: 20 + 16 Stufen ueber dem Geschossboden).
+	OutWaypoints.Reset();
+	for (int32 Geschoss = 0; Geschoss < Dimensions.FloorCount; ++Geschoss)
+	{
+		const double Podest = 20.0 + (Geschoss + 1) * Dimensions.FloorHeightCm;
+		OutWaypoints.Add(NachWelt(LaufX1, LaufY, Podest));
+		if (Geschoss + 1 >= Dimensions.FloorCount)
+		{
+			break;   // oben endet der Lauf auf dem Dachaufbau
+		}
+		OutWaypoints.Add(NachWelt(LaufX1, PodestY, Podest));
+		OutWaypoints.Add(NachWelt(LaufX0, PodestY, Podest));
+		OutWaypoints.Add(NachWelt(LaufX0, LaufY, Podest));
+	}
+	return true;
+}
+
 void AWiesbadenSebboHq::ProbeStaircase() const
 {
 	const UWorld* World = GetWorld();

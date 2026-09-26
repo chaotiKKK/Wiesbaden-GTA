@@ -118,6 +118,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Sebbo HQ|Arrival")
 	ESebboHqArrivalTarget GetArrivalTarget() const { return ArrivalTarget; }
 
+	/**
+	 * Der Weg, den ein Mensch die Treppe hinaufgeht - fuer die Figurprobe
+	 * (-WbFigurProbe=Treppe), die den ECHTEN Fuss-Pawn per Tasten hinaufschickt.
+	 * Dieselben Masse wie ProbeStaircase: Lauf hinauf (+X), quer aufs Podest,
+	 * zurueck, quer auf den naechsten Lauf. Weltpunkte (Z = Sollhoehe der Fuesse), Start
+	 * auf der ersten Stufe ueber dem Gelaende, Blick in +X des Turms.
+	 *
+	 * @return false, solange der Turm nicht gebaut ist.
+	 */
+	bool GetStairWalk(FVector& OutStart, FRotator& OutFacing, TArray<FVector>& OutWaypoints) const;
+
 private:
 	/** Bodenhoehe am Standort; false, solange die Zelle nicht gestreamt ist. */
 	bool ResolveGround(const FVector& WorldXY, double& OutZ) const;

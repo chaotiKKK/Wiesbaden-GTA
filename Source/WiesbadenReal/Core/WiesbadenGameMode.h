@@ -397,6 +397,38 @@ private:
 	/** Fuehrt einen Schritt des Ego-Pruef-Laufs aus (Tick). */
 	void TickEgoProbe(float DeltaSeconds);
 
+	/**
+	 * Figur-Pruef-Lauf (-WbFigurProbe, mit -WbZuFuss): steht, geht, rennt,
+	 * springt, dreht und duckt sich per SIMULIERTER Taste (W, Umschalt,
+	 * Leertaste, Pfeil rechts, X) - der Pawn kennt keine Probe, er sieht nur
+	 * Tasten. Zuletzt legt sie eine niedrige Platte ueber die geduckte Figur,
+	 * laesst X los (die Figur muss geduckt bleiben) und nimmt die Platte weg
+	 * (jetzt muss sie aufstehen).
+	 *
+	 * -WbFigurProbe=Boden: Aussteigen am Hang (mit -WbGoto=<Hangstrasse>),
+	 * Figur 60/150/250 cm ins Gelaende setzen (muss wieder hochkommen), geduckt
+	 * ins Auto und wieder aus (muss stehen), geduckt Mitfahrt beginnen.
+	 * -WbFigurProbe=Treppe: der echte Fuss-Pawn geht per Tasten die Treppe des
+	 * Sebbo-Turms hinauf (Wegpunkte von AWiesbadenSebboHq::GetStairWalk). Die Kamera
+	 * schaut von schraeg vorn auf die Figur; je Phase ein Bild in
+	 * Saved/Diagnose/figur_*.png, alle 0,5 s die gewaehlte Bewegung im Log.
+	 */
+	bool bFigurProbe = false;
+	float FigurProbeTime = 0.0f;
+	int32 FigurProbeShot = 0;
+	float FigurProbeLogIn = 0.0f;
+	TWeakObjectPtr<AActor> FigurProbeDecke;
+	FString FigurProbeMode;
+	float FigurProbeBodenZ = 0.0f;
+	TArray<FVector> FigurProbeWeg;
+	int32 FigurProbeWegIndex = -1;
+	float FigurProbeWegZeit = 0.0f;
+	FRotator FigurProbeBlick = FRotator::ZeroRotator;
+	float FigurProbeStartFussZ = 0.0f;
+
+	/** Ein Bild des Figur-Pruef-Laufs (Tick). */
+	void TickFigurProbe(float DeltaSeconds);
+
 	/** Spielzeit seit BeginPlay in Sekunden. */
 	float ElapsedSeconds = 0.0f;
 

@@ -6,7 +6,6 @@
 #include "GameFramework/Pawn.h"
 #include "WiesbadenFootPawn.generated.h"
 
-class UAnimSequence;
 class UCameraComponent;
 class UCapsuleComponent;
 class USkeletalMeshComponent;
@@ -14,6 +13,7 @@ class USpringArmComponent;
 class USpotLightComponent;
 class UStaticMeshComponent;
 class UWiesbadenCarAudioComponent;
+class UWiesbadenSebboFigureComponent;
 class UWiesbadenWeaponComponent;
 
 /**
@@ -45,13 +45,16 @@ public:
 	 * angehaengten Fahrgast in jedem Bild wieder auf das Gelaende ziehen -
 	 * die Bahn fuehre ohne ihn ab.
 	 */
-	void SetRiding(bool bInRiding) { bRiding = bInRiding; }
+	void SetRiding(bool bInRiding);
 
 	/** Faehrt der Spieler gerade mit? Seit es ZWEI Bus-Actoren gibt (Linie 6 und
 	 *  Linie 3), muss der Einstieg fragen, ob schon jemand den Fahrgast hat:
 	 *  beide Actors sehen denselben Tastendruck und haetten sich sonst beide
 	 *  denselben Pawn angehaengt (jeder mit eigenem Anker). */
 	bool IsRiding() const { return bRiding; }
+
+	/** Geduckt? (Taste X / rechter Stick gedrueckt; bleibt unter niedriger Decke.) */
+	bool IsCrouched() const { return bCrouched; }
 
 	// -- Gesundheit ---------------------------------------------------------
 	/**
@@ -91,6 +94,17 @@ public:
 	/** Laufgeschwindigkeit bei gehaltener Umschalttaste, in km/h. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fuss", meta = (ClampMin = "1.0"))
 	float SprintSpeedKmh = 16.0f;
+
+	/** Tempo geduckt in km/h (kein Sprint, kein Sprung). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fuss", meta = (ClampMin = "0.5"))
+	float CrouchSpeedKmh = 3.5f;
+
+	/**
+	 * Halbe Kapselhoehe geduckt in cm (stehend 90). Die Duck-Clips sind 1,25 bis
+	 * 1,36 m hoch - 70 laesst den Kopf in der Kapsel.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fuss", meta = (ClampMin = "40.0"))
+	float CrouchHalfHeightCm = 70.0f;
 
 	/** Drehgeschwindigkeit ueber die Pfeiltasten in Grad je Sekunde. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fuss", meta = (ClampMin = "10.0"))
@@ -228,20 +242,18 @@ public:
 	UStaticMeshComponent* BodyMesh = nullptr;
 
 	/**
-	 * Die animierte Spielfigur (SK_Sebbo).
-	 *
-	 * Sobald das Skelett-Modell vorliegt, uebernimmt sie: Gehen wird als
-	 * Schrittzyklus abgespielt, und statt der Pistole schwingt Sebbo die
-	 * Kettensaege. Das statische BodyMesh bleibt als Rueckfall bestehen.
+	 * Die animierte Spielfigur (SK_Sebbo) - besitzt Clips und Clip-Wahl; der
+	 * Pawn meldet ihr nur Tempo, Luft, Mitfahrt, Blick und Gesundheit. Das
+	 * statische BodyMesh bleibt als Rueckfall.
 	 */
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Figur")
-	USkeletalMeshComponent* FigureMesh = nullptr;
+	UWiesbadenSebboFigureComponent* FigureMesh = nullptr;
 
 	/** Kettensaegen-Klang: der Fahrzeug-Synthesizer als Zweitakter. */
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Figur")
 	UWiesbadenCarAudioComponent* SawAudio = nullptr;
 
-	/** Dauer eines Saegehiebs in Sekunden (Laenge von Sebbo_Swing). */
+	/** Dauer eines Nahkampfhiebs in Sekunden (mit A_Sebbo_Kick: dessen Laenge). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Nahkampf", meta = (ClampMin = "0.1"))
 	float SwingSeconds = 0.7f;
 
@@ -260,13 +272,6 @@ public:
 	/** Wie lange ein getroffener Fussgaenger liegen bleibt, in Sekunden. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Nahkampf", meta = (ClampMin = "0.5"))
 	float PedestrianDownSeconds = 12.0f;
-
-	/**
-	 * Gehtempo, fuer das der Schrittzyklus einmal je Sekunde laeuft (m/s).
-	 * Schnelleres Gehen beschleunigt die Bewegung im selben Verhaeltnis.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Figur", meta = (ClampMin = "0.1"))
-	float WalkAnimSpeedMps = 1.67f;
 
 	/** Kopf der Figur. */
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Figur")
@@ -299,6 +304,15 @@ private:
 	void FollowGround(float DeltaSeconds);
 
 	/**
+	 * Ducken/Aufstehen: Kapsel kuerzen bzw. verlaengern, die Fuesse bleiben am
+	 * Boden (Actor sinkt/steigt um die Differenz, die Figur rueckt nach).
+	 */
+	void SetCrouched(bool bInCrouched);
+
+	/** Ist ueber der geduckten Kapsel Platz zum Aufstehen? */
+	bool HasRoomToStand() const;
+
+	/**
 	 * Versucht, ein blockierendes Hindernis hinaufzusteigen.
 	 *
 	 * @return True, wenn die Figur versetzt wurde.
@@ -311,7 +325,7 @@ private:
 	/** Fuehrt den Treffer des laufenden Hiebs aus (Kugel-Sweep nach vorn). */
 	void DoMeleeHit();
 
-	/** Waehlt Idle oder Walk nach dem tatsaechlichen Tempo. */
+	/** Meldet der Figur Tempo, Luft, Mitfahrt, Blick und Gesundheit. */
 	void UpdateFigure(float DeltaSeconds, float SpeedMps);
 
 	/** Restzeit bis zum naechsten moeglichen Schuss. */
@@ -332,6 +346,14 @@ private:
 	/** Flankenerkennung der Sprungtaste. */
 	bool bJumpKeyHeld = false;
 
+	/** Bodenabfrage: Ort nach der letzten und Restzeit der Versetz-Schonfrist. */
+	FVector LastGroundCheckLocation = FVector(0.0, 0.0, -1e9);
+	float TeleportGraceSeconds = 0.0f;
+
+	/** Geduckt? Und die halbe Kapselhoehe im Stehen (aus dem Konstruktor). */
+	bool bCrouched = false;
+	float StandingHalfHeightCm = 90.0f;
+
 	/** True, solange der Spieler in der Nerobergbahn mitfaehrt. */
 	bool bRiding = false;
 
@@ -349,14 +371,6 @@ private:
 
 	/** Treffer dieses Hiebs bereits ausgefuehrt? */
 	bool bMeleeHitDone = false;
-
-	/** Bewegungen der Figur. */
-	UPROPERTY(Transient) UAnimSequence* IdleAnim = nullptr;
-	UPROPERTY(Transient) UAnimSequence* WalkAnim = nullptr;
-	UPROPERTY(Transient) UAnimSequence* SwingAnim = nullptr;
-
-	/** Welche Dauerschleife gerade laeuft (0 = keine, 1 = Idle, 2 = Walk). */
-	int32 CurrentLoop = 0;
 
 	/** Standort im letzten Bild - fuer das gemessene Tempo. */
 	FVector PreviousLocation = FVector::ZeroVector;

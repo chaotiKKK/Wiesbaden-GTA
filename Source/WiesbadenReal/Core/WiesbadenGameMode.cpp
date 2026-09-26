@@ -32,6 +32,11 @@
 #include "Store/WiesbadenStore.h"
 #include "Engine/GameInstance.h"
 #include "UnrealClient.h"
+#include "InputKeyEventArgs.h"
+#include "Engine/StaticMeshActor.h"
+#include "Components/CapsuleComponent.h"
+#include "World/WiesbadenSebboHq.h"
+#include "Vehicles/WiesbadenSebboFigureComponent.h"
 #include "World/WiesbadenStreamingSource.h"
 #include "WorldPartition/WorldPartitionSubsystem.h"
 #include "Engine/World.h"
@@ -111,6 +116,8 @@ void AWiesbadenGameMode::BeginPlay()
 	{
 		OnFootAfterSeconds = -1.0f;
 	}
+	bFigurProbe = FParse::Value(FCommandLine::Get(), TEXT("WbFigurProbe="), FigurProbeMode)
+		|| FParse::Param(FCommandLine::Get(), TEXT("WbFigurProbe"));
 
 	CitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
 	if (!CitySubsystem)
@@ -774,6 +781,306 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 	if (!bEgoProbeDone && EgoProbeAfterSeconds >= 0.0f && ElapsedSeconds >= EgoProbeAfterSeconds)
 	{
 		TickEgoProbe(DeltaSeconds);
+	}
+	if (bFigurProbe)
+	{
+		TickFigurProbe(DeltaSeconds);
+	}
+}
+
+void AWiesbadenGameMode::TickFigurProbe(float DeltaSeconds)
+{
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	// Der Fuss-Pawn des GameModes, nicht PC->GetPawn(): im Auto besitzt der
+	// Controller das Fahrzeug, und die Probe liefe sonst nicht weiter.
+	AWiesbadenFootPawn* Foot = FootPawn;
+	if (!PC || !Foot || !Foot->FigureMesh || (FigurProbeTime <= 0.0f && PC->GetPawn() != Foot))
+	{
+		return;   // erst aussteigen (-WbZuFuss)
+	}
+
+	// Erst 8 s Ruhe: die Zellen um den Ausstiegsort laden noch nach.
+	FigurProbeTime += DeltaSeconds;
+	const float T = FigurProbeTime - 8.0f;
+	const float Prev = T - DeltaSeconds;
+	const auto At = [T, Prev](float Moment) { return T >= Moment && Prev < Moment; };
+
+	// Tasten wie ein Spieler: gedrueckt halten, solange die Phase laeuft.
+	const auto Hold = [PC](const FKey& Key, bool bDown)
+	{
+		if (PC->IsInputKeyDown(Key) != bDown)
+		{
+			PC->InputKey(FInputKeyEventArgs::CreateSimulated(Key, bDown ? IE_Pressed : IE_Released, bDown ? 1.0f : 0.0f));
+		}
+	};
+	const UWiesbadenSebboFigureComponent* Figure = Foot->FigureMesh;
+	const FString Move = UWiesbadenSebboFigureComponent::MoveName(Figure->GetCurrentMove());
+	const auto Shot = [&](const TCHAR* Name)
+	{
+		const FString Path = FPaths::ProjectSavedDir() / TEXT("Diagnose") / Name + TEXT(".png");
+		FScreenshotRequest::RequestScreenshot(Path, false, false);
+		UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe t=%.2f: Bild %s bei Bewegung %s."), T, Name, *Move);
+	};
+	const float Half = Foot->GetRootComponent()->Bounds.BoxExtent.Z;
+	const float FeetZ = Foot->GetActorLocation().Z - Half;
+	// Gelaende unter der Figur: oberste Flaeche von weit oben (Figur ignoriert).
+	const auto GroundZ = [&](const FVector& P)
+	{
+		FHitResult Hit;
+		FCollisionQueryParams Q(SCENE_QUERY_STAT(WbFigurProbeBoden), true, Foot);
+		return World->LineTraceSingleByChannel(Hit, FVector(P.X, P.Y, P.Z + 5000.0), FVector(P.X, P.Y, P.Z - 50000.0),
+			ECC_WorldStatic, Q) ? static_cast<float>(Hit.Location.Z) : -1e9f;
+	};
+	bool bDone = false;
+
+	if (FigurProbeMode == TEXT("Boden"))
+	{
+		const FVector P = Foot->GetActorLocation();
+		if (At(0.0f))
+		{
+			FigurProbeBodenZ = GroundZ(P);
+			const float Hang = (GroundZ(P + FVector(200.0, 0.0, 0.0)) - GroundZ(P - FVector(200.0, 0.0, 0.0))) / 4.0f;
+			const float Quer = (GroundZ(P + FVector(0.0, 200.0, 0.0)) - GroundZ(P - FVector(0.0, 200.0, 0.0))) / 4.0f;
+			UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe Boden: nach dem Aussteigen Fuesse %+.0f cm ueber Gelaende, Neigung %.0f %% / %.0f %%."),
+				FeetZ - FigurProbeBodenZ, Hang, Quer);
+			Shot(TEXT("figur_boden_hang"));
+		}
+		// Ins Gelaende setzen - so tief, dass beim tiefsten Fall der Kapselscheitel
+		// (180 cm) im Boden steckt. Jedes Mal muss die Figur wieder oben stehen.
+		const float Tiefe[] = { 60.0f, 150.0f, 250.0f };
+		for (int32 i = 0; i < 3; ++i)
+		{
+			if (At(1.0f + 3.0f * i))
+			{
+				Foot->SetActorLocation(FVector(P.X, P.Y, FigurProbeBodenZ - Tiefe[i] + Half + 3.0f));
+				UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe Boden: %.0f cm ins Gelaende gesetzt (Scheitel %+.0f cm)."),
+					Tiefe[i], 2.0f * Half + 3.0f - Tiefe[i]);
+			}
+			if (At(3.0f + 3.0f * i))
+			{
+				UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe Boden: %.0f cm eingegraben -> nach 2 s Fuesse %+.0f cm ueber Gelaende."),
+					Tiefe[i], FeetZ - GroundZ(P));
+			}
+		}
+		// Geduckt ins Auto, X im Auto loslassen, aussteigen: die Figur muss stehen.
+		Hold(EKeys::X, (T >= 10.0f && T < 12.0f) || (T >= 18.0f && T < 21.0f));
+		Hold(EKeys::F, (T >= 11.0f && T < 11.15f) || (T >= 14.0f && T < 14.15f));
+		if (At(11.6f) || At(15.5f) || At(16.5f))
+		{
+			UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe Boden: Spieler steuert %s, Figur geduckt %d, Kapsel %.0f, Fuesse %+.0f cm ueber Gelaende."),
+				*GetNameSafe(PC->GetPawn()), Foot->IsCrouched() ? 1 : 0, Half, FeetZ - GroundZ(P));
+		}
+		if (At(16.0f)) { Shot(TEXT("figur_nach_auto")); }
+		// Mitfahrt beginnt geduckt (direkter Aufruf wie Bahn/Bus): aufgerichtet?
+		if (At(19.0f))
+		{
+			const bool bVorher = Foot->IsCrouched();
+			Foot->SetRiding(true);
+			UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe Boden: Mitfahrt beginnt - vorher geduckt %d, jetzt geduckt %d, Kapsel %.0f."),
+				bVorher ? 1 : 0, Foot->IsCrouched() ? 1 : 0, Foot->GetRootComponent()->Bounds.BoxExtent.Z);
+		}
+		if (At(20.0f)) { Foot->SetRiding(false); }
+		// -WbGoto noch einmal - jetzt trifft es den Fuss-Pawn. Das Goto-Ziel ist
+		// die Stelle, an die dasselbe Goto beim Start das Auto gestellt hat: das
+		// Auto kommt so lange aus dem Weg (sonst stuende die Figur im Auto).
+		if (At(21.5f) && PlayerVehicle)
+		{
+			PlayerVehicle->SetActorHiddenInGame(true);
+			PlayerVehicle->SetActorEnableCollision(false);
+		}
+		if (At(24.5f) && PlayerVehicle)
+		{
+			PlayerVehicle->SetActorHiddenInGame(false);
+			PlayerVehicle->SetActorEnableCollision(true);
+		}
+		if (At(22.0f) && CitySubsystem)
+		{
+			UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe Boden: -WbGoto erneut, Figur vorher bei (%.0f, %.0f, %.0f)."), P.X, P.Y, P.Z);
+			CitySubsystem->RepeatGoto();
+		}
+		if (At(24.0f))
+		{
+			UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe Boden: nach -WbGoto Figur bei (%.0f, %.0f, %.0f), Fuesse %+.0f cm ueber Gelaende."),
+				P.X, P.Y, P.Z, FeetZ - GroundZ(P));
+			Shot(TEXT("figur_nach_goto"));
+		}
+		// Taste 9 (Tritt) und einmal zutreten: das Log muss "Saegenklang aus" zeigen.
+		Hold(EKeys::Nine, T >= 25.0f && T < 25.1f);
+		Hold(EKeys::LeftMouseButton, T >= 25.5f && T < 25.7f);
+		bDone = T >= 28.0f;
+	}
+	else if (FigurProbeMode == TEXT("Treppe"))
+	{
+		if (FigurProbeWegIndex < 0 && T >= 0.0f)
+		{
+			AWiesbadenSebboHq* Turm = nullptr;
+			for (TActorIterator<AWiesbadenSebboHq> It(World); It; ++It) { Turm = *It; }
+			FVector Start;
+			if (Turm && Turm->GetStairWalk(Start, FigurProbeBlick, FigurProbeWeg))
+			{
+				Foot->SetActorLocationAndRotation(Start, FigurProbeBlick);
+				Foot->SetEgoCamera(true);
+				FigurProbeWegIndex = 0;
+				FigurProbeWegZeit = 0.0f;
+				FigurProbeStartFussZ = Start.Z - 90.0f;
+				UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe Treppe: Start (%.0f, %.0f, %.0f), %d Wegpunkte."),
+					Start.X, Start.Y, Start.Z, FigurProbeWeg.Num());
+			}
+			else if (At(FMath::FloorToFloat(T)))
+			{
+				UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe Treppe: Turm noch nicht gebaut."));
+			}
+		}
+		if (FigurProbeWeg.IsValidIndex(FigurProbeWegIndex))
+		{
+			// Nur Tasten: vor/zurueck (W/S) und seitlich (D/A) auf den Wegpunkt zu.
+			const FVector D = FigurProbeWeg[FigurProbeWegIndex] - Foot->GetActorLocation();
+			const float Dx = FVector::DotProduct(D, FigurProbeBlick.Vector());
+			const float Dy = FVector::DotProduct(D, FRotationMatrix(FigurProbeBlick).GetUnitAxis(EAxis::Y));
+			// Eng fuehren: die Stufen sind 50 cm tief, die Kapsel 80 cm breit. Vom
+			// Podest seitlich auf den naechsten Lauf kommt sie nur, wenn sie auf
+			// wenige Zentimeter an der Wand steht (sonst reicht die Stufenhilfe
+			// von 40 cm nicht ueber die zweite Stufe) - mit 15 cm Toleranz hing sie.
+			// Der letzte Lauf endet auf dem Dach: wer dort steht, ist oben - auch
+			// wenn er ein Stueck frueher auf das Austrittspodest getreten ist.
+			const FVector& Ziel = FigurProbeWeg[FigurProbeWegIndex];
+			const bool bLetzter = FigurProbeWegIndex + 1 == FigurProbeWeg.Num();
+			const bool bDa = (FMath::Abs(Dx) <= 4.0f && FMath::Abs(Dy) <= 4.0f)
+				|| (bLetzter && FeetZ >= Ziel.Z - 30.0f);
+			// Achsweise wie ein Mensch auf der Treppe: auf Laeufen und Podesten
+			// nur vor/zurueck, seitlich erst ab 20 cm - schraeg gedrueckt schob
+			// das Abgleiten an den Stufenkanten die Figur an die Trennwand, und
+			// schraeg in Wand und Stufe kommt keine Stufenhilfe weiter.
+			const float QuerAb = FMath::Abs(Dx) >= FMath::Abs(Dy) ? 20.0f : 2.0f;
+			Hold(EKeys::W, !bDa && Dx > 2.0f);
+			Hold(EKeys::S, !bDa && Dx < -2.0f);
+			Hold(EKeys::D, !bDa && Dy > QuerAb);
+			Hold(EKeys::A, !bDa && Dy < -QuerAb);
+			FigurProbeWegZeit += DeltaSeconds;
+			if (bDa)
+			{
+				const float Hoch = FeetZ - FigurProbeStartFussZ;
+				UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe Treppe: Wegpunkt %d/%d nach %.1f s, Fuesse %.0f cm ueber dem Start, Soll %+.0f cm, Bewegung %s."),
+					FigurProbeWegIndex + 1, FigurProbeWeg.Num(), FigurProbeWegZeit, Hoch, FeetZ - Ziel.Z, *Move);
+				if (FigurProbeWegIndex == 0) { Shot(TEXT("figur_treppe_lauf1")); }
+				if (FigurProbeWegIndex == FigurProbeWeg.Num() / 2) { Shot(TEXT("figur_treppe_mitte")); }
+				++FigurProbeWegIndex;
+				FigurProbeWegZeit = 0.0f;
+				if (FigurProbeWegIndex >= FigurProbeWeg.Num())
+				{
+					Shot(TEXT("figur_treppe_oben"));
+					UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe Treppe: OBEN - alle %d Wegpunkte, Fuesse %.2f m ueber dem Start."),
+						FigurProbeWeg.Num(), Hoch / 100.0f);
+					bDone = true;
+				}
+			}
+			else if (FigurProbeWegZeit > 15.0f)
+			{
+				const FVector L = Foot->GetActorLocation();
+				Shot(TEXT("figur_treppe_haengt"));
+				UE_LOG(LogWbVehicles, Warning, TEXT("WbFigurProbe Treppe: HAENGT vor Wegpunkt %d/%d - Rest %.0f/%.0f cm, Fuesse %.0f cm ueber dem Start, Ort (%.0f, %.0f, %.0f)."),
+					FigurProbeWegIndex + 1, FigurProbeWeg.Num(), Dx, Dy, FeetZ - FigurProbeStartFussZ, L.X, L.Y, L.Z);
+				// Woran? Die drei Stuecke der Stufenhilfe (anheben 40, 30 cm
+				// Richtung Ziel, absetzen) einzeln nachmessen.
+				const FCollisionShape Kapsel = FCollisionShape::MakeCapsule(40.0f, Half);
+				FCollisionQueryParams Q(SCENE_QUERY_STAT(WbTreppeWoran), false, Foot);
+				const FVector Hoch = L + FVector(0.0, 0.0, 40.0);
+				const FVector Vor = Hoch + D.GetSafeNormal2D() * 30.0;
+				const FVector Tief = Vor - FVector(0.0, 0.0, 42.0);
+				const FVector Wege[3][2] = { { L, Hoch }, { Hoch, Vor }, { Vor, Tief } };
+				const TCHAR* Namen[3] = { TEXT("anheben"), TEXT("vorschieben"), TEXT("absetzen") };
+				for (int32 k = 0; k < 3; ++k)
+				{
+					FHitResult H;
+					const bool bHit = World->SweepSingleByChannel(H, Wege[k][0], Wege[k][1], FQuat::Identity, ECC_Pawn, Kapsel, Q);
+					UE_LOG(LogWbVehicles, Warning, TEXT("WbFigurProbe Treppe:   %s: Treffer %d, beim Start %d, Bauteil %s, Normale (%.2f, %.2f, %.2f), Z %.0f."),
+						Namen[k], bHit ? 1 : 0, H.bStartPenetrating ? 1 : 0, *GetNameSafe(H.GetComponent()),
+						H.ImpactNormal.X, H.ImpactNormal.Y, H.ImpactNormal.Z, H.ImpactPoint.Z - FigurProbeStartFussZ);
+				}
+				bDone = true;
+			}
+		}
+		if (bDone)
+		{
+			for (const FKey& K : { EKeys::W, EKeys::S, EKeys::A, EKeys::D }) { Hold(K, false); }
+		}
+	}
+	else
+	{
+		// Bewegung: stehen, gehen, rennen, springen, drehen, ducken, Deckenprobe.
+		bDone = T >= 44.0f;
+		Hold(EKeys::W, !bDone && ((T >= 3.0f && T < 15.0f) || (T >= 30.0f && T < 35.0f)));
+		Hold(EKeys::X, !bDone && T >= 26.0f && T < 37.0f);   // ducken; ab 37 unter der Platte loslassen
+		Hold(EKeys::LeftShift, !bDone && T >= 9.0f && T < 15.0f);
+		Hold(EKeys::SpaceBar, !bDone && T >= 16.0f && T < 16.1f);
+		Hold(EKeys::Right, !bDone && T >= 19.0f && T < 22.0f);   // 3 s x 120 Grad/s = eine volle Drehung:
+		// danach schaut die Figur wieder den Gehweg entlang, und die Kamera von
+		// schraeg vorn stoesst beim Ducken nicht an die Hauswand.
+
+		// Niedrige Platte ueber der geduckten Figur: Unterkante 155 cm ueber den
+		// Fuessen - geduckt (140 cm) passt sie darunter, stehend (180 cm) nicht.
+		// 1,2 m breit, damit der Kameraarm nicht an ihr haengenbleibt.
+		if (T >= 36.0f && T < 39.5f && !FigurProbeDecke.IsValid() && Foot->IsCrouched())
+		{
+			const FVector P = Foot->GetActorLocation();
+			AStaticMeshActor* Decke = World->SpawnActor<AStaticMeshActor>(FVector(P.X, P.Y, FeetZ + 165.0f), FRotator::ZeroRotator);
+			if (Decke)
+			{
+				UStaticMeshComponent* Mesh = Decke->GetStaticMeshComponent();
+				Mesh->SetMobility(EComponentMobility::Movable);
+				Mesh->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")));
+				Mesh->SetWorldScale3D(FVector(1.2f, 1.2f, 0.2f));
+				Mesh->SetCollisionProfileName(TEXT("BlockAll"));
+				FigurProbeDecke = Decke;
+				UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe t=%.1f: Platte gesetzt, Unterkante %.0f cm ueber den Fuessen."), T, 155.0f);
+			}
+		}
+		if (T >= 39.5f && FigurProbeDecke.IsValid())
+		{
+			FigurProbeDecke->Destroy();
+			FigurProbeDecke.Reset();
+			UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe t=%.1f: Platte entfernt."), T);
+		}
+
+		// Bilder: je Phase eines, Gehen und Rennen je zwei (verschiedene Schritte).
+		struct FShot { float At; const TCHAR* Name; };
+		static const FShot Shots[] = {
+			{ 2.0f, TEXT("figur_stehen") }, { 6.5f, TEXT("figur_gehen_a") }, { 6.9f, TEXT("figur_gehen_b") },
+			{ 12.0f, TEXT("figur_rennen_a") }, { 12.3f, TEXT("figur_rennen_b") }, { 16.35f, TEXT("figur_sprung") },
+			{ 20.5f, TEXT("figur_drehen") }, { 28.5f, TEXT("figur_ducken") },
+			{ 33.0f, TEXT("figur_duckgehen_a") }, { 33.4f, TEXT("figur_duckgehen_b") },
+			{ 38.5f, TEXT("figur_decke") }, { 41.5f, TEXT("figur_aufgestanden") } };
+		if (FigurProbeShot < static_cast<int32>(UE_ARRAY_COUNT(Shots)) && T >= Shots[FigurProbeShot].At)
+		{
+			Shot(Shots[FigurProbeShot].Name);
+			++FigurProbeShot;
+		}
+	}
+
+	// Kamera schraeg von vorn (nicht auf der Treppe - dort Ego-Sicht): die
+	// Schulterkamera zeigte nur den Ruecken.
+	if (Foot->CameraArm && T >= 0.0f && FigurProbeMode != TEXT("Treppe"))
+	{
+		FRotator Arm = Foot->CameraArm->GetRelativeRotation();
+		Arm.Yaw = 150.0f;
+		Arm.Pitch = -12.0f;
+		Foot->CameraArm->SetRelativeRotation(Arm);
+	}
+
+	FigurProbeLogIn -= DeltaSeconds;
+	if (T >= 0.0f && FigurProbeLogIn <= 0.0f)
+	{
+		FigurProbeLogIn = 0.5f;
+		const FVector L = Foot->GetActorLocation();
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbFigurProbe t=%.1f: Bewegung %s, Rate %.2f, geduckt %d (Kapsel %.0f), Taste X %d, Ort (%.0f, %.0f, %.0f)."),
+			T, *Move, Figure->GetPlayRate(), Foot->IsCrouched() ? 1 : 0, Half, PC->IsInputKeyDown(EKeys::X) ? 1 : 0, L.X, L.Y, L.Z);
+	}
+	if (bDone)
+	{
+		UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe: fertig."));
+		bFigurProbe = false;
 	}
 }
 

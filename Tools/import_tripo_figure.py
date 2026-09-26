@@ -4,6 +4,7 @@ Welche: Umgebungsvariable WB_FIGUR -
   <Name>   eine Kundenfigur aus Tools/kunden_figuren.json
   kunden   alle Kundenfiguren aus Tools/kunden_figuren.json
   Denno    Denno (die Ladeninhaberin, Tools/Blender/rig_denno.py)
+  Sebbo    die Spielerfigur (Tools/Blender/build_sebbo_player.py)
 
 Kunden (Lieferkunden und Ladengaeste) kommen aus
 Tools/Blender/build_customer_figure.py (Data/Raw/Kunden/<Name>/SK_<Name>.fbx +
@@ -11,6 +12,9 @@ tex/) nach /Game/Assets/People/Kunden/<Name> - dort findet das Spiel jede
 vollstaendige Figur selbst (WiesbadenCustomerFigures); eine neue Figur braucht
 keine C++-Aenderung. Jede Kundenfigur muss die vier Bewegungen Idle, Walk,
 Wave und Sit tragen. Denno kommt aus Data/Raw/Denno nach /Game/Assets/People/Denno.
+Sebbo (Spieler) kommt aus Data/Raw/Sebbo/Spieler nach /Game/Assets/People/Sebbo;
+welche Bewegungen er tragen muss, sagt EWbSebboMove in C++
+(Tools/sebbo_bewegungen.py).
 
 Ergebnis je Figur, jedes Asset genau einmal:
 
@@ -33,6 +37,7 @@ geloescht und in einen Zwischenordner importiert.
 import glob
 import json
 import os
+import sys
 import unreal
 
 eal = unreal.EditorAssetLibrary
@@ -194,6 +199,11 @@ CUSTOMER_ANIMS = ['Idle', 'Walk', 'Wave', 'Sit']
 choice = os.environ.get('WB_FIGUR', 'kunden')
 if choice == 'Denno':
     import_figure('Denno', os.path.join(PROJECT, 'Data', 'Raw', 'Denno'), '/Game/Assets/People/Denno', [])
+elif choice == 'Sebbo':
+    sys.path.insert(0, os.path.join(PROJECT, 'Tools'))
+    from sebbo_bewegungen import bewegungen
+    import_figure('Sebbo', os.path.join(PROJECT, 'Data', 'Raw', 'Sebbo', 'Spieler'),
+                  '/Game/Assets/People/Sebbo', [name for name, _, _ in bewegungen()])
 else:
     names = list(REGISTRY) if choice == 'kunden' else [choice]
     for name in names:

@@ -8,11 +8,9 @@
 
 #include "WiesbadenReal.h"
 
-#include "Animation/AnimSequence.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
-#include "Components/SkeletalMeshComponent.h"
-#include "Engine/SkeletalMesh.h"
+#include "Vehicles/WiesbadenSebboFigureComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Components/StaticMeshComponent.h"
 #include "Vehicles/WiesbadenCarAudioComponent.h"
@@ -35,7 +33,7 @@ AWiesbadenFootPawn::AWiesbadenFootPawn()
 	PrimaryActorTick.bCanEverTick = true;
 
 	Capsule = CreateDefaultSubobject<UCapsuleComponent>(TEXT("Capsule"));
-	Capsule->InitCapsuleSize(40.0f, 90.0f);
+	Capsule->InitCapsuleSize(40.0f, StandingHalfHeightCm);
 	Capsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	Capsule->SetCollisionObjectType(ECC_Pawn);
 	Capsule->SetCollisionResponseToAllChannels(ECR_Block);
@@ -67,7 +65,7 @@ AWiesbadenFootPawn::AWiesbadenFootPawn()
 	HeadMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	// Die animierte Figur. Sie kollidiert nicht - dafuer ist die Kapsel da.
-	FigureMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("FigureMesh"));
+	FigureMesh = CreateDefaultSubobject<UWiesbadenSebboFigureComponent>(TEXT("FigureMesh"));
 	FigureMesh->SetupAttachment(Capsule);
 	FigureMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
@@ -111,6 +109,7 @@ void AWiesbadenFootPawn::BeginPlay()
 	{
 		Weapon->SetupWeapon();
 	}
+
 }
 
 void AWiesbadenFootPawn::Tick(float DeltaSeconds)
@@ -173,6 +172,20 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 		return;
 	}
 
+	// Ducken, solange X (oder der rechte Stick) gehalten wird. Aufstehen nur mit
+	// Platz darueber: unter einer niedrigen Decke bleibt die Figur geduckt,
+	// bis sie hervorkommt.
+	const bool bCrouchDown = PC->IsInputKeyDown(EKeys::X)
+		|| PC->IsInputKeyDown(EKeys::Gamepad_RightThumbstick);
+	if (bCrouchDown && !bCrouched && !bAirborne)
+	{
+		SetCrouched(true);
+	}
+	else if (!bCrouchDown && bCrouched && HasRoomToStand())
+	{
+		SetCrouched(false);
+	}
+
 	// Bewegung in Blickrichtung.
 	FVector Move = FVector::ZeroVector;
 	if (PC->IsInputKeyDown(EKeys::W)) { Move += GetActorForwardVector(); }
@@ -195,7 +208,8 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 		// zugleich einen Sprint ausloest.
 		const bool bSprint = PC->IsInputKeyDown(EKeys::LeftShift)
 			|| PC->IsInputKeyDown(EKeys::Gamepad_LeftThumbstick);
-		const float SpeedCmPerS = (bSprint ? SprintSpeedKmh : WalkSpeedKmh) * KmhToCmPerS;
+		const float SpeedCmPerS = (bCrouched ? CrouchSpeedKmh : bSprint ? SprintSpeedKmh : WalkSpeedKmh)
+			* KmhToCmPerS;
 		const FVector Wanted = Move.GetSafeNormal() * SpeedCmPerS * DeltaSeconds;
 
 		// An Hindernissen entlanggleiten statt stehenzubleiben.
@@ -268,7 +282,7 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 	// und nur vom Boden aus - kein zweiter Sprung in der Luft.
 	const bool bJumpDown = PC->IsInputKeyDown(EKeys::SpaceBar)
 		|| PC->IsInputKeyDown(EKeys::Gamepad_FaceButton_Bottom);
-	if (bJumpDown && !bJumpKeyHeld && !bAirborne)
+	if (bJumpDown && !bJumpKeyHeld && !bAirborne && !bCrouched)
 	{
 		VerticalSpeedCmS = JumpSpeedCmS;
 		bAirborne = true;
@@ -329,6 +343,7 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 	}
 
 	FollowGround(DeltaSeconds);
+	LastGroundCheckLocation = GetActorLocation();
 
 	// Gemessenes Tempo aus der tatsaechlichen Ortsaenderung - NICHT aus der
 	// Eingabe. Wer gegen eine Hauswand laeuft, steht; die Fuesse sollen dann
@@ -346,61 +361,25 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 
 void AWiesbadenFootPawn::BuildBody()
 {
-	// Die Spielerfigur ist "Sebbo mit Kettensaege" - ein Fotoscan.
-	//
-	// Erste Wahl ist die ANIMIERTE Fassung: Skelett mit neun Knochen und drei
-	// Bewegungen (Tools/Blender/rig_sebbo.py). Mit ihr geht Sebbo im
-	// Schrittzyklus und schwingt die Kettensaege im Nahkampf; die Pistole
-	// entfaellt, weil beide Haende an der Saege sind.
-	if (USkeletalMesh* Skeletal = LoadObject<USkeletalMesh>(
-		nullptr, TEXT("/Game/Assets/People/SK_Sebbo.SK_Sebbo")))
+	// Die Spielerfigur: Sebbo als geriggtes Tripo-Modell. Clips und Clip-Wahl
+	// besitzt die Figur (UWiesbadenSebboFigureComponent).
+	if (FigureMesh && FigureMesh->SetupFigure(2.0f * JumpSpeedCmS / FMath::Max(GravityCmPerS2, 1.0f)))
 	{
-		// Der FBX-Importer benennt Bewegungen als
-		// <Zielname><Armaturname>_<Aktionsname> - fuer Aufraeumarbeiten am
-		// Namen lohnt kein eigener Editorlauf, der Pfad steht eben so da.
-		auto LoadAnim = [](const TCHAR* Name) -> UAnimSequence*
+		FigureMesh->SetRelativeLocation(FVector(0.0f, 0.0f, -88.0f));
+
+		// Nahkampf (Taste 9) ist jetzt ein Tritt: das Modell traegt keine
+		// Kettensaege mehr. Hiebdauer = Laenge des Tritts, Treffer beim
+		// hoechsten Bein (0,67 von 1,42 s in der Quelle).
+		if (const float Kick = FigureMesh->MoveLength(EWbSebboMove::Kick); Kick > 0.0f)
 		{
-			const FString Primary = FString::Printf(
-				TEXT("/Game/Assets/People/SK_SebboSebboRig_%s.SK_SebboSebboRig_%s"), Name, Name);
-			if (UAnimSequence* Found = LoadObject<UAnimSequence>(nullptr, *Primary))
-			{
-				return Found;
-			}
-			const FString Plain = FString::Printf(
-				TEXT("/Game/Assets/People/%s.%s"), Name, Name);
-			return LoadObject<UAnimSequence>(nullptr, *Plain);
-		};
-
-		IdleAnim = LoadAnim(TEXT("Sebbo_Idle"));
-		WalkAnim = LoadAnim(TEXT("Sebbo_Walk"));
-		SwingAnim = LoadAnim(TEXT("Sebbo_Swing"));
-
-		// Nur mit allen drei Bewegungen lohnt der Umstieg: ein Skelett, das
-		// reglos in T-Haltung ueber die Strasse gleitet, waere schlechter als
-		// das statische Modell.
-		if (FigureMesh && IdleAnim && WalkAnim && SwingAnim)
-		{
-			FigureMesh->SetSkeletalMesh(Skeletal);
-			FigureMesh->SetRelativeLocation(FVector(0.0f, 0.0f, -88.0f));
-			FigureMesh->PlayAnimation(IdleAnim, true);
-			CurrentLoop = 1;
-
-			if (BodyMesh) { BodyMesh->SetVisibility(false); }
-			if (HeadMesh) { HeadMesh->SetVisibility(false); }
-
-			// Die Kettensaege ist jetzt WAFFENSLOT 9 (Taste 9), nicht mehr
-			// Dauerzustand: Start ist die MP aus der Waffentabelle, die Saege
-			// (und ihr Zweitakter-Klang) kommt mit der Taste 9 zurueck.
-			bUsesChainsaw = false;
-
-			UE_LOG(LogWbVehicles, Log,
-				TEXT("Spielerfigur: SK_Sebbo animiert (Gehen + Schwung); Startwaffe MP, Saege auf Taste 9."));
-			return;
+			SwingSeconds = Kick;
+			SwingHitAtSeconds = 0.47f * Kick;
 		}
 
-		UE_LOG(LogWbVehicles, Warning,
-			TEXT("Spielerfigur: SK_Sebbo ohne vollstaendige Bewegungen (Idle %d, Walk %d, Swing %d) - statisches Modell."),
-			IdleAnim != nullptr, WalkAnim != nullptr, SwingAnim != nullptr);
+		if (BodyMesh) { BodyMesh->SetVisibility(false); }
+		if (HeadMesh) { HeadMesh->SetVisibility(false); }
+		bUsesChainsaw = false;
+		return;
 	}
 
 	// Rueckfall: das statische Modell (kein Skelett importiert).
@@ -551,6 +530,7 @@ void AWiesbadenFootPawn::ApplyCameraMode()
 			Weapon->SetRelativeRotation(FRotator::ZeroRotator);
 		}
 	}
+
 }
 
 void AWiesbadenFootPawn::PollWeaponKeys(const APlayerController* PC)
@@ -598,18 +578,24 @@ void AWiesbadenFootPawn::SelectWeapon(int32 Index)
 		// Waffe zeigt die Waffenkomponente und feuert Projektile. Ein laufender
 		// Hieb gehoert zur Saege und wird beim Wechsel abgebrochen.
 	const bool bSaw = Index == static_cast<int32>(EWiesbadenWeaponId::Kettensaege)
-		&& SwingAnim != nullptr;
+		&& FigureMesh && FigureMesh->HasMove(EWbSebboMove::Kick);
 	bUsesChainsaw = bSaw;
 	SwingRemaining = 0.0f;
+	if (FigureMesh)
+	{
+		FigureMesh->CancelOneShot(EWbSebboMove::Kick);
+	}
 	bMeleeHitDone = false;
 
 	if (Weapon)
 	{
 		Weapon->SetVisibility(!bSaw, true);
 	}
+	// Slot 9 ist ein Tritt (A_Sebbo_Kick), keine Saege mehr: der
+	// Zweitakter-Synthesizer bleibt still.
 	if (SawAudio)
 	{
-		SawAudio->SetEngineRunning(bSaw);
+		SawAudio->SetEngineRunning(false);
 	}
 
 	// Waffenlage neu anwenden (Ego/Schulter bleibt erhalten).
@@ -627,9 +613,6 @@ void AWiesbadenFootPawn::FollowGround(float DeltaSeconds)
 		return;
 	}
 
-	const FVector Start = GetActorLocation() + FVector(0.0, 0.0, 200.0);
-	const FVector End = Start - FVector(0.0, 0.0, 100000.0);
-
 	// WorldStatic, nicht Visibility: Fahrbahn, Gehweg und Gelaende sind
 	// statische Weltgeometrie. Die Kanaele stimmen hier zwar ueberein, aber die
 	// Bodenabfrage soll denselben Kanal benutzen wie die Kollision, auf der
@@ -637,8 +620,27 @@ void AWiesbadenFootPawn::FollowGround(float DeltaSeconds)
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbFootGround), true);
 	Params.AddIgnoredActor(this);
 
+	// Boden = erste Flaeche unter dem SCHEITEL der Kapsel. Was ueber dem Kopf
+	// liegt, ist Decke: mit einem Start 2 m ueber der Mitte setzte die Abfrage
+	// die geduckte Figur unter einer niedrigen Platte OBEN auf die Platte.
+	//
+	// Ausnahme: gerade VERSETZT (Aussteigen, -WbGoto, Bahn/Bus). Dann kann die
+	// Figur im Gelaende stecken - am 54-%-Hang der Emser Strasse bis ueber den
+	// Kopf -, und nur die alte Reichweite von 2 m ueber der Mitte findet den
+	// Boden wieder. Gehen versetzt nie so weit (Sweep); ein Sprung von mehr als
+	// 1,5 m in einem Bild ist ein Versetzen.
+	const FVector Center = GetActorLocation();
+	if (FVector::Dist(Center, LastGroundCheckLocation) > 150.0)
+	{
+		TeleportGraceSeconds = 0.5f;
+	}
+	const float Reach = TeleportGraceSeconds > 0.0f ? 200.0f
+		: (Capsule ? Capsule->GetScaledCapsuleHalfHeight() : 90.0f);
+	TeleportGraceSeconds = FMath::Max(0.0f, TeleportGraceSeconds - DeltaSeconds);
+	const FVector Start = Center + FVector(0.0, 0.0, Reach);
+
 	FHitResult Hit;
-	if (!World->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params))
+	if (!World->LineTraceSingleByChannel(Hit, Start, Start - FVector(0.0, 0.0, 100000.0), ECC_WorldStatic, Params))
 	{
 		return;
 	}
@@ -700,20 +702,67 @@ void AWiesbadenFootPawn::FollowGround(float DeltaSeconds)
 	}
 }
 
+void AWiesbadenFootPawn::SetRiding(bool bInRiding)
+{
+	// Bahn und Bus setzen den Fahrgast mit der STEHENDEN Kapsel ein (Boden +
+	// 90 cm) und verfolgen waehrend der Fahrt keinen Boden - geduckt schwebte
+	// er 20 cm ueber dem Wagenboden und stuende nach dem Aussteigen mit der
+	// kurzen Kapsel da. Der Wagen hat Kopfhoehe, also aufrichten.
+	if (bInRiding)
+	{
+		SetCrouched(false);
+	}
+	bRiding = bInRiding;
+}
+
+void AWiesbadenFootPawn::SetCrouched(bool bInCrouched)
+{
+	if (!Capsule || bInCrouched == bCrouched)
+	{
+		return;
+	}
+	bCrouched = bInCrouched;
+	const float HalfHeight = bCrouched ? CrouchHalfHeightCm : StandingHalfHeightCm;
+	const float Delta = Capsule->GetUnscaledCapsuleHalfHeight() - HalfHeight;
+	Capsule->SetCapsuleHalfHeight(HalfHeight);
+	// Fuesse bleiben, wo sie sind: der Kapselmittelpunkt wandert um die
+	// Differenz, die Figuren sitzen wieder mit den Sohlen auf der Kapselunterseite.
+	AddActorWorldOffset(FVector(0.0f, 0.0f, -Delta), /*bSweep=*/false);
+	const FVector Feet(0.0f, 0.0f, -(HalfHeight - 2.0f));
+	if (FigureMesh) { FigureMesh->SetRelativeLocation(Feet); }
+	if (BodyMesh) { BodyMesh->SetRelativeLocation(Feet); }
+}
+
+bool AWiesbadenFootPawn::HasRoomToStand() const
+{
+	const UWorld* World = GetWorld();
+	if (!World || !Capsule)
+	{
+		return true;
+	}
+	// Die geduckte Kapsel um die Differenz nach oben schieben - trifft sie
+	// etwas, stoesst der Kopf an. Etwas schmaler als die Kapsel, damit ein
+	// Hang unter den Fuessen nicht als Decke zaehlt.
+	const float Rise = StandingHalfHeightCm - Capsule->GetUnscaledCapsuleHalfHeight();
+	const FVector Start = GetActorLocation();
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbAufstehen), false, this);
+	return !World->SweepTestByChannel(Start, Start + FVector(0.0f, 0.0f, Rise), FQuat::Identity,
+		Capsule->GetCollisionObjectType(),
+		FCollisionShape::MakeCapsule(Capsule->GetUnscaledCapsuleRadius() - 5.0f, Capsule->GetUnscaledCapsuleHalfHeight()),
+		Params, FCollisionResponseParams(Capsule->GetCollisionResponseToChannels()));
+}
+
 void AWiesbadenFootPawn::StartSwing()
 {
 	SwingRemaining = SwingSeconds;
 	bMeleeHitDone = false;
 
-	if (FigureMesh && SwingAnim)
+	if (FigureMesh)
 	{
-		// Einmalig, keine Schleife. CurrentLoop auf 0, damit UpdateFigure
-		// nach dem Hieb die passende Dauerschleife NEU startet - sonst
-		// bliebe die Figur im letzten Bild des Hiebs stehen.
-		FigureMesh->PlayAnimation(SwingAnim, false);
-		FigureMesh->SetPlayRate(SwingAnim->GetPlayLength() / FMath::Max(SwingSeconds, 0.1f));
-		CurrentLoop = 0;
+		FigureMesh->PlayOneShot(EWbSebboMove::Kick, SwingSeconds);
 	}
+	UE_LOG(LogWbVehicles, Log, TEXT("Tritt (Taste 9): A_Sebbo_Kick %.2f s, Saegenklang %s."),
+		SwingSeconds, SawAudio && SawAudio->IsEngineRunning() ? TEXT("AN") : TEXT("aus"));
 }
 
 bool AWiesbadenFootPawn::TryStepUp(const FVector& Wanted, const FHitResult& Blocked)
@@ -726,7 +775,17 @@ bool AWiesbadenFootPawn::TryStepUp(const FVector& Wanted, const FHitResult& Bloc
 
 	// Nur an aufrechten Hindernissen versuchen. Eine flache Rampe blockiert
 	// nicht, und eine Decke ueber dem Kopf ist keine Stufe.
-	if (FMath::Abs(Blocked.Normal.Z) > 0.5f)
+	//
+	// Ausnahme: die KANTE einer Stufe. Trifft die runde Kapselunterseite die
+	// Vorderkante, ist die Kontaktnormale schraeg (im Sebbo-Treppenhaus Z 0,63
+	// bei 15 cm ueber den Fuessen) - die Figur rutschte ab und hing am Podest,
+	// je nach Bildtakt in einem anderen Geschoss. Beruehrt sie zwischen 10 cm
+	// und Stufenhoehe ueber den Fuessen, ist es eine Stufe; Rampen beruehren
+	// tiefer (unter 6 cm bis 30 Grad), Decken hoeher.
+	const float FeetZ = GetActorLocation().Z - (Capsule ? Capsule->GetScaledCapsuleHalfHeight() : 90.0f);
+	const float ContactCm = Blocked.ImpactPoint.Z - FeetZ;
+	const bool bStepEdge = ContactCm > 10.0f && ContactCm <= MaxStepHeightCm;
+	if (FMath::Abs(Blocked.Normal.Z) > 0.5f && !bStepEdge)
 	{
 		return false;
 	}
@@ -745,17 +804,24 @@ bool AWiesbadenFootPawn::TryStepUp(const FVector& Wanted, const FHitResult& Bloc
 			Capsule->GetScaledCapsuleHalfHeight())
 		: FCollisionShape::MakeCapsule(40.0f, 90.0f);
 
+	// Eine Beruehrung am START ist kein Hindernis: an der Wand des
+	// Sebbo-Treppenhauses steht die Kapsel buendig (Radius 40 = Abstand zur
+	// Wand), und jeder Sweep meldete "steckt schon" - die Figur kam nicht vom
+	// Podest auf den naechsten Lauf. Dieselbe Regel wie die Treppensonde
+	// (KapselSchritt in WiesbadenSebboHqSonden.cpp).
+	const auto Blocks = [](const FHitResult& H) { return H.bBlockingHit && !H.bStartPenetrating; };
+
 	FHitResult Probe;
 	const FVector Raised = Start + Lift;
 	if (World->SweepSingleByChannel(Probe, Start, Raised, FQuat::Identity,
-		ECC_Pawn, Shape, Params))
+		ECC_Pawn, Shape, Params) && Blocks(Probe))
 	{
 		return false;
 	}
 
 	const FVector Ahead = Raised + Wanted.GetSafeNormal() * (Wanted.Size() + StepForwardProbeCm);
 	if (World->SweepSingleByChannel(Probe, Raised, Ahead, FQuat::Identity,
-		ECC_Pawn, Shape, Params))
+		ECC_Pawn, Shape, Params) && Blocks(Probe))
 	{
 		return false;
 	}
@@ -765,9 +831,9 @@ bool AWiesbadenFootPawn::TryStepUp(const FVector& Wanted, const FHitResult& Bloc
 	// sonst schwebt die Figur.
 	const FVector Down = Ahead - Lift - FVector(0.0f, 0.0f, 2.0f);
 	if (!World->SweepSingleByChannel(Probe, Ahead, Down, FQuat::Identity,
-		ECC_Pawn, Shape, Params))
+		ECC_Pawn, Shape, Params) || Probe.bStartPenetrating)
 	{
-		return false;
+		return false;   // kein Boden - oder die Figur staende IN der Geometrie
 	}
 
 	SetActorLocation(Probe.Location, /*bSweep=*/false);
@@ -855,45 +921,15 @@ void AWiesbadenFootPawn::DoMeleeHit()
 
 void AWiesbadenFootPawn::UpdateFigure(float DeltaSeconds, float SpeedMps)
 {
-	if (!bUsesChainsaw || !FigureMesh)
+	if (FigureMesh)
 	{
-		return;
-	}
-
-	// Kettensaegen-Klang: leiser Zweitakt-Leerlauf, beim Hieb Vollgas. Das
-	// Tempo faerbt leicht mit - im Laufen dreht der Motor etwas hoeher, wie
-	// bei einer getragenen Saege, die mitgeschuettelt wird.
-	if (SawAudio)
-	{
-		const bool bSwinging = SwingRemaining > 0.0f;
-		const float TargetRpm = bSwinging
-			? 9200.0f
-			: 2600.0f + 600.0f * FMath::Clamp(SpeedMps / 2.0f, 0.0f, 1.0f);
-		SawAudio->SetEngineState(TargetRpm, bSwinging ? 1.0f : 0.08f, SpeedMps * 3.6f);
-	}
-
-	// Waehrend des Hiebs laeuft Sebbo_Swing - nichts ueberschreiben.
-	if (SwingRemaining > 0.0f)
-	{
-		return;
-	}
-
-	if (SpeedMps > 0.4f)
-	{
-		if (CurrentLoop != 2 && WalkAnim)
-		{
-			FigureMesh->PlayAnimation(WalkAnim, true);
-			CurrentLoop = 2;
-		}
-		// Schritttakt an das Tempo koppeln: der Zyklus ist fuer 1,67 m/s
-		// gebaut; beim Rennen (16 km/h) laufen die Beine entsprechend
-		// schneller, statt ueber den Asphalt zu gleiten.
-		FigureMesh->SetPlayRate(FMath::Clamp(SpeedMps / WalkAnimSpeedMps, 0.5f, 3.0f));
-	}
-	else if (CurrentLoop != 1 && IdleAnim)
-	{
-		FigureMesh->PlayAnimation(IdleAnim, true);
-		FigureMesh->SetPlayRate(1.0f);
-		CurrentLoop = 1;
+		FWbFigureInput Input;
+		Input.SpeedMps = SpeedMps;
+		Input.YawDeg = GetActorRotation().Yaw;
+		Input.bAirborne = bAirborne;
+		Input.bRiding = bRiding;
+		Input.bCrouching = bCrouched;
+		Input.HealthPoints = HealthPoints;
+		FigureMesh->Animate(DeltaSeconds, Input);
 	}
 }
