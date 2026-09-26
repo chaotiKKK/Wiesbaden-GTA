@@ -160,6 +160,72 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 		}
 	}
 
+	// Sackgassen erkennen (siehe DeadEndLanes). Eine Wendeschleife ist keine
+	// echte Fortsetzung. Rueckwaerts durchrechnen: eine Spur, deren echte
+	// Fortsetzungen ALLE in Sackgassen fuehren, ist selbst eine.
+	DeadEndLanes.Reset();
+	{
+		auto EchteZiele = [this](int32 Lane, TArray<int32>& Out)
+		{
+			Out.Reset();
+			if (const TArray<int32>* Nach = LaneSuccessorIndices.Find(Lane))
+			{
+				for (const int32 C : *Nach)
+				{
+					const FLaneConnection& Con = Network->Connections[C];
+					if (!(Con.bAddedTurnaround && Con.TurnType == ETurnType::UTurn))
+					{
+						Out.Add(Con.ToLaneId);
+					}
+				}
+			}
+		};
+		TArray<int32> Ziele;
+		for (const FRoadLane& Lane : Network->Lanes)
+		{
+			if (Lane.IsValid())
+			{
+				EchteZiele(Lane.LaneId, Ziele);
+				if (Ziele.Num() == 0) { DeadEndLanes.Add(Lane.LaneId); }
+			}
+		}
+		for (int32 Runde = 0; Runde < 8; ++Runde)
+		{
+			int32 Neu = 0;
+			for (const FRoadLane& Lane : Network->Lanes)
+			{
+				if (!Lane.IsValid() || DeadEndLanes.Contains(Lane.LaneId))
+				{
+					continue;
+				}
+				EchteZiele(Lane.LaneId, Ziele);
+				bool bAlleSackgasse = Ziele.Num() > 0;
+				for (const int32 Z : Ziele) { bAlleSackgasse &= DeadEndLanes.Contains(Z); }
+				if (bAlleSackgasse) { DeadEndLanes.Add(Lane.LaneId); ++Neu; }
+			}
+			if (Neu == 0) { break; }
+		}
+		// Nicht in Sackgassen einsetzen - und auch nicht auf den Spuren, die
+		// man NUR ueber eine Wendeschleife erreicht (Rueckspur einer Hofzufahrt,
+		// Gegenspur im Wendehammer): dort tauchten Autos sonst mitten in der
+		// Zufahrt auf. Rueckfall: Netz nur aus solchen Spuren.
+		TMap<int32, int32> Zulaeufe;
+		TSet<int32> UeberWende;
+		for (const FLaneConnection& Con : Network->Connections)
+		{
+			if (Con.bRestricted) { continue; }
+			++Zulaeufe.FindOrAdd(Con.ToLaneId);
+			if (Con.bAddedTurnaround && Con.TurnType == ETurnType::UTurn) { UeberWende.Add(Con.ToLaneId); }
+		}
+		TArray<int32> Offen;
+		for (const int32 L : SpawnLaneIds)
+		{
+			const bool bNurUeberWende = UeberWende.Contains(L) && Zulaeufe.FindRef(L) <= 1;
+			if (!DeadEndLanes.Contains(L) && !bNurUeberWende) { Offen.Add(L); }
+		}
+		if (Offen.Num() > 0 && Settings.bAvoidDeadEnds) { SpawnLaneIds = MoveTemp(Offen); }
+	}
+
 	// Welche Wege durch eine Kreuzung liegen einander im Weg? Einmal hier -
 	// das Netz aendert sich nicht mehr, und je Tick waeren es Zehntausende
 	// Strecken-Schnitte.
@@ -257,6 +323,7 @@ void FWiesbadenTrafficSimulation::Reset()
 	TotalSpawned = 0;
 	SpawnAttempts = 0;
 	LifetimeSpawnsSkippedInView = 0;
+	DeadEndLanes.Reset();
 	LifetimeDeadEndWaits = 0;
 	TotalRemoved = 0;
 	LifetimeVehiclesHeldAtRed = 0;
@@ -450,8 +517,22 @@ int32 FWiesbadenTrafficSimulation::PickSuccessorConnection(const FTrafficVehicle
 	// andere Fortsetzung gibt (IsThroughTrafficClass) - und wer doch in einer
 	// steckt, nimmt den ersten Ausgang ins Durchgangsnetz statt Runden zu
 	// drehen.
-	TArray<int32, TInlineAllocator<8>> Choices;
+	// Erst Sackgassen meiden, dann Service-Wege - jeweils nur, wenn danach
+	// noch eine Fortsetzung bleibt.
+	TArray<int32, TInlineAllocator<8>> Offen;
 	for (const int32 ConnectionIndex : *Successors)
+	{
+		if (!Settings.bAvoidDeadEnds || !DeadEndLanes.Contains(Network->Connections[ConnectionIndex].ToLaneId))
+		{
+			Offen.Add(ConnectionIndex);
+		}
+	}
+	if (Offen.Num() == 0)
+	{
+		Offen.Append(*Successors);
+	}
+	TArray<int32, TInlineAllocator<8>> Choices;
+	for (const int32 ConnectionIndex : Offen)
 	{
 		if (IsThroughTrafficClass(GetSuccessorClass(ConnectionIndex)))
 		{
@@ -460,7 +541,7 @@ int32 FWiesbadenTrafficSimulation::PickSuccessorConnection(const FTrafficVehicle
 	}
 	if (Choices.Num() == 0)
 	{
-		Choices.Append(*Successors);
+		Choices.Append(Offen);
 	}
 
 	// Gewichtete Wahl: Hauptstrassen werden bevorzugt.
@@ -4050,6 +4131,15 @@ void FWiesbadenTrafficSimulation::StepQueueProbe(float DeltaSeconds)
 		{
 			++ProbeDeparted;   // hat die Haltelinie in diesem Bild ueberfahren
 		}
+	}
+	for (const int32 Id : JetztAufSpur)
+	{
+		ProbeEntered += ProbeOnLane.Contains(Id) ? 0 : 1;
+	}
+	if (FMath::FloorToInt(ProbeTime / 10.0) != FMath::FloorToInt((ProbeTime - DeltaSeconds) / 10.0))
+	{
+		UE_LOG(LogWbTraffic, Log, TEXT("Spurprobe %d nach %.0f s: %d Fahrzeuge auf der Spur, %d seit Start eingefahren, Sackgasse=%d."),
+			ProbeLaneId, ProbeTime, JetztAufSpur.Num(), ProbeEntered, DeadEndLanes.Contains(ProbeLaneId) ? 1 : 0);
 	}
 	ProbeOnLane = MoveTemp(JetztAufSpur);
 

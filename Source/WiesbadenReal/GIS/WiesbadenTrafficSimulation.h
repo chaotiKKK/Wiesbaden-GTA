@@ -285,6 +285,14 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	bool bJunctionConflicts = true;
 
 	/**
+	 * Sackgassen meiden (an): an einer Kreuzung wird eine Sackgasse (siehe
+	 * DeadEndLanes) nur gewaehlt, wenn es keine andere Fortsetzung gibt, und
+	 * dort wird nicht eingesetzt. Nur zum MESSEN abschaltbar: -WbSackgassenErlaubt.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	bool bAvoidDeadEnds = true;
+
+	/**
 	 * Platz, den es hinter der Kreuzung geben muss, in cm.
 	 *
 	 * Gemessen war dies der teuerste Posten der ganzen Kreuzungsregel: 27 bis
@@ -1489,9 +1497,26 @@ private:
 	bool bProbeGreen = false;
 	int32 ProbeWaitingAtStart = 0;
 	int32 ProbeDeparted = 0;
+	int32 ProbeEntered = 0;
 	int32 ProbeHeadConnection = INDEX_NONE;
 	bool bProbeHeadGreenSeen = false;
 	TSet<int32> ProbeOnLane;
+
+	/**
+	 * SACKGASSEN-SPUREN: von hier geht es nur per Wendeschleife weiter (oder
+	 * gar nicht) - auch ueber mehrere Spuren hinweg, wenn jede Fortsetzung
+	 * wieder in eine Sackgasse fuehrt. Verkehr biegt nur hinein, wenn es an
+	 * der Kreuzung keine andere Fortsetzung gibt, und setzt dort nicht ein.
+	 * Gemeldet 26.09.2026: am Garagenhof fuhren Autos in die Hofzufahrt und
+	 * standen (spaeter: wendeten) vor dem Spieler.
+	 */
+	TSet<int32> DeadEndLanes;
+
+public:
+	/** Liegt die Spur in einer Sackgasse (Diagnose/Tests)? */
+	bool IsDeadEndLane(int32 LaneId) const { return DeadEndLanes.Contains(LaneId); }
+
+private:
 
 public:
 

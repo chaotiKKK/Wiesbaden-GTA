@@ -1704,6 +1704,92 @@ bool FTrafficDeadEndTurnaroundTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficAvoidDeadEndTest,
+	"WiesbadenReal.Traffic.KeineSackgassenEinfahrt",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficAvoidDeadEndTest::RunTest(const FString& Parameters)
+{
+	// Gemeldet 26.09.2026: am Garagenhof fuhren Autos in die Hofzufahrt
+	// (Sackgasse) und standen bzw. wendeten dort vor dem Spieler.
+	//   Spur 0: Zufahrt zur Kreuzung 9 bei (3100,0)
+	//   Spur 1: Weiterfahrt geradeaus
+	//   Spur 2: Hofzufahrt rechts ab, Sackgasse
+	auto Netz = [](bool bMitWeiterfahrt)
+	{
+		FRoadNetwork N;
+		N.Lanes.Add(MakeSimLane(0, { FVector(0, 0, 0), FVector(3000, 0, 0) }, 30.0));
+		N.Lanes.Add(MakeSimLane(1, { FVector(3200, 0, 0), FVector(20000, 0, 0) }, 30.0));
+		N.Lanes.Add(MakeSimLane(2, { FVector(3100, 100, 0), FVector(3100, 3000, 0) }, 30.0));
+		for (int32 i = 0; i < 3; ++i)
+		{
+			FRoadSegment S;
+			S.SegmentId = i;
+			S.HighwayType = EOSMHighwayType::Residential;
+			N.Segments.Add(S);
+		}
+		for (const int32 Ziel : { 1, 2 })
+		{
+			if (Ziel == 1 && !bMitWeiterfahrt) { continue; }
+			FLaneConnection C;
+			C.FromLaneId = 0;
+			C.ToLaneId = Ziel;
+			C.IntersectionNodeId = 9;
+			C.TurnType = Ziel == 1 ? ETurnType::Through : ETurnType::Right;
+			C.ConnectionPath = { FVector(3000, 0, 0), N.Lanes[Ziel].Centerline[0] };
+			N.Connections.Add(C);
+		}
+		// Ringschluss: die Weiterfahrt fuehrt zurueck auf die Zufahrt - sonst
+		// waere auch sie eine Sackgasse (Netzrand), und ihre Rueckspur haette
+		// an Knoten 9 nur die Hofzufahrt als Fortsetzung.
+		if (bMitWeiterfahrt)
+		{
+			FLaneConnection Ring;
+			Ring.FromLaneId = 1;
+			Ring.ToLaneId = 0;
+			Ring.IntersectionNodeId = 10;
+			Ring.TurnType = ETurnType::UTurn;
+			Ring.ConnectionPath = { FVector(20000, 0, 0), FVector(20000, -5000, 0), FVector(0, -5000, 0), FVector(0, 0, 0) };
+			N.Connections.Add(Ring);
+		}
+		FRoadIntersection K;
+		K.NodeId = 9;
+		K.Location = FVector(3100, 0, 0);
+		N.Intersections.Add(K);
+		FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(N);
+		return N;
+	};
+	// Wie viele verschiedene Fahrzeuge waren je auf der Hofzufahrt?
+	auto InZufahrt = [](const FRoadNetwork& N, bool& bSackgasse)
+	{
+		FWiesbadenTrafficSimulation Sim;
+		Sim.Initialize(N, MakeSettings(1.0f));
+		bSackgasse = Sim.IsDeadEndLane(2);
+		TSet<int32> Drin;
+		for (int32 Schritt = 0; Schritt < 600; ++Schritt)
+		{
+			Sim.Tick(0.1f);
+			for (const FTrafficVehicle& V : Sim.Vehicles)
+			{
+				if (V.bOnLane && V.LaneId == 2) { Drin.Add(V.VehicleId); }
+			}
+		}
+		return Drin.Num();
+	};
+
+	bool bSackgasse = false;
+	const FRoadNetwork MitWeiter = Netz(true);
+	const int32 Drin = InZufahrt(MitWeiter, bSackgasse);
+	TestTrue(TEXT("Hofzufahrt gilt als Sackgasse"), bSackgasse);
+	TestEqual(TEXT("mit Weiterfahrt faehrt KEIN Fahrzeug in die Hofzufahrt"), Drin, 0);
+
+	// Gegenprobe: ist die Zufahrt die EINZIGE Fortsetzung, geht es hinein (und
+	// per Wendeschleife wieder heraus) - die Regel verbietet nichts, sie waehlt.
+	const int32 DrinOhne = InZufahrt(Netz(false), bSackgasse);
+	TestTrue(FString::Printf(TEXT("Gegenprobe: ohne Weiterfahrt fahren Fahrzeuge hinein (%d)"), DrinOhne), DrinOhne > 0);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficSpawnOutOfViewTest,
 	"WiesbadenReal.Vehicles.Traffic.SpawnOutOfView",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

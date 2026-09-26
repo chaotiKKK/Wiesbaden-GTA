@@ -4481,6 +4481,12 @@ void UWiesbadenCitySubsystem::InitializeCity()
 					UE_LOG(LogWbTraffic, Warning,
 						TEXT("-WbKreuzungAlt: alte Kreuzungsfreihaltung (480 cm, Zielspur ohne Haltelinienabstand; nur zum Messen)."));
 				}
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbSackgassenErlaubt")))
+				{
+					TrafficSettings.bAvoidDeadEnds = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbSackgassenErlaubt: Verkehr faehrt wieder in Sackgassen (nur zum Messen)."));
+				}
 				if (FParse::Param(FCommandLine::Get(), TEXT("WbOhneKreuzungsregel")))
 				{
 					TrafficSettings.bJunctionConflicts = false;
