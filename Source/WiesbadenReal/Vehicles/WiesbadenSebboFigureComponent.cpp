@@ -4,8 +4,175 @@
 
 #include "WiesbadenReal.h"
 
+#include "Animation/AnimInstanceProxy.h"
+#include "Animation/AnimNodeBase.h"
 #include "Animation/AnimSequence.h"
+#include "Animation/AnimationPoseData.h"
+#include "AnimationRuntime.h"
 #include "Engine/SkeletalMesh.h"
+
+// -- Mischer ------------------------------------------------------------------
+
+void FWbSebboMixer::Start(EWbSebboMove Move, bool bLoop, float PlayRate, float InBlendSeconds, float StartTime)
+{
+	for (FWbSebboLayer& Layer : Layers)
+	{
+		Layer.StartWeight = Layer.Weight;
+	}
+
+	// Laeuft die Bewegung noch (im Ausblenden), blendet sie von dort wieder
+	// ein und behaelt ihre Abspielstelle - Gehen/Rennen im Wechsel springt
+	// sonst jedes Mal an den Anfang des Zyklus.
+	FWbSebboLayer Layer;
+	const int32 Existing = Layers.IndexOfByPredicate([Move](const FWbSebboLayer& L) { return L.Move == Move; });
+	if (Existing != INDEX_NONE)
+	{
+		Layer = Layers[Existing];
+		Layers.RemoveAt(Existing);
+		if (!bLoop)
+		{
+			Layer.Time = StartTime;   // Einmalbewegung beginnt immer von vorn
+		}
+	}
+	else
+	{
+		Layer.Move = Move;
+		Layer.Time = StartTime;
+	}
+	Layer.bLoop = bLoop;
+	Layer.PlayRate = PlayRate;
+	Layers.Add(Layer);
+
+	// Zu viele Spuren: die aeltesten fallen weg, der Rest wird so skaliert,
+	// dass die Gewichte wieder 1 ergeben.
+	if (Layers.Num() > MaxLayers)
+	{
+		Layers.RemoveAt(0, Layers.Num() - MaxLayers);
+		float Sum = 0.0f;
+		for (const FWbSebboLayer& L : Layers) { Sum += L.StartWeight; }
+		for (FWbSebboLayer& L : Layers)
+		{
+			L.StartWeight = Sum > KINDA_SMALL_NUMBER ? L.StartWeight / Sum : 0.0f;
+			L.Weight = L.StartWeight;
+		}
+	}
+
+	AlphaStart = Layers.Last().StartWeight;
+	Alpha = AlphaStart;
+	BlendSeconds = InBlendSeconds;
+	if (InBlendSeconds <= 0.0f || Layers.Num() == 1)
+	{
+		// Hart: nur noch diese Spur.
+		FWbSebboLayer Only = Layers.Last();
+		Only.Weight = Only.StartWeight = 1.0f;
+		Layers.Reset();
+		Layers.Add(Only);
+		Alpha = AlphaStart = 1.0f;
+	}
+}
+
+void FWbSebboMixer::Advance(float DeltaSeconds, TFunctionRef<float(EWbSebboMove)> ClipLength)
+{
+	for (FWbSebboLayer& Layer : Layers)
+	{
+		const float Length = ClipLength(Layer.Move);
+		Layer.Time += DeltaSeconds * Layer.PlayRate;
+		if (Length > KINDA_SMALL_NUMBER)
+		{
+			Layer.Time = Layer.bLoop
+				? Layer.Time - Length * FMath::FloorToFloat(Layer.Time / Length)
+				: FMath::Clamp(Layer.Time, 0.0f, Length);   // Einmal: im letzten Bild stehen
+		}
+	}
+
+	if (Alpha < 1.0f)
+	{
+		Alpha = BlendSeconds > KINDA_SMALL_NUMBER ? FMath::Min(1.0f, Alpha + DeltaSeconds / BlendSeconds) : 1.0f;
+	}
+	if (Layers.Num() == 0)
+	{
+		return;
+	}
+	if (Alpha >= 1.0f)
+	{
+		FWbSebboLayer Only = Layers.Last();
+		Only.Weight = 1.0f;
+		Layers.Reset();
+		Layers.Add(Only);
+		return;
+	}
+	// Die gewollte Spur steigt linear, die anderen fallen im selben Verhaeltnis.
+	const float Rest = AlphaStart < 1.0f ? (1.0f - Alpha) / (1.0f - AlphaStart) : 0.0f;
+	for (int32 I = 0; I + 1 < Layers.Num(); ++I)
+	{
+		Layers[I].Weight = Layers[I].StartWeight * Rest;
+	}
+	Layers.Last().Weight = Alpha;
+}
+
+float FWbSebboMixer::WeightOf(EWbSebboMove Move) const
+{
+	float Weight = 0.0f;
+	for (const FWbSebboLayer& Layer : Layers)
+	{
+		Weight += Layer.Move == Move ? Layer.Weight : 0.0f;
+	}
+	return Weight;
+}
+
+// -- Anim-Instanz --------------------------------------------------------------
+
+namespace
+{
+	/** Tastet die gemeldeten Clips ab und mischt sie nach Gewicht. */
+	struct FWbSebboAnimProxy : public FAnimInstanceProxy
+	{
+		explicit FWbSebboAnimProxy(UAnimInstance* InAnimInstance) : FAnimInstanceProxy(InAnimInstance) {}
+
+		virtual void PreUpdate(UAnimInstance* InAnimInstance, float DeltaSeconds) override
+		{
+			FAnimInstanceProxy::PreUpdate(InAnimInstance, DeltaSeconds);
+			// Spielstrang: Kopie fuer das Abtasten auf dem Anim-Strang.
+			Samples = CastChecked<UWiesbadenSebboAnimInstance>(InAnimInstance)->GetSamples();
+		}
+
+		virtual bool Evaluate(FPoseContext& Output) override
+		{
+			float Summed = 0.0f;
+			for (const FWbSebboPoseSample& Sample : Samples)
+			{
+				if (!Sample.Sequence || Sample.Weight <= KINDA_SMALL_NUMBER)
+				{
+					continue;
+				}
+				const FAnimExtractContext Extract(static_cast<double>(Sample.Time), false, {}, Sample.bLoop);
+				if (Summed <= 0.0f)
+				{
+					FAnimationPoseData Base(Output);
+					Sample.Sequence->GetAnimationPose(Base, Extract);
+					Summed = Sample.Weight;
+					continue;
+				}
+				FPoseContext Other(this);
+				FAnimationPoseData OtherData(Other);
+				Sample.Sequence->GetAnimationPose(OtherData, Extract);
+				FAnimationPoseData Blended(Output);
+				FAnimationRuntime::BlendTwoPosesTogetherInPlace(Blended, OtherData, Summed / (Summed + Sample.Weight));
+				Summed += Sample.Weight;
+			}
+			return Summed > 0.0f;   // nichts gemeldet: Ruhepose
+		}
+
+		TArray<FWbSebboPoseSample> Samples;
+	};
+}
+
+FAnimInstanceProxy* UWiesbadenSebboAnimInstance::CreateAnimInstanceProxy()
+{
+	return new FWbSebboAnimProxy(this);
+}
+
+// -- Figur ---------------------------------------------------------------------
 
 bool UWiesbadenSebboFigureComponent::SetupFigure(float InJumpAirSeconds)
 {
@@ -40,10 +207,21 @@ bool UWiesbadenSebboFigureComponent::SetupFigure(float InJumpAirSeconds)
 	}
 
 	SetSkeletalMesh(Skeletal);
+	// Eigene Anim-Instanz statt PlayAnimation: sie mischt die Clips, die der
+	// Mischer meldet - weiche Uebergaenge statt hartem Umschalten.
+	SetAnimationMode(EAnimationMode::AnimationBlueprint);
+	SetAnimInstanceClass(UWiesbadenSebboAnimInstance::StaticClass());
+	if (!Cast<UWiesbadenSebboAnimInstance>(GetAnimInstance()))
+	{
+		UE_LOG(LogWbVehicles, Warning,
+			TEXT("Spielerfigur: Misch-Instanz nicht angelegt (Komponente noch nicht registriert?) - die Figur bleibt in Ruhepose, bis sie es ist."));
+	}
 	JumpAirSeconds = InJumpAirSeconds;
 	bReady = true;
+	Mixer = FWbSebboMixer();
 	CurrentMove = EWbSebboMove::Count;
 	PlayMove(EWbSebboMove::Idle, true, 1.0f);
+	AdvanceMixer(0.0f);
 	UE_LOG(LogWbVehicles, Log,
 		TEXT("Spielerfigur: SK_Sebbo (Tripo, 61 Knochen) mit %d von %d Bewegungen%s%s."),
 		Geladen, Moves.Num(), Fehlend.IsEmpty() ? TEXT("") : TEXT(", es fehlen: "), *Fehlend);
@@ -71,8 +249,9 @@ void UWiesbadenSebboFigureComponent::PlayOneShot(EWbSebboMove Move, float Second
 	// Bild stehen.
 	OneShotMove = Move;
 	OneShotRemaining = FMath::Max(Seconds, 0.1f);
-	PlayAnimation(Moves[static_cast<int32>(Move)], false);
-	SetPlayRate(MoveLength(Move) / OneShotRemaining);
+	const FWbSebboLayer* Before = Mixer.Top();
+	Mixer.Start(Move, false, MoveLength(Move) / OneShotRemaining,
+		BlendSecondsFor(Before ? Before->Move : EWbSebboMove::Count, Move));
 	CurrentMove = EWbSebboMove::Count;
 }
 
@@ -91,7 +270,34 @@ void UWiesbadenSebboFigureComponent::Animate(float DeltaSeconds, const FWbFigure
 	{
 		return;
 	}
+	ChooseAndPlay(DeltaSeconds, Input);
+	AdvanceMixer(DeltaSeconds);
+}
 
+void UWiesbadenSebboFigureComponent::AdvanceMixer(float DeltaSeconds)
+{
+	Mixer.Advance(DeltaSeconds, [this](EWbSebboMove Move) { return MoveLength(Move); });
+	if (UWiesbadenSebboAnimInstance* Instance = Cast<UWiesbadenSebboAnimInstance>(GetAnimInstance()))
+	{
+		TArray<FWbSebboPoseSample> Samples;
+		Samples.Reserve(Mixer.Layers.Num());
+		for (const FWbSebboLayer& Layer : Mixer.Layers)
+		{
+			if (HasMove(Layer.Move))
+			{
+				FWbSebboPoseSample& Sample = Samples.AddDefaulted_GetRef();
+				Sample.Sequence = Moves[static_cast<int32>(Layer.Move)];
+				Sample.Time = Layer.Time;
+				Sample.bLoop = Layer.bLoop;
+				Sample.Weight = Layer.Weight;
+			}
+		}
+		Instance->SetSamples(MoveTemp(Samples));
+	}
+}
+
+void UWiesbadenSebboFigureComponent::ChooseAndPlay(float DeltaSeconds, const FWbFigureInput& Input)
+{
 	// Drehrate aus der Blickrichtung, geglaettet: die Maus liefert je Bild
 	// sprunghafte Werte, und ohne Glaettung flackerte Turn/Idle.
 	const float RawRate = bHasPreviousYaw
@@ -185,10 +391,91 @@ void UWiesbadenSebboFigureComponent::PlayMove(EWbSebboMove Move, bool bLoop, flo
 	}
 	if (Move != CurrentMove)
 	{
-		PlayAnimation(Moves[static_cast<int32>(Move)], bLoop);
+		// Gangzyklen uebernehmen die Schrittphase des bisherigen Clips.
+		const FWbSebboLayer* Before = Mixer.Top();
+		const EWbSebboMove From = Before ? Before->Move : EWbSebboMove::Count;
+		float StartTime = 0.0f;
+		if (Before && MoveLength(From) > KINDA_SMALL_NUMBER)
+		{
+			const float Phase = GaitStartFor(From, Before->Time / MoveLength(From), Move);
+			if (Phase >= 0.0f)
+			{
+				StartTime = Phase * MoveLength(Move);
+			}
+		}
+		Mixer.Start(Move, bLoop, PlayRate, BlendSecondsFor(From, Move), StartTime);
 		CurrentMove = Move;
 	}
-	SetPlayRate(PlayRate);
+	else if (FWbSebboLayer* Top = Mixer.Top())
+	{
+		Top->PlayRate = PlayRate;
+	}
+}
+
+float UWiesbadenSebboFigureComponent::BlendSecondsFor(EWbSebboMove From, EWbSebboMove To)
+{
+	using EM = EWbSebboMove;
+	if (From == To || From == EM::Count)
+	{
+		return 0.0f;
+	}
+	if (To == EM::Jump)
+	{
+		return 0.1f;
+	}
+	if (From == EM::Jump)
+	{
+		return 0.15f;
+	}
+	if (To == EM::Kick || To == EM::Hit)
+	{
+		return 0.08f;
+	}
+	if (From == EM::Kick || From == EM::Hit)
+	{
+		return 0.2f;
+	}
+	if ((From == EM::Walk && To == EM::Run) || (From == EM::Run && To == EM::Walk))
+	{
+		return 0.25f;
+	}
+	if (From == EM::Swagger || From == EM::Call || To == EM::Swagger || To == EM::Call)
+	{
+		return 0.35f;
+	}
+	return 0.2f;
+}
+
+float UWiesbadenSebboFigureComponent::GaitStartFor(EWbSebboMove From, float FromNormalizedTime, EWbSebboMove To)
+{
+	// Gemessen am exportierten Skelett (SK_Sebbo.fbx, Abstand foot_l - foot_r
+	// entlang der Blickrichtung, .planning/sebbo-blend/fussphase.py): jeder
+	// Clip enthaelt ZWEI Gangzyklen; der linke Fuss liegt am weitesten vorn
+	// bei Walk 0,384/0,884 (Bild 22,5 und 50,5 von 56), Run 0,167/0,667
+	// (Bild 6 und 21 von 30). CrouchWalk ist auf den Fussbahnen von Walk gebaut.
+	struct FGait { float Cycles; float LeftFront; };
+	const auto GaitOf = [](EWbSebboMove Move, FGait& Out)
+	{
+		switch (Move)
+		{
+		case EWbSebboMove::Walk:
+		case EWbSebboMove::CrouchWalk: Out = { 2.0f, 0.384f }; return true;
+		case EWbSebboMove::Run:        Out = { 2.0f, 0.167f }; return true;
+		default:                       return false;
+		}
+	};
+	FGait A, B;
+	if (!GaitOf(From, A) || !GaitOf(To, B))
+	{
+		return -1.0f;
+	}
+	// Schrittphase (0 = links vorn) UND welcher der Zyklen im Clip gerade
+	// laeuft - so bleibt Gehen -> Duckgehen (gleiche Fussbahnen) bildgenau.
+	const float Steps = (FromNormalizedTime - A.LeftFront) * A.Cycles;
+	const float Cycle = FMath::FloorToFloat(Steps);
+	const float Phase = Steps - Cycle;
+	const float Copy = FMath::Fmod(FMath::Fmod(Cycle, B.Cycles) + B.Cycles, B.Cycles);
+	return FMath::Frac(B.LeftFront + (Copy + Phase) / B.Cycles);
 }
 
 EWbSebboMove UWiesbadenSebboFigureComponent::ChooseMove(const FWbSebboMoveState& State, float RunFromMps,

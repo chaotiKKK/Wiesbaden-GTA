@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Animation/AnimInstance.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "WiesbadenSebboFigureComponent.generated.h"
 
@@ -64,6 +65,93 @@ struct FWbSebboMoveState
 	EWbSebboMove Previous = EWbSebboMove::Idle;
 };
 
+/** Eine Spur im Mischer: Clip, Abspielstelle, Gewicht. */
+struct FWbSebboLayer
+{
+	EWbSebboMove Move = EWbSebboMove::Count;
+	/** Abspielstelle in Sekunden. */
+	float Time = 0.0f;
+	float PlayRate = 1.0f;
+	bool bLoop = true;
+	float Weight = 0.0f;
+	/** Gewicht zu Beginn der laufenden Blende. */
+	float StartWeight = 0.0f;
+};
+
+/**
+ * WEICHES UEBERBLENDEN zwischen Sebbos Bewegungen. Datenrein (testbar): die
+ * Figur-Komponente sagt, welche Bewegung laufen soll, der Mischer blendet die
+ * neue ueber die Blendzeit ein und die bisherigen im selben Mass aus. Vorher
+ * schaltete PlayAnimation hart um - die Figur sprang beim Anlaufen, Landen
+ * und jedem Tempowechsel von einer Pose in die andere.
+ *
+ * Die Gewichte summieren sich immer zu 1. Laeuft eine Bewegung noch im
+ * Ausblenden und wird wieder gewollt (Gehen - Rennen - Gehen), blendet sie
+ * von ihrem jetzigen Gewicht aus wieder ein und behaelt ihre Abspielstelle.
+ */
+struct FWbSebboMixer
+{
+	/** Aelteste zuerst, die gewollte Bewegung zuletzt. */
+	TArray<FWbSebboLayer> Layers;
+
+	/** Hoechstens so viele Spuren zugleich (die aeltesten fallen weg). */
+	static constexpr int32 MaxLayers = 4;
+
+	/**
+	 * Bewegung einblenden. StartTime gilt nur fuer eine neue Spur bzw. eine
+	 * Einmalbewegung (die immer von vorn beginnt). BlendSeconds <= 0 schaltet hart.
+	 */
+	void Start(EWbSebboMove Move, bool bLoop, float PlayRate, float BlendSeconds, float StartTime = 0.0f);
+
+	/** Zeit und Blende fortschreiben; ClipLength(Move) = Clip-Laenge in s. */
+	void Advance(float DeltaSeconds, TFunctionRef<float(EWbSebboMove)> ClipLength);
+
+	/** Die gewollte (oberste) Spur, nullptr ohne Spuren. */
+	FWbSebboLayer* Top() { return Layers.Num() > 0 ? &Layers.Last() : nullptr; }
+	const FWbSebboLayer* Top() const { return Layers.Num() > 0 ? &Layers.Last() : nullptr; }
+
+	/** Gewicht einer Bewegung (0, wenn sie nicht laeuft). */
+	float WeightOf(EWbSebboMove Move) const;
+
+	/** Fortschritt der laufenden Blende, 1 = fertig. */
+	float Alpha = 1.0f;
+
+private:
+	float AlphaStart = 1.0f;
+	float BlendSeconds = 0.0f;
+};
+
+/** Was die Anim-Instanz je Bild abtastet (Spielstrang -> Anim-Strang). */
+struct FWbSebboPoseSample
+{
+	const UAnimSequence* Sequence = nullptr;
+	float Time = 0.0f;
+	bool bLoop = true;
+	float Weight = 0.0f;
+};
+
+/**
+ * Anim-Instanz ohne Animation-Blueprint: mischt die Clips, die ihr die
+ * Figur-Komponente je Bild meldet (Gewichte des FWbSebboMixer), zu EINER Pose.
+ * Das Abtasten macht ihr Proxy (Evaluate) - so, wie es auch der Einzelknoten
+ * von PlayAnimation tut, nur mit mehreren gewichteten Clips.
+ */
+UCLASS(Transient, NotBlueprintable)
+class WIESBADENREAL_API UWiesbadenSebboAnimInstance : public UAnimInstance
+{
+	GENERATED_BODY()
+
+public:
+	void SetSamples(TArray<FWbSebboPoseSample>&& InSamples) { Samples = MoveTemp(InSamples); }
+	const TArray<FWbSebboPoseSample>& GetSamples() const { return Samples; }
+
+protected:
+	virtual FAnimInstanceProxy* CreateAnimInstanceProxy() override;
+
+private:
+	TArray<FWbSebboPoseSample> Samples;
+};
+
 /**
  * Die animierte Spielfigur Sebbo: geriggtes Tripo-Modell (61 Knochen) samt
  * Clip-Wahl und Wiedergabe. Einziger Besitzer aller Animationszustaende; der
@@ -106,6 +194,29 @@ public:
 	float MoveLength(EWbSebboMove Move) const;
 	EWbSebboMove GetCurrentMove() const { return CurrentMove; }
 
+	/** Abspielrate der gewollten Bewegung (Figurprobe). */
+	float GetMovePlayRate() const { return Mixer.Top() ? Mixer.Top()->PlayRate : 0.0f; }
+
+	/** Gewicht einer Bewegung im Mischer (0..1; Figurprobe, Tests). */
+	float GetMoveWeight(EWbSebboMove Move) const { return Mixer.WeightOf(Move); }
+
+	/**
+	 * Blendzeit von einer Bewegung zur naechsten in Sekunden. Datenrein.
+	 * Absprung schnell (0,1 s - sonst hebt die Figur ab, bevor die Beine
+	 * springen), Landung 0,15 s, Tritt/Treffer ein 0,08 s und aus 0,2 s,
+	 * Gehen <-> Rennen 0,25 s, ins und aus dem Stolzieren/Telefonieren
+	 * 0,35 s, sonst 0,2 s. Erster Clip und gleiche Bewegung: 0 (hart).
+	 */
+	static float BlendSecondsFor(EWbSebboMove From, EWbSebboMove To);
+
+	/**
+	 * Startstelle (normiert 0..1) fuer den Wechsel zwischen zwei Gangzyklen
+	 * (Walk, Run, CrouchWalk): dieselbe Schrittphase wie im bisherigen Clip,
+	 * damit sich beim Ueberblenden nicht linker und rechter Fuss mischen.
+	 * -1, wenn eine der beiden Bewegungen kein Gangzyklus ist. Datenrein.
+	 */
+	static float GaitStartFor(EWbSebboMove From, float FromNormalizedTime, EWbSebboMove To);
+
 	/**
 	 * Welche Dauerbewegung passt zum Zustand? Datenrein, damit testbar.
 	 *
@@ -134,6 +245,16 @@ public:
 private:
 	/** Spielt eine Bewegung ab (Wechsel nur, wenn sie nicht schon laeuft). */
 	void PlayMove(EWbSebboMove Move, bool bLoop, float PlayRate);
+
+	/** Clip-Wahl eines Bilds (ohne Fortschreiben des Mischers). */
+	void ChooseAndPlay(float DeltaSeconds, const FWbFigureInput& Input);
+
+	/** Mischer fortschreiben und die Gewichte an die Anim-Instanz geben. */
+	void AdvanceMixer(float DeltaSeconds);
+
+	/** Die laufenden Clips samt Gewicht (weiches Ueberblenden). */
+	FWbSebboMixer Mixer;
+
 
 	/** Clips, Index = EWbSebboMove (fehlende = nullptr). */
 	UPROPERTY(Transient)

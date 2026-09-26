@@ -425,6 +425,8 @@ private:
 	float FigurProbeWegZeit = 0.0f;
 	FRotator FigurProbeBlick = FRotator::ZeroRotator;
 	float FigurProbeStartFussZ = 0.0f;
+	/** Bewegungen, deren Einblenden schon ein Bild bekam (je eine). */
+	TSet<FString> FigurProbeBlendeBilder;
 
 	/** Ein Bild des Figur-Pruef-Laufs (Tick). */
 	void TickFigurProbe(float DeltaSeconds);

@@ -94,3 +94,126 @@ bool FSebboFigureMoveTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("kein leerer Name"), Namen.Contains(FString()));
 	return true;
 }
+
+/**
+ * Weiches Ueberblenden (FWbSebboMixer, BlendSecondsFor, GaitStartFor).
+ *
+ * Vorher schaltete PlayAnimation hart: Stehen -> Gehen -> Rennen -> Sprung
+ * sprangen von einer Pose in die naechste.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboFigureBlendTest,
+	"WiesbadenReal.Vehicles.SebboFigur.Ueberblenden",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboFigureBlendTest::RunTest(const FString& Parameters)
+{
+	using EM = EWbSebboMove;
+	using UFig = UWiesbadenSebboFigureComponent;
+	// Laengen wie die echten Clips (Walk 56, Run 30 Bilder bei 30 fps).
+	const auto Length = [](EM Move)
+	{
+		switch (Move)
+		{
+		case EM::Walk: return 56.0f / 30.0f;
+		case EM::Run:  return 1.0f;
+		case EM::Jump: return 2.2f;
+		default:       return 3.0f;
+		}
+	};
+	const auto Sum = [](const FWbSebboMixer& M)
+	{
+		float S = 0.0f;
+		for (const FWbSebboLayer& L : M.Layers) { S += L.Weight; }
+		return S;
+	};
+
+	// 1) Stehen -> Gehen ueber 0,2 s: nach 0,1 s halb und halb, dann nur Gehen.
+	{
+		FWbSebboMixer M;
+		M.Start(EM::Idle, true, 1.0f, 0.0f);
+		M.Advance(0.5f, Length);
+		M.Start(EM::Walk, true, 1.0f, 0.2f);
+		M.Advance(0.1f, Length);
+		TestTrue(FString::Printf(TEXT("nach 0,1 s: Gehen halb eingeblendet (%.2f)"), M.WeightOf(EM::Walk)),
+			FMath::IsNearlyEqual(M.WeightOf(EM::Walk), 0.5f, 0.01f));
+		TestTrue(FString::Printf(TEXT("nach 0,1 s: Stehen halb ausgeblendet (%.2f)"), M.WeightOf(EM::Idle)),
+			FMath::IsNearlyEqual(M.WeightOf(EM::Idle), 0.5f, 0.01f));
+		TestTrue(TEXT("Gewichte ergeben 1"), FMath::IsNearlyEqual(Sum(M), 1.0f, 1e-4f));
+		M.Advance(0.1f, Length);
+		TestEqual(TEXT("nach 0,2 s: nur noch Gehen"), M.Layers.Num(), 1);
+		TestTrue(TEXT("Gehen voll"), FMath::IsNearlyEqual(M.WeightOf(EM::Walk), 1.0f));
+
+		// Gegenprobe: Blendzeit 0 schaltet hart wie das alte PlayAnimation.
+		M.Start(EM::Run, true, 1.0f, 0.0f);
+		TestTrue(TEXT("Gegenprobe hart: Rennen sofort voll"), FMath::IsNearlyEqual(M.WeightOf(EM::Run), 1.0f));
+		TestEqual(TEXT("Gegenprobe hart: Gehen sofort weg"), M.WeightOf(EM::Walk), 0.0f);
+	}
+
+	// 2) Umkehr mitten in der Blende: kein Sprung, Abspielstelle bleibt.
+	{
+		FWbSebboMixer M;
+		M.Start(EM::Idle, true, 1.0f, 0.0f);
+		M.Advance(1.2f, Length);
+		M.Start(EM::Walk, true, 1.0f, 0.2f);
+		M.Advance(0.05f, Length);                    // Walk 0,25 / Idle 0,75
+		const float IdleTime = M.Layers[0].Time;
+		M.Start(EM::Idle, true, 1.0f, 0.2f);
+		M.Advance(0.0f, Length);
+		TestTrue(FString::Printf(TEXT("Umkehr: Stehen macht dort weiter (%.2f statt 0)"), M.WeightOf(EM::Idle)),
+			FMath::IsNearlyEqual(M.WeightOf(EM::Idle), 0.75f, 0.01f));
+		TestTrue(TEXT("Umkehr: Stehen behaelt seine Abspielstelle"),
+			FMath::IsNearlyEqual(M.Top()->Time, IdleTime, 1e-4f));
+		M.Advance(0.05f, Length);                    // restliches Viertel der Blendzeit
+		TestTrue(TEXT("Umkehr: nach dem Rest nur noch Stehen"), FMath::IsNearlyEqual(M.WeightOf(EM::Idle), 1.0f));
+	}
+
+	// 3) Schneller Wechsel ueber alle vier: hoechstens MaxLayers Spuren, Summe 1.
+	{
+		FWbSebboMixer M;
+		M.Start(EM::Idle, true, 1.0f, 0.0f);
+		const EM Folge[] = { EM::Walk, EM::Run, EM::Jump, EM::Idle, EM::Walk, EM::Turn, EM::Run };
+		for (const EM Move : Folge)
+		{
+			M.Start(Move, Move != EM::Jump, 1.0f, 0.3f);
+			M.Advance(0.05f, Length);
+			TestTrue(TEXT("hoechstens MaxLayers Spuren"), M.Layers.Num() <= FWbSebboMixer::MaxLayers);
+			TestTrue(FString::Printf(TEXT("Summe 1 nach %s (%.4f)"), *UFig::MoveName(Move), Sum(M)),
+				FMath::IsNearlyEqual(Sum(M), 1.0f, 1e-3f));
+		}
+	}
+
+	// 4) Schleifen laufen um, Einmalbewegungen bleiben im letzten Bild.
+	{
+		FWbSebboMixer M;
+		M.Start(EM::Run, true, 1.0f, 0.0f);
+		M.Advance(1.25f, Length);
+		TestTrue(TEXT("Rennen laeuft um (1,25 s -> 0,25 s)"), FMath::IsNearlyEqual(M.Top()->Time, 0.25f, 1e-3f));
+		M.Start(EM::Jump, false, 1.0f, 0.1f);
+		M.Advance(3.0f, Length);
+		TestTrue(TEXT("Sprung steht im letzten Bild"), FMath::IsNearlyEqual(M.Top()->Time, 2.2f, 1e-3f));
+	}
+
+	// 5) Blendzeiten.
+	TestEqual(TEXT("erster Clip: hart"), UFig::BlendSecondsFor(EM::Count, EM::Idle), 0.0f);
+	TestEqual(TEXT("gleiche Bewegung: keine Blende"), UFig::BlendSecondsFor(EM::Walk, EM::Walk), 0.0f);
+	TestEqual(TEXT("Stehen -> Gehen 0,2 s"), UFig::BlendSecondsFor(EM::Idle, EM::Walk), 0.2f);
+	TestEqual(TEXT("Gehen -> Rennen 0,25 s"), UFig::BlendSecondsFor(EM::Walk, EM::Run), 0.25f);
+	TestEqual(TEXT("Absprung 0,1 s"), UFig::BlendSecondsFor(EM::Run, EM::Jump), 0.1f);
+	TestEqual(TEXT("Landung 0,15 s"), UFig::BlendSecondsFor(EM::Jump, EM::Idle), 0.15f);
+
+	// 6) Schrittphase: linker Fuss vorn in Walk (0,384) -> linker Fuss vorn in Run (0,167).
+	TestTrue(TEXT("Gehen links vorn -> Rennen links vorn"),
+		FMath::IsNearlyEqual(UFig::GaitStartFor(EM::Walk, 0.384f, EM::Run), 0.167f, 1e-3f));
+	TestTrue(TEXT("zweiter Zyklus von Walk -> zweiter Zyklus von Run (0,667)"),
+		FMath::IsNearlyEqual(UFig::GaitStartFor(EM::Walk, 0.884f, EM::Run), 0.667f, 1e-3f));
+	TestTrue(TEXT("Viertelschritt bleibt Viertelschritt (0,292)"),
+		FMath::IsNearlyEqual(UFig::GaitStartFor(EM::Walk, 0.509f, EM::Run), 0.292f, 1e-3f));
+	const float Hin = UFig::GaitStartFor(EM::Walk, 0.7f, EM::Run);
+	const float Zurueck = UFig::GaitStartFor(EM::Run, Hin, EM::Walk);
+	TestTrue(FString::Printf(TEXT("hin und zurueck: dieselbe Stelle (%.3f)"), Zurueck),
+		FMath::IsNearlyEqual(Zurueck, 0.7f, 1e-3f));
+	TestTrue(TEXT("Gehen -> Duckgehen: dieselbe Stelle"),
+		FMath::IsNearlyEqual(UFig::GaitStartFor(EM::Walk, 0.3f, EM::CrouchWalk), 0.3f, 1e-3f));
+	TestEqual(TEXT("Stehen ist kein Gangzyklus"), UFig::GaitStartFor(EM::Idle, 0.3f, EM::Walk), -1.0f);
+	return true;
+}

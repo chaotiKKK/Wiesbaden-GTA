@@ -1068,14 +1068,31 @@ void AWiesbadenGameMode::TickFigurProbe(float DeltaSeconds)
 		Foot->CameraArm->SetRelativeRotation(Arm);
 	}
 
+	// Ueberblenden sichtbar machen: waehrend einer Blende jedes Bild eine
+	// Zeile, und je Bewegung ein Bild mitten in der Blende (Gewicht ~0,5).
+	if (T >= 0.0f && Figure->GetCurrentMove() != EWbSebboMove::Count)
+	{
+		const float Gewicht = Figure->GetMoveWeight(Figure->GetCurrentMove());
+		if (Gewicht < 0.999f)
+		{
+			UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe t=%.2f: Blende nach %s, Gewicht %.2f."), T, *Move, Gewicht);
+			if (Gewicht >= 0.35f && Gewicht <= 0.65f && !FigurProbeBlendeBilder.Contains(Move))
+			{
+				FigurProbeBlendeBilder.Add(Move);
+				Shot(*(TEXT("figur_blende_") + Move.ToLower()));
+			}
+		}
+	}
+
 	FigurProbeLogIn -= DeltaSeconds;
 	if (T >= 0.0f && FigurProbeLogIn <= 0.0f)
 	{
 		FigurProbeLogIn = 0.5f;
 		const FVector L = Foot->GetActorLocation();
 		UE_LOG(LogWbVehicles, Log,
-			TEXT("WbFigurProbe t=%.1f: Bewegung %s, Rate %.2f, geduckt %d (Kapsel %.0f), Taste X %d, Ort (%.0f, %.0f, %.0f)."),
-			T, *Move, Figure->GetPlayRate(), Foot->IsCrouched() ? 1 : 0, Half, PC->IsInputKeyDown(EKeys::X) ? 1 : 0, L.X, L.Y, L.Z);
+			TEXT("WbFigurProbe t=%.1f: Bewegung %s (Gewicht %.2f), Rate %.2f, geduckt %d (Kapsel %.0f), Taste X %d, Ort (%.0f, %.0f, %.0f)."),
+			T, *Move, Figure->GetMoveWeight(Figure->GetCurrentMove()), Figure->GetMovePlayRate(),
+			Foot->IsCrouched() ? 1 : 0, Half, PC->IsInputKeyDown(EKeys::X) ? 1 : 0, L.X, L.Y, L.Z);
 	}
 	if (bDone)
 	{
