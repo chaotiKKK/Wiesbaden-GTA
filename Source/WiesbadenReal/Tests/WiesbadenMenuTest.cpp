@@ -321,10 +321,23 @@ bool FWiesbadenMenuIntroTest::RunTest(const FString& Parameters)
 		WiesbadenMenu::IntroPhase(0.4, Zeile, Deckkraft));
 	TestEqual(TEXT("und ist deckend"), Deckkraft, 1.0f);
 
-	// Genau halb hinein: der Wert liegt in der Mitte, nicht am Rand.
+	// In der Mitte der Phase steht er voll da - die Deckkraft ist in der
+	// Mitte HOCH, an den Raendern fast null (Blenden je 0,40 s bei 2,40 s
+	// Phasendauer). "Halb eingeblendet" gibt es deshalb nur an den Raendern,
+	// nicht in der Mitte: hier stand vorher 0,5 erwartet und 1,0 gemeldet.
 	TestTrue(TEXT("in der Mitte laeuft es"),
 		WiesbadenMenu::IntroPhase(1.2, Zeile, Deckkraft));
-	TestEqual(TEXT("und ist halb eingeblendet"), Deckkraft, 0.5f);
+	TestEqual(TEXT("und ist in der Mitte deckend"), Deckkraft, 1.0f);
+
+	// Die Haelfte der Blende: mitten im Ein- und im Ausblenden. Ohne diese
+	// beiden Proben koennte die Deckkraft in der Mitte Spruenge machen und
+	// trotzdem oben durchfallen.
+	TestTrue(TEXT("die Einblendung laeuft noch"),
+		WiesbadenMenu::IntroPhase(0.2, Zeile, Deckkraft));
+	TestEqual(TEXT("halb eingeblendet"), Deckkraft, 0.5f);
+	TestTrue(TEXT("die Ausblendung laeuft schon"),
+		WiesbadenMenu::IntroPhase(2.2, Zeile, Deckkraft));
+	TestEqual(TEXT("und wieder halb"), Deckkraft, 0.5f);
 
 	// Die zweite Phase laeuft, die erste ist vorbei.
 	TestTrue(TEXT("die zweite Phase laeuft"),
@@ -548,8 +561,12 @@ bool FWiesbadenMenuWarpZielTest::RunTest(const FString& Parameters)
 		double Z = 0.0;
 		TestTrue(TEXT("der Bogen wird gefunden"),
 			FWiesbadenMinimap::FindStreetWarpTarget(Netz, TEXT("Bogenstrasse"), Ziel, Yaw, Z));
-		// Der Mittelpunkt der Strecke liegt auf dem Knick.
-		TestEqual(TEXT("der Knick ist die Mitte"), Ziel, FVector2D(1000.0, 1000.0));
+		// Der Mittelpunkt der Strecke liegt auf dem Knick: 2 000 m nach
+		// Norden und 2 000 m nach Osten, also bei der halben Laenge genau
+		// am Wendepunkt (0, 2000). Stand hier vorher (1000, 1000) - das ist
+		// die Mitte der Diagonalen und liegt in der Wiese, also weder auf
+		// der Strasse noch das, was der Kommentar darunter beschreibt.
+		TestEqual(TEXT("der Knick ist die Mitte"), Ziel, FVector2D(0.0, 2000.0));
 		// Und die Richtung kommt aus dem letzten Drittel: nach Osten.
 		TestTrue(TEXT("die Richtung zeigt entlang des Bogens"), Yaw > -1.0f && Yaw < 1.0f);
 	}
@@ -557,9 +574,13 @@ bool FWiesbadenMenuWarpZielTest::RunTest(const FString& Parameters)
 	// -- Ungleichmaessige Punktdichte -----------------------------------------
 	{
 		// Drei Stuetzpunkte liegen dicht beieinander, der vierte weit weg.
-		// Der Mittelwert der Stuetzpunkte waere 2 060 m - mitten auf der
-		// Strecke sind es aber 1 325,75 m. Genau dieser Unterschied ist der
-		// Grund, warum ueber Punktpaare gemittelt wird.
+		// Der Mittelwert der Stuetzpunkte waere 2 060 m - die Mitte der
+		// Strecke ist aber 5 000 m. Genau dieser Unterschied ist der Grund,
+		// warum nach Bogenlaenge abgelaufen und nicht ueber die Punkte
+		// gemittelt wird. (Stand hier vorher 1 325,75 m: der Mittelwert der
+		// Abschnittsmitten rechnet im Index-Raum, nicht in der Laenge, und
+		// rutscht bei dichter Punktfolge nach vorn - auf einem S-Bogen dann
+		// aus der Strasse heraus.)
 		FRoadNetwork Netz;
 		Netz.Segments.Add(MakeSegment(0, TEXT("Dichtstrasse"), {
 			FVector(0.0, 0.0, 0.0),
@@ -572,7 +593,7 @@ bool FWiesbadenMenuWarpZielTest::RunTest(const FString& Parameters)
 		double Z = 0.0;
 		FWiesbadenMinimap::FindStreetWarpTarget(Netz, TEXT("Dichtstrasse"), Ziel, Yaw, Z);
 		TestTrue(TEXT("die Mitte der Strecke, nicht der Mittel der Stuetzpunkte"),
-			FMath::IsNearlyEqual(Ziel.X, 1325.75, 1.0));
+			FMath::IsNearlyEqual(Ziel.X, 5000.0, 1.0));
 	}
 
 	// -- Namen, Grossschreibung und Trefferarten -----------------------------

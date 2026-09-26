@@ -540,39 +540,83 @@ bool FWiesbadenMinimap::FindStreetWarpTarget(
 		return false;
 	}
 
-	// Mittelpunkt des gewaehlten Segments, als Mittel aufeinanderfolgender
-	// Punktpaare - das ist bei ungleichmaessiger Punktdichte der Mittelpunkt
-	// der STRECKE und nicht der Mittelwert der Stuetzpunkte.
-	FVector2D Summe = FVector2D::ZeroVector;
-	double ZSumme = 0.0;
-	int32 Paare = 0;
+	// Mittelpunkt des gewaehlten Segments nach BOGENLAENGE: die Strecke
+	// ablaufen, bis die Haelfte der Gesamtlänge erreicht ist, und dort
+	// interpolieren. Das ist der Punkt, der auf der Fahrbahn liegt.
+	//
+	// Vorher stand hier der Mittelwert aufeinanderfolgender Punktpaare - der
+	// rechnet im INDEX-Raum, nicht in der Laenge, und wich bei einem
+	// S-Bogen von der Strasse ab (Punkte (0,0), (0,2000), (0,2000),
+	// (2000,2000) ergaben (333, 1667): mitten in der Wiese neben dem Knick,
+	// also genau das, was diese Funktion vermeiden soll). Bei einem
+	// GestDuplikat zaehlt ein Abschnitt doppelt, und die gewichtete Mitte
+	// rutscht zum Knick - die Laenge laeuft davon nicht weg.
+	double GesamtLaenge = 0.0;
 	for (int32 i = 1; i < BesteLinie->Num(); ++i)
 	{
-		const FVector& A = (*BesteLinie)[i - 1];
-		const FVector& B = (*BesteLinie)[i];
-		Summe += FVector2D(A.X, A.Y) + FVector2D(B.X, B.Y);
-		ZSumme += (A.Z + B.Z) * 0.5;
-		++Paare;
+		GesamtLaenge += FVector::Dist2D((*BesteLinie)[i - 1], (*BesteLinie)[i]);
 	}
-	if (Paare == 0)
+	if (GesamtLaenge <= 0.0)
 	{
-		return false;
+		OutWorldXY = FVector2D((*BesteLinie)[0].X, (*BesteLinie)[0].Y);
+		OutZCm = (*BesteLinie)[0].Z;
 	}
-	OutWorldXY = Summe / (2.0 * Paare);
-	OutZCm = ZSumme / Paare;
+	else
+	{
+		const double Ziel = GesamtLaenge * 0.5;
+		double Gelaufen = 0.0;
+		bool bGefunden = false;
+		for (int32 i = 1; i < BesteLinie->Num() && !bGefunden; ++i)
+		{
+			const FVector& A = (*BesteLinie)[i - 1];
+			const FVector& B = (*BesteLinie)[i];
+			const double Teilstrecke = FVector::Dist2D(A, B);
+			if (Gelaufen + Teilstrecke >= Ziel)
+			{
+				// Ein Abschnitt der Laenge 0 (GestDuplikat) kann die halbe
+				// Laenge nicht ueberbieten - dann zaehlt er als 0 und die
+				// Mitte wandert einen Abschnitt weiter.
+				const double Anteil = (Teilstrecke > 0.0)
+					? (Ziel - Gelaufen) / Teilstrecke : 1.0;
+				OutWorldXY = FVector2D(
+					A.X + (B.X - A.X) * Anteil,
+					A.Y + (B.Y - A.Y) * Anteil);
+				OutZCm = A.Z + (B.Z - A.Z) * Anteil;
+				bGefunden = true;
+				break;
+			}
+			Gelaufen += Teilstrecke;
+		}
+		if (!bGefunden)
+		{
+			// Nur erreichbar, wenn die Laenge in der Summe nicht aufgeht -
+			// dann der letzte Punkt, aber nie (0,0) im Nirgendwo.
+			OutWorldXY = FVector2D(BesteLinie->Last().X, BesteLinie->Last().Y);
+			OutZCm = BesteLinie->Last().Z;
+		}
+	}
 
-	// Richtung: vom Mittelpunkt des ersten zum Mittelpunkt des letzten
-	// Drittels. Die ganze Linie als Richtung zu nehmen faellt bei einem
-	// S-Bogen aus, weil sich Anfang und Ende fast aufheben.
+	// Richtung: das LETZTE Drittel der Linie, vom Beginn dieses Drittels bis
+	// zum Ende. Die ganze Linie als Richtung zu nehmen faellt bei einem
+	// S-Bogen aus, weil sich Anfang und Ende fast aufheben - und die
+	// STRECKE von einem Drittel zum anderen zu nehmen war es ebenfalls: bei
+	// einer geraden Linie mit nur zwei Stuetzpunkten fallen Beginn und Ende
+	// des letzten Drittels auf dieselben zwei Punkte, und die Differenz
+	// zeigte damit nach hinten statt nach vorn (die Strasse "Wilhelmstrasse"
+	// kam mit 180 statt 0 Grad heraus). Das letzte Drittel ist zugleich das,
+	// was man ankommend sieht.
 	const int32 Drittel = FMath::Max(1, BesteLinie->Num() / 3);
-	const FVector2D A((*BesteLinie)[0].X, (*BesteLinie)[0].Y);
-	const FVector2D B((*BesteLinie)[Drittel].X, (*BesteLinie)[Drittel].Y);
-	const FVector2D C((*BesteLinie)[BesteLinie->Num() - 1 - Drittel].X,
-		(*BesteLinie)[BesteLinie->Num() - 1 - Drittel].Y);
-	FVector2D Richtung = (C - B);
+	const int32 DrittelBeginn = BesteLinie->Num() - 1 - Drittel;
+	const FVector2D C((*BesteLinie)[DrittelBeginn].X, (*BesteLinie)[DrittelBeginn].Y);
+	const FVector2D E((*BesteLinie)[BesteLinie->Num() - 1].X,
+		(*BesteLinie)[BesteLinie->Num() - 1].Y);
+	FVector2D Richtung = (E - C);
 	if (Richtung.SizeSquared() < 1.0)
 	{
-		Richtung = (B - A);
+		// Das letzte Drittel ist ein Punkt (GestDuplikat am Ende): dann
+		// wenigstens die ganze Linie von vorn nach hinten.
+		const FVector2D A((*BesteLinie)[0].X, (*BesteLinie)[0].Y);
+		Richtung = (E - A);
 	}
 	if (Richtung.SizeSquared() < 1.0)
 	{
