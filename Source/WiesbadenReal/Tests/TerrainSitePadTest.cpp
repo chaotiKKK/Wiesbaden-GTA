@@ -266,3 +266,41 @@ bool FTerrainSitePadGrundrissTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTerrainSitePadPreferredRoadTest,
+	"WiesbadenReal.GIS.Terrain.SitePadPreferredRoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTerrainSitePadPreferredRoadTest::RunTest(const FString& Parameters)
+{
+	FRoadNetwork Network;
+	FRoadSegment& PublicPath = Network.Segments.AddDefaulted_GetRef();
+	PublicPath.SegmentId = 1;
+	PublicPath.StreetName = TEXT("Fuss- und Radweg");
+	PublicPath.Centerline = { FVector(-5000.0, 1000.0, 500.0), FVector(5000.0, 1000.0, 500.0) };
+	FRoadSegment& Platter = Network.Segments.AddDefaulted_GetRef();
+	Platter.SegmentId = 2;
+	Platter.StreetName = TEXT("Platter Stra\u00dfe");
+	Platter.Centerline = { FVector(-5000.0, 3000.0, 1000.0), FVector(5000.0, 3000.0, 1000.0) };
+
+	FTerrainSitePad Pad;
+	Pad.RoadAnchorCm = FVector2D::ZeroVector;
+	Pad.RoadSearchRadiusCm = 5000.0;
+	Pad.AccessFloorCm = 60.0;
+	Pad.PreferredStreetName = TEXT("Platter Stra\u00dfe");
+	double PlateauCm = 0.0;
+	double RoadCm = 0.0;
+	TestTrue(TEXT("Die bevorzugte Platter Strasse wird gefunden"),
+		UTerrainGenerator::ResolveSitePadPlateauCm(Network, Pad, PlateauCm, RoadCm));
+	TestEqual(TEXT("Plateau orientiert sich an der Platter Hoehe"), PlateauCm, 940.0, 0.01);
+	TestEqual(TEXT("Strassenhoehe stammt von Platter"), RoadCm, 1000.0, 0.01);
+
+	Pad.PreferredStreetName = TEXT("Nicht vorhanden");
+	TestFalse(TEXT("Ohne die gewuenschte Strasse wird keine andere Hoehe geraten"),
+		UTerrainGenerator::ResolveSitePadPlateauCm(Network, Pad, PlateauCm, RoadCm));
+	Pad.PreferredStreetName.Empty();
+	TestTrue(TEXT("Ohne Praeferenz gilt weiterhin die naechste Strasse"),
+		UTerrainGenerator::ResolveSitePadPlateauCm(Network, Pad, PlateauCm, RoadCm));
+	TestEqual(TEXT("Standardfall bleibt der naehere Weg"), RoadCm, 500.0, 0.01);
+	return true;
+}

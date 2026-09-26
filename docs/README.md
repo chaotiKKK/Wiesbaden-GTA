@@ -10,6 +10,8 @@ Vier Sorten Dokument, nach dem, was du gerade brauchst:
 | Genau NACHSCHLAGEN | **Reference** | informationsorientiert, trocken, vollstaendig |
 | Etwas VERSTEHEN (warum) | **Explanation** | verstaendnisorientiert, Hintergrund |
 
+**Was schon laeuft, mit GIFs und Fotos aus dem Spiel:** [Meilensteine](meilensteine.md).
+
 ---
 
 ## Tutorials

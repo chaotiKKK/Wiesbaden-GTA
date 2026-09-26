@@ -1,6 +1,6 @@
 r"""Die Weltkoordinate des SebboTower - abgeleitet, nicht eingetragen.
 
-    python Tools/sebbo_standort.py          ->  -110985,-128485
+    python Tools/sebbo_standort.py          ->  -113514,-125729
     python Tools/sebbo_standort.py --json   ->  {"x_cm": ..., "y_cm": ...}
 
 WOFUER: run_ankunft_probe.cmd trug die Koordinate als feste Zahl. Verschiebt

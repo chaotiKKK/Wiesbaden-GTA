@@ -2118,6 +2118,37 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					}
 				}
 
+				// -WbShotSteps=<plan> ist der Ablaufplan EINER Sitzung:
+				// eine plusgetrennte Liste aus "modus=N" (Fahrzeugkamera:
+				// 0 Folge, 1 Orbit, 2 Cockpit), "hold" (ein Bild aus der
+				// aktuellen Sicht) und "turm" (Hubschrauber auf den Helipad
+				// des Sebbotower setzen). AUFBE-WERKZEUG, kein Spielverhalten.
+				//
+				// Warum das noetig war: je Sitzung war genau EIN Bild moeglich,
+				// die Kamera liess sich nur per Taste C umschalten (die nicht
+				// zuverlaessig ankommt), und der Muendungsfeuer der 2A42 ist
+				// 55 ms von je 120 ms an - ein Zufallstreffer ist kein Beleg.
+				// Der Plan erlaubt damit in einer Sitzung: Cockpit, dann eine
+				// Salve Bilder waehrend des Dauerfeuers, dann der Helipad.
+				if (ShotPoseLines.Num() == 0)
+				{
+					FString Plan;
+					if (FParse::Value(FCommandLine::Get(), TEXT("WbShotSteps="), Plan))
+					{
+						TArray<FString> Schritte;
+						ParseShotPlan(Plan, Schritte);
+						ShotPoseLines.Append(Schritte);
+						FParse::Value(FCommandLine::Get(), TEXT("WbShotGap="), ShotPoseSettle);
+						if (ShotPoseSettle <= 0.0f)
+						{
+							ShotPoseSettle = 0.7f;
+						}
+						UE_LOG(LogWbStreaming, Log,
+							TEXT("WbShotWhenReady: Ablaufplan mit %d Schritten (Abstand %.2f s): %s"),
+							ShotPoseLines.Num(), ShotPoseSettle, *Plan);
+					}
+				}
+
 				FParse::Value(FCommandLine::Get(), TEXT("WbPoseSettle="), ShotPoseSettle);
 				ShotPoseIndex = 0;
 				bShotCapturing = false;
@@ -3761,6 +3792,29 @@ UWiesbadenCitySubsystem::FWbGotoTarget UWiesbadenCitySubsystem::ParseGotoTarget(
 	return Target;
 }
 
+void UWiesbadenCitySubsystem::ParseShotPlan(const FString& Raw,
+	TArray<FString>& OutSteps)
+{
+	// Trenner ist das Pluszeichen: FParse::Value haelt den Wert am ersten
+	// Komma an, aus "modus=2,hold,hold" wurde dadurch "modus=2" - und die
+	// ganze Serie lief als EIN Schritt. Das Pluszeichen umgeht das, ohne
+	// dass die Schritte selbst Kommas enthalten duerfen.
+	FString Plan = Raw.TrimStartAndEnd();
+	Plan.ReplaceInline(TEXT("+"), TEXT(","));
+
+	TArray<FString> Schritte;
+	Plan.ParseIntoArray(Schritte, TEXT(","), false);
+	for (const FString& Roh : Schritte)
+	{
+		const FString Schritt = Roh.TrimStartAndEnd();
+		// Leere Eintraege ("modus=2++hold") sind Tippfehler, keine Schritte.
+		if (!Schritt.IsEmpty())
+		{
+			OutSteps.Add(Schritt);
+		}
+	}
+}
+
 bool UWiesbadenCitySubsystem::FindStreetLocation(const FRoadNetwork& Network,
 	const FString& Name, FVector2D& OutLocationCm, double& OutLengthCm)
 {
@@ -4236,6 +4290,136 @@ void UWiesbadenCitySubsystem::ApplyShotPose(const FString& PoseLine)
 	// "Hoehe_m, AtX_cm, AtY_cm, Yaw, Pitch, Vorwaerts_m, LookYaw, LookPitch"
 	// Fehlende/leere Felder = Default. AtX UND AtY noetig fuer einen absoluten
 	// Zielort; sonst ueber dem Spieler.
+	const FString Schritt = PoseLine.TrimStartAndEnd();
+
+	// "hold": Bild aus der aktuellen Sicht, Kamera unveraendert. Damit laesst
+	// sich eine Bilderserie fahren, ohne je eine Pose zu rechnen.
+	if (Schritt.Equals(TEXT("hold"), ESearchCase::IgnoreCase))
+	{
+		return;
+	}
+
+	// "modus=N": Fahrzeugkamera des besessenen Hubschraubers umstellen. Ueber
+	// die CVar, damit der Weg derselbe ist wie beim Befehl WbHeliKamera - und
+	// damit die Umschaltung auch dann greift, wenn sie vor der Uebernahme
+	// eintrifft.
+	if (Schritt.StartsWith(TEXT("modus="), ESearchCase::IgnoreCase))
+	{
+		const int32 Modus = FCString::Atoi(*Schritt.Mid(6));
+		if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			// Mit Leerzeichen, NICHT "=": die Gleich-Form kommt bei CVars nicht
+			// durch, das Kommando bleibt wirkungslos (gemessen am 26.09.2026).
+			PC->ConsoleCommand(FString::Printf(TEXT("wb.HeliKamera %d"), Modus), true);
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("WbShotWhenReady: Schritt - Fahrzeugkamera auf Modus %d."), Modus);
+		}
+		return;
+	}
+
+	// "feuer" / "feuer-aus": Bordabzug halten bzw. loesen. Der Schritt
+	// braucht keinen synthetischen Tastendruck - der haelt nicht, weil UEs
+	// Eingabestapel ereignisgesteuert ist (am 26.09.2026 vier Wege, null
+	// Abzugsflanken). Zwischen "feuer" und "feuer-aus" liegen dann die
+	// Bilder, auf denen das Muendungsfeuer zu sehen sein soll.
+	if (Schritt.Equals(TEXT("feuer"), ESearchCase::IgnoreCase)
+		|| Schritt.Equals(TEXT("feuer-aus"), ESearchCase::IgnoreCase))
+	{
+		if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			const bool bHalten = Schritt.Equals(TEXT("feuer"), ESearchCase::IgnoreCase);
+			PC->ConsoleCommand(bHalten ? TEXT("WbHeliFeuer 1") : TEXT("WbHeliFeuer 0"), true);
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("WbShotWhenReady: Schritt - Bordabzug %s."),
+				bHalten ? TEXT("halten") : TEXT("loesen"));
+		}
+		return;
+	}
+
+	// "waffe=N" / "ego=N": den Fuss-Pawn fuer Aufnahmen einrichten (z.B. die
+	// Waffen-Mesh-Kontrolle). Wie bei "modus=" ueber die Konsole - und ueber
+	// die SERIE verteilt statt ueber -ExecCmds, weil der beim Start laeuft,
+	// bevor der Pawn existiert (deshalb blieb WbFussWaffe dort wirkungslos).
+	if (Schritt.StartsWith(TEXT("waffe="), ESearchCase::IgnoreCase)
+		|| Schritt.StartsWith(TEXT("ego="), ESearchCase::IgnoreCase))
+	{
+		if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			if (Schritt.StartsWith(TEXT("waffe="), ESearchCase::IgnoreCase))
+			{
+				const int32 Index = FCString::Atoi(*Schritt.Mid(6));
+				PC->ConsoleCommand(FString::Printf(TEXT("WbFussWaffe %d"), Index), true);
+				UE_LOG(LogWbStreaming, Log,
+					TEXT("WbShotWhenReady: Schritt - Fusswaffe %d."), Index);
+			}
+			else
+			{
+				const int32 Ansicht = FCString::Atoi(*Schritt.Mid(4));
+				PC->ConsoleCommand(FString::Printf(TEXT("WbFussAnsicht %d"), Ansicht), true);
+				UE_LOG(LogWbStreaming, Log,
+					TEXT("WbShotWhenReady: Schritt - Fussansicht %d (1 = Ego)."), Ansicht);
+			}
+		}
+		return;
+	}
+
+	// "ziel,Xcm,Ycm,HoeheUeberBodenCm,DistanzMeter": den Hubschrauber vor ein
+	// Bauwerk stellen und es anpeilen. Gehoert VOR "feuer" - sonst zeigt die
+	// Kanone "nach vorn" und der Schuss trifft nichts Bestimmtes. Steht in
+	// der Posendatei, weil der Wert Kommas traegt (die Kommandozeile wuerde
+	// FParse::Value am ersten Komma abschneiden).
+	if (Schritt.StartsWith(TEXT("ziel,"), ESearchCase::IgnoreCase))
+	{
+		TArray<FString> Felder;
+		Schritt.ParseIntoArray(Felder, TEXT(","), false);
+		// Felder[0] ist "ziel", danach vier Zahlen.
+		if (Felder.Num() >= 5)
+		{
+			if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+			{
+				PC->ConsoleCommand(FString::Printf(TEXT("WbHeliZiel %s %s %s %s"),
+					*Felder[1].TrimStartAndEnd(), *Felder[2].TrimStartAndEnd(),
+					*Felder[3].TrimStartAndEnd(), *Felder[4].TrimStartAndEnd()), true);
+				UE_LOG(LogWbStreaming, Log,
+					TEXT("WbShotWhenReady: Schritt - Ziel (%s, %s) bei Hoehe %s cm, Abstand %s m."),
+					*Felder[1].TrimStartAndEnd(), *Felder[2].TrimStartAndEnd(),
+					*Felder[3].TrimStartAndEnd(), *Felder[4].TrimStartAndEnd());
+			}
+		}
+		return;
+	}
+
+	// "licht" / "licht-aus": beide Suchscheinwerfer. Ohne Schalter muesste
+	// man Taste L druecken, und Tasten erreichen das Spiel in einer
+	// Aufnahmesitzung nicht zuverlaessig.
+	if (Schritt.Equals(TEXT("licht"), ESearchCase::IgnoreCase)
+		|| Schritt.Equals(TEXT("licht-aus"), ESearchCase::IgnoreCase))
+	{
+		if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			const bool bAn = Schritt.Equals(TEXT("licht"), ESearchCase::IgnoreCase);
+			PC->ConsoleCommand(bAn ? TEXT("WbHeliLicht 1") : TEXT("WbHeliLicht 0"), true);
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("WbShotWhenReady: Schritt - Suchscheinwerfer %s."),
+				bAn ? TEXT("an") : TEXT("aus"));
+		}
+		return;
+	}
+
+	// "turm": den Hubschrauber auf den markierten Helipad des Sebbotower
+	// setzen. Ohne diesen Schritt zeigt das Bild eine Wiese - der Startpunkt
+	// des normalen Spiels liegt nicht auf dem Turmdach.
+	if (Schritt.Equals(TEXT("turm"), ESearchCase::IgnoreCase))
+	{
+		if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			PC->ConsoleCommand(TEXT("WbHeliTurm"), true);
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("WbShotWhenReady: Schritt - Hubschrauber auf den Turm-Helipad."));
+		}
+		return;
+	}
+
 	TArray<FString> Fields;
 	PoseLine.ParseIntoArray(Fields, TEXT(","), false);
 

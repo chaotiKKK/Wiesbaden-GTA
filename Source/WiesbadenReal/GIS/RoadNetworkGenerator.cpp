@@ -249,7 +249,8 @@ FResolvedRoadAccess URoadNetworkGenerator::ResolveRoadAccess(
 
 		for (const FRoadSegment& Segment : Network.Segments)
 		{
-			if (Segment.bIsArea)
+			if (Segment.bIsArea || (!Override.PreferredStreetName.IsEmpty()
+				&& !Segment.StreetName.Equals(Override.PreferredStreetName, ESearchCase::IgnoreCase)))
 			{
 				continue;
 			}
@@ -1167,6 +1168,12 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 	UE_LOG(LogWbRoads, Log, TEXT("Schritt 5-6: %d Spuren, %d Verbindungen (%d gesperrt)."),
 		OutNetwork.Lanes.Num(), OutNetwork.Connections.Num(), RestrictedCount);
 
+	OutNetwork.TurningPlates.Reset();
+	if (Settings.bGenerateTurningPlates)
+	{
+		BuildTurningPlates(OutNetwork);
+	}
+
 	// -- Schritt 7: Geometrie ----------------------------------------------
 
 	if (OutMeshData)
@@ -1257,6 +1264,12 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 		for (const FRoadIntersection& Intersection : OutNetwork.Intersections)
 		{
 			BuildIntersectionMesh(Intersection, Settings, *OutMeshData);
+		}
+		// Wendeplatten: Asphalt wie eine Kreuzungsplatte (Kanal Intersection -
+		// damit auch Kollision und Hoehenabfrage fuer Spieler und Auto).
+		for (const FRoadTurningPlate& Plate : OutNetwork.TurningPlates)
+		{
+			BuildIntersectionMesh(Plate.AsJunction(), Settings, *OutMeshData);
 		}
 
 		// Hoehenlage je Kanal.
@@ -2075,6 +2088,157 @@ void URoadNetworkGenerator::BuildLanes(
 			Network.Lanes.Add(MoveTemp(Lane));
 		}
 	}
+}
+
+void URoadNetworkGenerator::BuildTurningPlates(FRoadNetwork& Network) const
+{
+	// Sackgasse = Spur ohne ECHTEN Nachfolger. Die Wende, die ConnectLanes an
+	// zweispurigen Sackgassen auf die Gegenspur desselben Abschnitts legt,
+	// zaehlt nicht - auch dort gehoert eine Platte hin (und der Verkehr faehrt
+	// dann ueber sie statt als Haarnadel quer ueber die Fahrbahn). Gegenspur
+	// wie in FWiesbadenTrafficSimulation::AddDeadEndTurnarounds: desselben
+	// Abschnitts, hoechstens 15 m vom Ende; sonst wendet die Spur auf sich.
+	TSet<int32> HatNachfolger;
+	for (const FLaneConnection& C : Network.Connections)
+	{
+		const bool bWendeImAbschnitt = C.TurnType == ETurnType::UTurn
+			&& Network.Lanes.IsValidIndex(C.FromLaneId) && Network.Lanes.IsValidIndex(C.ToLaneId)
+			&& Network.Lanes[C.FromLaneId].SegmentId == Network.Lanes[C.ToLaneId].SegmentId;
+		if (!bWendeImAbschnitt)
+		{
+			HatNachfolger.Add(C.FromLaneId);
+		}
+	}
+	TMap<int32, TArray<int32>> JeAbschnitt;
+	for (int32 i = 0; i < Network.Lanes.Num(); ++i)
+	{
+		JeAbschnitt.FindOrAdd(Network.Lanes[i].SegmentId).Add(i);
+	}
+
+	int32 AnBauwerken = 0;
+	int32 Doppelt = 0;
+	for (int32 L = 0; L < Network.Lanes.Num(); ++L)
+	{
+		const FRoadLane& Spur = Network.Lanes[L];
+		if (Spur.Centerline.Num() < 2 || Spur.bIsBusLane || Spur.bIsBikeLane || HatNachfolger.Contains(L)
+			|| !Network.Segments.IsValidIndex(Spur.SegmentId))
+		{
+			continue;
+		}
+		const FRoadSegment& Abschnitt = Network.Segments[Spur.SegmentId];
+		// Auf Bruecken und in Tunneln gibt es kein Gelaende, auf dem eine Platte laege.
+		if (Abschnitt.bIsBridge || Abschnitt.bIsTunnel || Abschnitt.Layer != 0)
+		{
+			++AnBauwerken;
+			continue;
+		}
+
+		const FVector E = Spur.GetEndPoint();
+		const FVector Dir = Spur.GetExitDirection();
+		FVector S = E;
+		double Bester = 1500.0;
+		for (const int32 O : JeAbschnitt.FindRef(Spur.SegmentId))
+		{
+			const FRoadLane& Andere = Network.Lanes[O];
+			if (O != L && Andere.Direction != Spur.Direction && !Andere.bIsBusLane && Andere.Centerline.Num() >= 2)
+			{
+				const double Dist = FVector::Dist2D(Andere.GetStartPoint(), E);
+				if (Dist < Bester) { Bester = Dist; S = Andere.GetStartPoint(); }
+			}
+		}
+
+		FVector2D C;
+		double LoopR;
+		WiesbadenTurnaround::LoopCircle(E, Dir, S, C, LoopR);
+		const double R = LoopR + WiesbadenTurnaround::PlateMarginCm;
+
+		// Mehrspurige Einbahnstrassen: je Spur ein Kreis, fast deckungsgleich -
+		// eine Platte genuegt.
+		bool bSchonDa = false;
+		for (const FRoadTurningPlate& Andere : Network.TurningPlates)
+		{
+			if (FVector2D::Distance(FVector2D(Andere.Center), C) < 0.5 * FMath::Min(Andere.RadiusCm, R))
+			{
+				bSchonDa = true;
+				break;
+			}
+		}
+		if (bSchonDa)
+		{
+			++Doppelt;
+			continue;
+		}
+
+		// Laengsgefaelle der letzten ~8 m der Spur, sanft begrenzt: die Platte
+		// setzt die Strasse fort, statt eine Stufe zu bilden.
+		const FVector2D D = FVector2D(Dir.X, Dir.Y).GetSafeNormal();
+		double Gefaelle = 0.0;
+		{
+			double Laenge = 0.0;
+			for (int32 i = Spur.Centerline.Num() - 1; i > 0; --i)
+			{
+				Laenge += FVector::Dist2D(Spur.Centerline[i], Spur.Centerline[i - 1]);
+				if (Laenge >= 800.0 || i == 1)
+				{
+					Gefaelle = Laenge > 1.0 ? (E.Z - Spur.Centerline[i - 1].Z) / Laenge : 0.0;
+					break;
+				}
+			}
+			Gefaelle = FMath::Clamp(Gefaelle, -0.2, 0.2);
+		}
+
+		FRoadTurningPlate Platte;
+		Platte.SegmentIndex = Spur.SegmentId;
+		Platte.LaneId = L;
+		Platte.RadiusCm = R;
+		Platte.Gradient = D * Gefaelle;
+		Platte.Center = FVector(C.X, C.Y, E.Z + Gefaelle * FVector2D::DotProduct(C - FVector2D(E), D));
+
+		// Umriss: der Kreis HINTER der Endkante der Fahrbahn (dort endet das
+		// Band gerade), dazu die Endkante selbst - konvex, also als Faecher
+		// vermaschbar wie eine Kreuzungsplatte.
+		const TArray<FVector>& Mitte = Abschnitt.TrimmedCenterline.Num() >= 2 ? Abschnitt.TrimmedCenterline : Abschnitt.Centerline;
+		const FVector2D Ende2D = FVector2D::DistSquared(FVector2D(Mitte[0]), FVector2D(E)) < FVector2D::DistSquared(FVector2D(Mitte.Last()), FVector2D(E))
+			? FVector2D(Mitte[0]) : FVector2D(Mitte.Last());
+		const FVector2D Links(D.Y, -D.X);
+		const double HalbeBreite = Abschnitt.CarriagewayWidthCm * 0.5;
+		TArray<FVector2D> Punkte;
+		Punkte.Add(Ende2D + Links * HalbeBreite);
+		Punkte.Add(Ende2D - Links * HalbeBreite);
+		const double Vor = FVector2D::DotProduct(C - Ende2D, D);
+		const double Quer = FVector2D::DotProduct(C - Ende2D, Links);
+		if (R > FMath::Abs(Vor))
+		{
+			const double Sehne = FMath::Sqrt(R * R - Vor * Vor);
+			Punkte.Add(Ende2D + Links * (Quer + Sehne));
+			Punkte.Add(Ende2D + Links * (Quer - Sehne));
+		}
+		constexpr int32 Randpunkte = 32;
+		for (int32 k = 0; k < Randpunkte; ++k)
+		{
+			const double A = 2.0 * UE_DOUBLE_PI * k / Randpunkte;
+			const FVector2D P = C + FVector2D(FMath::Cos(A), FMath::Sin(A)) * R;
+			if (FVector2D::DotProduct(P - Ende2D, D) >= 0.0)
+			{
+				Punkte.Add(P);
+			}
+		}
+		FVector2D Schwerpunkt = FVector2D::ZeroVector;
+		for (const FVector2D& P : Punkte) { Schwerpunkt += P; }
+		Schwerpunkt /= static_cast<double>(Punkte.Num());
+		Punkte.Sort([&Schwerpunkt](const FVector2D& A, const FVector2D& B)
+		{
+			return FMath::Atan2(A.Y - Schwerpunkt.Y, A.X - Schwerpunkt.X) < FMath::Atan2(B.Y - Schwerpunkt.Y, B.X - Schwerpunkt.X);
+		});
+		for (const FVector2D& P : Punkte)
+		{
+			Platte.Polygon.Add(FVector(P.X, P.Y, Platte.HeightAt(P)));
+		}
+		Network.TurningPlates.Add(MoveTemp(Platte));
+	}
+
+	UE_LOG(LogWbRoads, Log, TEXT("Wendeplatten: %d an Sackgassen (%d mehrspurig zusammengefasst, %d an Bruecken/Tunneln ausgelassen)."),
+		Network.TurningPlates.Num(), Doppelt, AnBauwerken);
 }
 
 void URoadNetworkGenerator::CollectTurnRestrictions(

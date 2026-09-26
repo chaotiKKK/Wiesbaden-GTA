@@ -197,7 +197,7 @@ void SebboHq::BuildShell(const FSebboHqDimensions& D, TArray<FHqPart>& OutParts)
 	const double PodiumHalf = Half + FMath::Max(0.0, D.PodiumOversizeCm);
 	const int32 Podium = FMath::Clamp(D.PodiumFloors, 0, D.FloorCount);
 
-	OutParts.Reserve(OutParts.Num() + D.FloorCount * 3 + 12);
+	OutParts.Reserve(OutParts.Num() + D.FloorCount * 8 + 12);
 
 	for (int32 Floor = 0; Floor < D.FloorCount; ++Floor)
 	{
@@ -205,15 +205,26 @@ void SebboHq::BuildShell(const FSebboHqDimensions& D, TArray<FHqPart>& OutParts)
 		const double Seite = bPodium ? PodiumHalf * 2.0 : D.FootprintCm;
 		const double Unterkante = Floor * D.FloorHeightCm;
 
-		// Geschossdecke als sichtbares Bruestungsband - erst daran liest man
-		// von aussen ab, wieviele Geschosse der Turm hat.
-		Add(OutParts, EHqPrimitive::Box, EHqMaterial::Concrete,
-			FVector(0.0, 0.0, Unterkante + D.SlabCm * 0.5),
-			FVector(Seite + 20.0, Seite + 20.0, D.SlabCm), Floor);
+		// Die Geschossdecke umschliesst den Kern als Ring. Ein massiver Quader
+		// wuerde den Aufzugsschacht auf JEDEM Geschoss verschliessen.
+		const double DeckenHalf = Seite * 0.5 + 10.0;
+		const double KernHalf = D.CoreCm * 0.5;
+		AddBetween(OutParts, EHqMaterial::Concrete,
+			-DeckenHalf, -KernHalf, -DeckenHalf, DeckenHalf,
+			Unterkante, Unterkante + D.SlabCm, Floor);
+		AddBetween(OutParts, EHqMaterial::Concrete,
+			KernHalf, DeckenHalf, -DeckenHalf, DeckenHalf,
+			Unterkante, Unterkante + D.SlabCm, Floor);
+		AddBetween(OutParts, EHqMaterial::Concrete,
+			-KernHalf, KernHalf, -DeckenHalf, -KernHalf,
+			Unterkante, Unterkante + D.SlabCm, Floor);
+		AddBetween(OutParts, EHqMaterial::Concrete,
+			-KernHalf, KernHalf, KernHalf, DeckenHalf,
+			Unterkante, Unterkante + D.SlabCm, Floor);
 
-		// Glasband darueber bis zur naechsten Decke. Das Erdgeschoss hat an
-		// der Platter-Strassen-Seite zwei reale Oeffnungen und wird deshalb als
-		// Fassade statt als massiver Glasklotz gebaut.
+		// Das Erdgeschoss hat zwei echte Oeffnungen. Auch die Regelgeschosse
+		// brauchen einen HOHLEN Innenraum: ein vollflaechiger 30x30-m-Glasquader
+		// blockierte Aufzug, Treppe und jede kuenftige Inneneinrichtung.
 		const double GlasHoehe = D.FloorHeightCm - D.SlabCm;
 		if (Floor == 0)
 		{
@@ -221,17 +232,37 @@ void SebboHq::BuildShell(const FSebboHqDimensions& D, TArray<FHqPart>& OutParts)
 		}
 		else if (GlasHoehe > 0.0)
 		{
-			Add(OutParts, EHqPrimitive::Box, EHqMaterial::Glass,
-				FVector(0.0, 0.0, Unterkante + D.SlabCm + GlasHoehe * 0.5),
-				FVector(Seite, Seite, GlasHoehe), Floor);
+			const double Kante = Seite * 0.5;
+			constexpr double Fassadentiefe = 18.0;
+			const double Z0 = Unterkante + D.SlabCm;
+			const double Z1 = Unterkante + D.FloorHeightCm;
+			AddBetween(OutParts, EHqMaterial::Glass,
+				Kante - Fassadentiefe, Kante, -Kante, Kante, Z0, Z1, Floor);
+			AddBetween(OutParts, EHqMaterial::Glass,
+				-Kante, -Kante + Fassadentiefe, -Kante, Kante, Z0, Z1, Floor);
+			AddBetween(OutParts, EHqMaterial::Glass,
+				-Kante, Kante, Kante - Fassadentiefe, Kante, Z0, Z1, Floor);
+			AddBetween(OutParts, EHqMaterial::Glass,
+				-Kante, Kante, -Kante, -Kante + Fassadentiefe, Z0, Z1, Floor);
 		}
 	}
 
 	// Attika: schliesst den Turm oben ab, damit das oberste Glasband nicht
-	// als offene Kante endet.
-	Add(OutParts, EHqPrimitive::Box, EHqMaterial::Concrete,
-		FVector(0.0, 0.0, D.TotalHeightCm() + D.SlabCm * 0.5),
-		FVector(D.FootprintCm + 40.0, D.FootprintCm + 40.0, D.SlabCm));
+	// als offene Kante endet. Als RING um den Kern wie die Geschossdecken -
+	// ein Vollquader lag auch ueber dem Treppenhaus: die Treppenprobe steckte
+	// im letzten Lauf bei 58,85 m mit dem Kopf an der Attika-Unterkante, der
+	// Turm war nicht bis aufs Dach begehbar. Den Kern schliesst
+	// BuildVerticalCore auf Dachhoehe selbst (Austrittspodest, Schachtdeckel).
+	{
+		const double AttikaHalf = (D.FootprintCm + 40.0) * 0.5;
+		const double KernHalf = D.CoreCm * 0.5;
+		const double Z0 = D.TotalHeightCm();
+		const double Z1 = Z0 + D.SlabCm;
+		AddBetween(OutParts, EHqMaterial::Concrete, -AttikaHalf, -KernHalf, -AttikaHalf, AttikaHalf, Z0, Z1);
+		AddBetween(OutParts, EHqMaterial::Concrete, KernHalf, AttikaHalf, -AttikaHalf, AttikaHalf, Z0, Z1);
+		AddBetween(OutParts, EHqMaterial::Concrete, -KernHalf, KernHalf, -AttikaHalf, -KernHalf, Z0, Z1);
+		AddBetween(OutParts, EHqMaterial::Concrete, -KernHalf, KernHalf, KernHalf, AttikaHalf, Z0, Z1);
+	}
 
 	// DER ERSCHLIESSUNGSKERN STEHT NICHT HIER, sondern in BuildVerticalCore:
 	// er ist seit Stufe 2 hohl (Waende um Treppenhaus und Schacht) und damit
@@ -278,12 +309,43 @@ void SebboHq::BuildShell(const FSebboHqDimensions& D, TArray<FHqPart>& OutParts)
 		FVector(PadVersatz, 0.0, PadZ + 18.0), FVector(Strich, HBreite, 6.0));
 }
 
-FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(const FSebboHqDimensions& D)
+FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(
+	const FSebboHqDimensions& D, const FSebboHqAnschluss* Anschluss)
 {
 	FSebboHqArrivalLayout Layout;
 	const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
 	const FArrivalOpenings Openings = GroundFloorOpenings(D);
 	const double FloorZ = GetAccessFloorCm(D);
+
+	// Deckenhoehe: sanfte Kuppe ueber die GANZE Laenge (der oeffentliche
+	// Fuss-/Radweg liegt im Trog 2,14 m unter Strassenniveau - ohne Kuppe
+	// verschliesst die Deckenunterkante den Weg), am Aussenrand auf die
+	// gemessene Strassenhoehe abgezogen (EndHoehe).
+	//
+	// Die Kuppe darf NICHT steiler sein: SebboHq.Schwellenrampe laesst
+	// hoechstens 6 cm Kante zwischen benachbarten Deckstuecken zu. 40 cm Hub
+	// ueber 12 m Sinus geben bei 30-cm-Stuecken rund 3,1 cm - die fruehere
+	// 35-cm-Kuppe ueber nur 4,3 m war mit 15 cm je Stueck deutlich zu steil.
+	constexpr double WegZone0Cm = 190.0;
+	constexpr double WegZone1Cm = 620.0;
+	constexpr double KuppenHubCm = 40.0;
+	const auto EndHoehe = [&Anschluss, FloorZ](const TArray<double>& Reihe, double Anteil) -> double
+	{
+		if (Reihe.Num() == 0)
+		{
+			return FloorZ;
+		}
+		const double Stelle = FMath::Clamp(Anteil, 0.0, 1.0) * (Reihe.Num() - 1);
+		const int32 I0 = FMath::Clamp(static_cast<int32>(Stelle), 0, Reihe.Num() - 1);
+		const int32 I1 = FMath::Min(I0 + 1, Reihe.Num() - 1);
+		return FMath::Lerp(Reihe[I0], Reihe[I1], Stelle - I0);
+	};
+	const auto BelagHoehe = [FloorZ, KuppenHubCm](
+		double LaengeCm, double WegAnteil, double EndZ) -> double
+	{
+		return FloorZ + KuppenHubCm * FMath::Sin(PI * WegAnteil)
+			+ (EndZ - FloorZ) * WegAnteil;
+	};
 
 	// Die Ziele liegen HINTER den Oeffnungen. Die Zufahrt bleibt auf der
 	// Strassenseite +X; eine spaetere Tiefgarage kann von dieser ebenerdigen
@@ -317,88 +379,71 @@ FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(const FSebboHqDimensions& 
 		Half - 900.0, Half, Openings.GarageY0, Openings.GarageY1,
 		D.SlabCm, FloorZ);
 
-	// SCHWELLENRAMPE: der Garagenboden darf nicht als Kante ueber der Zufahrt
-	// enden.
+	// Zufahrt und Personeneingang EBENERDIG ueber die Platter Strasse.
 	//
-	// GEMESSEN am 21.09.2026 auf Alkis17. Die Zufahrt steigt in Fahrtrichtung
-	// gleichmaessig an - 9987 cm auf 25 m draussen, 10094 cm unter dem
-	// Gebaeude - und trifft den Garagenboden (10096 cm) am Ende fast genau.
-	// Sie ist aber erst dort oben angekommen; an der Fassadenlinie liegt sie
-	// noch bei rund 10054 cm. Die 15 cm dicke Bodenplatte ragte mit ihrer
-	// Aussenkante 20 cm darueber hinaus und stand damit als rund 40 cm hohe
-	// Stufe quer im Weg - der Fahrzeugquader blieb dort haengen.
+	// Die alte Konstruktion endete auf EINER starren Hoehe. Die Platter
+	// Fahrbahn faellt aber an den Oeffnungen entlang rund 6 % (gemessen:
+	// 11032 cm am Portalrand bis 10999 cm am Garagenrand) - ein starres
+	// Deck endet dort mit einer Kante bis 15 cm, nicht "ebenerdig mit der
+	// Platter Strasse". Gleichzeitig liegt die Deckenkante auf keinen Fall
+	// 15 cm TIEFER als der Belag, sonst rollt das Auto beim Auffahren eine
+	// Stufe hinab.
 	//
-	// Die Rampe ueberbrueckt diesen Rest in flachen Stufen. Sie reicht
-	// bewusst weit nach unten: wo die Zufahrt schon hoeher liegt, verschwindet
-	// sie im Belag, statt als Podest darueber zu schweben.
+	// Jetzt: Deck mit derselben Kuppe wie bisher (40 cm Sinus ueber die
+	// volle Laenge - sie gibt dem oeffentlichen Fuss-/Radweg 35825899 im
+	// Trog 2,14 m unter Strassenniveau seine lichte Hoehe), aber am
+	// Aussenrand je Y-Spalte auf die GEMESSENE Strassenoberflaeche
+	// abgezogen (FSebboHqAnschluss). Das Deck laeuft so stufenlos auf
+	// Strassenniveau zu, und die 15-cm-Kante entfaellt.
 	{
-		// FEIN genug, dass es als Schraege liest und nicht als Treppe.
-		//
-		// GESEHEN am 21.09.2026 auf Alkis17 (Saved/Diagnose, Zufahrt von
-		// Westen): mit 5 Stufen zu je 12 cm zeichnete sich jede Kante einzeln
-		// ab - der Koerper las als gestuftes Betonpodest vor der Garage, nicht
-		// als Zufahrtsschuerze. 20 Stufen zu je 3 cm verschwinden auf jede
-		// normale Entfernung in der Flaeche.
-		constexpr int32 StufenZahl = 20;
-		// LANG GENUG, DASS SIE DIE FAHRBAHN ERREICHT.
-		//
-		// 300 cm endeten in der Wiese. Das lag nicht an der Laenge, sondern
-		// daran, dass der Turm in der Strasse stand (siehe SebboHqSite.h);
-		// nach der Ruecknahme um 8 m liegt die Wolkenbruch vor dem Haus, und
-		// die Zufahrtssonde misst ihre turmseitige Kante vor der
-		// Garagenoeffnung bei 1946..2162 cm. Der Fuss der Schuerze trifft sie
-		// bei 1551 + 620 = 2171 cm.
-		//
-		// Und FLACHER: die 60 cm stammen vom alten 40-cm-Absatz. Das neu
-		// gebackene Gelaende steigt von der Fahrbahn (10093 cm) gleichmaessig
-		// zum Garagenboden (10141 cm) - 48 cm auf 6,2 m. 50 cm Fall legen die
-		// Schuerze damit praktisch auf das Gelaende, statt sie darueber zu
-		// stellen.
-		constexpr double RampeLaengeCm = 620.0;
-		constexpr double RampeFallCm = 50.0;
-		for (int32 i = 0; i < StufenZahl; ++i)
+		constexpr int32 Segmente = 40;
+		constexpr double DeckStaerkeCm = 15.0;
+		const auto BaueDeck = [&](double LaengeCm, double Y0, double Y1,
+			const TArray<double>& Reihe)
 		{
-			const double X0 = Half + RampeLaengeCm * i / StufenZahl;
-			const double X1 = Half + RampeLaengeCm * (i + 1) / StufenZahl;
-			const double Oben = FloorZ - RampeFallCm * (i + 1) / StufenZahl;
-			AddBetween(Layout.Parts, EHqMaterial::Concrete,
-				X0, X1, Openings.GarageY0, Openings.GarageY1,
-				Oben - 300.0, Oben);
-		}
+			const int32 Spalten = FMath::Max(1, Reihe.Num());
+			for (int32 s = 0; s < Spalten; ++s)
+			{
+				const double SY0 = Y0 + (Y1 - Y0) * s / Spalten;
+				const double SY1 = Y0 + (Y1 - Y0) * (s + 1) / Spalten;
+				const double EndZ = EndHoehe(Reihe, (s + 0.5) / Spalten);
+				for (int32 i = 0; i < Segmente; ++i)
+				{
+					const double T0 = static_cast<double>(i) / Segmente;
+					const double T1 = static_cast<double>(i + 1) / Segmente;
+					const double Oben = BelagHoehe(LaengeCm, (T0 + T1) * 0.5, EndZ);
+					AddBetween(Layout.Parts, EHqMaterial::Concrete,
+						Half + LaengeCm * T0, Half + LaengeCm * T1, SY0, SY1,
+						Oben - DeckStaerkeCm, Oben);
+					// Widerlager nur ausserhalb des 2-m-Wegs. Zwischen
+					// X=1890 und 2320 cm bleibt die volle Breite offen.
+					if (Half + LaengeCm * T1 <= Half + WegZone0Cm
+						|| Half + LaengeCm * T0 >= Half + WegZone1Cm)
+					{
+						AddBetween(Layout.Parts, EHqMaterial::Concrete,
+							Half + LaengeCm * T0, Half + LaengeCm * T1, SY0, SY1,
+							FloorZ - 250.0, Oben - DeckStaerkeCm);
+					}
+				}
+			}
+		};
 
-		// BOESCHUNG, damit die Schuerze im Gelaende endet und nicht in der Luft.
-		//
-		// GESEHEN am 21.09.2026 auf Alkis17: das Gelaende faellt quer zur
-		// Zufahrt (gemessen 48..87 cm auf 2 m Wagenbreite). Die Schuerze ist
-		// aber eine waagerechte Platte - ihre talseitige Ecke stand darum rund
-		// 1,5 m frei ueber der Wiese, als senkrechte Betonwand. Das las als
-		// Podest, nicht als Zufahrt, und die feineren Stufen allein haben
-		// daran nichts geaendert: die Kante war das Problem, nicht ihre Hoehe.
-		//
-		// Ein wirklicher Wirtschaftsweg bekommt an so einer Stelle eine
-		// Anschuettung. Genau die steht hier: Lagen, die nach unten hin breiter
-		// und laenger werden, sodass der Beton als Schraege in die Wiese
-		// laeuft. Wo das Gelaende hoeher liegt - zur Portalseite hin, dort
-		// gemessen 49 cm UEBER dem Innenboden - verschwinden die Lagen im
-		// Boden; sichtbar wird immer nur die Seite, die es braucht.
-		//
-		// Die oberste Lage beginnt unter dem Rampenfuss, damit sie die
-		// Fahrflaeche nicht ueberbaut.
-		// Und FEIN, aus demselben Grund wie die Rampe selbst: mit 6 Lagen zu
-		// 25 cm stand statt der Wand eine Freitreppe vor dem Haus. Dieselbe
-		// Schraege in 5-cm-Lagen liest als Boeschung.
-		constexpr int32 LagenZahl = 30;
-		constexpr double LagenHoeheCm = 5.0;
-		constexpr double AnzugCm = 8.0;       // Versatz je Lage = rund 32 Grad
-		for (int32 k = 0; k < LagenZahl; ++k)
-		{
-			const double Oben = FloorZ - RampeFallCm - LagenHoeheCm * k;
-			const double Breiter = AnzugCm * (k + 1);
-			AddBetween(Layout.Parts, EHqMaterial::Concrete,
-				Half, Half + RampeLaengeCm + Breiter,
-				Openings.GarageY0 - Breiter, Openings.GarageY1 + Breiter,
-				Oben - LagenHoeheCm, Oben);
-		}
+		BaueDeck(GarageBridgeLengthCm, Openings.GarageY0, Openings.GarageY1,
+			Anschluss ? Anschluss->GarageZCm : TArray<double>());
+		BaueDeck(PedestrianBridgeLengthCm, Openings.PortalY0, Openings.PortalY1,
+			Anschluss ? Anschluss->PortalZCm : TArray<double>());
+
+		// Trennung und Absturzschutz liegen oberhalb des Decks; der Weg unten
+		// bleibt auch an seinen Raendern frei.
+		AddBetween(Layout.Parts, EHqMaterial::Metal,
+			Half + 70.0, Half + PedestrianBridgeLengthCm - 40.0,
+			Openings.PortalY0, Openings.PortalY0 + 10.0, FloorZ + 50.0, FloorZ + 125.0);
+		AddBetween(Layout.Parts, EHqMaterial::Metal,
+			Half + 70.0, Half + GarageBridgeLengthCm - 40.0,
+			Openings.GarageY1 - 10.0, Openings.GarageY1, FloorZ + 50.0, FloorZ + 125.0);
+		AddBetween(Layout.Parts, EHqMaterial::Metal,
+			Half + 70.0, Half + PedestrianBridgeLengthCm - 40.0,
+			Openings.PortalY1, Openings.GarageY0, FloorZ + 50.0, FloorZ + 105.0);
 	}
 	AddBetween(Layout.Parts, EHqMaterial::Concrete,
 		Half - 900.0, Half - 860.0, Openings.GarageY0, Openings.GarageY1,
@@ -409,10 +454,13 @@ FSebboHqArrivalLayout SebboHq::BuildArrivalFacilities(const FSebboHqDimensions& 
 	AddBetween(Layout.Parts, EHqMaterial::Metal,
 		Half - 900.0, Half, Openings.GarageY1 - 25.0, Openings.GarageY1,
 		FloorZ, Openings.ClearHeightCm);
-	// Haltstreifen vor der Platter Strasse: die Zufahrt bleibt privat, aber
-	// die Konfliktstelle mit dem durchlaufenden Verkehr ist sichtbar markiert.
+	// Haltstreifen vor der Platter Strasse auf dem Fahrspurende - auf der
+	// HOEHE DES DECKS dort (bei geneigtem Anschluss liegt FloorZ+13 falsch).
+	const double HaltstreifenZ = BelagHoehe(GarageBridgeLengthCm,
+		1100.0 / GarageBridgeLengthCm,
+		EndHoehe(Anschluss ? Anschluss->GarageZCm : TArray<double>(), 0.5)) + 13.0;
 	Add(Layout.Parts, EHqPrimitive::Box, EHqMaterial::Marking,
-		FVector(Half - 110.0, (Openings.GarageY0 + Openings.GarageY1) * 0.5, FloorZ + 3.0),
+		FVector(Half + 1100.0, (Openings.GarageY0 + Openings.GarageY1) * 0.5, HaltstreifenZ),
 		FVector(12.0, Openings.GarageY1 - Openings.GarageY0 - 80.0, 6.0));
 
 	// Personeneingang: ebenerdiger Vorraum mit schlankem Sturz - die Oeffnung
@@ -482,7 +530,7 @@ void SebboHq::BuildVerticalCore(const FSebboHqDimensions& D, TArray<FHqPart>& Ou
 	const double Innen = Aussen - Wand;            // lichte Innenkante
 	const double Trennung = Wand * 0.5;            // halbe Mittelwand bei Y = 0
 	const double TuerBreite = 110.0;
-	const double TuerHoehe = 210.0;
+	const double TuerHoehe = 300.0;
 	const double PodestDicke = 20.0;
 	const double StufenHoehe = 25.0;               // steil, aber begehbar
 	const double KernOberkante = GetCoreTopHeightCm(D);
@@ -566,6 +614,51 @@ void SebboHq::BuildVerticalCore(const FSebboHqDimensions& D, TArray<FHqPart>& Ou
 					StufeZ - PodestDicke, StufeZ, Floor);
 			}
 		}
+
+		// --- Handlauf am offenen Lauf (innere Kante) --------------------------
+		// Pfosten auf der innersten Stufenkante, ein schraeger Stab darueber.
+		// Rein dekorativ, OHNE Kollision (bCollision = false): die Figurenprobe
+		// fuehrt die 80-cm-Kapsel auf der Laufmitte (Kapselfreiheit bis zur
+		// Pfostenkante ~79 cm, also knapp doppelt Kapselradius), aber
+		// Steckenbleiben zaehlt als Fehlschlag - ein Handlauf soll dort nicht
+		// der neue Stolpergrund sein. Die Wandseite bleibt frei, weil die Probe
+		// an den Uebergaengen dicht an der Wand steht.
+		{
+			const double Lauflaenge = (Innen * 2.0) - 40.0;   // wie im Lauf
+			const double LaufX0 = -Innen + 20.0;
+			const double LaufX1 = LaufX0 + Lauflaenge;
+			const double RailY = TrennY - 5.0 - 4.0;          // innerste Stufenkante
+			const double Steig = D.FloorHeightCm - StufenHoehe;  // erste Stufe fehlt
+			const double Winkel = FMath::RadiansToDegrees(FMath::Atan2(Steig, Lauflaenge));
+			const double RailLaenge = FMath::Sqrt(Steig * Steig + Lauflaenge * Lauflaenge);
+
+			FHqPart Schiene;
+			Schiene.Material = EHqMaterial::Metal;
+			Schiene.CenterCm = FVector((LaufX0 + LaufX1) * 0.5, RailY,
+				Z0 + PodestDicke + (StufenHoehe + D.FloorHeightCm) * 0.5 + 90.0);
+			Schiene.SizeCm = FVector(RailLaenge, 8.0, 8.0);
+			Schiene.Rotation = FRotator(-Winkel, 0.0, 0.0);   // steigt mit +X
+			Schiene.bCollision = false;
+			Schiene.Floor = Floor;
+			OutParts.Add(Schiene);
+
+			const int32 PfostenZahl = 7;
+			for (int32 P = 0; P < PfostenZahl; ++P)
+			{
+				const double X = LaufX0 + 45.0 + (Lauflaenge - 90.0) * P / (PfostenZahl - 1);
+				// Stufenoberkante dort - die Stufen steigen linear ueber den Lauf.
+				const double StufenOberkante = Z0 + PodestDicke + StufenHoehe
+					+ (X - LaufX0) * Steig / Lauflaenge;
+				FHqPart Stab;
+				Stab.Primitive = EHqPrimitive::Cylinder;
+				Stab.Material = EHqMaterial::Metal;
+				Stab.CenterCm = FVector(X, RailY, StufenOberkante + 42.0);
+				Stab.SizeCm = FVector(7.0, 7.0, 92.0);
+				Stab.bCollision = false;
+				Stab.Floor = Floor;
+				OutParts.Add(Stab);
+			}
+		}
 	}
 
 	// --- Dachaufbau ueber der Attika ----------------------------------------
@@ -575,6 +668,14 @@ void SebboHq::BuildVerticalCore(const FSebboHqDimensions& D, TArray<FHqPart>& Ou
 	{
 		const double Z0 = D.TotalHeightCm();
 		const double Z1 = KernOberkante;
+		// Boden des Dachaufbaus buendig mit der Attika-Oberkante (die Attika ist
+		// ein Ring um den Kern): Austrittspodest ueber der inneren Haelfte des
+		// Treppenhauses - 25 cm ueber der letzten Stufe, steigbar - und ein
+		// Deckel ueber dem Aufzugsschacht. Ueber dem letzten LAUF bleibt es
+		// offen, sonst stoesst man dort wieder mit dem Kopf an.
+		const double BodenOben = Z0 + D.SlabCm;
+		AddBetween(OutParts, EHqMaterial::Concrete, -Innen, Innen, TrennY, TreppeY1, Z0, BodenOben);
+		AddBetween(OutParts, EHqMaterial::Concrete, -Innen, Innen, -Trennung, Innen, Z0, BodenOben);
 		AddBetween(OutParts, EHqMaterial::Concrete, Innen, Aussen, -Aussen, Aussen, Z0, Z1);
 		AddBetween(OutParts, EHqMaterial::Concrete, -Aussen, Aussen, Innen, Aussen, Z0, Z1);
 		AddBetween(OutParts, EHqMaterial::Concrete, -Aussen, Aussen, -Aussen, -Innen, Z0, Z1);
@@ -586,5 +687,47 @@ void SebboHq::BuildVerticalCore(const FSebboHqDimensions& D, TArray<FHqPart>& Ou
 		// Decke des Dachaufbaus.
 		AddBetween(OutParts, EHqMaterial::Metal, -Aussen, Aussen, -Aussen, Aussen,
 			Z1, Z1 + PodestDicke);
+	}
+}
+
+void SebboHq::BuildDachaufbauten(const FSebboHqDimensions& D, TArray<FSebboHqDachProp>& OutProps)
+{
+	// Standflaeche der Dachaufbauten ist die Oberkante der Attika, nicht die
+	// Attika-Unterkante: die Attika ist ein Deckel auf dem obersten Geschoss
+	// (TotalHeight bis + SlabCm), auf dem der Spieler steht.
+	const double DachZ = GetRoofHeightCm(D) + D.SlabCm;
+	const double KernOberkante = GetCoreTopHeightCm(D);
+
+	// Satellitenschuessel: die Schale ist ins Mesh gebaut, die Oeffnung steht
+	// im lokalen -X (Talseite) in rund 30 Grad Elevation - Yaw 0 genuegt.
+	FSebboHqDachProp Schuessel;
+	Schuessel.MeshPfad = TEXT("/Game/SebboTower/Meshes/SM_WbSeboDachSchuessel");
+	Schuessel.PosCm = FVector(-950.0, -780.0, DachZ);
+	Schuessel.ExtentCm = FVector(85.0, 65.0, 195.0);
+	OutProps.Add(Schuessel);
+
+	// Zwei Antennenmasten, gegeneinander versetzt.
+	FSebboHqDachProp MastA;
+	MastA.MeshPfad = TEXT("/Game/SebboTower/Meshes/SM_WbSeboDachMast");
+	MastA.PosCm = FVector(-1180.0, 620.0, DachZ);
+	MastA.ExtentCm = FVector(30.0, 70.0, 400.0);
+	OutProps.Add(MastA);
+
+	FSebboHqDachProp MastB = MastA;
+	MastB.PosCm = FVector(-620.0, -1230.0, DachZ);
+	MastB.YawDeg = 45.0;
+	OutProps.Add(MastB);
+
+	// Dachreklame auf der Krone, +X zur Platter Strasse. Auf der Krone (nicht
+	// auf der Dachflaeche), damit die Wortmarke ueber den Sockel hinausschaut,
+	// und so weit zurueckgesetzt (X 330 bei Kronehalb 480), dass ihr Vorsprung
+	// den Anflugkorridor des Landeplatzes (ab X 545) nicht erreicht.
+	if (D.CrownHeightCm > 0.0)
+	{
+		FSebboHqDachProp Logo;
+		Logo.MeshPfad = TEXT("/Game/SebboTower/Meshes/SM_WbSeboDachLogo");
+		Logo.PosCm = FVector(330.0, 0.0, KernOberkante + D.CrownHeightCm);
+		Logo.ExtentCm = FVector(13.0, 240.0, 190.0);
+		OutProps.Add(Logo);
 	}
 }

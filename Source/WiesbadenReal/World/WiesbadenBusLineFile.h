@@ -6,6 +6,7 @@
 #include "World/WiesbadenBusLine.h"
 
 class UGeoCoordinateConverter;
+struct FRoadNetwork;
 
 /**
  * Der EINE Leser der Liniendateien (Data/Raw/Bus/line<ref>.json und
@@ -49,6 +50,10 @@ namespace WiesbadenBusLineFile
 		TArray<FVector2D> GeoPath;    // je Eintrag (Breite, Laenge)
 		TArray<FVector2D> GeoStops;   // je Eintrag (Breite, Laenge)
 		TArray<FString> StopNames;    // `stop_names`, gleiche Reihenfolge wie GeoStops
+		/** Eigener Rueckweg (`return_path`/`return_stops`/`return_stop_names`, leer = keiner). */
+		TArray<FVector2D> GeoReturnPath;
+		TArray<FVector2D> GeoReturnStops;
+		TArray<FString> ReturnStopNames;
 		/**
 		 * `monitor_stops`: Halte mit DFI-Saeule (Namen). Der Eintrag "*" steht fuer
 		 * ALLE Halte der Linie (siehe ReadLine) - so bekommt auch eine verlaengerte
@@ -72,7 +77,10 @@ namespace WiesbadenBusLineFile
 		FLineFile File;
 		TArray<FVector> WorldPath;    // cm, Z = 0 (die Hoehe kommt je Tick vom Boden)
 		TArray<double> ArcCm;         // kumulierte 2D-Bogenlaenge je Pfadpunkt, cm
-		WiesbadenBusLine::FBusRoute Route;   // Halte-Bogenlaengen + Gesamtlaenge
+		WiesbadenBusLine::FBusRoute Route;   // Halte-Bogenlaengen + Gesamtlaenge (+ Rueckweg)
+		/** Eigener Rueckweg in Weltkoordinaten (leer = die Hinweg-Linie rueckwaerts). */
+		TArray<FVector> ReturnWorldPath;
+		TArray<double> ReturnArcCm;
 	};
 
 	/**
@@ -98,4 +106,18 @@ namespace WiesbadenBusLineFile
 
 	/** Vollstaendiger Pfad einer Liniendatei (fuer Diagnose und Tests). */
 	WIESBADENREAL_API FString LineFilePath(const FString& FileName);
+
+	/**
+	 * Rechte Fahrbahnkante an einer Halte: seitlicher Abstand (cm) von Pos nach
+	 * rechts der Fahrtrichtung Dir bis zum Rand der Fahrbahn, auf der Pos liegt
+	 * (naechstes befahrbares Strassensegment, parallel zu Dir, bis 15 m weit;
+	 * Mitte + halbe CarriagewayWidthCm). False, wenn keines in Reichweite.
+	 *
+	 * WOFUER: Bus und Haltestelle standen pauschal 4,80 m bzw. 6,40 m neben der
+	 * Linie. Auf breiten Strassen passt das, auf schmalen (Wendeschleife am
+	 * Nordfriedhof, 5 m Fahrbahn) stand der haltende Bus damit hinter dem
+	 * Gehweg im Gras. Bus-Actor und Monitor nehmen beide diese Kante.
+	 */
+	WIESBADENREAL_API bool RightKerbOffsetCm(const FRoadNetwork& Net, const FVector& Pos,
+		const FVector& Dir, double& OutCm);
 }

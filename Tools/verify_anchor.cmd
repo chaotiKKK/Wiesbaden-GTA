@@ -1,0 +1,180 @@
+@echo off
+setlocal
+rem NUR LESENDER Prueflauf des gespeicherten Verankerungszustands.
+rem Speichert nichts. Ergebnis: Saved\Diagnose\anchor_verify.txt
+rem
+rem DREI SACHEN, DIE DIESES SKRIPT VORHERS STILL ERFOLGLOS GEMACHT HAT:
+rem
+rem 1. ABSOLUTER SKRIPTPFAD. "-script=Tools/verify_anchor_state.py" loest die
+rem    Engine gegen Engine\Binaries\Win64 auf und meldet nur "Could not load
+rem    Python file" (Exit 127, keine Ergebnisdatei). Nur ein vollstaendiger
+rem    Pfad laeuft - siehe SCRIPT weiter unten.
+rem
+rem 2. ALTES ERGEBNIS LOESCHEN. Das Skript schreibt die Datei am ENDE. Bricht
+rem    es vorher ab, liegt der Lauf von gestern noch da und sieht aus wie ein
+rem    Ergebnis. Genau das war der wertlose Alkis24-Stand, der wochenlang als
+rem    Messung galt. Deshalb: vorher weg, und am Ende MUSS eine neue Datei da
+rem    sein, sonst ist der Lauf fehlgeschlagen.
+rem
+rem 3. ECHTER FEHLSCHLAG. Die Engine beendet sich bei Skriptfehlern mit 127
+rem    (gemessen: fehlende Datei UND Absturz im Skript, beide mit "Python
+rem    script executed with errors" im Log). Der alte Aufruf meldete trotzdem
+rem    Erfolg, weil niemand nach der Ergebnisdatei sah. Dieses Skript prueft
+rem    beides und gibt bei Fehlschlag eine ungewoehnliche Exit-Code.
+rem
+rem Bauform: Sprungmarken statt "if ( ... )"-Bloecken. In einem Klammerblock
+rem beendet das ERSTE ungeschuetzte ")" den Block - auch eines, das in einem
+rem Text steht. Ein "echo ... errors." am Ende einer Zeile darin reisst den
+rem ganzen Block auf ("'.' kann syntaktisch ... nicht verarbeitet werden").
+rem
+rem Karte: die Standardkarte aus Config\DefaultEngine.ini (Tools\karte.py).
+rem NICHT per WB_MAP aus Git Bash setzen - dort wird /Game/... zu
+rem C:\Program Files\Git\Game\... umgeschrieben, und der Lauf misst eine leere
+rem Ebene. Fuer eine andere Karte das ARGUMENT benutzen - die ini
+rem umzuschalten ist der Umweg, der eine laufende Messung ueberschreibt:
+rem
+rem   Tools\verify_anchor.cmd              -> Standardkarte (siehe oben)
+rem   Tools\verify_anchor.cmd Alkis31      -> /Game/Maps/WiesbadenCity_Alkis31
+rem   Tools\verify_anchor.cmd /Game/Maps/X -> genau diese Karte
+rem
+rem Der Name wird HIER zum Paketpfad gebaut und als WB_MAP an das Skript
+rem gereicht. So entsteht "/Game/..." nur in dieser Datei und nie auf der
+rem Kommandozeile von Git Bash, die es umschreiben wuerde. Jede gemessene
+rem Karte bekommt ihr eigenes Ergebnis - zwei Messungen sollen nebeneinander
+rem stehen koennen, nicht sich gegenseitig ersetzen:
+rem   Saved\Diagnose\anchor_verify.txt           (Standardkarte)
+rem   Saved\Diagnose\anchor_verify_<Karte>.txt  (mit Argument)
+rem
+rem Ergebnis: Saved\Diagnose\anchor_verify.txt (neu je Lauf)
+rem Log:      Saved\Logs\verify_anchor_<HIMMMS>.log
+rem Exit 0 = gueltige Messung, 2 = Skript fehlt, 3 = Engine ohne Ergebnis,
+rem 4 = keine Ergebnisdatei, 5 = falsche/leere Karte, 6 = keine Messzeile.
+rem Gemessen: ein Kartenname, den es nicht gibt ("Alkis99"), endet auf 3
+rem und NICHT auf 5 - das Skript bricht mit RuntimeError "Karte nicht
+rem geladen" ab und schreibt nichts, also greift 4/5 gar nicht erst. Die
+rem Ursache steht als Traceback im Log. 5 ist fuer eine Ergebnisdatei,
+rem die zwar da ist, aber keine geladene Karte nennt.
+
+set "PROJ=%~dp0.."
+set "UE=C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
+set "SCRIPT=%PROJ%\Tools\verify_anchor_state.py"
+
+rem -- 0. Messkarte: Argument, sonst die Standardkarte -----------------------
+set "WBMAP=%~1"
+if "%WBMAP%"=="" goto :ohne_argument
+rem Ein blosser Name wie "Alkis31" wird zum vollstaendigen Paketpfad. Der
+rem findstr-Test ist die einzige Stelle, an der "/Game/" in dieser Datei
+rem entsteht - auf der Kommandozeile wuerde Git Bash es umschreiben.
+echo %WBMAP%| findstr /C:"/Game/" > nul
+if not errorlevel 1 goto :argument_ist_pfad
+set "WBMAP=/Game/Maps/WiesbadenCity_%WBMAP%"
+:argument_ist_pfad
+rem Der Namenszusatz (%%~nxf ohne Ordner und ohne .umap) sorgt dafuer, dass
+rem zwei Karten zwei Dateien bekommen. Im Kommentar muss %% stehen:
+for %%f in ("%WBMAP%") do set "WBSUFFIX=_%%~nxf"
+goto :argument_geprueft
+:ohne_argument
+set "WBMAP="
+set "WBSUFFIX="
+:argument_geprueft
+if not "%WBMAP%"=="" set "WB_MAP=%WBMAP%"
+rem Zweite Umgebungsvariable: derselbe Namenszusatz fuer das Skript.
+rem Ohne dieses WB_SUFFIX schreibt das Skript nach anchor_verify.txt,
+rem waehrend die Batch-Datei unter dem Kartennamen sucht - der Lauf
+rem meldet dann "keine Ergebnisdatei", obwohl gemessen wurde.
+if not "%WBMAP%"=="" set "WB_SUFFIX=%WBSUFFIX%"
+
+set "ERGEBNIS=%PROJ%\Saved\Diagnose\anchor_verify%WBSUFFIX%.txt"
+rem Eigenes Log je Lauf (HIMMMS), nicht ein fester Name: haelt sich ein
+rem haengender Prozess an verify_anchor.log fest, blockiert er den naechsten
+rem Lauf an der Umleitung ("Der Prozess kann nicht auf die Datei zugreifen")
+rem und man glaubt, die Messung sei gescheitert. Genau das ist die Fehler-
+rem klasse, die dieses Skript abstellen soll - sie darf nicht im Werkzeug
+rem selbst stecken.
+set "STAMP=%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%"
+set "LOG=%PROJ%\Saved\Logs\verify_anchor_%STAMP%.log"
+
+rem -- 1. Vorbereiten: Skript da? altes Ergebnis weg? -------------------------
+if not exist "%SCRIPT%" goto :kein_skript
+if exist "%ERGEBNIS%" del /q "%ERGEBNIS%"
+
+rem -- 2. Lauf ----------------------------------------------------------------
+"%UE%" "%PROJ%\WiesbadenReal.uproject" -run=pythonscript -script="%SCRIPT%" -unattended -nop4 -nosplash -nullrhi > "%LOG%" 2>&1
+set "WB=%ERRORLEVEL%"
+
+rem -- 3. Pruefen. MASSGEBLICH IST DIE ERGEBNISDATEI, nicht der Exit-Code:
+rem       die Engine stuerzt beim Herunterfahren gelegentlich ab
+rem       (gemessen: UnrealEditor-MegascansPlugin.dll in dllmain_crt_process_
+rem       detach), nachdem die Messung laengst geschrieben ist. Ein gueltiges
+rem       Ergebnis wird deshalb nicht weggeworfen - aber der Absturz wird
+rem       laut gemeldet. Umgekehrt gilt ohne Ergebnis IMMER Fehler.
+if exist "%ERGEBNIS%" goto :ergebnis_pruefen
+if not "%WB%"=="0" goto :engine_fehler
+goto :kein_ergebnis
+
+:ergebnis_pruefen
+findstr /C:"Karte geladen: /Game/Maps/" "%ERGEBNIS%" >nul
+if errorlevel 1 goto :falsche_karte
+
+findstr /C:"LEERE Komponenten:" "%ERGEBNIS%" >nul
+if errorlevel 1 goto :keine_messung
+
+if not "%WB%"=="0" goto :messung_mit_abweichung
+
+rem -- 4. Befund auf den Bildschirm ------------------------------------------
+echo Werkzeug: %~nx0
+if not "%WBMAP%"=="" echo Messkarte:  %WBMAP%
+findstr /C:"Karte geladen:" "%ERGEBNIS%"
+findstr /C:"Zell-Actors" "%ERGEBNIS%"
+findstr /C:"LEERE Komponenten:" "%ERGEBNIS%"
+echo Ergebnis: %ERGEBNIS%
+echo Log:      %LOG%
+exit /b 0
+
+rem -- Sprungmarken ------------------------------------------------------------
+:messung_mit_abweichung
+rem Gueltiges Ergebnis, ungewoehnlicher Exit-Code. Beides sagen, nicht das eine
+rem verschweigen und das andere melden.
+echo Werkzeug: %~nx0
+if not "%WBMAP%"=="" echo Messkarte:  %WBMAP%
+findstr /C:"Karte geladen:" "%ERGEBNIS%"
+findstr /C:"Zell-Actors" "%ERGEBNIS%"
+findstr /C:"LEERE Komponenten:" "%ERGEBNIS%"
+echo Ergebnis: %ERGEBNIS%
+echo Log:      %LOG%
+echo.
+echo WARNUNG: Die Engine endete mit Exit %WB% - die Messung oben ist dennoch
+echo   gueltig. Typischer Fall: Absturz beim Herunterfahren (Megascans-Plugin),
+echo   nachdem das Ergebnis geschrieben war. Fuer die reine Messung zaehlt die
+echo   Datei; wenn der Absturz stoert, im Log nach "Fatal error" suchen.
+exit /b 0
+
+:kein_skript
+echo FEHLER: Skript fehlt - %SCRIPT%
+exit /b 2
+
+:engine_fehler
+echo FEHLER: Engine endete mit Exit %WB% und hat NICHTS geschrieben.
+echo   Gemessene Exit-Codes: 127, wenn die Engine das Skript nicht findet,
+echo   -1, wenn das Skript selbst abbrach (beides mit "Python script
+echo   executed with errors" im Log, dort steht auch der Grund).
+echo   Log: %LOG%
+exit /b 3
+
+:kein_ergebnis
+echo FEHLER: keine Ergebnisdatei unter %ERGEBNIS%
+echo   Der Lauf hat nichts geschrieben - meist ist die Karte nicht geladen.
+echo   Log: %LOG%
+exit /b 4
+
+:falsche_karte
+echo FEHLER: die Ergebnisdatei nennt keine geladene Karte - Kopf:
+findstr /C:"Karte geladen:" "%ERGEBNIS%"
+echo   Ein umgeschriebener Pfad bedeutet: es wurde eine leere Ebene gemessen.
+echo   Log: %LOG%
+exit /b 5
+
+:keine_messung
+echo FEHLER: die Ergebnisdatei enthaelt keine Zeile "LEERE Komponenten:".
+echo   Log: %LOG%
+exit /b 6

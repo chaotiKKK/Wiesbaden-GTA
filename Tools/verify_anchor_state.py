@@ -12,10 +12,32 @@ grosse Zellen. Dieser Lauf beantwortet das, OHNE zu speichern:
     Saved/Diagnose/anchor_verify.txt (Prints erreichen den Cmdlet-Stream
     nicht, siehe AGENTS.md).
 
-Aufruf (Ergebnis in Saved/Diagnose/anchor_verify.txt, Exit 0 = gelesen):
-  UnrealEditor-Cmd.exe <uproject> -run=pythonscript \
-      -script=Tools/verify_anchor_state.py
-Karte ueber WB_MAP (Default: die Standardkarte aus Config/DefaultEngine.ini).
+Aufruf - ueber das Skript, das die drei Fallen schon abhandelt
+(Ergebnis loeschen, echten Fehlschlag melden, Befund ausgeben):
+
+  Tools\\verify_anchor.cmd
+
+Handaufruf, falls noetig. DER SKRIPTPFAD MUSS VOLLSTAENDIG SEIN: die Engine
+loest einen relativen Pfad gegen Engine\\Binaries\\Win64 auf und meldet dann
+nur "Could not load Python file" (Exit 127, keine Ergebnisdatei):
+
+  "C:\\Program Files\\Epic Games\\UE_5.8\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe" ^
+    "C:\\freebuff\\WiesbadenReal_Sicherung\\WiesbadenReal\\WiesbadenReal.uproject" ^
+    -run=pythonscript ^
+    -script="C:\\freebuff\\WiesbadenReal_Sicherung\\WiesbadenReal\\Tools\\verify_anchor_state.py" ^
+    -unattended -nop4 -nosplash -nullrhi
+
+Karte: die Standardkarte aus Config/DefaultEngine.ini (Tools/karte.py). Ein
+WB_MAP ist nur erlaubt, wenn es WIRKLICH auf /Game/... beginnt - Git Bash
+schreibt "/Game/Maps/X" zu "C:/Program Files/Git/Game/Maps/X" um, load_level
+liefert dann False und dieser Lauf misst die leere Ebene /Temp/Untitled_0.
+Deshalb prueft main() die geladene Karte und bricht ab, statt eine Zahl zu
+liefern, die nichts bedeutet (genau so entstand der wertlose "0 von 0").
+
+Ergebnis: Saved/Diagnose/anchor_verify.txt (bzw. anchor_verify_<Karte>.txt
+beim Aufruf mit Kartenargument - Tools\verify_anchor.cmd Alkis31).
+Schreibt dieses Skript nichts,
+ist der Lauf FEHLGESCHLAGEN - das ist Absicht, nicht ein Fehler.
 """
 
 import os
@@ -31,8 +53,17 @@ MAP = os.environ.get("WB_MAP", standard_karte_pfad())
 EAS = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 LES = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 
+# Jede gemessene Karte bekommt ihr eigenes Ergebnis: verify_anchor.cmd
+# haengt den Kartennamen an (WB_SUFFIX), damit zwei Messungen
+# nebeneinander bestehen koennen, statt sich gegenseitig zu ersetzen.
+# Ohne Argument bleibt der alte Name. Unerwartete Zeichen fliegen raus:
+# der Wert stammt aus einem Kartennamen und darf keinen Pfad bilden.
+SUFFIX = "".join(c for c in os.environ.get("WB_SUFFIX", "")
+                  if c.isalnum() or c == "_")
+
 RESULT_FILE = os.path.join(
-    unreal.Paths.project_saved_dir(), "Diagnose", "anchor_verify.txt")
+    unreal.Paths.project_saved_dir(), "Diagnose",
+    "anchor_verify%s.txt" % SUFFIX)
 
 
 def _dump_component(log, comp):
@@ -70,9 +101,46 @@ def bounds_reaches_origin(actor):
     return abs(origin.x) <= extent.x and abs(origin.y) <= extent.y
 
 
+def geladener_kartenpfad():
+    """Der Paketpfad der gerade offenen Karte, oder "" wenn nichts offen ist.
+
+    Bewusst ueber mehrere Wege: 5.8 exponiert je nach Aufrufkontext nicht
+    denselben Weg, und ein Fehler hier darf die Messung nicht zerstoeren -
+    er darf nur bedeuten, dass nichts geladen ist.
+    """
+    try:
+        level = unreal.get_editor_subsystem(
+            unreal.LevelEditorSubsystem).get_current_level()
+        if level is not None:
+            return level.get_path_name()
+    except Exception:
+        pass
+    try:
+        return unreal.EditorLevelLibrary.get_editor_world().get_path_name()
+    except Exception:
+        return ""
+
+
 def main():
     os.makedirs(os.path.dirname(RESULT_FILE), exist_ok=True)
+    # Auch hier gilt: die Datei gehoert zu diesem Lauf oder zu keinem. Ohne
+    # dieses Loeschen laesst ein abgebrochener Direktaufruf das Ergebnis des
+    # Vortags als Messung stehen (das Skript schreibt erst ganz am Ende).
+    if os.path.exists(RESULT_FILE):
+        os.remove(RESULT_FILE)
     LES.load_level(MAP)
+
+    # DIE eine Probe, an der der Lauf steht. Ohne sie schreibt dieses Skript
+    # eine Zahl, die gemessen aussieht und nichts bedeutet: bei leerer Ebene
+    # meldet das Skript 0 Zell-Actors und 0 leere Komponenten am Ursprung -
+    # das haette wie ein vollstaendig geheiltes Weltpartition ausgesehen.
+    offen = geladener_kartenpfad()
+    if MAP.lower() not in offen.lower():
+        raise RuntimeError(
+            "Karte nicht geladen: gewollt %s, offen %r. Haeufigste Ursache: "
+            "WB_MAP kam aus Git Bash und wurde zu 'C:/Program Files/Git/Game/"
+            "...' umgeschrieben - dann WB_MAP weglassen und die Karte aus "
+            "Config/DefaultEngine.ini nehmen (Tools/karte.py)." % (MAP, offen))
     log("Karte geladen: %s" % MAP)
 
     descs = unreal.WorldPartitionBlueprintLibrary.get_actor_descs()

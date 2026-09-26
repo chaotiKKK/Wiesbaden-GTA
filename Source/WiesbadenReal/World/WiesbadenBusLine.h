@@ -15,11 +15,27 @@
  */
 namespace WiesbadenBusLine
 {
-	/** Route als Halte-Bogenlaengen (cm, aufsteigend) + Gesamtlaenge der Polylinie. */
+	/**
+	 * Route als Halte-Bogenlaengen (cm, aufsteigend) + Gesamtlaenge der Polylinie.
+	 *
+	 * RUECKWEG (optional, 25.09.): eine EIGENE Polylinie mit eigenen Halten fuer
+	 * die Gegenrichtung (OSM-Relation der Rueckfahrt). Ohne ihn faehrt der Bus
+	 * die Hinweg-Linie rueckwaerts - auf getrennten Richtungsfahrbahnen dann auf
+	 * der falschen, und die Halte der Gegenrichtung stand auf der falschen
+	 * Strassenseite. Der Rueckweg beginnt am Ende des Hinwegs (Anschluss am
+	 * fernen Ende) und endet an dessen Anfang: seine letzte Halte ist der
+	 * Ausstieg (Pause = Wendezeit), danach faehrt der Bus leer zur Einstiegs-
+	 * haltestelle = Halte 0 des Hinwegs (am Nordfriedhof: Linkskurve).
+	 */
 	struct FBusRoute
 	{
 		TArray<double> StopArcCm;
 		double TotalLengthCm = 0.0;
+		/** Halte auf dem Rueckweg (Bogenlaenge auf SEINER Linie, aufsteigend). */
+		TArray<double> ReturnStopArcCm;
+		double ReturnLengthCm = 0.0;
+
+		bool HasReturnLeg() const { return ReturnStopArcCm.Num() >= 2 && ReturnLengthCm > 0.0; }
 	};
 
 	/** Momentaner Fahrzustand eines Busses. */
@@ -27,6 +43,9 @@ namespace WiesbadenBusLine
 	{
 		double ArcLengthCm = 0.0;   // Position entlang der Polylinie
 		bool bForward = true;       // Hinrichtung true, Rueckrichtung false
+		/** Auf dem eigenen Rueckweg (FBusRoute::HasReturnLeg): ArcLengthCm gilt dann
+		 *  auf der Rueckweg-Linie, in IHRER Richtung (aufsteigend). */
+		bool bReturnPath = false;
 		bool bDwelling = false;     // haelt gerade an einer Halte
 		/** Restsekunden der laufenden Verweilphase (0, wenn keine laeuft). An
 		 *  der Endhalte ist das die Wendezeit - nur so ist im Log nachweisbar,
@@ -198,6 +217,14 @@ namespace WiesbadenBusLine
 	 * als naechste (Eps). Am/hinter dem Terminus die Endhalte (Hinfahrt) bzw.
 	 * Halt 0 (Rueckfahrt). -1 bei < 2 Halten. Datenrein fuer die Halteansagen.
 	 */
+	/**
+	 * Fahrzeit ab Abfahrt am Anfangspunkt bis zur Halte ReturnStopIndex des
+	 * RUECKWEGS (Hinfahrt samt Wendezeit, Anschluss, Rueckweg-Halte davor).
+	 * Nur bei HasReturnLeg(); sonst 0.
+	 */
+	WIESBADENREAL_API double SecondsToReturnStop(const FBusRoute& Route, double CruiseSpeedCmS,
+		double StopDwellSeconds, double TerminusDwellSeconds, int32 ReturnStopIndex);
+
 	WIESBADENREAL_API int32 NextStopIndex(double ArcLengthCm, bool bForward,
 		const TArray<double>& StopArcCm);
 }

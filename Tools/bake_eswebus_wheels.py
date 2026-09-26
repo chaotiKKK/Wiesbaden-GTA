@@ -4,6 +4,14 @@ The source GLB keeps each wheel's tire and hub in separate Tripo objects.  The
 old bake joined every object, so wheel rotation in Unreal was impossible.  This
 script leaves that source and the existing SM_Bus untouched and writes two new
 GLBs for Tools/import_eswebus_wheels.py.
+
+ONLY THE TYRES are wheel parts (25.09.). The Tripo source puts a mudguard /
+wheel-arch piece next to each tyre (e.g. tripo_part_34: 66 cm wide, centre
+62 cm high). The old bake counted those as wheel parts: they vanished from
+the body AND the donor wheel (tyre + mudguard) turned about the centre of
+both - 3.8 cm too high and sideways off the hub, with the mudguard spinning
+along. Measured tyre centres (m, body frame): front +-0.868 / 2.545, middle
++-0.86 / -0.452, rear +-0.846 / -2.725, all at z 0.344; tyre radius 0.342.
 """
 
 import bpy
@@ -14,21 +22,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'Data/Raw/Bus/eswe_bus.glb'
 DEST = ROOT / 'Data/Raw/Bus'
+# Tyres (with rim) only - the mudguards 34/32/35/28/29/27 stay on the body.
 WHEEL_PARTS = {
-    'tripo_part_7', 'tripo_part_17', 'tripo_part_34',  # front axle
-    'tripo_part_12', 'tripo_part_18', 'tripo_part_28',
-    'tripo_part_32', 'tripo_part_35',                   # middle axle
-    'tripo_part_6', 'tripo_part_9', 'tripo_part_27',
-    'tripo_part_29',                                   # rear axle
+    'tripo_part_17', 'tripo_part_7',    # front axle
+    'tripo_part_18', 'tripo_part_12',   # middle axle
+    'tripo_part_6', 'tripo_part_9',     # rear axle
 }
-WHEEL_DONOR = {'tripo_part_17', 'tripo_part_34'}
+WHEEL_DONOR = {'tripo_part_17'}
 WHEEL_GROUPS = {
     'front_left': WHEEL_DONOR,
     'front_right': {'tripo_part_7'},
-    'middle_left': {'tripo_part_18', 'tripo_part_32', 'tripo_part_35'},
-    'middle_right': {'tripo_part_12', 'tripo_part_28'},
-    'rear_left': {'tripo_part_6', 'tripo_part_29'},
-    'rear_right': {'tripo_part_9', 'tripo_part_27'},
+    'middle_left': {'tripo_part_18'},
+    'middle_right': {'tripo_part_12'},
+    'rear_left': {'tripo_part_6'},
+    'rear_right': {'tripo_part_9'},
 }
 
 

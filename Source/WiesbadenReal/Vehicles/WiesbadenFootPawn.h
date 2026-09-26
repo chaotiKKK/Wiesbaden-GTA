@@ -190,7 +190,38 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "0.0", ClampMax = "40.0"))
 	float EgoShoulderOffsetCm = 18.0f;
 
-	/** Waffe waehlen (Tasten 1-9); rueckwaerts zaehlt als Abwahl des Rings. */
+	/** Armlaenge der Schulterkamera in cm (stand frueher fest 300 im Code). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "0.0"))
+	float ShoulderArmLengthCm = 300.0f;
+
+	// -- Zielen (ADS) & Mausrad ---------------------------------------------
+
+	/**
+	 * Zoom-Stufe je Mausradklick im Zielmodus. Die OBERGRENZE steht pro
+	 * Waffe in der Spec-Tabelle (AdsZoomMax): ein Scharfschuetzengewehr zoomt
+	 * weiter als eine Schrotflinte - zwei Stellen sollen nicht ueber dieselbe
+	 * Zahl bestimmen.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "0.05"))
+	float AdsZoomStep = 0.25f;
+
+	/** Armlaenge im Zielmodus als Anteil der normalen (Kamera rueckt heran). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float AdsArmLengthScale = 0.55f;
+
+	/** Zielt der Spieler gerade (rechte Maustaste gehalten)? (HUD, Pruefung.) */
+	bool IsAiming() const { return bAiming; }
+
+	/**
+	 * Zoom-Stufe im Zielmodus (1 = kein Zoom). Pruef-Zugang: das D-Pad
+	 * ist am Gamepad der Mausrad-Weg, und im Zielmodus entscheidet
+	 * RouteMausrad genau auf diese Stufe. Ohne den Zugang laesst sich am
+	 * laufenden Spiel nicht unterscheiden, ob das D-Pad den Zoom, die
+	 * Waffenwahl oder gar nichts getroffen hat.
+	 */
+	float GetAdsZoomLevel() const { return AdsZoomLevel; }
+
+	/** Waffe waehlen (Tasten 1-8 + Mausrad); rueckwaerts zaehlt als Abwahl. */
 	void SelectWeapon(int32 Index);
 
 	/** Schaltet Schulter-/Ego-Ansicht um (Taste C, Flankenerkennung). */
@@ -297,8 +328,17 @@ private:
 	/** Uebernimmt Kameraposition, Sichtbarkeiten und Waffenlage je Modus. */
 	void ApplyCameraMode();
 
-	/** Tasten 1-9 abfragen und Waffe umschalten (Flanken je Taste). */
+	/** Tasten 1-8 abfragen und Waffe umschalten (Flanken je Taste). */
 	void PollWeaponKeys(const APlayerController* PC);
+
+	/**
+	 * Zielen und Mausrad: rechte Maustaste gehalten = ADS (Zoom, halbe
+	 * Streuung); im Zielmodus zoomt das Mausrad, sonst wechselt es die Waffe.
+	 */
+	void PollAimAndWheel(const APlayerController* PC);
+
+	/** Wendet den Zielzustand an: Kamera-Zoom, Armlaenge, Streuung. */
+	void ApplyAimState();
 
 	/** Haelt die Figur auf dem Boden. */
 	void FollowGround(float DeltaSeconds);
@@ -346,6 +386,14 @@ private:
 	/** Flankenerkennung der Sprungtaste. */
 	bool bJumpKeyHeld = false;
 
+	/** Flanken der Gamepad-Schultertasten (Waffenwechsel RB/LB). */
+	bool bWaffeVorHeld = false;
+	bool bWaffeZurueckHeld = false;
+
+	/** Flanken des D-Pads hoch/runter (Klicks wie das Mausrad). */
+	bool bPadUpHeld = false;
+	bool bPadDownHeld = false;
+
 	/** Bodenabfrage: Ort nach der letzten und Restzeit der Versetz-Schonfrist. */
 	FVector LastGroundCheckLocation = FVector(0.0, 0.0, -1e9);
 	float TeleportGraceSeconds = 0.0f;
@@ -363,8 +411,20 @@ private:
 	/** Flankenerkennung der C-Taste. */
 	bool bEgoKeyHeld = false;
 
-	/** Zuletzt gehaltene Zifferntasten 1-9 (Flanken je Taste). */
-	bool WeaponKeyHeld[9] = {};
+	/** Zuletzt gehaltene Zifferntasten 1-8 (Flanken je Taste). */
+	bool WeaponKeyHeld[8] = {};
+
+	/** Grund-FOV der Kamera in Grad - gemerkt beim Start, ADS teilt es. */
+	float BaseCameraFOV = 90.0f;
+
+	/** Aktueller Zoomfaktor im Zielmodus (1.0 = kein Zoom). */
+	float AdsZoomLevel = 1.0f;
+
+	/** Zielmodus aktiv (rechte Maustaste gehalten)? */
+	bool bAiming = false;
+
+	/** Angehaeuftes Mausrad-Signal: die Achse meldet ein Delta je Bild. */
+	float WheelAccumulator = 0.0f;
 
 	/** Restzeit des laufenden Saegehiebs; 0 = kein Hieb. */
 	float SwingRemaining = 0.0f;

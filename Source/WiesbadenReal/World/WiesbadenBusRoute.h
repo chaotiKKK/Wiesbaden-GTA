@@ -197,7 +197,17 @@ private:
 	void BuildGates();
 	WiesbadenBusLine::FBusState ComputeHeldState(int64 VehicleId, double RawElapsed,
 		float DeltaSeconds, bool bPeriodic, bool& bOutFinished);
-	bool RedGateAhead(double InArcCm, const FVector& Dir, bool bForward, double& OutStopArcCm) const;
+	bool RedGateAhead(double InArcCm, const FVector& Dir, bool bForward, double& OutStopArcCm,
+		bool bReturnPath = false) const;
+
+	// Weg, Bogenlaengen und Halte fuer einen Fahrzustand: auf dem eigenen
+	// Rueckweg (FBusState::bReturnPath) dessen Linie, sonst der Hinweg. Auf dem
+	// Rueckweg faehrt der Bus seine Linie VORWAERTS (aufsteigende Bogenlaenge).
+	const TArray<FVector>& PathFor(const WiesbadenBusLine::FBusState& St) const;
+	const TArray<double>& ArcFor(const WiesbadenBusLine::FBusState& St) const;
+	const TArray<double>& StopsFor(const WiesbadenBusLine::FBusState& St) const;
+	double LengthFor(const WiesbadenBusLine::FBusState& St) const;
+	static bool AlongPath(const WiesbadenBusLine::FBusState& St) { return St.bReturnPath || St.bForward; }
 
 	/** Uebernimmt aus der (gemeinsam gelesenen) Liniendatei, was dieser Actor
 	 *  braucht: Liniennummer, Takt, Wendezeit, Zielschilder. */
@@ -296,6 +306,8 @@ private:
 	// Ampel-Gates entlang der Linie + Rotlicht-Haltezeit je Kurs.
 	struct FBusGate { double ArcCm = 0.0; int32 LightIndex = 0; };
 	TArray<FBusGate> Gates;
+	/** Ampeln auf dem eigenen Rueckweg (Bogenlaenge auf dessen Linie). */
+	TArray<FBusGate> ReturnGates;
 	bool bGatesBuilt = false;
 	// Ampel-Haltezeit je WAGEN (im Dauerbetrieb umlaufend, auf die Wendezeit
 	// begrenzt - sonst wuerde ein Wagen ueber Stunden immer spaeter).
@@ -418,6 +430,10 @@ private:
 	bool RoadSurfaceZ(double X, double Y, double MaxDistCm, double HintZ, double& OutZ,
 		double* OutRejectedDevCm = nullptr);
 
+	/** Hoehe der waagerecht naechsten Spur (ohne Hoehenvergleich) - Rueckfall,
+	 *  wenn der Strahl von oben eine Ueberbauung trifft. */
+	bool NearestLaneZ(double X, double Y, double MaxDistCm, double& OutZ);
+
 	/** Suchradius Spur (cm): eine Spurbreite links/rechts, nicht mehr. */
 	float RoadReachCm = 900.0f;
 	/** Zulaessiger Hoehenabstand Spur <-> Gelaende-Trace (cm). Mehr = grob falsche
@@ -429,6 +445,12 @@ private:
 	TArray<FVector> LanePt;        // alle Stuetzpunkte aller Spuren
 	TArray<int32> LaneNext;        // Folgepunkt auf DERSELBEN Spur (INDEX_NONE am Ende)
 	TMap<int64, TArray<int32>> LaneCells;   // 200-m-Zelle -> Punktindizes
+
+	/** Rechte Fahrbahnkante je Halte (cm rechts der Linie, <0 = unbekannt),
+	 *  Hinweg bzw. eigener Rueckweg - siehe WiesbadenBusLineFile::RightKerbOffsetCm.
+	 *  Der haltende Bus steht mit seiner rechten Seite 25 cm davor. */
+	TArray<double> StopKerbCm;
+	TArray<double> ReturnStopKerbCm;
 
 	/**
 	 * Abstand (cm) zur naechsten Spur, deren Spursegment in TravelDir zeigt -

@@ -22,9 +22,11 @@
 /** Gruppe, unter der eine Zeile im Menue steht. */
 enum class EWbOptionGroup : uint8
 {
-	Grafik,
 	Ton,
+	Grafik,
 	Steuerung,
+	Bild,
+	Debug,
 	Spielwelt,
 	MAX
 };
@@ -37,7 +39,7 @@ enum class EWbOptionKind : uint8
 	Lautstaerke,    // 0..1, Schritt 5 %
 	Faktor,         // 0,25..3,00, Schritt 0,25 (Maus-Empfindlichkeit)
 	Schalter,       // 0 = aus, 1 = an
-	Anteil,         // 0..1, Schritt 10 % (Verkehrsdichte)
+	Anteil,         // 0..1, Schritt 10 % (Verkehrsdichte, Aufloesungsskalierung)
 	Tageszeit,      // -1 = Systemzeit, sonst 0..23 Uhr
 	MAX
 };
@@ -66,6 +68,12 @@ enum class EWbOptionId : uint8
 	Effekte,
 	Texturen,
 	Bildratengrenze,
+	Vollbild,
+	VSync,
+	Aufloesungsskalierung,
+	FpsAnzeige,
+	StatEinblendung,
+	KollisionsOverlay,
 	/** Eine Zeile je Bus des Mischpults - WELCHER, sagt FWbOptionRow::BusIndex. */
 	TonBus,
 	MausEmpfindlichkeit,

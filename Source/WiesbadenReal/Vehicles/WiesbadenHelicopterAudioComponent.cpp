@@ -18,6 +18,14 @@ namespace
 {
 	constexpr int32 ProceduralSampleRate = 44100;
 	constexpr int32 SamplesPerPush = 2048;
+
+	// Bezugsdrehzahlen der Ka-52-Loop-Assets (Tools/make_ka52_audio.py).
+	// Konstant und keine UPROPERTYs: sie gehoeren zum Klang, nicht zur
+	// Einstellung. Aendert man sie hier, ohne die WAV neu zu bauen, liegt
+	// der Ton bei Reiseflug falsch - und genau das war der Fehler, den die
+	// alten Teiler 560/3800 machten.
+	constexpr float RotorBezugsRpm = 300.0f;
+	constexpr float TriebwerkBezugsRpm = 600.0f;
 }
 
 UWiesbadenHelicopterAudioComponent::UWiesbadenHelicopterAudioComponent()
@@ -52,12 +60,20 @@ void UWiesbadenHelicopterAudioComponent::CreateAudioSources()
 	EngineAudio->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
 	EngineAudio->RegisterComponent();
 
+	// Der Wind hat seine eigene Quelle: er haengt an der Geschwindigkeit
+	// und darf deshalb nicht mit der Drehzahl hoch- und heruntergezogen
+	// werden wie Rotor und Turbine.
+	WindAudio = NewObject<UAudioComponent>(Owner, TEXT("WindAudio"));
+	WindAudio->AttachToComponent(this, FAttachmentTransformRules::KeepRelativeTransform);
+	WindAudio->RegisterComponent();
+
 	// Rotor + Turbine in den Fahrzeug-Bus des Mischpults einordnen (nullptr, falls
 	// die Mix-Assets fehlen -> dann ohne Bus, kein Fehler).
 	if (USoundClass* VehicleBus = UWiesbadenAudioSubsystem::LoadBusSoundClass(EWbAudioBus::Vehicle))
 	{
 		RotorAudio->SoundClassOverride = VehicleBus;
 		EngineAudio->SoundClassOverride = VehicleBus;
+		WindAudio->SoundClassOverride = VehicleBus;
 	}
 
 	ApplyMasterVolume();
@@ -65,6 +81,10 @@ void UWiesbadenHelicopterAudioComponent::CreateAudioSources()
 	// Ausbreitung: weit (Rotor/Turbine tragen) inkl. Occlusion + Hall-Send.
 	WiesbadenAudioPropagation::ConfigureSource(RotorAudio, EWbAudioRange::Far);
 	WiesbadenAudioPropagation::ConfigureSource(EngineAudio, EWbAudioRange::Far);
+	// Der Wind ist an der eigenen Quelle am lautesten und verliert mit der
+	// Entfernung zuerst - sonst fliegt man mit ausgeschaltetem Triebwerk
+	// schneller, als der eigene Fahrtwind hoeren laesst.
+	WiesbadenAudioPropagation::ConfigureSource(WindAudio, EWbAudioRange::Mid);
 
 	if (bUseAssets)
 	{
@@ -78,6 +98,18 @@ void UWiesbadenHelicopterAudioComponent::CreateAudioSources()
 			EngineAudio->SetSound(EngineSound);
 			EngineAudio->Play();
 		}
+		// Fehlt der Wind, ist das kein Fehler: er ist zusaetzlich zum
+		// Rotor, nicht Voraussetzung fuer den Start.
+		if (WindSound)
+		{
+			WindAudio->SetSound(WindSound);
+			WindAudio->Play();
+		}
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("Flugsound-Assets aktiv (Rotor %s, Triebwerk %s, Wind %s)."),
+			RotorSound ? TEXT("ja") : TEXT("nein"),
+			EngineSound ? TEXT("ja") : TEXT("nein"),
+			WindSound ? TEXT("ja") : TEXT("nein"));
 	}
 	else if (bUseProceduralFallback)
 	{
@@ -135,6 +167,10 @@ void UWiesbadenHelicopterAudioComponent::ApplyMasterVolume()
 	{
 		EngineAudio->SetVolumeMultiplier(Volume);
 	}
+	if (WindAudio)
+	{
+		WindAudio->SetVolumeMultiplier(Volume);
+	}
 }
 
 void UWiesbadenHelicopterAudioComponent::UpdateAssetAudio()
@@ -145,7 +181,12 @@ void UWiesbadenHelicopterAudioComponent::UpdateAssetAudio()
 	}
 
 	// Asset-Parameter: Pitch folgt der Drehzahl, Lautstaerke der Blattlast.
-	// Groesserer Divisor = tiefere Tonhoehe (war zu hoch/schrill).
+	// Die Teiler sind die Bezugsdrehzahlen der Ka-52-Loops aus
+	// Tools/make_ka52_audio.py: 300 rpm Rotor, 600 rpm Triebwerk. Bei
+	// Reiseflug (350 rpm / 700 rpm) liegt der Pitch knapp ueber 1, der Ton
+	// bleibt also, wie er gebaut wurde. Mit den aelteren Teilern 560 und
+	// 3800 lag er bei Reiseflug eine Oktave zu tief und klang wie ein
+	// Hubschrauber im Leerlauf auf 200 m.
 	// Doppler ueber die Relativbewegung - der lange gemerkte ForwardSpeed-
 	// Parameter ist damit verbraucht: Vorbeifahrt klingt auf und ab.
 	APawn* ListenerPawn = nullptr;
@@ -158,14 +199,24 @@ void UWiesbadenHelicopterAudioComponent::UpdateAssetAudio()
 	}
 	const float Doppler = WiesbadenAudioPropagation::ComputeDopplerForActors(GetOwner(), ListenerPawn);
 
-	const float RotorPitch = FMath::Max(Params.MainRotorRpm, 0.0f) / 560.0f;
-	RotorAudio->SetPitchMultiplier(RotorPitch * Doppler);
+	const float RotorPitch = FMath::Max(Params.MainRotorRpm, 0.0f) / RotorBezugsRpm;
+	RotorAudio->SetPitchMultiplier(FMath::Max(RotorPitch, 0.01f) * Doppler);
 	RotorAudio->SetVolumeMultiplier(
 		MasterVolume * (0.3f + 0.7f * Params.Collective));
 
-	const float EnginePitch = FMath::Max(Params.EngineRpm, 0.0f) / 3800.0f;
-	EngineAudio->SetPitchMultiplier(EnginePitch);
+	const float EnginePitch = FMath::Max(Params.EngineRpm, 0.0f) / TriebwerkBezugsRpm;
+	EngineAudio->SetPitchMultiplier(FMath::Max(EnginePitch, 0.01f));
 	EngineAudio->SetVolumeMultiplier(Params.bEngineRunning ? MasterVolume : 0.0f);
+
+	// Wind: nur Geschwindigkeit, kein Pitch. Bei 80 m/s (288 km/h) voll.
+	if (WindAudio)
+	{
+		const float Anteil = FMath::Clamp(Params.ForwardSpeedMetersPerS
+			/ FMath::Max(WindFullSpeedMetersPerS, 1.0f), 0.0f, 1.0f);
+		// Quadriert: ein linearer Anteil hiess im Reiseflug fast nichts und
+		// kam erst kurz vor dem Tempolimit auf.
+		WindAudio->SetVolumeMultiplier(MasterVolume * (0.08f + 0.62f * Anteil * Anteil));
+	}
 }
 
 void UWiesbadenHelicopterAudioComponent::PushProceduralAudio()

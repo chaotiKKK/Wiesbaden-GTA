@@ -120,6 +120,10 @@ struct WIESBADENREAL_API FRoadAccessOverride
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access", meta = (ClampMin = "100.0"))
 	double SearchRadiusCm = 5000.0;
 
+	/** Leer: naechster Abschnitt. Sonst nur diese Strasse; kein stiller Rueckfall auf einen Weg. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access")
+	FString PreferredStreetName;
+
 	/** Breite der abgesenkten Bordsteinstelle fuer Fahrzeuge. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access", meta = (ClampMin = "100.0"))
 	double GarageWidthCm = 700.0;
@@ -239,6 +243,14 @@ struct WIESBADENREAL_API FRoadGenerationSettings
 	/** Hoehe der Markierungen ueber der Fahrbahn in cm. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
 	double MarkingOffsetCm = 1.5;
+
+	/**
+	 * Gepflasterte Wendeplatte an jeder Sackgasse (Spur ohne Nachfolger). Sie
+	 * deckt die Wendeschleife des Verkehrs ab - ohne sie fuhren wendende Autos
+	 * ueber die Wiese. Siehe FRoadTurningPlate.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
+	bool bGenerateTurningPlates = true;
 
 	/** Zusaetzlicher Kreuzungsradius ueber die Armbreiten hinaus, in cm. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
@@ -547,6 +559,9 @@ private:
 		int32& OutRestrictedCount) const;
 
 	/** Wertet type=restriction-Relationen aus (Abbiegeverbote). */
+	/** Wendeplatten an allen Spuren ohne Nachfolger (nach ConnectLanes). */
+	void BuildTurningPlates(FRoadNetwork& Network) const;
+
 	void CollectTurnRestrictions(
 		const FOSMDataSet& DataSet,
 		TSet<TPair<int64, int64>>& OutForbiddenWayPairs) const;

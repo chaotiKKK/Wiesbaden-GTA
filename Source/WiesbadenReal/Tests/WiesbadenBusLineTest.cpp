@@ -464,3 +464,63 @@ bool FWiesbadenBusNextStopTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWiesbadenBusReturnLegTest,
+	"WiesbadenReal.Traffic.BusLine.Rueckweg",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FWiesbadenBusReturnLegTest::RunTest(const FString& Parameters)
+{
+	using namespace WiesbadenBusLine;
+	// Eigener Rueckweg (Gegenrichtungs-Relation): Halte 500/2000/3500 cm auf
+	// einer 4000 cm langen eigenen Linie; die letzte ist der Ausstieg (Pause),
+	// das Ende der Linie liegt an der Einstiegshaltestelle = Halt 0 des Hinwegs.
+	FBusRoute R = MakeRoute();
+	R.ReturnStopArcCm = { 500.0, 2000.0, 3500.0 };
+	R.ReturnLengthCm = 4000.0;
+	TestTrue(TEXT("Rueckweg erkannt"), R.HasReturnLeg());
+	const double v = 500.0, dwell = 2.0, term = 4.0;
+	// Hin: seg(2) dwell(2) seg(4) Wende(4) = 12 s
+	// Rueck: Anschluss(1) Einstieg(2) seg(3) dwell(2) seg(3) AUSSTIEG+Pause(4)
+	//        Leerfahrt zur Einstiegshaltestelle(1) Einsteigen(2) = 18 s
+	TestTrue(TEXT("Umlauf 30 s"), FMath::IsNearlyEqual(RoundTripSeconds(R, v, dwell, term), 30.0, 0.01));
+
+	const FBusState Anschluss = EvaluateRoundTrip(12.5, R, v, dwell, term);
+	TestTrue(TEXT("nach der Wende auf der Rueckweg-Linie, in IHRER Richtung aufsteigend"),
+		Anschluss.bReturnPath && !Anschluss.bForward && !Anschluss.bDwelling
+		&& FMath::IsNearlyEqual(Anschluss.ArcLengthCm, 250.0, 1.0));
+	const FBusState Einstieg = EvaluateRoundTrip(14.0, R, v, dwell, term);
+	TestTrue(TEXT("haelt an der ersten Rueckweg-Halte"),
+		Einstieg.bReturnPath && Einstieg.bDwelling && FMath::IsNearlyEqual(Einstieg.ArcLengthCm, 500.0, 1.0));
+	const FBusState Pause = EvaluateRoundTrip(25.0, R, v, dwell, term);
+	TestTrue(TEXT("am Ausstieg die volle Wendezeit als Pause"),
+		Pause.bReturnPath && Pause.bDwelling && FMath::IsNearlyEqual(Pause.ArcLengthCm, 3500.0, 1.0)
+		&& FMath::IsNearlyEqual(Pause.DwellTotalSeconds, term, 0.01));
+	const FBusState Leer = EvaluateRoundTrip(27.5, R, v, dwell, term);
+	TestTrue(TEXT("danach Leerfahrt weiter auf der Rueckweg-Linie"),
+		Leer.bReturnPath && !Leer.bDwelling && FMath::IsNearlyEqual(Leer.ArcLengthCm, 3750.0, 1.0));
+	const FBusState Abfahrt = EvaluateRoundTrip(29.0, R, v, dwell, term);
+	TestTrue(TEXT("am Ende steht er an Halt 0 des Hinwegs (Einstieg)"),
+		!Abfahrt.bReturnPath && Abfahrt.bForward && Abfahrt.bDwelling
+		&& FMath::IsNearlyEqual(Abfahrt.ArcLengthCm, 0.0, 1.0));
+	const FBusState Neu = EvaluateRoundTrip(31.0, R, v, dwell, term);
+	TestTrue(TEXT("neuer Umlauf faehrt den Hinweg"),
+		!Neu.bReturnPath && Neu.bForward && FMath::IsNearlyEqual(Neu.ArcLengthCm, 500.0, 1.0));
+
+	// Die Tafel der Gegenrichtung muss dieselben Zeiten nennen, die der Bus faehrt.
+	const double Expected[3] = { 13.0, 18.0, 23.0 };
+	for (int32 j = 0; j < 3; ++j)
+	{
+		const double T = SecondsToReturnStop(R, v, dwell, term, j);
+		TestTrue(FString::Printf(TEXT("Rueckweg-Halte %d nach %.0f s"), j, Expected[j]),
+			FMath::IsNearlyEqual(T, Expected[j], 0.01));
+		const FBusState At = EvaluateRoundTrip(T + 0.01, R, v, dwell, term);
+		TestTrue(FString::Printf(TEXT("Rueckweg-Halte %d: dort steht der Bus dann wirklich"), j),
+			At.bReturnPath && At.bDwelling && FMath::IsNearlyEqual(At.ArcLengthCm, R.ReturnStopArcCm[j], 1.0));
+	}
+	FBusRoute Ohne = MakeRoute();
+	TestTrue(TEXT("ohne Rueckweg: 0 und alter Umlauf (24 s)"),
+		SecondsToReturnStop(Ohne, v, dwell, term, 1) == 0.0
+		&& FMath::IsNearlyEqual(RoundTripSeconds(Ohne, v, dwell, term), 24.0, 0.01));
+	return true;
+}

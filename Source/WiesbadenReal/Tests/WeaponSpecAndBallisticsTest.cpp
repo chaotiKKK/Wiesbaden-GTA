@@ -13,8 +13,10 @@ bool FWeaponSpecTest::RunTest(const FString& Parameters)
 {
 	const TArray<FWiesbadenWeaponSpec>& Table = WiesbadenWeapons::Table();
 
-	// Neun Eintraege: 8 Waffen + Kettensaege (Entwurf 2026-09).
-	TestEqual(TEXT("9 Waffen"), Table.Num(),
+	// Zwoelf Eintraege: die neun aus dem Entwurf 2026-09 plus Laserpistole,
+	// Raketenwerfer und Plasmacutter (Auftrag 26.09.2026). Die Sollzahl kommt
+	// aus dem Enum - wer eine Waffe anhaengt, vergisst hier nichts.
+	TestEqual(TEXT("12 Waffen"), Table.Num(),
 		static_cast<int32>(EWiesbadenWeaponId::Count));
 
 	// Nahkampf-Flag: nur Lichtschwert und Kettensaege.
@@ -32,12 +34,19 @@ bool FWeaponSpecTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Granatwerfer explosiv"), Grenade.bExplosive);
 	TestEqual(TEXT("Eigenschaden = Blast"), Grenade.SelfDamage, Grenade.BlastDamage);
 
+	// Explosiv sind zwei: der Granatwerfer und der Raketenwerfer.
 	int32 ExplosiveCount = 0;
 	for (const FWiesbadenWeaponSpec& S : Table)
 	{
 		ExplosiveCount += S.bExplosive ? 1 : 0;
 	}
-	TestEqual(TEXT("Genau eine explosive Waffe"), ExplosiveCount, 1);
+	TestEqual(TEXT("Zwei explosive Waffen"), ExplosiveCount, 2);
+	TestTrue(TEXT("Raketenwerfer explosiv"),
+		WiesbadenWeapons::Spec(
+			static_cast<int32>(EWiesbadenWeaponId::Raketenwerfer)).bExplosive);
+	TestTrue(TEXT("Rakete fliegt sichtbar"),
+		WiesbadenWeapons::Spec(
+			static_cast<int32>(EWiesbadenWeaponId::Raketenwerfer)).bVisibleProjectile);
 
 	// Physik-Sinn: positive Geschwindigkeit, Schaden >= 0, Magazin >= 0.
 	for (int32 Index = 0; Index < Table.Num(); ++Index)
@@ -63,6 +72,46 @@ bool FWeaponSpecTest::RunTest(const FString& Parameters)
 		WiesbadenWeapons::InMeleeReach(FVector::ZeroVector, FVector(100.0, 0.0, 0.0), Schwert));
 	TestFalse(TEXT("Weit weg trifft nicht"),
 		WiesbadenWeapons::InMeleeReach(FVector::ZeroVector, FVector(1000.0, 0.0, 0.0), Schwert));
+
+	// Die acht Kernwaffen des Auftrags (Ziffern 1-8) existieren, haben einen
+	// Kurznamen fuer die Anzeige beim Wechsel und eine sinnvolle Zoom-Grenze.
+	static const EWiesbadenWeaponId CoreOrder[8] = {
+		EWiesbadenWeaponId::Pistole, EWiesbadenWeaponId::Gewehr,
+		EWiesbadenWeaponId::Maschinengewehr, EWiesbadenWeaponId::Laserpistole,
+		EWiesbadenWeaponId::Lichtschwert, EWiesbadenWeaponId::Raketenwerfer,
+		EWiesbadenWeaponId::Granatwerfer, EWiesbadenWeaponId::Plasmacutter };
+	for (int32 Slot = 0; Slot < 8; ++Slot)
+	{
+		const FWiesbadenWeaponSpec& S = WiesbadenWeapons::Spec(
+			static_cast<int32>(CoreOrder[Slot]));
+		TestTrue(FString::Printf(TEXT("Kernwaffe %d hat Namen"), Slot + 1),
+			S.DisplayName != nullptr && S.DisplayName[0] != 0);
+		TestTrue(FString::Printf(TEXT("Kernwaffe %d hat Kurzname"), Slot + 1),
+			S.ShortName != nullptr && S.ShortName[0] != 0);
+		TestTrue(FString::Printf(TEXT("Kernwaffe %d zoomt mindestens 1.0"), Slot + 1),
+			S.AdsZoomMax >= 1.0f);
+	}
+
+	// Der Plasmacutter schneidet: Flag, Geschwindigkeit und Rastwinkel der
+	// Schnittebene (Dead-Space-Prinzip: das Mausrad dreht die Ebene).
+	const FWiesbadenWeaponSpec& Cutter = WiesbadenWeapons::Spec(
+		static_cast<int32>(EWiesbadenWeaponId::Plasmacutter));
+	TestTrue(TEXT("Plasmacutter schneidet"), Cutter.bCuts);
+	TestTrue(TEXT("Schnittgeschwindigkeit > 0"), Cutter.CutSpeedCmPerS > 0.0f);
+	TestTrue(TEXT("Rastwinkel der Schnittebene > 0"), Cutter.CutAngleStepDeg > 0.0f);
+
+	// Mausrad-Blaettern: ueber beide Raender zurueck, Spruenge bleiben im Ring.
+	const int32 Num = Table.Num();
+	TestEqual(TEXT("Von hinten nach vorn"),
+		WiesbadenWeapons::NextWeaponIndex(Num - 1, 1), 0);
+	TestEqual(TEXT("Von vorn nach hinten"),
+		WiesbadenWeapons::NextWeaponIndex(0, -1), Num - 1);
+	TestEqual(TEXT("Zwei Rasten vor"),
+		WiesbadenWeapons::NextWeaponIndex(0, 2), 2);
+	TestEqual(TEXT("Sprung um den ganzen Ring bleibt"),
+		WiesbadenWeapons::NextWeaponIndex(3, Num), 3);
+	TestEqual(TEXT("Nullschritt wechselt nicht"),
+		WiesbadenWeapons::NextWeaponIndex(5, 0), 5);
 
 	return true;
 }

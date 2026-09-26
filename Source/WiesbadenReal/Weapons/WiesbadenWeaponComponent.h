@@ -106,8 +106,26 @@ public:
 	/** Gibt es diese Waffe ueberhaupt? (Tastenbelegung vor dem Umschalten.) */
 	static bool IsValidWeaponIndex(int32 Index);
 
+	/**
+	 * Winkel der Schnittebene in Grad (Plasmacutter). Das Mausrad am
+	 * FootPawn dreht sie in Rasten - das Dead-Space-Prinzip.
+	 */
+	float CutPlaneAngleDeg = 0.0f;
+
+	/** Schnittebene weiterdrehen (Mausrad-Rasten); bleibt im Kreis 0..<360. */
+	void RotateCutPlane(float StepDeg);
+
 	/** Zahl der gerade fliegenden Projektile (fuer Pruefungen). */
 	int32 GetActiveProjectileCount() const { return LiveShots.Num(); }
+
+	/**
+	 * Zahl der abgegebenen Schuesse (fuer Pruefungen). Zaehlt jeden Aufruf
+	 * von Fire() - auch den Hieb und den Plasma-Trennstrahl. Ohne diesen
+	 * Zaehler laesst sich am laufenden Spiel nur schwer belegen, dass ein
+	 * Ausloeser wirklich geschossen hat: das Projektil ist nach einem Bild
+	 * weg, der Treffer kaeme erst weit spaeter.
+	 */
+	int32 GetSchussZahl() const { return SchussZahl; }
 
 	/** Weltposition der Muendung - Ursprung der Leuchtspuren. */
 	FVector GetMuzzleLocation() const;
@@ -139,6 +157,13 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Waffe", meta = (ClampMin = "0.0"))
 	float SpreadDegrees = 0.7f;
+
+	/**
+	 * Faktor auf die Streuung. 1.0 = laut Tabelle; der Zielmodus des
+	 * Fuss-Pawns setzt 0.5, damit Zielen etwas bringt, ohne dass die
+	 * Spec-Tabelle zwei Zeilen je Waffe braucht.
+	 */
+	float SpreadScale = 1.0f;
 
 	/** Wie lange das Muendungsfeuer leuchtet, in Sekunden. */
 	UPROPERTY(EditAnywhere, Category = "Waffe", meta = (ClampMin = "0.005"))
@@ -173,6 +198,10 @@ private:
 
 	/** Explosion am Punkt: alle Ziele im Radius, inkl. Eigenschaden. */
 	void ApplyExplosionAt(const FVector& Centre, const FWiesbadenProjectile& P);
+
+	/** Schneiden statt Schiessen: Strahl aus dem Blick, Trennen am Ziel. */
+	void FireCutBeam(const FVector& AimStart, const FVector& AimDirection,
+		const FWiesbadenWeaponSpec& Spec);
 
 	/** Passanten im Aufschlag-Umkreis zu Boden + Tat ins Fahndungskonto. */
 	void ReportPedestrianAndWanted(UWorld* World, const FVector& ImpactPoint, float Damage);
@@ -220,6 +249,9 @@ private:
 
 	/** Zaehler der Schuesse - dient als Seed, damit sie sich unterscheiden. */
 	int32 ShotCounter = 0;
+
+	/** Zahl der abgegebenen Schuesse (Pruefungen; zaehlt Hieb und Trennstrahl mit). */
+	int32 SchussZahl = 0;
 
 	TArray<FWiesbadenTracer> Tracers;
 

@@ -4,8 +4,9 @@
 
 namespace
 {
-	// Ein Fahrabschnitt der Rundfahrt: Dauer, Bogenlaenge Start->Ende, Halt?, Richtung.
-	struct FPhase { double Dur; double A; double B; bool bDwell; bool bForward; };
+	// Ein Fahrabschnitt der Rundfahrt: Dauer, Bogenlaenge Start->Ende, Halt?, Richtung,
+	// auf dem eigenen Rueckweg?
+	struct FPhase { double Dur; double A; double B; bool bDwell; bool bForward; bool bReturn = false; };
 
 	double BuildPhases(const WiesbadenBusLine::FBusRoute& R, double v,
 		double Dwell, double Term, TArray<FPhase>& Out)
@@ -24,6 +25,27 @@ namespace
 			const double B = R.StopArcCm[i + 1];
 			Out.Add({ FMath::Abs(B - A) / Vv, A, B, false, true });
 			Out.Add({ (i + 1 == N - 1) ? Term : Dwell, B, B, true, true });
+		}
+		// Eigener Rueckweg: Anschluss vom Hinweg-Ende zur ersten Rueckweg-Halte
+		// (Einstieg), Halt fuer Halt bis zum Ausstieg (letzte Halte, dort die
+		// Wendezeit als Pause), dann leer zur Einstiegshaltestelle = Halte 0 des
+		// Hinwegs und dort einsteigen lassen.
+		if (R.HasReturnLeg())
+		{
+			const TArray<double>& RS = R.ReturnStopArcCm;
+			const int32 M = RS.Num();
+			Out.Add({ RS[0] / Vv, 0.0, RS[0], false, false, true });
+			Out.Add({ Dwell, RS[0], RS[0], true, false, true });
+			for (int32 j = 0; j < M - 1; ++j)
+			{
+				Out.Add({ FMath::Abs(RS[j + 1] - RS[j]) / Vv, RS[j], RS[j + 1], false, false, true });
+				Out.Add({ (j + 1 == M - 1) ? Term : Dwell, RS[j + 1], RS[j + 1], true, false, true });
+			}
+			Out.Add({ FMath::Max(R.ReturnLengthCm - RS[M - 1], 0.0) / Vv, RS[M - 1], R.ReturnLengthCm, false, false, true });
+			Out.Add({ Dwell, R.StopArcCm[0], R.StopArcCm[0], true, true, false });
+			double TotalR = 0.0;
+			for (const FPhase& P : Out) { TotalR += P.Dur; }
+			return TotalR;
 		}
 		// Rueckfahrt: Halt N-1 -> Halt 0.
 		for (int32 i = N - 1; i > 0; --i)
@@ -65,6 +87,7 @@ WiesbadenBusLine::FBusState WiesbadenBusLine::EvaluateRoundTrip(double Elapsed,
 			const double f = (P.Dur > 0.0) ? FMath::Clamp(t / P.Dur, 0.0, 1.0) : 0.0;
 			S.ArcLengthCm = P.bDwell ? P.A : FMath::Lerp(P.A, P.B, f);
 			S.bForward = P.bForward;
+			S.bReturnPath = P.bReturn;
 			S.bDwelling = P.bDwell;
 			S.DwellRemainingSeconds = P.bDwell ? FMath::Max(P.Dur - t, 0.0) : 0.0;
 			S.DwellTotalSeconds = P.bDwell ? P.Dur : 0.0;
@@ -260,6 +283,35 @@ void WiesbadenBusLine::NextDepartures(double ServiceSeconds, const FBusSchedule&
 	const int32 K = FMath::Min(MaxCount, Cand.Num());
 	for (int32 i = 0; i < K; ++i) { OutSecondsUntil.Add(Cand[i]); }
 }
+double WiesbadenBusLine::SecondsToReturnStop(const FBusRoute& Route, double v,
+	double Dwell, double Term, int32 ReturnStopIndex)
+{
+	if (!Route.HasReturnLeg() || Route.StopArcCm.Num() < 2)
+	{
+		return 0.0;
+	}
+	const double Vv = FMath::Max(v, 1.0);
+	const TArray<double>& S = Route.StopArcCm;
+	const TArray<double>& RS = Route.ReturnStopArcCm;
+	const int32 N = S.Num();
+	const int32 Target = FMath::Clamp(ReturnStopIndex, 0, RS.Num() - 1);
+	// Dieselbe Phasenfolge wie BuildPhases: Hinfahrt samt Wendezeit ...
+	double t = 0.0;
+	for (int32 i = 0; i < N - 1; ++i)
+	{
+		t += (S[i + 1] - S[i]) / Vv;
+		t += (i + 1 == N - 1) ? Term : Dwell;
+	}
+	// ... Anschluss zur ersten Rueckweg-Halte, dann Halt fuer Halt.
+	t += RS[0] / Vv;
+	for (int32 j = 0; j < Target; ++j)
+	{
+		t += Dwell;
+		t += (RS[j + 1] - RS[j]) / Vv;
+	}
+	return t;
+}
+
 int32 WiesbadenBusLine::NextStopIndex(double ArcLengthCm, bool bForward,
 	const TArray<double>& StopArcCm)
 {

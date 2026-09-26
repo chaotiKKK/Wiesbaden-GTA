@@ -5,8 +5,18 @@
 #   Mastachse (Naben- und Blatt-Drehpunkte, Stangen-/Blattachsneigung),
 #   Kamera (Modus, Abstand, Blicklage gegen die Rumpflage).
 #
-# Aufruf:  Tools\flight_check.cmd "WbHeli,WbHeliFly 24" a
-#          Tools\flight_check.cmd "WbHeli,WbCam 2,WbHeliFly 12" cockpit
+# Aufruf:  Tools\flight_check.cmd "WbHeli,WbHeliFly" a
+#          Tools\flight_check.cmd "WbHeli,WbHeliFly" cockpit
+#
+# ACHTUNG, Dev-Befehle OHNE Argument aufrufen. Die Engine kann ueber
+# -ExecCmds keins uebergeben; am 26.09.2026 an der Engine gemessen, drei
+# Schreibweisen: "WbHeliFly 24" -> "Bad or missing property 'Sekunden'",
+# "WbHeliFly=24" -> keine Fehlermeldung und KEINE Wirkung, "WbHeliFly
+# Sekunden=24" -> dieselbe Fehlermeldung (CallFunctionByNameWithArguments
+# sucht ein Objekt-Property, keinen Funktionsparameter). "WbHeliFly 24" sah
+# richtig aus, tat aber nichts: die Flugtelemetrie lief nie an, und dieses
+# Skript meldete danach trotzdem Erfolg. Die Dauer kommt jetzt aus der CVar
+# wb.Sekunden (Vorgabe 24 s). "WbCam 2" ist aus demselben Grund wirkungslos.
 #
 # Engine-/Build-Paarung: gebaut wird mit der INSTALLIERTEN Engine
 # (Tools\build_gate1.cmd), die Sitzung startet deshalb mit DEMSELBEN
@@ -17,7 +27,7 @@
 # wie im Spiel; der Rauchtest faehrt aus demselben Grund windowed.
 param(
     [string]$Root       = "C:\freebuff\WiesbadenReal_Sicherung",
-    [string]$ExecCmds   = "WbHeli,WbHeliFly 24",
+    [string]$ExecCmds   = "WbHeli,WbHeliFly",
     [string]$Name       = "a",
     # Auf GENUG Messpunkte warten, nicht auf das Demo-Ende: die Stadt kann beim
     # Fliegen streckenweise haengen (WP-Streaming-Hitches) - das ist normal.
@@ -55,13 +65,24 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Remove-Item $Log -ErrorAction SilentlyContinue
 
-# Die Quotes um -ExecCmds MUSS dieses Skript setzen (fest verdrahtet): uebergeben
-# an Start-Process gehen sie sonst verloren, der Engine-Befehl zerfaellt und es
-# laeuft nur das erste Wort (in einem Fall blieb der Editor darum endlos stehen).
-$sargs = @("`"$Proj`"", "-game", "-windowed", "-resx=1280", "-resy=720",
-           "-nosound", "-ABSLOG=$Log", "-ExecCmds=`"$ExecCmds`"")
-
-$proc = Start-Process -FilePath $Exe -ArgumentList $sargs -PassThru
+# Die Quotes um -ExecCmds MUESSEN die Engine bekommen, und Start-Process
+# nimmt sie weg: es baut aus der Argumentliste eine Befehlszeile und
+# entfernt die Quotes wieder. Am 26.09.2026 stand dadurch tatsaechlich
+#   LogInit: Command Line: ... -ExecCmds=WbHeli,WbHeliFly 24
+# im Log - ohne Quotes. Windows hat die Zeile am LEERZEICHEN in
+# "-ExecCmds=WbHeli,WbHeliFly" und "24" getrennt, die Engine rief
+# "WbHeliFly": Bad or missing property 'Sekunden' auf, und die Flugphase
+# lief nie. Der Lauf wartete danach volle 7 Minuten auf Messpunkte, die nie
+# kommen konnten, und meldete Erfolg.
+#
+# ProcessStartInfo.Arguments geht dagegen unveraendert an CreateProcess; die
+# inneren Quotes bleiben erhalten. Deshalb dieser Weg statt Start-Process.
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = $Exe
+$psi.Arguments = '"' + $Proj + '" -game -windowed -resx=1280 -resy=720 -nosound' +
+                 ' -ABSLOG="' + $Log + '" -ExecCmds="' + $ExecCmds + '"'
+$psi.UseShellExecute = $false
+$proc = [System.Diagnostics.Process]::Start($psi)
 Write-Host ("Sitzung PID {0}: {1}" -f $proc.Id, $ExecCmds)
 Write-Host ("Log: {0}" -f $Log)
 
@@ -75,6 +96,11 @@ while ((Get-Date) -lt $deadline) {
 }
 Write-Host ("{0} Mast-Messpunkte; beende Sitzung." -f $n)
 
+# REIHENFOLGE WICHTIG: erst die Sitzung beenden, dann ueber das Ergebnis
+# entscheiden. Ein "exit 1" vor dem Stop-Process laesst den Editor zurueck -
+# am 26.09.2026 stand so eine 7-GB-Sitzung zehn Minuten weiter, ohne dass
+# jemand sie beendet haette. Ein Messlauf, der scheitert, muss trotzdem
+# aufraeumen.
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 Stop-ProjectEditors $Proj
 Start-Sleep -Seconds 1
@@ -89,5 +115,26 @@ if (Test-Path $Log) {
     }
     $last = Select-String -Path $Log -Pattern "WbDev (Mast|Kamera) t=" | Select-Object -Last 2
     foreach ($l in $last) { Write-Host ("  " + $l.Line.Trim()) }
+}
+
+# Ohne Messpunkte ist die Pruefung ergebnislos, nicht erfolgreich. Vorher
+# stand hier bedingungslos "exit 0": ein Lauf, bei dem der Hubschrauber gar
+# nicht flog, sah auf der Konsole aus wie ein bestandener Lauf. Ein
+# Messwerkzeug, das nichts misst und Erfolg meldet, ist das Schlimmste, was
+# ein Werkzeug tun kann.
+$Gemessen = $false
+if (Test-Path $Log) {
+    $Gemessen = @(Select-String -Path $Log -Pattern "WbDev Mast t=").Count -ge $MinSeconds
+}
+if (-not $Gemessen) {
+    Write-Host ("FEHLER: nur {0} von mindestens {1} Mast-Messpunkten im Log." -f $n, $MinSeconds)
+    Write-Host ("       Log: {0}" -f $Log)
+    $verdaechtig = Select-String -Path $Log -Pattern "Bad or missing property" -ErrorAction SilentlyContinue |
+                   Select-Object -First 3
+    if ($verdaechtig) {
+        Write-Host "       Die Engine hat die Dev-Befehle abgewiesen - die Messung kam nie zustande:"
+        foreach ($v in $verdaechtig) { Write-Host ("         " + $v.Line.Trim()) }
+    }
+    exit 1
 }
 exit 0

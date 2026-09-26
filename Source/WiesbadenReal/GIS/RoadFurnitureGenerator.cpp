@@ -366,16 +366,11 @@ namespace
 			return false;
 		}
 
-		const FVector2D Delta = Point - Building.FootprintCenterCm;
-		const double Yaw = FMath::DegreesToRadians(static_cast<double>(-Building.FootprintYawDegrees));
-		const double CosYaw = FMath::Cos(Yaw);
-		const double SinYaw = FMath::Sin(Yaw);
-		const FVector2D Local(
-			Delta.X * CosYaw - Delta.Y * SinYaw,
-			Delta.X * SinYaw + Delta.Y * CosYaw);
-
-		return FMath::Abs(Local.X) <= Building.FootprintExtentCm.X
-			&& FMath::Abs(Local.Y) <= Building.FootprintExtentCm.Y;
+		// Eine Pruefung fuer alle: der Platzierungs-Audit rechnet dieselbe
+		// Frage ueber FPolygonUtils - dort wie hier, Bit fuer Bit gleich.
+		return FPolygonUtils::IsInsideRotatedBox2D(
+			Point, Building.FootprintCenterCm,
+			Building.FootprintExtentCm, Building.FootprintYawDegrees);
 	}
 
 	/**

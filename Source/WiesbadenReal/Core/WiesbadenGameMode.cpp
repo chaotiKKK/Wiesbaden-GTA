@@ -10,6 +10,7 @@
 
 #include "EngineUtils.h"
 #include "Core/WiesbadenPlayerController.h"
+#include "Core/WiesbadenInputMap.h"
 #include "GIS/WiesbadenWorldBuilder.h"
 #include "GameFramework/PlayerController.h"
 #include "Vehicles/WiesbadenCar.h"
@@ -118,6 +119,7 @@ void AWiesbadenGameMode::BeginPlay()
 	}
 	bFigurProbe = FParse::Value(FCommandLine::Get(), TEXT("WbFigurProbe="), FigurProbeMode)
 		|| FParse::Param(FCommandLine::Get(), TEXT("WbFigurProbe"));
+	bPadProbe = FParse::Param(FCommandLine::Get(), TEXT("WbPadProbe"));
 
 	CitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
 	if (!CitySubsystem)
@@ -717,20 +719,26 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 	// das ganze Bild - derselbe Tastendruck zaehlte damit als zwei Interaktionen
 	// am NPC.
 	//
-	// Y am Gamepad neben F auf der Tastatur.
-	//
-	// Ein- und Aussteigen war das letzte Stueck, das sich NUR ueber die
-	// Tastatur bedienen liess - wer mit dem Gamepad fuhr, musste zum
-	// Aussteigen zur Tastatur greifen. Y ist an dieser Stelle die uebliche
-	// Belegung; A, B und X sind im Fahrzeug schon belegt (Hupe, Handbremse,
-	// Rueckwaertsgang).
+	// Pad-Taste JE ZUSTAND, nicht eine fuer beides:
+	//   zu Fuss  X (FaceButton_Left) - so steht es in der Belegungstabelle
+	//                                   (Core/WiesbadenInputMap.h) und so
+	//                                   erwarten es die Spieler.
+	//   im Auto  Y (FaceButton_Top)   - dort ist X der Rueckwaertsgang
+	//                                   (WiesbadenCar), und eine Taste kann
+	//                                   nicht beides sein.
+	// Vorher stand hier Y fuer beides. Am Fuss schaltete derselbe Druck die
+	// Ansicht UND stieg nebenbei ins Auto - die Belegungstabelle fuehrte X
+	// als Einsteigen, im Spiel tat diese Taste gar nichts.
 	//
 	// Flankenerkennung: ohne sie wuerde der Wechsel jeden Frame ausgeloest,
 	// solange die Taste gehalten wird.
+	const FKey PadEintritt = (PC->GetPawn() == FootPawn)
+		? EKeys::Gamepad_FaceButton_Left
+		: EKeys::Gamepad_FaceButton_Top;
 	const bool bDown = PC->IsInputKeyDown(EKeys::F)
-		|| PC->IsInputKeyDown(EKeys::Gamepad_FaceButton_Top);
+		|| PC->IsInputKeyDown(PadEintritt);
 	const bool bJustPressed = PC->WasInputKeyJustPressed(EKeys::F)
-		|| PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Top);
+		|| PC->WasInputKeyJustPressed(PadEintritt);
 
 	if (bJustPressed && !bEntryKeyHeld)
 	{
@@ -785,6 +793,10 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 	if (bFigurProbe)
 	{
 		TickFigurProbe(DeltaSeconds);
+	}
+	if (bPadProbe)
+	{
+		TickPadProbe(DeltaSeconds);
 	}
 }
 
@@ -1099,6 +1111,681 @@ void AWiesbadenGameMode::TickFigurProbe(float DeltaSeconds)
 	{
 		UE_LOG(LogWbVehicles, Log, TEXT("WbFigurProbe: fertig."));
 		bFigurProbe = false;
+	}
+}
+
+void AWiesbadenGameMode::TickPadProbe(float DeltaSeconds)
+{
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	AWiesbadenFootPawn* Foot = FootPawn;
+	if (!PC || !Foot || (PadProbeTime <= 0.0f && PC->GetPawn() != Foot))
+	{
+		return;   // erst aussteigen (-WbZuFuss)
+	}
+
+	// Wie die Figur-Probe: erst 8 s Ruhe, die Zellen um den Ausstiegsort
+	// laden noch nach.
+	PadProbeTime += DeltaSeconds;
+	const float T = PadProbeTime - 8.0f;
+	if (T < 0.0f)
+	{
+		return;
+	}
+
+	// Pad-Eingabe als simuliertes Tastenereignis - derselbe Weg wie die
+	// Tastatur-Proben. RT/LT sind ACHSEN (Betrag 0..1), RB/LB digitale
+	// Tasten. Beide Wege fragen ihren Zustand unterschiedlich ab: bei einer
+	// Achse den Analogwert, bei einer Taste IsInputKeyDown. Mit der jeweils
+	// richtigen Abfrage wird ein Tastendruck genau einmal gesendet, sonst
+	// haette man pro Bild eine Flanke und der Pawn wuerde im Kreis laufen.
+	const auto SetzeAchse = [PC](const FKey& Key, bool bGedrueckt)
+	{
+		if ((PC->GetInputAnalogKeyState(Key) > 0.5f) == bGedrueckt)
+		{
+			return;
+		}
+		PC->InputKey(FInputKeyEventArgs::CreateSimulated(
+			Key, bGedrueckt ? IE_Pressed : IE_Released, bGedrueckt ? 1.0f : 0.0f));
+	};
+	const auto SetzeTaste = [PC](const FKey& Key, bool bGedrueckt)
+	{
+		if (PC->IsInputKeyDown(Key) == bGedrueckt)
+		{
+			return;
+		}
+		PC->InputKey(FInputKeyEventArgs::CreateSimulated(
+			Key, bGedrueckt ? IE_Pressed : IE_Released, bGedrueckt ? 1.0f : 0.0f));
+	};
+	// Ein Tastendruck ist nicht SOFORT im KeyState: UPlayerInput spult die
+	// Ereignisse erst beim naechsten Eingabedurchlauf in den Zustand, und ein
+	// Eingabewechsel (SetInputMode, Menue) verwirft ihn mit. Die erste
+	// Fassung der Probe hat einen Druck gesendet und 0,4 s spaeter geguckt -
+	// bei R3, A und Y war der Druck da weg und der Schritt meldete
+	// "Wirkungslos", ohne dass irgendwo stand, dass die Taste nie ankam.
+	// Deshalb: senden, solange sie nicht unten ist, und nach 0,5 s melden,
+	// statt zu raten.
+	const auto WarteTaste = [PC](const FKey& Key, bool bGedrueckt, float& Zeit,
+		float Frist, const TCHAR* Name)
+	{
+		if (PC->IsInputKeyDown(Key) == bGedrueckt)
+		{
+			Zeit = 0.0f;
+			return true;
+		}
+		PC->InputKey(FInputKeyEventArgs::CreateSimulated(
+			Key, bGedrueckt ? IE_Pressed : IE_Released, bGedrueckt ? 1.0f : 0.0f));
+		Zeit += Frist;   // Frist ist hier die Schrittlaenge
+		if (Zeit > 0.5f)
+		{
+			UE_LOG(LogWbVehicles, Warning,
+				TEXT("WbPadProbe: Taste %s kam nach %.1f s nicht an (Tastatur-Pad-Kette "
+					"verloren?) - der Schritt zaehlt als wirkungslos."),
+				Name, Zeit);
+			return false;
+		}
+		return false;
+	};
+	const auto Zaehle = [this](bool bWirkt)
+	{
+		if (bWirkt)
+		{
+			++PadProbeOk;
+		}
+		else
+		{
+			++PadProbeFehl;
+		}
+	};
+
+	// Nur melden, was der Weg tatsaechlich ergibt: die Belegungstabelle
+	// sagt, welcher Schwellwert gilt; der Pawn sagt, was daraus wurde.
+	//
+	// Deshalb stehen hier BEIDES: der rohe Tastenzustand (kam die
+	// Eingabe ueberhaupt an?) und der Pawn-Zustand (hat sie gewirkt?).
+	// Nur eine der beiden Zahlen zu loggen hat bei der ersten Fassung
+	// vier Schritte als "Wirkungslos" gemeldet, ohne zu sagen, an welcher
+	// der beiden Stellen es lag.
+	const auto Taste = [PC](const FKey& Key) { return PC->IsInputKeyDown(Key) ? 1 : 0; };
+	const auto Lage = [PC, Foot, &Taste]()
+	{
+		return FString::Printf(
+			TEXT("LT %.2f RT %.2f | RB %d LB %d A %d B %d X %d Y %d R3 %d L3 %d "
+				"Dpad %d%d | zielt %d feuert %d | geduckt %d Ansicht %s | fahrt %d "
+				"Stick %.2f/%.2f | Schuesse %d"),
+			PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftTriggerAxis),
+			PC->GetInputAnalogKeyState(EKeys::Gamepad_RightTriggerAxis),
+			Taste(EKeys::Gamepad_RightShoulder), Taste(EKeys::Gamepad_LeftShoulder),
+			Taste(EKeys::Gamepad_FaceButton_Bottom), Taste(EKeys::Gamepad_FaceButton_Right),
+			Taste(EKeys::Gamepad_FaceButton_Left), Taste(EKeys::Gamepad_FaceButton_Top),
+			Taste(EKeys::Gamepad_RightThumbstick), Taste(EKeys::Gamepad_LeftThumbstick),
+			Taste(EKeys::Gamepad_DPad_Up), Taste(EKeys::Gamepad_DPad_Down),
+			WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::Zielen) ? 1 : 0,
+			WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::Feuern) ? 1 : 0,
+			Foot->IsCrouched() ? 1 : 0,
+			Foot->IsEgoCamera() ? TEXT("Ego") : TEXT("Schulter"),
+			Foot->IsRiding() ? 1 : 0,
+			PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftX),
+			PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftY),
+			Foot->Weapon ? Foot->Weapon->GetSchussZahl() : 0);
+	};
+
+	// Schritt 0: Grundlage. Alles los, nichts gezielt, keine Schuesse.
+	if (PadProbeStep == 0)
+	{
+		PadProbeSchuesseStart = Foot->Weapon ? Foot->Weapon->GetSchussZahl() : 0;
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: Ausgangslage - %s, Waffe %d. Beide Trigger los "
+				"(unter der Schwelle 0,35)."),
+			T, *Lage(), Foot->Weapon ? Foot->Weapon->WeaponIndex : -1);
+		PadProbeStep = 1;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	PadProbeStepTime += DeltaSeconds;
+
+	// Schritt 1: LT gedrueckt halten -> zielen. 0,6 s geben dem Pawn Zeit,
+	// den Zustand zu uebernehmen.
+	if (PadProbeStep == 1)
+	{
+		SetzeAchse(EKeys::Gamepad_LeftTriggerAxis, true);
+		if (PadProbeStepTime < 0.6f)
+		{
+			return;
+		}
+		const bool bZielt = WiesbadenInputMap::IsActionDown(
+			PC, EWiesbadenInputAction::Zielen) && Foot->IsAiming();
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: LT gedrueckt - %s -> gezielt %d (Pawn meldet %s). %s"),
+			T, *Lage(), bZielt ? 1 : 0, Foot->IsAiming() ? TEXT("ja") : TEXT("nein"),
+			bZielt ? TEXT("ADS WIRKT") : TEXT("ADS WIRKT NICHT"));
+		Zaehle(bZielt);
+		PadProbeStep = 2;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 2: RT dazu -> feuern, LT bleibt gedrueckt (Zielen + Feueren
+	// gleichzeitig ist der Normalfall am Pad).
+	if (PadProbeStep == 2)
+	{
+		SetzeAchse(EKeys::Gamepad_RightTriggerAxis, true);
+		if (PadProbeStepTime < 0.6f)
+		{
+			return;
+		}
+		const int32 Schuesse = Foot->Weapon ? Foot->Weapon->GetSchussZahl() : 0;
+		const int32 Differenz = Schuesse - PadProbeSchuesseStart;
+		const bool bFeuert = WiesbadenInputMap::IsActionDown(
+			PC, EWiesbadenInputAction::Feuern) && Differenz > 0;
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: RT gedrueckt (LT bleibt) - %s -> Schuesse %d "
+				"(seit Ausgangslage %d). %s"),
+			T, *Lage(), Schuesse, Differenz,
+			bFeuert ? TEXT("FEUER WIRKT") : TEXT("FEUER WIRKT NICHT"));
+		Zaehle(bFeuert);
+		PadProbeStep = 3;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 3: beide Trigger los -> Zielzustand muss wieder auf.
+	if (PadProbeStep == 3)
+	{
+		SetzeAchse(EKeys::Gamepad_LeftTriggerAxis, false);
+		SetzeAchse(EKeys::Gamepad_RightTriggerAxis, false);
+		if (PadProbeStepTime < 0.6f)
+		{
+			return;
+		}
+		const bool bFrei = !Foot->IsAiming();
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: beide Trigger los - %s -> gezielt %d. %s"),
+			T, *Lage(), Foot->IsAiming() ? 1 : 0,
+			bFrei ? TEXT("Loslassen WIRKT") : TEXT("LOSLASSEN WIRKT NICHT (Zielzustand klebt)"));
+		Zaehle(bFrei);
+		PadProbeStep = 4;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 4: RB = naechste Waffe. Ein Tastendruck, kein Halten - die
+	// Flanke des Pawns soll verhindern, dass durchgehalten jede Waffe
+	// weiterspringt.
+	if (PadProbeStep == 4)
+	{
+		// Einmal lesen, nicht je Bild - siehe PadProbeWaffeVorher.
+		if (PadProbeWaffeVorher == INDEX_NONE)
+		{
+			PadProbeWaffeVorher = Foot->Weapon ? Foot->Weapon->WeaponIndex : -1;
+		}
+		const int32 Vorher = PadProbeWaffeVorher;
+		if (PadProbeStepTime < 0.2f)
+		{
+			SetzeTaste(EKeys::Gamepad_RightShoulder, true);
+			return;
+		}
+		if (PadProbeStepTime < 0.8f)
+		{
+			SetzeTaste(EKeys::Gamepad_RightShoulder, false);
+			return;
+		}
+		const int32 Nachher = Foot->Weapon ? Foot->Weapon->WeaponIndex : -1;
+		const int32 Erwartet = WiesbadenWeapons::NextWeaponIndex(Vorher, +1);
+		const bool bWechsel = Nachher == Erwartet && Nachher != Vorher;
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: RB gedrueckt (0,6 s) - Waffe %d -> %d, erwartet %d. %s"),
+			T, Vorher, Nachher, Erwartet,
+			bWechsel ? TEXT("WECHSEL VOR WIRKT") : TEXT("WECHSEL VOR WIRKT NICHT"));
+		Zaehle(bWechsel);
+		PadProbeWaffeVorher = INDEX_NONE;
+		PadProbeStep = 5;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 5: LB = vorige Waffe.
+	if (PadProbeStep == 5)
+	{
+		// Einmal lesen, nicht je Bild - siehe PadProbeWaffeVorher.
+		if (PadProbeWaffeVorher == INDEX_NONE)
+		{
+			PadProbeWaffeVorher = Foot->Weapon ? Foot->Weapon->WeaponIndex : -1;
+		}
+		const int32 Vorher = PadProbeWaffeVorher;
+		if (PadProbeStepTime < 0.2f)
+		{
+			SetzeTaste(EKeys::Gamepad_LeftShoulder, true);
+			return;
+		}
+		if (PadProbeStepTime < 0.8f)
+		{
+			SetzeTaste(EKeys::Gamepad_LeftShoulder, false);
+			return;
+		}
+		const int32 Nachher = Foot->Weapon ? Foot->Weapon->WeaponIndex : -1;
+		const int32 Erwartet = WiesbadenWeapons::NextWeaponIndex(Vorher, -1);
+		const bool bWechsel = Nachher == Erwartet && Nachher != Vorher;
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: LB gedrueckt (0,6 s) - Waffe %d -> %d, erwartet %d. %s"),
+			T, Vorher, Nachher, Erwartet,
+			bWechsel ? TEXT("WECHSEL ZURUECK WIRKT") : TEXT("WECHSEL ZURUECK WIRKT NICHT"));
+		Zaehle(bWechsel);
+		PadProbeWaffeVorher = INDEX_NONE;
+		PadProbeStep = 6;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 6: R3 = Ducken (halten). Ohne Loslassen waere nur die halbe
+	// Belegung geprueft - die Figur muss auch wieder aufstehen.
+	//
+	// ZUSTANDSBASIERT, nicht nach Uhrzeit: die erste Fassung hat 0,4 s
+	// gewartet und dann an einem festen Punkt gelesen. Bei einem Hänger
+	// (hier 0,5 s) fiel genau dieser Moment in eine Zeitlupe, in der die
+	// Figur schon wieder aufgestanden war - der Schritt meldete
+	// "Wirkungslos", obwohl R3 sieben Zeilen ueber ihm "unten 1" stand.
+	// Jetzt wartet der Schritt so lange, bis die Wirkung da IST, und
+	// meldet erst danach, mit dem Rohzustand als Beleg.
+	if (PadProbeStep == 6)
+	{
+		if (!PadProbeBedingtErreicht)
+		{
+			SetzeTaste(EKeys::Gamepad_RightThumbstick, true);
+			PadProbeBedingtErreicht = Foot->IsCrouched()
+				&& WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::DuckenHalten);
+		}
+		else
+		{
+			SetzeTaste(EKeys::Gamepad_RightThumbstick, false);
+		}
+
+		// Hoechstens 1,5 s warten, dann melden - mit oder ohne Wirkung.
+		if ((!PadProbeBedingtErreicht && PadProbeStepTime < 1.5f)
+			|| (PadProbeBedingtErreicht && PadProbeStepTime < 1.8f))
+		{
+			return;
+		}
+		SetzeTaste(EKeys::Gamepad_RightThumbstick, false);
+		const bool bDuckt = PadProbeBedingtErreicht;
+		const bool bSteht = !Foot->IsCrouched();
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: R3 gedrueckt bis zur Wirkung - %s -> geduckt %d, "
+				"danach aufgestanden %d. %s"),
+			T, *Lage(), bDuckt ? 1 : 0, bSteht ? 1 : 0,
+			(bDuckt && bSteht) ? TEXT("DUCKEN WIRKT") : TEXT("DUCKEN WIRKT NICHT"));
+		Zaehle(bDuckt && bSteht);
+		PadProbeBedingtErreicht = false;
+		PadProbeStep = 7;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 7: A = Sprung. Gemessen wird die tatsaechliche Hoehe, nicht
+	// ein Flag: ein gesetztes bAirborne beweist nichts, wenn die Figur an
+	// einer Decke klemmt.
+	if (PadProbeStep == 7)
+	{
+		if (PadProbeSprungZ == 0.0f)
+		{
+			PadProbeSprungZ = Foot->GetActorLocation().Z;
+			PadProbeSprungMaxZ = PadProbeSprungZ;
+		}
+		if (!PadProbeBedingtErreicht)
+		{
+			SetzeTaste(EKeys::Gamepad_FaceButton_Bottom, true);
+			// 420 cm/s Startgeschwindigkeit, in 0,25 s rund 90 cm; 25 cm sind
+			// eine klare Schwelle, ein verpasster Sprung faellt darunter.
+			// Das HOEHSTE massgehaltene Z zaehlt: nach dem Landen ist die
+			// Figur wieder unten, und die Endhoehe ergaebe immer 0.
+			PadProbeSprungMaxZ = FMath::Max(PadProbeSprungMaxZ, Foot->GetActorLocation().Z);
+			PadProbeBedingtErreicht = PadProbeSprungMaxZ - PadProbeSprungZ > 25.0f;
+		}
+		else
+		{
+			SetzeTaste(EKeys::Gamepad_FaceButton_Bottom, false);
+		}
+
+		if ((!PadProbeBedingtErreicht && PadProbeStepTime < 1.5f)
+			|| (PadProbeBedingtErreicht && PadProbeStepTime < 2.2f))
+		{
+			return;   // bzw. auf das Landen warten
+		}
+		SetzeTaste(EKeys::Gamepad_FaceButton_Bottom, false);
+		const float Hub = PadProbeSprungMaxZ - PadProbeSprungZ;
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: A gedrueckt bis zur Wirkung - %s | Figur %.0f cm, "
+				"höchste %.0f cm, Hub %+.0f cm. %s"),
+			T, *Lage(), PadProbeSprungZ, PadProbeSprungMaxZ, Hub,
+			PadProbeBedingtErreicht ? TEXT("SPRUNG WIRKT") : TEXT("SPRUNG WIRKT NICHT"));
+		Zaehle(PadProbeBedingtErreicht);
+		PadProbeBedingtErreicht = false;
+		PadProbeStep = 8;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 8: L3 = Rennen. Sprint ist nur ein Zuschlag auf die
+	// Geschwindigkeit, er wirkt also nur, wenn ueberhaupt gelaufen wird -
+	// die Probe schiebt den linken Stick nach vorn und MIST die Strecke,
+	// einmal ohne und einmal mit L3. Beide Phasen gleich lang, sonst
+	// vergleicht die Probe zwei verschiedene Zeiten.
+	if (PadProbeStep == 8)
+	{
+		// Jedes Bild erneut setzen: SetzeAchse sendet nur, wenn der Wert
+		// nicht schon stimmt - faellt er auf 0, ist er im selben Bild wieder
+		// da. Ohne das blieb der Stick nach einem Eingabewechsel auf 0 und
+		// die Figur stand still, ohne dass irgendwo ein Grund stand.
+		SetzeAchse(EKeys::Gamepad_LeftY, true);
+		if (PadProbeStepTime < 0.3f)
+		{
+			// Anlauf: der erste Moment zaehlt nicht, die Figur muss erst
+			// weg vom Startpunkt.
+			PadProbeLaufStart = Foot->GetActorLocation();
+			return;
+		}
+		if (PadProbeStepTime < 0.9f)
+		{
+			return;
+		}
+		SetzeAchse(EKeys::Gamepad_LeftY, false);
+		PadProbeLaufStrecke = FVector::Dist(PadProbeLaufStart, Foot->GetActorLocation());
+		PadProbeStep = 90;   // Luecke: Loslassen erst auswerten lassen
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Lueckenschritt: der Stick ist los, der Wert muss wirklich auf 0
+	// durchgelaufen sein, bevor er wieder gedrueckt wird. Ohne diese Pause
+	// kommen Loslassen und Druecken im selben Bild an und der Analogwert
+	// bleibt 0 - die Figur steht dann scheinbar grundlos still.
+	if (PadProbeStep == 90)
+	{
+		if (PadProbeStepTime < 0.4f)
+		{
+			return;
+		}
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: Stick los - Wert %.2f, jetzt L3 dazunehmen."),
+			T, PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftY));
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: linker Stick 1 s ohne L3 - %s | %.0f cm gelaufen "
+				"(Soll ~170 cm bei 6 km/h)."),
+			T, *Lage(), PadProbeLaufStrecke);
+		SetzeAchse(EKeys::Gamepad_LeftY, true);
+		SetzeTaste(EKeys::Gamepad_LeftThumbstick, true);
+		PadProbeLaufStart = Foot->GetActorLocation();
+		PadProbeStep = 9;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	if (PadProbeStep == 9)
+	{
+		SetzeAchse(EKeys::Gamepad_LeftY, true);
+		SetzeTaste(EKeys::Gamepad_LeftThumbstick, true);
+		if (PadProbeStepTime < 0.3f)
+		{
+			PadProbeLaufStart = Foot->GetActorLocation();
+			return;
+		}
+		if (PadProbeStepTime < 0.9f)
+		{
+			return;
+		}
+		SetzeAchse(EKeys::Gamepad_LeftY, false);
+		SetzeTaste(EKeys::Gamepad_LeftThumbstick, false);
+		PadProbeRennStrecke = FVector::Dist(PadProbeLaufStart, Foot->GetActorLocation());
+		// 16 gegen 6 km/h: die gesuchte Strecke muss mindestens doppelt so
+		// lang sein. Ein Verhaeltnis 1,0 heisst, L3 hat nichts bewirkt.
+		const bool bSchneller = PadProbeRennStrecke > PadProbeLaufStrecke * 1.6f;
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: linker Stick 1 s MIT L3 - %s | %.0f cm gelaufen gegen "
+				"%.0f cm ohne (Soll ~440 cm bei 16 km/h), Faktor %.2f. %s"),
+			T, *Lage(), PadProbeRennStrecke, PadProbeLaufStrecke,
+			PadProbeLaufStrecke > 1.0f ? PadProbeRennStrecke / PadProbeLaufStrecke : 0.0f,
+			bSchneller ? TEXT("RENNEN WIRKT") : TEXT("RENNEN WIRKT NICHT"));
+		Zaehle(bSchneller);
+		PadProbeStep = 10;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 10: D-Pad = Mausrad. Im Zielmodus muss es den Zoom treffen.
+	// Ohne Zielmodus waere es derselbe Weg wie RB, und die Probe wuerde
+	// einen Wechsel messen, den der Bildschirm nicht zeigt.
+	if (PadProbeStep == 10)
+	{
+		SetzeAchse(EKeys::Gamepad_LeftTriggerAxis, true);
+		if (PadProbeStepTime < 0.4f)
+		{
+			PadProbeZoomVorher = Foot->GetAdsZoomLevel();
+			return;
+		}
+		if (PadProbeStepTime < 0.6f)
+		{
+			SetzeTaste(EKeys::Gamepad_DPad_Up, true);
+			return;
+		}
+		if (PadProbeStepTime < 0.8f)
+		{
+			SetzeTaste(EKeys::Gamepad_DPad_Up, false);
+			return;
+		}
+		SetzeAchse(EKeys::Gamepad_LeftTriggerAxis, false);
+		const float ZoomNachher = Foot->GetAdsZoomLevel();
+		const int32 Waffe = Foot->Weapon ? Foot->Weapon->WeaponIndex : -1;
+		const bool bZoomt = ZoomNachher > PadProbeZoomVorher + 0.01f;
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: D-Pad hoch bei gezielter Waffe - Zoom %.2f -> %.2f, "
+				"Waffe unveraendert %d. %s"),
+			T, PadProbeZoomVorher, ZoomNachher, Waffe,
+			bZoomt ? TEXT("DPAD ZOOMT") : TEXT("DPAD ZOOMT NICHT"));
+		Zaehle(bZoomt);
+		PadProbeStep = 11;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 11: D-Pad mit der Trennwaffe in der Hand. Hier hat die
+	// schneidende Waffe Vorrang: das D-Pad dreht die Schnittebene, es darf
+	// weder zoomen noch die Waffe wechseln. Genau diese Verwechslung war
+	// der Grund fuer RouteMausrad.
+	if (PadProbeStep == 11)
+	{
+		if (PadProbeStepTime < 0.1f)
+		{
+			Foot->SelectWeapon(static_cast<int32>(EWiesbadenWeaponId::Plasmacutter));
+			return;
+		}
+		if (PadProbeStepTime < 0.5f)
+		{
+			// Warten, bis der Waffenwechsel durch ist (er loggt selbst).
+			PadProbeZoomVorher = Foot->GetAdsZoomLevel();
+			PadProbeSchnittVorher = Foot->Weapon ? Foot->Weapon->CutPlaneAngleDeg : 0.0f;
+			return;
+		}
+		if (PadProbeStepTime < 0.7f)
+		{
+			SetzeTaste(EKeys::Gamepad_DPad_Up, true);
+			return;
+		}
+		if (PadProbeStepTime < 0.9f)
+		{
+			SetzeTaste(EKeys::Gamepad_DPad_Up, false);
+			return;
+		}
+		const float SchnittNachher = Foot->Weapon ? Foot->Weapon->CutPlaneAngleDeg : 0.0f;
+		const bool bSchneidend = Foot->Weapon
+			&& WiesbadenWeapons::Spec(Foot->Weapon->WeaponIndex).bCuts;
+		const bool bDreht = !FMath::IsNearlyEqual(SchnittNachher, PadProbeSchnittVorher, 0.5f);
+		const bool bZoomFrei = FMath::IsNearlyEqual(Foot->GetAdsZoomLevel(), PadProbeZoomVorher, 0.01f);
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: D-Pad hoch mit Trennwaffe (schneidend %d) - "
+				"Schnittebene %.0f -> %.0f Grad, Zoom unveraendert %.2f. %s"),
+			T, bSchneidend ? 1 : 0, PadProbeSchnittVorher, SchnittNachher,
+			Foot->GetAdsZoomLevel(),
+			(bDreht && bZoomFrei) ? TEXT("DPAD DREHT DIE SCHNITTEBENE")
+				: TEXT("DPAD DREHT DIE SCHNITTEBENE NICHT"));
+		Zaehle(bDreht && bZoomFrei);
+		PadProbeStep = 12;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 12: Y = Ansicht (Ego/Schulter). Flanke, also ein kurzer
+	// Tastendruck und danach wieder los - auch hier zustandsbasiert.
+	if (PadProbeStep == 12)
+	{
+		// Genau einmal erfassen. Die erste Fassung hat in den ersten 50 ms
+		// bei jedem Bild neu gelesen - der Pawn schaltet aber im Bild
+		// selbst, also stand am Ende "Ego -> Ego" da, obwohl der Druck
+		// genau eine Umschaltung bewirkt hatte.
+		if (!PadProbeAnsichtErfasst)
+		{
+			PadProbeAnsichtVorher = Foot->IsEgoCamera();
+			PadProbeAnsichtErfasst = true;
+		}
+		if (!PadProbeBedingtErreicht)
+		{
+			SetzeTaste(EKeys::Gamepad_FaceButton_Top, true);
+			PadProbeBedingtErreicht = Foot->IsEgoCamera() != PadProbeAnsichtVorher;
+		}
+		else
+		{
+			SetzeTaste(EKeys::Gamepad_FaceButton_Top, false);
+		}
+
+		if ((!PadProbeBedingtErreicht && PadProbeStepTime < 1.5f)
+			|| (PadProbeBedingtErreicht && PadProbeStepTime < 1.7f))
+		{
+			return;
+		}
+		SetzeTaste(EKeys::Gamepad_FaceButton_Top, false);
+		const bool bUmschaltet = Foot->IsEgoCamera() != PadProbeAnsichtVorher;
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: Y gedrueckt bis zur Wirkung - %s | Ansicht %s -> "
+				"%s. %s"),
+			T, *Lage(),
+			PadProbeAnsichtVorher ? TEXT("Ego") : TEXT("Schulter"),
+			Foot->IsEgoCamera() ? TEXT("Ego") : TEXT("Schulter"),
+			bUmschaltet ? TEXT("ANSICHT WECHSELT") : TEXT("ANSICHT WECHSELT NICHT"));
+		Zaehle(bUmschaltet);
+		PadProbeBedingtErreicht = false;
+		PadProbeAnsichtErfasst = false;
+		PadProbeStep = 13;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 13: X = Einsteigen. MUSS der letzte Schritt sein: danach
+	// sitzt der Spieler im Fahrzeug, der Fuss-Pawn tickt nicht mehr und
+	// alle folgenden Messungen liefen ins Leere.
+	//
+	// Die Laufphasen haben die Figur gut fuenf Meter vom Auto weggetragen -
+	// das Einstiegsfeld reicht aber nur 6 m, also meldete der Schritt
+	// "Wirkungslos" und meinte das Auto am anderen Ende der Strasse. Der
+	// Schritt laeuft deshalb vorher zum eigenen Fahrzeug zurueck.
+	if (PadProbeStep == 13)
+	{
+		const APawn* Auto = PlayerVehicle;
+		if (!Auto)
+		{
+			UE_LOG(LogWbVehicles, Warning,
+				TEXT("WbPadProbe: X nicht geprueft - dem GameMode ist kein eigenes "
+					"Fahrzeug bekannt (die Laufphasen haben es womoeglich "
+					"weggefahren)."));
+			Zaehle(false);
+			PadProbeStep = 14;
+			PadProbeStepTime = 0.0f;
+			return;
+		}
+
+		const FVector ZumAuto = Auto->GetActorLocation() - Foot->GetActorLocation();
+		const float AbstandCm = ZumAuto.Size();
+		if (AbstandCm > 300.0f)
+		{
+			// Zum Auto drehen und geradeaus laufen. Der Schritt macht das
+			// selbst - der Spieler tut es auch, sonst stuende die Figur
+			// nach dem Laufen an der Strasse und nicht am Auto.
+			Foot->SetActorRotation(FRotator(0.0f, ZumAuto.Rotation().Yaw, 0.0f));
+			SetzeAchse(EKeys::Gamepad_LeftY, true);
+			if (PadProbeStepTime < 4.0f)
+			{
+				return;
+			}
+			SetzeAchse(EKeys::Gamepad_LeftY, false);
+			UE_LOG(LogWbVehicles, Warning,
+				TEXT("WbPadProbe: nach 4 s noch %.0f m vom Auto entfernt - X wird "
+					"nicht geprueft."), AbstandCm / 100.0f);
+			Zaehle(false);
+			PadProbeStep = 14;
+			PadProbeStepTime = 0.0f;
+			return;
+		}
+
+		SetzeAchse(EKeys::Gamepad_LeftY, false);
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: zurueck am Auto (%.1f m) - X druecken."),
+			T, AbstandCm / 100.0f);
+
+		if (!PadProbeBedingtErreicht)
+		{
+			SetzeTaste(EKeys::Gamepad_FaceButton_Left, true);
+			PadProbeBedingtErreicht = PC->GetPawn() != Foot;
+		}
+		else
+		{
+			SetzeTaste(EKeys::Gamepad_FaceButton_Left, false);
+		}
+		if ((!PadProbeBedingtErreicht && PadProbeStepTime < 1.5f)
+			|| (PadProbeBedingtErreicht && PadProbeStepTime < 1.7f))
+		{
+			return;
+		}
+		SetzeTaste(EKeys::Gamepad_FaceButton_Left, false);
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe t=%.1f: X gedrueckt bis zur Wirkung - %s | Spieler sitzt "
+				"jetzt %s. %s"),
+			T, *Lage(),
+			PC->GetPawn() != Foot ? TEXT("im Fahrzeug") : TEXT("zu Fuss"),
+			PC->GetPawn() != Foot ? TEXT("EINSTEIGEN WIRKT") : TEXT("EINSTEIGEN WIRKT NICHT"));
+		Zaehle(PC->GetPawn() != Foot);
+		PadProbeBedingtErreicht = false;
+		PadProbeStep = 14;
+		PadProbeStepTime = 0.0f;
+		return;
+	}
+
+	// Schritt 14: Abschluss. Der Lauf gilt nur als bestanden, wenn JEDER
+	// Schritt seine Erwartung erfuellt hat - ein "geht meistens" reicht nicht.
+	if (PadProbeStep == 14)
+	{
+		// Alles loslassen, damit die Probe keine Tasten haengen laesst.
+		SetzeAchse(EKeys::Gamepad_LeftTriggerAxis, false);
+		SetzeAchse(EKeys::Gamepad_RightTriggerAxis, false);
+		SetzeAchse(EKeys::Gamepad_LeftY, false);
+		SetzeTaste(EKeys::Gamepad_RightShoulder, false);
+		SetzeTaste(EKeys::Gamepad_LeftShoulder, false);
+		SetzeTaste(EKeys::Gamepad_RightThumbstick, false);
+		SetzeTaste(EKeys::Gamepad_LeftThumbstick, false);
+		SetzeTaste(EKeys::Gamepad_FaceButton_Bottom, false);
+		SetzeTaste(EKeys::Gamepad_FaceButton_Top, false);
+		SetzeTaste(EKeys::Gamepad_FaceButton_Left, false);
+		SetzeTaste(EKeys::Gamepad_DPad_Up, false);
+		SetzeTaste(EKeys::Gamepad_DPad_Down, false);
+
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbPadProbe: fertig - %d von %d Schritten mit Wirkung, %d ohne "
+				"Wirkung, Endlage: %s."),
+			PadProbeOk, PadProbeSchritte, PadProbeFehl, *Lage());
+		UE_LOG(LogWbVehicles, Warning,
+			TEXT("WbPadProbe: %s"),
+			PadProbeFehl == 0
+				? TEXT("ALLE GAMEPAD-TASTEN WIRKEN (LT/RT/RB/LB/R3/A/L3/D-Pad/Y/X).")
+				: TEXT("NICHT ALLE GAMEPAD-TASTEN WIRKEN - siehe Schritte oben."));
+		bPadProbe = false;
 	}
 }
 

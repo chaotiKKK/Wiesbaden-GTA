@@ -9,6 +9,7 @@
 #include "Components/SceneComponent.h"
 #include "Components/BoxComponent.h"
 #include "World/WiesbadenCitySubsystem.h"
+#include "World/TrafficVehicleSpawnerComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/EngineTypes.h"
 #include "Engine/StaticMesh.h"
@@ -915,10 +916,42 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 			}
 		}
 
+		// ZUSAMMENSTOSS MIT EINEM VERKEHRSAUTO: kein Anprall an eine Wand,
+		// sondern ein Stoss nach Impulserhaltung - das Verkehrsauto wird
+		// verschoben und gedreht (sein Fahrer bremst und faehrt danach
+		// weiter), das Spielerauto verliert genau den abgegebenen Impuls.
+		bool bTrafficImpact = false;
+		if (const AActor* HitActor = MoveHit.GetActor())
+		{
+			const UTrafficVehicleSpawnerComponent* Traffic =
+				HitActor->FindComponentByClass<UTrafficVehicleSpawnerComponent>();
+			const int32 TrafficId = Traffic ? Traffic->FindVehicleIdForProxy(MoveHit.GetComponent()) : INDEX_NONE;
+			UWiesbadenCitySubsystem* City = (TrafficId != INDEX_NONE && GetWorld())
+				? GetWorld()->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+			if (City)
+			{
+				const FVector PlayerVelocity = Forward * SpeedCmPerS + Right * LateralCmPerS;
+				FVector PlayerDeltaV;
+				if (City->TrafficSimulation.ApplyPlayerImpact(TrafficId, MoveHit.ImpactPoint,
+					-MoveHit.ImpactNormal, PlayerVelocity, VehiclePhysics.Powertrain.MassKg, PlayerDeltaV))
+				{
+					VehiclePhysics.SpeedMetersPerS += static_cast<float>(FVector::DotProduct(PlayerDeltaV, Forward) / MetersToCm);
+					VehiclePhysics.LateralVelocityMetersPerS += static_cast<float>(FVector::DotProduct(PlayerDeltaV, Right) / MetersToCm);
+					bTrafficImpact = true;
+					UE_LOG(LogWbVehicles, Log,
+						TEXT("Zusammenstoss mit Verkehrsauto #%d bei %.0f km/h: Spielerauto %+.0f km/h."),
+						TrafficId, PlayerVelocity.Size() * 0.036, FVector::DotProduct(PlayerDeltaV, Forward) * 0.036);
+				}
+			}
+		}
+
 		// Anprall kostet Tempo, streifen kaum: der Verlust richtet sich danach,
 		// wie frontal die Wand getroffen wurde.
-		const float Frontal = FMath::Abs(FVector::DotProduct(Forward, MoveHit.Normal));
-		VehiclePhysics.SpeedMetersPerS *= FMath::Lerp(0.98f, 0.25f, Frontal);
+		if (!bTrafficImpact)
+		{
+			const float Frontal = FMath::Abs(FVector::DotProduct(Forward, MoveHit.Normal));
+			VehiclePhysics.SpeedMetersPerS *= FMath::Lerp(0.98f, 0.25f, Frontal);
+		}
 	}
 
 	// Fussgaenger ueberfahren.

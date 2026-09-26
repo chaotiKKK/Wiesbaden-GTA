@@ -2070,7 +2070,6 @@ void FWiesbadenTrafficSimulation::BuildStopLines()
 		{
 			continue;
 		}
-
 		// Echte Kreuzung (mindestens drei Arme)? Nur dort haelt die Haltelinie
 		// auch zur eigenen Zielspur Abstand - an einer Stossstelle ist die
 		// eigene Zielspur schlicht die Fortsetzung geradeaus.
@@ -2416,7 +2415,6 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 					++LastBlockedConflictBusy;
 					break;
 				}
-
 				// LINKSABBIEGER LASSEN DEN GEGENVERKEHR DURCH (StVO 9 Abs. 3).
 				// Bedingt vertraegliche Linksabbieger (gemischte Spur) haben mit
 				// dem Geradeausverkehr ihrer Achse zugleich Gruen - das
@@ -2754,6 +2752,125 @@ void FWiesbadenTrafficSimulation::CountVehicleOverlaps(FOverlapReport& Out) cons
 	}
 
 	Out.VehiclesInvolved = Involved.Num();
+}
+
+bool FWiesbadenTrafficSimulation::ComputeImpact(const FVector2D& ContactCm, const FVector2D& NormalIntoTraffic,
+	const FVector2D& PlayerVelocityCmS, double PlayerMassKg,
+	const FVector2D& TrafficCenterCm, const FVector2D& TrafficVelocityCmS,
+	double TrafficMassKg, double TrafficYawInertiaKgM2, double Restitution, FImpactResult& Out)
+{
+	Out = FImpactResult();
+	const FVector2D N = NormalIntoTraffic.GetSafeNormal();
+	if (N.IsNearlyZero() || PlayerMassKg <= 0.0 || TrafficMassKg <= 0.0)
+	{
+		return false;
+	}
+	// Annaeherung entlang der Stossnormalen - nur wer aufeinander zu faehrt, stoesst.
+	const double Closing = FVector2D::DotProduct(PlayerVelocityCmS - TrafficVelocityCmS, N);
+	if (Closing <= 0.0)
+	{
+		return false;
+	}
+	const FVector2D R = ContactCm - TrafficCenterCm;
+	const double RxN = R.X * N.Y - R.Y * N.X;
+	const double InertiaKgCm2 = FMath::Max(TrafficYawInertiaKgM2, 1.0) * 10000.0;
+	const double InvMass = 1.0 / PlayerMassKg + 1.0 / TrafficMassKg + RxN * RxN / InertiaKgCm2;
+	const double J = (1.0 + FMath::Clamp(Restitution, 0.0, 1.0)) * Closing / InvMass;
+	Out.ImpulseKgCmS = J;
+	Out.PlayerDeltaVCmS = -N * (J / PlayerMassKg);
+	Out.TrafficDeltaVCmS = N * (J / TrafficMassKg);
+	Out.TrafficDeltaYawRateRadS = RxN * J / InertiaKgCm2;
+	return true;
+}
+
+void FWiesbadenTrafficSimulation::StepKnock(FTrafficVehicle& Vehicle, const FWiesbadenTrafficSettings& InSettings, double Dt)
+{
+	if (!Vehicle.bKnocked || Dt <= 0.0)
+	{
+		return;
+	}
+	// Rutschen: die Reifen stehen quer, Reibung bremst gleichmaessig.
+	const double Slide = Vehicle.KnockVelCmS.Size();
+	const double SlideLoss = FMath::Max(InSettings.KnockFrictionCmS2, 1.0) * Dt;
+	Vehicle.KnockVelCmS = Slide <= SlideLoss ? FVector2D::ZeroVector : Vehicle.KnockVelCmS * ((Slide - SlideLoss) / Slide);
+	Vehicle.KnockOffsetCm += Vehicle.KnockVelCmS * Dt;
+	// Ausdrehen.
+	const double Spin = Vehicle.KnockYawRateRadS;
+	const double SpinLoss = FMath::Max(InSettings.KnockYawDampingRadS2, 0.1) * Dt;
+	Vehicle.KnockYawRateRadS = FMath::Abs(Spin) <= SpinLoss ? 0.0f : static_cast<float>(Spin - FMath::Sign(Spin) * SpinLoss);
+	Vehicle.KnockYawRad = static_cast<float>(FMath::UnwindRadians(Vehicle.KnockYawRad + Vehicle.KnockYawRateRadS * Dt));
+	// Weiter als 8 m schiebt ein Anstoss kein Auto - Sicherheitsnetz gegen Ausreisser.
+	if (Vehicle.KnockOffsetCm.Size() > 800.0)
+	{
+		Vehicle.KnockOffsetCm = Vehicle.KnockOffsetCm.GetSafeNormal() * 800.0;
+		Vehicle.KnockVelCmS = FVector2D::ZeroVector;
+	}
+
+	if (!Vehicle.KnockVelCmS.IsNearlyZero(1.0) || FMath::Abs(Vehicle.KnockYawRateRadS) > 0.01f)
+	{
+		Vehicle.KnockRestSeconds = 0.0f;
+		return;
+	}
+	Vehicle.KnockRestSeconds += static_cast<float>(Dt);
+	if (Vehicle.KnockRestSeconds < InSettings.KnockWaitSeconds)
+	{
+		return;   // erschrocken stehen bleiben
+	}
+	// Zurueck in die Spur: je Fahrstrecke, und im Stau langsam auch im Stand.
+	const double Driven = FMath::Max(Vehicle.SpeedCmS, 0.0) * Dt;
+	const double Keep = FMath::Exp(-Driven / FMath::Max(InSettings.KnockRecoverDistanceCm, 1.0) - Dt / 8.0);
+	Vehicle.KnockOffsetCm *= Keep;
+	Vehicle.KnockYawRad = static_cast<float>(Vehicle.KnockYawRad * Keep);
+	if (Vehicle.KnockOffsetCm.Size() < 3.0 && FMath::Abs(Vehicle.KnockYawRad) < 0.01f)
+	{
+		Vehicle.KnockOffsetCm = FVector2D::ZeroVector;
+		Vehicle.KnockYawRad = 0.0f;
+		Vehicle.bKnocked = false;
+	}
+}
+
+bool FWiesbadenTrafficSimulation::ApplyPlayerImpact(int32 VehicleId, const FVector& ContactPoint,
+	const FVector& NormalIntoTraffic, const FVector& PlayerVelocityCmS, double PlayerMassKg,
+	FVector& OutPlayerDeltaVCmS)
+{
+	OutPlayerDeltaVCmS = FVector::ZeroVector;
+	FTrafficVehicle* Vehicle = Vehicles.FindByPredicate([VehicleId](const FTrafficVehicle& V)
+	{
+		return V.VehicleId == VehicleId && !V.bRemoved;
+	});
+	if (!Vehicle || !Vehicle->bBodyInitialized)
+	{
+		return false;
+	}
+	const TArray<FWbTrafficCarType>& CarTypes = WiesbadenTrafficCars::Types();
+	const FWbTrafficCarType& Type = CarTypes[FMath::Clamp(Vehicle->TypeIndex, 0, CarTypes.Num() - 1)];
+	FVector Center, Forward;
+	double HalfLength = 0.0, HalfWidth = 0.0;
+	GetVehicleFootprint(*Vehicle, /*bBody=*/true, Center, Forward, HalfLength, HalfWidth);
+	const FVector2D Fwd2(Forward.X, Forward.Y);
+	const FVector2D TrafficVelocity = Fwd2 * Vehicle->BodySpeedCmS + Vehicle->KnockVelCmS;
+
+	FImpactResult Impact;
+	if (!ComputeImpact(FVector2D(ContactPoint.X, ContactPoint.Y), FVector2D(NormalIntoTraffic.X, NormalIntoTraffic.Y),
+		FVector2D(PlayerVelocityCmS.X, PlayerVelocityCmS.Y), PlayerMassKg,
+		FVector2D(Center.X, Center.Y), TrafficVelocity, Type.Powertrain.MassKg, Type.YawInertiaKgM2,
+		Settings.KnockRestitution, Impact))
+	{
+		return false;
+	}
+
+	// Die eigene Fahrt geht im Stoss auf: das Auto rutscht mit seinem Schwung
+	// weiter, die Fahrlinie haelt an (der Fahrer bremst).
+	Vehicle->KnockVelCmS = TrafficVelocity + Impact.TrafficDeltaVCmS;
+	Vehicle->KnockYawRateRadS += static_cast<float>(Impact.TrafficDeltaYawRateRadS);
+	Vehicle->KnockRestSeconds = 0.0f;
+	Vehicle->bKnocked = true;
+	Vehicle->SpeedCmS = 0.0;
+	Vehicle->BodySpeedCmS = 0.0;
+	Vehicle->Physics.SpeedMetersPerS = 0.0f;
+	++LifetimePlayerImpacts;
+	OutPlayerDeltaVCmS = FVector(Impact.PlayerDeltaVCmS.X, Impact.PlayerDeltaVCmS.Y, 0.0);
+	return true;
 }
 
 double FWiesbadenTrafficSimulation::SafeFollowSpeedCmS(double GapCm, double MinGapCm, double SpeedCmS,
@@ -3693,6 +3810,18 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		}
 	}
 
+	// -- 1g) Zusammenstoss: der Fahrer bremst, steht, faehrt langsam zurueck ---
+	for (FTrafficVehicle& Vehicle : Vehicles)
+	{
+		if (!Vehicle.bKnocked)
+		{
+			continue;
+		}
+		const bool bStillSliding = !Vehicle.KnockVelCmS.IsNearlyZero(1.0) || FMath::Abs(Vehicle.KnockYawRateRadS) > 0.01f;
+		Vehicle.SpeedCmS = (bStillSliding || Vehicle.KnockRestSeconds < Settings.KnockWaitSeconds)
+			? 0.0 : FMath::Min(Vehicle.SpeedCmS, Settings.KnockRecoverSpeedCmS);
+	}
+
 	// -- 2) Vorsprung ----------------------------------------------------------
 	double DistanceThisTick = 0.0;
 	for (FTrafficVehicle& Vehicle : Vehicles)
@@ -3997,6 +4126,38 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		// Lenkeinschlag hinterher.
 		UpdateBodyPose(Vehicle, DeltaSeconds);
 
+		// Zusammenstoss: Versatz und Drehung auf die Karosserie. Nur wenn sie
+		// auf der Bahn liegt - dort wird sie je Tick neu gesetzt; das frei
+		// nachlenkende Modell integriert und wuerde den Versatz aufsummieren.
+		if (Vehicle.bKnocked)
+		{
+			StepKnock(Vehicle, Settings, DeltaSeconds);
+			// Im Moment des Stillstands: was das Auto LAENGS gerutscht ist, gilt
+			// als gefahren - sonst rollte es beim Zurueckfahren scheinbar
+			// rueckwaerts an seinen alten Platz. Quer und Drehung baut der Fahrer ab.
+			if (Vehicle.KnockRestSeconds > 0.0f && Vehicle.KnockRestSeconds <= DeltaSeconds * 1.5f
+				&& Vehicle.bOnLane && Network->Lanes.IsValidIndex(Vehicle.LaneId))
+			{
+				const FVector2D Along2D = FVector2D(Vehicle.Forward.X, Vehicle.Forward.Y).GetSafeNormal();
+				const double LaneLength = Network->Lanes[Vehicle.LaneId].LengthCm;
+				const double Along = FMath::Clamp(FVector2D::DotProduct(Vehicle.KnockOffsetCm, Along2D),
+					-Vehicle.DistanceCm, FMath::Max(0.0, LaneLength - 1.0 - Vehicle.DistanceCm));
+				Vehicle.DistanceCm += Along;
+				Vehicle.KnockOffsetCm -= Along2D * Along;
+				// Die Karosserie dieses Bilds lag noch an der alten Stelle.
+				Vehicle.BodyLocation.X += Along2D.X * Along;
+				Vehicle.BodyLocation.Y += Along2D.Y * Along;
+				SamplePolyline(Network->Lanes[Vehicle.LaneId].Centerline, Vehicle.DistanceCm,
+					Vehicle.Location, Vehicle.Forward);
+			}
+			if (Settings.bPhysicsBodies && Settings.bSmoothDriving && Settings.bBodyOnPath)
+			{
+				Vehicle.BodyLocation.X += Vehicle.KnockOffsetCm.X;
+				Vehicle.BodyLocation.Y += Vehicle.KnockOffsetCm.Y;
+				Vehicle.BodyYawRad = static_cast<float>(FMath::UnwindRadians(Vehicle.BodyYawRad + Vehicle.KnockYawRad));
+			}
+		}
+
 		// Fahrbild mitschreiben.
 		{
 			const double BodySpeed = FMath::Abs(Vehicle.BodySpeedCmS);
@@ -4255,11 +4416,12 @@ void FWiesbadenTrafficSimulation::StepQueueProbe(float DeltaSeconds)
 	}
 }
 
-TArray<FVector> FWiesbadenTrafficSimulation::BuildTurnaroundPath(const FVector& E, const FVector& Dir, const FVector& S)
+TArray<FVector> FWiesbadenTrafficSimulation::BuildTurnaroundPath(const FVector& E, const FVector& Dir, const FVector& S,
+	const FRoadTurningPlate* Plate)
 {
 	// Kolbenkopf-Schleife: ein Kreis HINTER dem Spurende, der durch E geht und
-	// (bei zweispurigen Strassen) durch den Start S der Gegenrichtung
-	// (WiesbadenTurnaround::LoopCircle).
+	// (bei zweispurigen Strassen) durch den Start S der Gegenrichtung - derselbe
+	// Kreis, den der Generator pflastert (WiesbadenTurnaround::LoopCircle).
 	const FVector2D D = FVector2D(Dir.X, Dir.Y).GetSafeNormal();
 	const FVector2D E2(E.X, E.Y);
 	const double W = FVector2D::DotProduct(FVector2D(S.X, S.Y) - E2, FVector2D(D.Y, -D.X));
@@ -4292,9 +4454,10 @@ TArray<FVector> FWiesbadenTrafficSimulation::BuildTurnaroundPath(const FVector& 
 	{
 		const double T = static_cast<double>(i) / Stuecke;
 		const double A = A0 + Vorzeichen * Bogen * T;
-		// Hoehe zwischen den Spurenden gemittelt.
+		// Auf der Wendeplatte faehrt die Schleife auf deren Ebene; ohne Platte
+		// (aeltere Karten) zwischen den Spurenden gemittelt.
 		const FVector2D P(C.X + R * FMath::Cos(A), C.Y + R * FMath::Sin(A));
-		Pfad.Add(FVector(P.X, P.Y, FMath::Lerp(E.Z, S.Z, T)));
+		Pfad.Add(FVector(P.X, P.Y, Plate ? Plate->HeightAt(P) : FMath::Lerp(E.Z, S.Z, T)));
 	}
 	Pfad.Add(S);
 	return Pfad;
@@ -4327,6 +4490,25 @@ int32 FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(FRoadNetwork& Net, int3
 	}
 	TMap<int64, FVector> KnotenOrt;
 	for (const FRoadIntersection& K : Net.Intersections) { KnotenOrt.Add(K.NodeId, K.Location); }
+	TMap<int32, const FRoadTurningPlate*> PlatteJeSpur;
+	for (const FRoadTurningPlate& Platte : Net.TurningPlates) { PlatteJeSpur.Add(Platte.LaneId, &Platte); }
+
+	// Zweispurige Sackgassen wenden schon ueber eine Verbindung aus dem
+	// Generator - als Haarnadel quer ueber die Fahrbahn. Liegt dort eine
+	// Wendeplatte, fahren sie stattdessen die Schleife ueber die Platte.
+	for (int32 i = 0; i < AlteVerbindungen; ++i)
+	{
+		FLaneConnection& C = Net.Connections[i];
+		const FRoadTurningPlate* const* Platte = PlatteJeSpur.Find(C.FromLaneId);
+		if (Platte && C.TurnType == ETurnType::UTurn && Net.Lanes.IsValidIndex(C.ToLaneId)
+			&& Net.Lanes[C.ToLaneId].SegmentId == Net.Lanes[C.FromLaneId].SegmentId)
+		{
+			const FRoadLane& Von = Net.Lanes[C.FromLaneId];
+			C.ConnectionPath = BuildTurnaroundPath(Von.GetEndPoint(), Von.GetExitDirection(),
+				Net.Lanes[C.ToLaneId].GetStartPoint(), *Platte);
+		}
+	}
+
 	auto Abbiegeart = [](const FVector& Raus, const FVector& Rein)
 	{
 		const FVector2D A = FVector2D(Raus.X, Raus.Y).GetSafeNormal();
@@ -4421,7 +4603,9 @@ int32 FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(FRoadNetwork& Net, int3
 		Wende.ToLaneId = Gegen;
 		Wende.IntersectionNodeId = KuenstlicherKnoten--;
 		Wende.TurnType = ETurnType::UTurn;
-		Wende.ConnectionPath = BuildTurnaroundPath(Ende, Spur.GetExitDirection(), Net.Lanes[Gegen].GetStartPoint());
+		const FRoadTurningPlate* const* Platte = PlatteJeSpur.Find(L);
+		Wende.ConnectionPath = BuildTurnaroundPath(Ende, Spur.GetExitDirection(), Net.Lanes[Gegen].GetStartPoint(),
+			Platte ? *Platte : nullptr);
 		Wende.bAddedTurnaround = true;
 		Net.Connections.Add(Wende);
 		++Schleifen;

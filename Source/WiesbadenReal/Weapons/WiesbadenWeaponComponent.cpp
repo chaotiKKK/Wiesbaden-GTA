@@ -5,9 +5,11 @@
 #include "WiesbadenReal.h"
 
 #include "Weapons/WiesbadenDamageTarget.h"
+#include "Weapons/WiesbadenCutMath.h"
 #include "Weapons/WiesbadenWeaponSpec.h"
 #include "GameFramework/Actor.h"
 #include "World/WiesbadenCitySubsystem.h"
+#include "World/WiesbadenCuttable.h"
 
 #include "Audio/WiesbadenAudioPropagation.h"
 #include "Audio/WiesbadenAudioSubsystem.h"
@@ -79,6 +81,25 @@ UStaticMeshComponent* UWiesbadenWeaponComponent::AddPart(
 
 void UWiesbadenWeaponComponent::BuildWeaponMesh()
 {
+	// Blender-Mesh zuerst: die acht Waffen-Meshes aus
+	// Tools/Blender/build_weapons.py (SM_Waffe_*) werden importiert und in
+	// der Spec-Tabelle ueber MeshAssetPath zugeordnet. Leer oder nicht
+	// ladbar = die prozedurale Huelle aus Grundkoerpern bleibt: die Waffe
+	// sieht dann schlichter aus, aber spielt.
+	const FWiesbadenWeaponSpec& GeWaffe = WiesbadenWeapons::Spec(WeaponIndex);
+	if (GeWaffe.MeshAssetPath && GeWaffe.MeshAssetPath[0] != 0)
+	{
+		if (AddPart(TEXT("WeaponModel"), GeWaffe.MeshAssetPath,
+			FVector::ZeroVector, FVector(1.0f, 1.0f, 1.0f),
+			FRotator::ZeroRotator, nullptr))
+		{
+			return;
+		}
+		UE_LOG(LogWbVehicles, Warning,
+			TEXT("Waffe %d: Mesh %s nicht ladbar - prozedurale Huelle."),
+			WeaponIndex, GeWaffe.MeshAssetPath);
+	}
+
 	// Masse einer Maschinenpistole, in Zentimetern:
 	//
 	//   Gesamtlaenge etwa 60 cm, Gehaeuse 26 cm, Lauf 20 cm, Magazin 18 cm.
@@ -179,25 +200,42 @@ void UWiesbadenWeaponComponent::SetupAudio()
 	// Ausbreitung: mittlere Distanzkurve (Schuss) inkl. Occlusion + Hall-Send.
 	WiesbadenAudioPropagation::ConfigureSource(ShotAudio, EWbAudioRange::Mid);
 
-	// Echte Aufnahme statt Synth (Nutzerwunsch 2026-09): je Waffe ein Sample
-	// aus /Game/Audio/Samples. Das Sample wird je Schuss neu gestartet -
-	// der Sample-Pfad ist damit die erste Wahl, die Synth-Welle bleibt
-	// Rueckfall, wenn die Assets fehlen (z. B. im CI-Lauf).
-	if (USoundBase* Sample = LoadObject<USoundBase>(nullptr,
-		TEXT("/Game/Audio/Samples/A_ShotBerettaM12.A_ShotBerettaM12")))
-	{
-		ShotSample = Sample;
-		ShotAudio->SetSound(ShotSample);
-		ShotAudio->bAutoActivate = false;
-		UE_LOG(LogWbVehicles, Log, TEXT("Waffe: Schuss-Sample 'Beretta M12' aktiviert (Synth als Rueckfall)."));
-		return;   // keine prozedurale Welle noetig
-	}
-
 	// Dasselbe Verfahren wie beim Motor: eine laufende prozedurale Welle, in
 	// die Abtastwerte geschoben werden. Sie spielt dauerhaft und ist still,
 	// solange nichts eingereiht ist - dadurch klingt der Schuss ohne
 	// Anlaufverzoegerung, die ein Neustart der Quelle mit sich braechte.
+	//
+	// Beide Quellen werden angelegt, NICHT nur eine: der Spieler wechselt
+	// die Waffe waehrend des Spiels, und eine Waffe ohne Sample (Laser,
+	// Cutter) muesste sonst stumm bleiben, nur weil vorher eine Waffe mit
+	// Sample gewaehlt war (am 26.09.2026 genau so gebaut).
 	ShotWave = NewObject<USoundWaveProcedural>(GetOwner(), TEXT("WeaponShotProceduralSound"));
+	if (ShotWave)
+	{
+		ShotWave->NumChannels = 1;
+		ShotWave->SetSampleRate(FMath::Max(GunshotParams.SampleRate, 8000));
+		ShotWave->SampleByteSize = BytesPerSample;
+	}
+
+	// Echte Aufnahme statt Synth (Nutzerwunsch 2026-09): der Pfad steht in
+	// der Spec-Tabelle ZUR Waffe, nicht im Code der Komponente. Ein if/else
+	// ueber den Waffenschlitz vergisst jede neue Waffe - so stand frueher auf
+	// dem Scharfschuetzengewehr und auf dem MG dasselbe Beretta-Sample.
+	const FWiesbadenWeaponSpec& ErsteWaffe = WiesbadenWeapons::Spec(WeaponIndex);
+	if (ErsteWaffe.ShotSoundPath && ErsteWaffe.ShotSoundPath[0] != 0)
+	{
+		if (USoundBase* Sample = LoadObject<USoundBase>(nullptr, ErsteWaffe.ShotSoundPath))
+		{
+			ShotSample = Sample;
+			ShotAudio->SetSound(ShotSample);
+			ShotAudio->bAutoActivate = false;
+			UE_LOG(LogWbVehicles, Log,
+				TEXT("Waffe: Schuss-Sample fuer '%s' aktiviert (Synth als Rueckfall)."),
+				ErsteWaffe.ShortName);
+			return;
+		}
+	}
+
 	if (!ShotWave)
 	{
 		UE_LOG(LogWbVehicles, Warning,
@@ -205,12 +243,11 @@ void UWiesbadenWeaponComponent::SetupAudio()
 		return;
 	}
 
-	ShotWave->NumChannels = 1;
-	ShotWave->SetSampleRate(FMath::Max(GunshotParams.SampleRate, 8000));
-	ShotWave->SampleByteSize = BytesPerSample;
-
 	ShotAudio->SetSound(ShotWave);
 	ShotAudio->Play();
+	UE_LOG(LogWbVehicles, Log,
+		TEXT("Waffe: prozeduraler Schussklang aktiviert (%d Hz, mono) - '%s' hat kein Sample."),
+		GunshotParams.SampleRate, ErsteWaffe.ShortName);
 
 	UE_LOG(LogWbVehicles, Log,
 		TEXT("Waffe: prozeduraler Schussklang aktiviert (%d Hz, mono, %.0f ms je Schuss)."),
@@ -252,6 +289,18 @@ void UWiesbadenWeaponComponent::SetWeaponIndex(int32 InIndex)
 	// Fliegende Schuesse der alten Waffe ausklingen lassen: ein MG-Feuerstoss
 	// gehoert zum MG, nicht zur naechstgewaehlten Pistole.
 	LiveShots.Reset();
+
+	// Modell zur neuen Waffe: das alte Geflecht ab, das neue an - sonst
+	// traege jede Waffe dieselbe Huelle (bis 26.09.2026 genau so).
+	for (UStaticMeshComponent* Part : Parts)
+	{
+		if (Part)
+		{
+			Part->DestroyComponent();
+		}
+	}
+	Parts.Reset();
+	BuildWeaponMesh();
 }
 
 void UWiesbadenWeaponComponent::PlayGunshot()
@@ -260,28 +309,24 @@ void UWiesbadenWeaponComponent::PlayGunshot()
 	// Rifle fuer den Scharfschuetzen), Explosion beim Granatwerfer. Ein
 	// leicht zufaelliger Pitch-Versatz (0,97..1,03) nimmt den Schuessen
 	// die Gleichfoermigkeit, die zwei identische Samples sofort verraten.
-	if (ShotSample && ShotAudio)
+	// Klangprofil aus der Spec-Tabelle: Pfad, Lautstaerke und Pitch-Streuung
+	// gehoeren zur Waffe, nicht zur Komponente.
+	const FWiesbadenWeaponSpec& Waffe = WiesbadenWeapons::Spec(WeaponIndex);
+	if (ShotSample && ShotAudio && Waffe.ShotSoundPath && Waffe.ShotSoundPath[0] != 0)
 	{
-		const int32 WeaponSlot = FMath::Clamp(WeaponIndex, 0,
-			static_cast<int32>(EWiesbadenWeaponId::Count) - 1);
-		const TCHAR* Path = TEXT("/Game/Audio/Samples/A_ShotBerettaM12.A_ShotBerettaM12");
-		if (WeaponSlot == static_cast<int32>(EWiesbadenWeaponId::Scharfschuetze))
-		{
-			Path = TEXT("/Game/Audio/Samples/A_ShotRifle.A_ShotRifle");
-		}
-		else if (WeaponSlot == static_cast<int32>(EWiesbadenWeaponId::Granatwerfer))
-		{
-			Path = TEXT("/Game/Audio/Samples/A_Explosion.A_Explosion");
-		}
-		if (USoundBase* Wanted = LoadObject<USoundBase>(nullptr, Path))
+		if (USoundBase* Wanted = LoadObject<USoundBase>(nullptr, Waffe.ShotSoundPath))
 		{
 			ShotSample = Wanted;
 			ShotAudio->SetSound(ShotSample);
 		}
-		ShotAudio->SetPitchMultiplier(FMath::RandRange(0.97f, 1.03f));
+		const float Jitter = FMath::Max(0.0f, Waffe.ShotPitchJitter);
+		ShotAudio->SetPitchMultiplier(1.0f + FMath::FRandRange(-Jitter, Jitter));
+		ShotAudio->SetVolumeMultiplier(Waffe.ShotVolume);
 		ShotAudio->Play(0.0f);
 		return;
 	}
+
+	// Ohne Sample (Laser, Cutter) bleibt die prozedurale Welle.
 
 	if (!ShotWave)
 	{
@@ -311,6 +356,12 @@ void UWiesbadenWeaponComponent::Fire(const FVector& AimStart, const FVector& Aim
 		return;
 	}
 
+	// Am Anfang, vor den Waffenarten: so zaehlt der Zaehler jede abgegebene
+	// Waffe - Projektile, Hieb und Plasma-Trennstrahl gleichermassen. Er ist
+	// der Beleg, dass ein Ausloeser wirklich gefeuert hat (das Projektil ist
+	// nach einem Bild verschwunden).
+	++SchussZahl;
+
 	const FWiesbadenWeaponSpec& Spec = WiesbadenWeapons::Spec(WeaponIndex);
 	if (Spec.bMelee)
 	{
@@ -318,6 +369,14 @@ void UWiesbadenWeaponComponent::Fire(const FVector& AimStart, const FVector& Aim
 		// Rueckkopplung - ein sichtbarer Schwung ist Schritt "Ego-Modus".
 		RecoilOffset = -FMath::Abs(RecoilOffsetCm) * 2.0f;
 		PlayGunshot();
+		return;
+	}
+
+	if (Spec.bCuts)
+	{
+		// Plasma-Trennen: Strahl aus dem Blick, kein Projektil. Die
+		// Schnittebene kommt aus dem Winkel, den das Mausrad dreht.
+		FireCutBeam(AimStart, AimDirection, Spec);
 		return;
 	}
 
@@ -329,9 +388,10 @@ void UWiesbadenWeaponComponent::Fire(const FVector& AimStart, const FVector& Aim
 	for (int32 Pellet = 0; Pellet < Pellets; ++Pellet)
 	{
 		FVector Direction = AimDirection.GetSafeNormal();
-		if (SpreadDegrees > 0.0f)
+		if (SpreadDegrees * SpreadScale > 0.0f)
 		{
-			Direction = FMath::VRandCone(Direction, FMath::DegreesToRadians(SpreadDegrees));
+			Direction = FMath::VRandCone(
+				Direction, FMath::DegreesToRadians(SpreadDegrees * SpreadScale));
 		}
 
 		// Projektil mit echter Flugbahn: Start an der Muendung, Zielrichtung
@@ -369,6 +429,66 @@ void UWiesbadenWeaponComponent::Fire(const FVector& AimStart, const FVector& Aim
 	}
 	RecoilOffset = -FMath::Abs(RecoilOffsetCm);
 
+	PlayGunshot();
+}
+
+void UWiesbadenWeaponComponent::RotateCutPlane(float StepDeg)
+{
+	CutPlaneAngleDeg = WiesbadenCutMath::RotateCutPlane(CutPlaneAngleDeg, StepDeg);
+	UE_LOG(LogWbVehicles, Log,
+		TEXT("Plasmacutter: Schnittebene auf %.0f Grad."), CutPlaneAngleDeg);
+}
+
+void UWiesbadenWeaponComponent::FireCutBeam(
+	const FVector& AimStart, const FVector& AimDirection, const FWiesbadenWeaponSpec& Spec)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// Strahl aus dem Blick bis zur Werkzeug-Reichweite. Der Cutter ist ein
+	// Werkzeug: der Strahl trifft sofort, es fliegt nichts.
+	const FVector Dir = AimDirection.GetSafeNormal();
+	const FVector End = AimStart + Dir * Spec.RangeCm;
+
+	FHitResult Hit;
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(WbCutBeam), false, GetOwner());
+	const bool bWorldHit = World->LineTraceSingleByChannel(
+		Hit, AimStart, End, ECC_Visibility, QueryParams);
+	const FVector BeamEnd = bWorldHit ? Hit.ImpactPoint : End;
+
+	// Duenn sichtbar: eine kurze Spur zum Einschlag, ohne Projektilflug.
+	FWiesbadenTracer Tracer;
+	Tracer.Start = GetMuzzleLocation();
+	Tracer.End = BeamEnd;
+	Tracer.Alpha = 0.0f;
+	Tracer.Speed = 6.0f;
+	Tracers.Add(Tracer);
+
+	if (bWorldHit)
+	{
+		if (AWiesbadenCuttable* Cuttable = Cast<AWiesbadenCuttable>(Hit.GetActor()))
+		{
+			const FVector PlaneNormal =
+				WiesbadenCutMath::CutPlaneNormal(Dir, CutPlaneAngleDeg);
+			if (Cuttable->ApplyCut(Hit.ImpactPoint, PlaneNormal))
+			{
+				UE_LOG(LogWbVehicles, Log,
+					TEXT("Plasmacutter: getrennt bei (%.0f, %.0f, %.0f), Ebene %.0f Grad."),
+					Hit.ImpactPoint.X, Hit.ImpactPoint.Y, Hit.ImpactPoint.Z,
+					CutPlaneAngleDeg);
+			}
+		}
+	}
+
+	// Licht und Klang wie beim Schuss - der Energie-Ton kommt aus der Spec.
+	MuzzleFlashRemaining = MuzzleFlashSeconds;
+	if (MuzzleLight)
+	{
+		MuzzleLight->SetIntensity(MuzzleFlashIntensity);
+	}
 	PlayGunshot();
 }
 

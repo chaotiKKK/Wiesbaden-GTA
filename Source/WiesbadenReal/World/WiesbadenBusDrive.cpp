@@ -20,7 +20,7 @@ FWiesbadenVehiclePhysics WiesbadenBusDrive::MakeBusPhysics()
 	Physics.ShiftUpRpm = 2200.0f;
 	Physics.ShiftDownRpm = 1050.0f;
 	Physics.UpshiftDurationSeconds = 0.45f;
-	Physics.WheelRadiusM = 0.38f;
+	Physics.WheelRadiusM = 0.342f;   // gemessener Reifen (Tools/bake_eswebus_wheels.py)
 	Physics.WheelbaseM = 5.25f;
 	Physics.BrakeForceN = 52000.0f;
 	Physics.EngineBrakeTorqueNm = 95.0f;
@@ -58,7 +58,12 @@ WiesbadenBusDrive::FStep WiesbadenBusDrive::Advance(FState& State,
 		State.bInitialized = true;
 	}
 
-	const double Direction = Timetable.bForward ? 1.0 : -1.0;
+	// Auf dem eigenen Rueckweg faehrt der Bus SEINE Linie vorwaerts, mit seinen
+	// Halten; ihr Ende (Einstiegshaltestelle) ist ebenfalls ein Halt zum Anbremsen.
+	const bool bReturn = Timetable.bReturnPath && Route.HasReturnLeg();
+	const TArray<double>& StopList = bReturn ? Route.ReturnStopArcCm : Route.StopArcCm;
+	const double LegLengthCm = bReturn ? Route.ReturnLengthCm : Route.TotalLengthCm;
+	const double Direction = (bReturn || Timetable.bForward) ? 1.0 : -1.0;
 	const double GapCm = (Timetable.ArcLengthCm - State.ArcCm) * Direction;
 	const bool bScheduleMoving = !Timetable.bDwelling
 		&& FMath::Abs(Timetable.ArcLengthCm - State.LastTimetableArcCm) > 0.1;
@@ -67,12 +72,20 @@ WiesbadenBusDrive::FStep WiesbadenBusDrive::Advance(FState& State,
 	// Vorausliegende Halte verlangen Bremsweg. Bei Rot oder Verweilen gibt der
 	// Fahrplan keine Strecke frei, daher ist das direkte Zeit-Ziel die Grenze.
 	double DistanceToStopCm = TNumericLimits<double>::Max();
-	for (const double StopArc : Route.StopArcCm)
+	for (const double StopArc : StopList)
 	{
 		const double Ahead = (StopArc - State.ArcCm) * Direction;
 		if (Ahead > 1.0 && Ahead < DistanceToStopCm)
 		{
 			DistanceToStopCm = Ahead;
+		}
+	}
+	if (bReturn)
+	{
+		const double ToEnd = LegLengthCm - State.ArcCm;
+		if (ToEnd > 1.0 && ToEnd < DistanceToStopCm)
+		{
+			DistanceToStopCm = ToEnd;
 		}
 	}
 	const double LookAheadCm = bScheduleMoving ? 1600.0 : 0.0;
@@ -102,10 +115,10 @@ WiesbadenBusDrive::FStep WiesbadenBusDrive::Advance(FState& State,
 	{
 		State.ArcCm = MaxGrantedArc;
 	}
-	State.ArcCm = FMath::Clamp(State.ArcCm, 0.0, Route.TotalLengthCm);
+	State.ArcCm = FMath::Clamp(State.ArcCm, 0.0, LegLengthCm);
 	Step.TravelledCm = FMath::Abs(State.ArcCm - PreviousArc);
 	State.WheelDegrees = FMath::Fmod(State.WheelDegrees
-		+ static_cast<float>(Step.TravelledCm / (2.0 * PI * 38.0) * 360.0), 360.0f);
+		+ static_cast<float>(Step.TravelledCm / (2.0 * PI * 34.2) * 360.0), 360.0f);
 	Step.WheelDegrees = State.WheelDegrees;
 	Step.Position.ArcLengthCm = State.ArcCm;
 	Step.Position.bDwelling = Timetable.bDwelling

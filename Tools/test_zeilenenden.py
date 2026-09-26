@@ -38,6 +38,24 @@ def verfolgte_dateien():
     return [p.decode("utf-8", "surrogateescape") for p in roh.split(b"\0") if p]
 
 
+def vorhandene_dateien():
+    """Verfolgte Pfade, die es auf der Platte wirklich gibt.
+
+    `git ls-files` liefert auch Pfade, die im Arbeitsbaum geloescht sind (im
+    Index stehen sie weiter, bis der Loeschvorgang committet wird). Am
+    26.09.2026 waren fuenf Sebbo-Assets genau so beschaffen - und diese
+    Zeilenenden-Pruefung starb daran mit FileNotFoundError, statt ihr
+    eigentliches Thema zu pruefen. Ein Loeschen ist eine Entscheidung des
+    Menschen und wird hier weder verhindert noch bewertet; die Liste wird nur
+    zurueckgegeben, damit der Aufrufer sie melden kann.
+    """
+    return [p for p in verfolgte_dateien() if (WURZEL / p).is_file()]
+
+
+def fehlende_dateien():
+    return [p for p in verfolgte_dateien() if not (WURZEL / p).is_file()]
+
+
 def ist_binaer(pfad):
     with open(WURZEL / pfad, "rb") as f:
         return b"\0" in f.read(SPAEHWEITE)
@@ -73,7 +91,7 @@ class RegelVorhandenTest(unittest.TestCase):
 
 class BinaerdateienGeschuetztTest(unittest.TestCase):
     def test_keine_binaerdatei_gilt_als_text(self):
-        binaer = [p for p in verfolgte_dateien() if ist_binaer(p)]
+        binaer = [p for p in vorhandene_dateien() if ist_binaer(p)]
         self.assertGreater(len(binaer), 100, "Erwartet werden Hunderte Unreal-Assets")
         werte = attribute(binaer, "text")
         als_text = sorted(p for p in binaer if werte.get(p) not in ("unset", "unspecified"))
@@ -91,7 +109,7 @@ class BestandSauberTest(unittest.TestCase):
     def test_keine_datei_ist_in_sich_gemischt(self):
         """Gemischte Dateien sind geladene Fallen - AGENTS.md war eine."""
         gemischt = []
-        for p in verfolgte_dateien():
+        for p in vorhandene_dateien():
             if ist_binaer(p):
                 continue
             b = (WURZEL / p).read_bytes()
@@ -109,11 +127,17 @@ class BestandSauberTest(unittest.TestCase):
         """
         mit_crlf = []
         for p in verfolgte_dateien():
-            if ist_binaer(p):
-                continue
+            # Binaerheit am BLOB pruefen, nicht an der Datei auf der Platte.
+            # Dieser Test handelt vom Index, und der Index enthaelt auch Pfade,
+            # die im Arbeitsbaum geloescht sind: am 26.09.2026 brach die
+            # Pruefung mit FileNotFoundError ab, weil fuenf Sebbo-Assets
+            # geloescht, aber noch eingecheckt waren. Die Zeilenenden dieser
+            # Blobs sind trotzdem pruefbar - sie sind ja genau das Thema.
             blob = subprocess.run(
                 ["git", "show", f":{p}"], cwd=WURZEL, capture_output=True, check=True
             ).stdout
+            if b"\0" in blob[:SPAEHWEITE]:
+                continue
             if b"\r\n" in blob:
                 mit_crlf.append(p)
         self.assertEqual(mit_crlf, [], "Diese Blobs enthalten CRLF im Index")

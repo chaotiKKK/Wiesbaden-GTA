@@ -588,8 +588,12 @@ namespace
 			Desc.CreatePolygon(Groups[G.Section[T]], { Vi[0], Vi[1], Vi[2] });
 		}
 		UStaticMesh* Mesh = NewObject<UStaticMesh>(Outer, TEXT("SM_WbStreetLamp"), RF_Transient);
-		Mesh->GetStaticMaterials().Add(FStaticMaterial(PostMaterial, Slots[0], Slots[0]));
-		Mesh->GetStaticMaterials().Add(FStaticMaterial(GlassMaterial, Slots[1], Slots[1]));
+		// Nur zwei Argumente: der dritte Parameter des FStaticMaterial-Konstruktors
+		// (InImportedMaterialSlotName) existiert nur WITH_EDITORONLY_DATA - im
+		// Game-Target (Development-Paket) ist Parameter 3 ein UMaterialInterface*
+		// und die Zeile C2440 (gemessen 26.09.2026 im BuildCookRun-Lauf).
+		Mesh->GetStaticMaterials().Add(FStaticMaterial(PostMaterial, Slots[0]));
+		Mesh->GetStaticMaterials().Add(FStaticMaterial(GlassMaterial, Slots[1]));
 		UStaticMesh::FBuildMeshDescriptionsParams Params;
 		Params.bBuildSimpleCollision = false;
 		Params.bFastBuild = true;

@@ -17,13 +17,18 @@ class USoundWaveProcedural;
  * Flugsound fuer den Helikopter.
  *
  * Zwei Betriebsarten (fuer Rotor- und Triebwerk je eine):
- *  - Asset-basiert: RotorSound/EngineSound (USoundWave) werden mit
- *    Pitch/Volume aus Drehzahl und Blattlast abgespielt (Rotor: Pitch ~ RPM/420,
- *    Volume ~ Last; Motor: Pitch ~ RPM/3000).
+ *  - Asset-basiert: RotorSound/EngineSound/WindSound (USoundWave) werden mit
+ *    Pitch/Volume aus Drehzahl, Blattlast und Geschwindigkeit abgespielt. Die
+ *    Pitch-Teiler sind BEZUGSDREHZAHLEN, keine Einheiten: die Ka-52-Loops
+ *    (Tools/make_ka52_audio.py) sind auf 300 rpm bzw. 600 rpm gebaut, damit
+ *    der Ton bei Reiseflug unveraendert bleibt und nur beim Hoch- und
+ *    Herunterlaufen einzieht. Mit den aelteren Teilern 560/3800 lag der Ton
+ *    bei Reiseflug eine Oktave zu tief.
  *  - Prozedural (bUseProceduralFallback, ohne zugewiesene Assets):
  *    FWiesbadenHelicopterAudioModel erzeugt einen Rotor-/"Wop-Wop"- und
  *    Motor-Klang als int16-PCM und pusht ihn in einen USoundWaveProcedural -
- *    so sind Flugsounds ohne externe Audio-Dateien sofort hoerbar.
+ *    das ist der Rueckfall, kein Ziel: eine Saegezahn-Approximation ohne
+ *    Transienten hoert man sofort als Rechner.
  *
  * Die Werte werden vom Heli-Pawn pro Tick per Setter uebergeben
  * (SetRotorState/SetEngineState/SetForwardSpeed) - die Komponente bleibt
@@ -64,6 +69,17 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Audio")
 	USoundWave* EngineSound = nullptr;
 
+	/** Fahrtwind-Asset: haengt an der Geschwindigkeit, nicht an der Drehzahl. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Audio")
+	USoundWave* WindSound = nullptr;
+
+	/**
+	 * Geschwindigkeit (m/s), bei der der Wind voll hoechst (Ka-52 Reiseflug
+	 * 300 km/h = 83 m/s). Darueber wird die Windlautstaerke linear gerechnet.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Audio", meta = (ClampMin = "1.0"))
+	float WindFullSpeedMetersPerS = 80.0f;
+
 	/** Ohne Assets einen prozeduralen Rotor-/Motor-Klang erzeugen. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Audio")
 	bool bUseProceduralFallback = true;
@@ -94,6 +110,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Audio")
 	UAudioComponent* EngineAudio = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Audio")
+	UAudioComponent* WindAudio = nullptr;
 
 private:
 	void CreateAudioSources();

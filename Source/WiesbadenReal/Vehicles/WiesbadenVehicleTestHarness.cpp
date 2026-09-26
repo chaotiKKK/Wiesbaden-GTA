@@ -152,6 +152,8 @@ void UWiesbadenVehicleTestHarness::AccumulateHeliTelemetry(float DeltaTime, cons
 	TelMaxLowerHubOffsetCm = FMath::Max(TelMaxLowerHubOffsetCm, Sample.LowerHubOffsetCm);
 	TelMaxMainBladeOffsetCm = FMath::Max(TelMaxMainBladeOffsetCm, Sample.MainBladeOffsetCm);
 	TelMaxLowerBladeOffsetCm = FMath::Max(TelMaxLowerBladeOffsetCm, Sample.LowerBladeOffsetCm);
+	TelMaxMainAxisResidualCm = FMath::Max(TelMaxMainAxisResidualCm, Sample.MainAxisResidualCm);
+	TelMaxLowerAxisResidualCm = FMath::Max(TelMaxLowerAxisResidualCm, Sample.LowerAxisResidualCm);
 	TelMaxMastTiltDeg = FMath::Max(TelMaxMastTiltDeg, Sample.MastTiltDeg);
 	TelMaxMainSpinTiltDeg = FMath::Max(TelMaxMainSpinTiltDeg, Sample.MainSpinTiltDeg);
 	TelMaxLowerSpinTiltDeg = FMath::Max(TelMaxLowerSpinTiltDeg, Sample.LowerSpinTiltDeg);
@@ -229,11 +231,13 @@ void UWiesbadenVehicleTestHarness::LogHeliTelemetry(const IWiesbadenHeliControl&
 
 	UE_LOG(LogWbVehicles, Log,
 		TEXT("WbDev Mast t=%.0f: RPM %.0f (Soll-Drehung %+.0f Grad/s) | gemessen oben %+.0f / unten %+.0f Grad/s ")
-		TEXT("aus %d Bildern (%d verworfen) | Naben %.1f/%.1f cm ab Mastachse, Blatt-Drehpunkte %.1f/%.1f cm ab Nabe, ")
+		TEXT("aus %d Bildern (%d verworfen) | Naben %.1f/%.1f cm ab Mastachse, ")
+		TEXT("Achsenkorrektur %.1f/%.1f cm, Drehpunkt der Scheibe %.1f/%.1f cm neben der Stange, ")
 		TEXT("Stange %.2f Grad, Blattachsen %.2f/%.2f Grad | Blattstern-Mitte quer %.1f/%.1f cm (Mittel aus %d Bildern)"),
 		ElapsedSeconds, Heli.GetMainRotorRpm(), ExpectedRate, MainRate, LowerRate,
 		TelRateFrames, TelRateSkipped,
 		TelMaxMainHubOffsetCm, TelMaxLowerHubOffsetCm, TelMaxMainBladeOffsetCm, TelMaxLowerBladeOffsetCm,
+		TelMaxMainAxisResidualCm, TelMaxLowerAxisResidualCm,
 		TelMaxMastTiltDeg, TelMaxMainSpinTiltDeg, TelMaxLowerSpinTiltDeg,
 		BladeCentreCm, LowerBladeCentreCm, TelBladeCentreSamples);
 
@@ -271,6 +275,8 @@ void UWiesbadenVehicleTestHarness::LogHeliTelemetry(const IWiesbadenHeliControl&
 	TelMaxMainHubOffsetCm = 0.0f;
 	TelMaxLowerHubOffsetCm = 0.0f;
 	TelMaxMainBladeOffsetCm = 0.0f;
+	TelMaxMainAxisResidualCm = 0.0f;
+	TelMaxLowerAxisResidualCm = 0.0f;
 	TelMaxLowerBladeOffsetCm = 0.0f;
 	TelMainBladeCentreSum = FVector::ZeroVector;
 	TelLowerBladeCentreSum = FVector::ZeroVector;

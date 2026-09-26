@@ -343,10 +343,14 @@ void AWiesbadenBusRoute::BeginPlay()
 			// Achsenpositionen wurden im glTF vor dem Trennen gemessen; das rechte
 			// Rad dreht seine Aussenseite nach +X. Drehwinkel folgen der wirklich
 			// gefahrenen Strecke, nicht der Fahrplanuhr.
+			// Reifenmitten im Karosserie-Rahmen, gemessen am Tripo-Modell
+			// (Tools/bake_eswebus_wheels.py): das Rad dreht um SEINE Nabe.
+			// Vorher 79,4 / 38,2 cm = Mitte aus Reifen PLUS Kotfluegel - 3,8 cm
+			// zu hoch und seitlich neben der Nabe.
 			static const FVector AxlesCm[6] = {
-				FVector(-79.4, 254.5, 38.2), FVector(79.4, 254.5, 38.2),
-				FVector(-79.4, -40.2, 38.2), FVector(79.4, -40.2, 38.2),
-				FVector(-79.4, -271.4, 38.2), FVector(79.4, -271.4, 38.2) };
+				FVector(-87.4, 254.5, 34.4), FVector(85.4, 254.5, 34.4),
+				FVector(-85.5, -45.2, 34.4), FVector(85.6, -45.2, 34.4),
+				FVector(-85.5, -272.5, 34.4), FVector(85.3, -272.5, 34.4) };
 			for (int32 WheelIndex = 0; WheelIndex < 6; ++WheelIndex)
 			{
 				UStaticMeshComponent* Wheel = NewObject<UStaticMeshComponent>(this);
@@ -469,41 +473,72 @@ void AWiesbadenBusRoute::HideBusSlot(int32 k)
 void AWiesbadenBusRoute::BuildGates()
 {
 	Gates.Reset();
+	ReturnGates.Reset();
 	if (!CitySubsystem || LineRoute->WorldPath.Num() < 2) { return; }
 	const TArray<FWiesbadenTrafficLight>& Lights = CitySubsystem->TrafficLightSystem.Lights;
 	if (Lights.Num() == 0) { return; }   // Ampelsystem noch nicht initialisiert -> spaeter erneut
 	const double MatchSq = (double)RedGateMatchCm * (double)RedGateMatchCm;
-	for (int32 li = 0; li < Lights.Num(); ++li)
+	const auto Match = [&Lights, MatchSq](const TArray<FVector>& Path, const TArray<double>& Arc, TArray<FBusGate>& Out)
 	{
-		const FVector L = Lights[li].Location;
-		double Best = TNumericLimits<double>::Max();
-		int32 BestIdx = INDEX_NONE;
-		for (int32 i = 0; i < LineRoute->WorldPath.Num(); ++i)
+		for (int32 li = 0; li < Lights.Num(); ++li)
 		{
-			const double D = FVector2D::DistSquared(FVector2D(LineRoute->WorldPath[i].X, LineRoute->WorldPath[i].Y), FVector2D(L.X, L.Y));
-			if (D < Best) { Best = D; BestIdx = i; }
+			const FVector L = Lights[li].Location;
+			double Best = TNumericLimits<double>::Max();
+			int32 BestIdx = INDEX_NONE;
+			for (int32 i = 0; i < Path.Num(); ++i)
+			{
+				const double D = FVector2D::DistSquared(FVector2D(Path[i].X, Path[i].Y), FVector2D(L.X, L.Y));
+				if (D < Best) { Best = D; BestIdx = i; }
+			}
+			if (BestIdx != INDEX_NONE && Best <= MatchSq)
+			{
+				FBusGate G; G.ArcCm = Arc[BestIdx]; G.LightIndex = li;
+				Out.Add(G);
+			}
 		}
-		if (BestIdx != INDEX_NONE && Best <= MatchSq)
-		{
-			FBusGate G; G.ArcCm = LineRoute->ArcCm[BestIdx]; G.LightIndex = li;
-			Gates.Add(G);
-		}
+		Out.Sort([](const FBusGate& A, const FBusGate& B) { return A.ArcCm < B.ArcCm; });
+	};
+	Match(LineRoute->WorldPath, LineRoute->ArcCm, Gates);
+	if (LineRoute->ReturnWorldPath.Num() >= 2)
+	{
+		Match(LineRoute->ReturnWorldPath, LineRoute->ReturnArcCm, ReturnGates);
 	}
-	Gates.Sort([](const FBusGate& A, const FBusGate& B) { return A.ArcCm < B.ArcCm; });
 	bGatesBuilt = true;
-	UE_LOG(LogWbBus, Log, TEXT("Bus: %d Ampeln auf der Linie 6 als Halte-Gates erkannt (von %d im Netz)."),
-		Gates.Num(), Lights.Num());
+	UE_LOG(LogWbBus, Log, TEXT("Bus Linie %s: %d Ampeln auf dem Hinweg, %d auf dem eigenen Rueckweg als Halte-Gates erkannt (von %d im Netz)."),
+		*LineRef, Gates.Num(), ReturnGates.Num(), Lights.Num());
 }
 
-bool AWiesbadenBusRoute::RedGateAhead(double InArcCm, const FVector& Dir, bool bForward, double& OutStopArcCm) const
+const TArray<FVector>& AWiesbadenBusRoute::PathFor(const WiesbadenBusLine::FBusState& St) const
 {
-	if (!CitySubsystem || Gates.Num() == 0) { return false; }
+	return (St.bReturnPath && LineRoute->ReturnWorldPath.Num() >= 2) ? LineRoute->ReturnWorldPath : LineRoute->WorldPath;
+}
+
+const TArray<double>& AWiesbadenBusRoute::ArcFor(const WiesbadenBusLine::FBusState& St) const
+{
+	return (St.bReturnPath && LineRoute->ReturnWorldPath.Num() >= 2) ? LineRoute->ReturnArcCm : LineRoute->ArcCm;
+}
+
+const TArray<double>& AWiesbadenBusRoute::StopsFor(const WiesbadenBusLine::FBusState& St) const
+{
+	return (St.bReturnPath && LineRoute->Route.HasReturnLeg()) ? LineRoute->Route.ReturnStopArcCm : LineRoute->Route.StopArcCm;
+}
+
+double AWiesbadenBusRoute::LengthFor(const WiesbadenBusLine::FBusState& St) const
+{
+	return (St.bReturnPath && LineRoute->Route.HasReturnLeg()) ? LineRoute->Route.ReturnLengthCm : LineRoute->Route.TotalLengthCm;
+}
+
+bool AWiesbadenBusRoute::RedGateAhead(double InArcCm, const FVector& Dir, bool bForward, double& OutStopArcCm,
+	bool bReturnPath) const
+{
+	const TArray<FBusGate>& GateList = bReturnPath ? ReturnGates : Gates;
+	if (!CitySubsystem || GateList.Num() == 0) { return false; }
 	// naechstes Gate in Fahrtrichtung innerhalb des Prueffensters.
 	int32 BestGate = INDEX_NONE;
 	double BestDelta = (double)RedApproachCm;
-	for (int32 gi = 0; gi < Gates.Num(); ++gi)
+	for (int32 gi = 0; gi < GateList.Num(); ++gi)
 	{
-		const double Delta = bForward ? (Gates[gi].ArcCm - InArcCm) : (InArcCm - Gates[gi].ArcCm);
+		const double Delta = bForward ? (GateList[gi].ArcCm - InArcCm) : (InArcCm - GateList[gi].ArcCm);
 		if (Delta > 0.0 && Delta < BestDelta) { BestDelta = Delta; BestGate = gi; }
 	}
 	if (BestGate == INDEX_NONE) { return false; }
@@ -514,10 +549,10 @@ bool AWiesbadenBusRoute::RedGateAhead(double InArcCm, const FVector& Dir, bool b
 	const double BearingDeg = FMath::RadiansToDegrees(FMath::Atan2(Dir.Y, Dir.X));
 	const int32 Group = FWiesbadenTrafficLightSystem::GroupForApproach(
 		FWiesbadenTrafficLightSystem::AxisForBearing(BearingDeg), /*bLeftTurn=*/false);
-	const ESignalAspect A = CitySubsystem->TrafficLightSystem.GetGroupAspect(Gates[BestGate].LightIndex, Group);
+	const ESignalAspect A = CitySubsystem->TrafficLightSystem.GetGroupAspect(GateList[BestGate].LightIndex, Group);
 	if (A == ESignalAspect::Green) { return false; }
-	OutStopArcCm = bForward ? (Gates[BestGate].ArcCm - RedStopMarginCm)
-	                        : (Gates[BestGate].ArcCm + RedStopMarginCm);
+	OutStopArcCm = bForward ? (GateList[BestGate].ArcCm - RedStopMarginCm)
+	                        : (GateList[BestGate].ArcCm + RedStopMarginCm);
 	return true;
 }
 
@@ -543,15 +578,16 @@ WiesbadenBusLine::FBusState AWiesbadenBusRoute::ComputeHeldState(int64 VehicleId
 	}
 	WiesbadenBusLine::FBusState St = WiesbadenBusLine::EvaluateRoundTrip(
 		Eff, LineRoute->Route, SpeedCmS, StopDwellSeconds, TerminusDwellSeconds);
-	if (!bStopAtRed || Gates.Num() == 0 || St.bDwelling || bOutFinished) { return St; }
+	if (!bStopAtRed || (Gates.Num() == 0 && ReturnGates.Num() == 0) || St.bDwelling || bOutFinished) { return St; }
 	FVector Pos, Tangent;
-	if (!WiesbadenRailTransport::SamplePolyline(LineRoute->WorldPath, LineRoute->ArcCm, St.ArcLengthCm, Pos, Tangent)) { return St; }
+	if (!WiesbadenRailTransport::SamplePolyline(PathFor(St), ArcFor(St), St.ArcLengthCm, Pos, Tangent)) { return St; }
+	const bool bAlong = AlongPath(St);
 	FVector Dir = Tangent.GetSafeNormal();
-	if (!St.bForward) { Dir = -Dir; }
+	if (!bAlong) { Dir = -Dir; }
 	double StopArc = 0.0;
-	if (RedGateAhead(St.ArcLengthCm, Dir, St.bForward, StopArc))
+	if (RedGateAhead(St.ArcLengthCm, Dir, bAlong, StopArc, St.bReturnPath))
 	{
-		const bool bPast = St.bForward ? (St.ArcLengthCm >= StopArc) : (St.ArcLengthCm <= StopArc);
+		const bool bPast = bAlong ? (St.ArcLengthCm >= StopArc) : (St.ArcLengthCm <= StopArc);
 		if (bPast)
 		{
 			St.ArcLengthCm = StopArc;                            // an der Haltelinie klemmen
@@ -566,15 +602,15 @@ void AWiesbadenBusRoute::AdvanceAndPlaceBus(int32 k,
 	const WiesbadenBusLine::FBusState& St, float DeltaSeconds, bool bLogThisTick)
 {
 	if (!DriveStates.IsValidIndex(k)) { return; }
-	const double Direction = St.bForward ? 1.0 : -1.0;
+	const double Direction = AlongPath(St) ? 1.0 : -1.0;
 	FVector Here, Tangent, Ahead, AheadTangent;
 	float SteerNorm = 0.0f;
 	const double NextArc = FMath::Clamp(St.ArcLengthCm + Direction * 1200.0,
-		0.0, LineRoute->Route.TotalLengthCm);
-	if (WiesbadenRailTransport::SamplePolyline(LineRoute->WorldPath,
-			LineRoute->ArcCm, St.ArcLengthCm, Here, Tangent)
-		&& WiesbadenRailTransport::SamplePolyline(LineRoute->WorldPath,
-			LineRoute->ArcCm, NextArc, Ahead, AheadTangent))
+		0.0, LengthFor(St));
+	if (WiesbadenRailTransport::SamplePolyline(PathFor(St),
+			ArcFor(St), St.ArcLengthCm, Here, Tangent)
+		&& WiesbadenRailTransport::SamplePolyline(PathFor(St),
+			ArcFor(St), NextArc, Ahead, AheadTangent))
 	{
 		const float Yaw = (Tangent * Direction).Rotation().Yaw;
 		const float AheadYaw = (AheadTangent * Direction).Rotation().Yaw;
@@ -592,14 +628,15 @@ void AWiesbadenBusRoute::PlaceBusAt(int32 k, const WiesbadenBusLine::FBusState& 
 	UStaticMeshComponent* Bus = Buses.IsValidIndex(k) ? Buses[k] : nullptr;
 	if (!Bus) { return; }
 	FVector Pos, Tangent;
-	if (!WiesbadenRailTransport::SamplePolyline(LineRoute->WorldPath, LineRoute->ArcCm, St.ArcLengthCm, Pos, Tangent))
+	if (!WiesbadenRailTransport::SamplePolyline(PathFor(St), ArcFor(St), St.ArcLengthCm, Pos, Tangent))
 	{
 		HideBusSlot(k);
 		return;
 	}
-	// Fahrtrichtung (fuer die Rueckfahrt gespiegelt) bestimmt die rechte Seite.
+	// Fahrtrichtung bestimmt die rechte Seite: auf dem eigenen Rueckweg entlang
+	// SEINER Linie, sonst fuer die Rueckfahrt die Hinweg-Linie gespiegelt.
 	FVector Dir = Tangent.GetSafeNormal();
-	if (!St.bForward) { Dir = -Dir; }
+	if (!AlongPath(St)) { Dir = -Dir; }
 	// Rechtsverkehr: jeder Bus faehrt LaneOffsetCm rechts seiner Fahrtrichtung,
 	// so begegnen sich Gegenrichtungs-Busse nebeneinander statt durcheinander.
 	// ACHTUNG Achsen: die Geo->Welt-Projektion bildet Ost~+X, SUED~+Y ab (Nord=-Y),
@@ -621,12 +658,36 @@ void AWiesbadenBusRoute::PlaceBusAt(int32 k, const WiesbadenBusLine::FBusState& 
 		LeftDist = AlignedLaneDistanceCm(Pos.X - RightDir.X * Probe, Pos.Y - RightDir.Y * Probe, Dir, Probe);
 		if (LeftDist + (double)LaneSideHysteresisCm < RightDist) { LaneSide = -1.0; }
 		else if (RightDist + (double)LaneSideHysteresisCm < LeftDist) { LaneSide = 1.0; }
+		// Keine Spur auf BEIDEN Seiten (beide an der Suchgrenze): dann gilt die
+		// Grundregel rechts der Fahrtrichtung - der Pfad laeuft in Fahrtrichtung.
+		// Sonst blieb die Seite einer frueheren Strasse haengen: am Ausstieg
+		// Nordfriedhof (Wendeschleife ohne Spurdaten) stand der Bus 9,6 m weiter
+		// links, auf der Gegenseite der Schleife.
+		else if (RightDist >= Probe - 1.0 && LeftDist >= Probe - 1.0) { LaneSide = 1.0; }
 		if (SlotLaneSide.IsValidIndex(k)) { SlotLaneSide[k] = LaneSide; }
 	}
 	// Haltebucht: an der Halte weiter zum Bordstein ausscheren (weich ein/aus).
 	// Beides auf DERSELBEN Seite: die Bucht liegt am Gehweg unserer Fahrspur.
-	const double Bay = WiesbadenBusLine::BayFactor(St.ArcLengthCm, St.bDwelling, LineRoute->Route.StopArcCm, BayZoneCm);
-	const double SideOffsetCm = LaneSide * (LaneOffsetCm + Bay * BayDepthCm);
+	const double Bay = WiesbadenBusLine::BayFactor(St.ArcLengthCm, St.bDwelling, StopsFor(St), BayZoneCm);
+	// An der Halte an die echte Fahrbahnkante (rechte Busseite 25 cm davor):
+	// die pauschale Bucht (LaneOffset + BayDepth = 4,80 m) setzte den Bus auf
+	// schmalen Strassen hinter den Gehweg. Ohne bekannte Kante bleibt es dabei.
+	double StopOffsetCm = LaneOffsetCm + BayDepthCm;
+	if (LaneSide > 0.0 && AlongPath(St) && Bay > 0.0)
+	{
+		const TArray<double>& Stops = StopsFor(St);
+		const TArray<double>& Kerbs = St.bReturnPath ? ReturnStopKerbCm : StopKerbCm;
+		int32 Near = INDEX_NONE;
+		for (int32 i = 0; i < Stops.Num(); ++i)
+		{
+			if (Near == INDEX_NONE || FMath::Abs(Stops[i] - St.ArcLengthCm) < FMath::Abs(Stops[Near] - St.ArcLengthCm)) { Near = i; }
+		}
+		if (Kerbs.IsValidIndex(Near) && Kerbs[Near] > 0.0)
+		{
+			StopOffsetCm = FMath::Clamp(Kerbs[Near] - 128.0 - 25.0, 0.0, (double)(LaneOffsetCm + BayDepthCm));
+		}
+	}
+	const double SideOffsetCm = LaneSide * FMath::Lerp((double)LaneOffsetCm, StopOffsetCm, Bay);
 	const double FinalX = Pos.X + RightDir.X * SideOffsetCm;
 	const double FinalY = Pos.Y + RightDir.Y * SideOffsetCm;
 	double TraceZ = 0.0;
@@ -650,8 +711,18 @@ void AWiesbadenBusRoute::PlaceBusAt(int32 k, const WiesbadenBusLine::FBusState& 
 	// Liegt eine Spur in Reichweite, gilt sie; nur ohne Spur bleibt der Trace.
 	double LaneZ = 0.0;
 	double RejectedDevCm = 0.0;
-	const bool bLane = RoadSurfaceZ(FinalX, FinalY, RoadReachCm, TraceZ, LaneZ,
+	bool bLane = RoadSurfaceZ(FinalX, FinalY, RoadReachCm, TraceZ, LaneZ,
 		bGroundAudit ? &RejectedDevCm : nullptr);
+	// UEBERBAUUNG: der Strahl von oben trifft das Erste ueber der Strasse. An
+	// der Schwalbacher Strasse (Halt 7) liegt ein Gebaeude-Kollisionskoerper
+	// ueber der Fahrbahn: Treffer 86,9 m statt 46,9 m, die Spur darunter wich
+	// 40 m ab und wurde verworfen - der Bus stand auf dem Dach. Passt keine Spur
+	// zur Trefferhoehe, gilt darum die waagerecht naechste Spur (die Fahrbahn,
+	// ueber der der Bus steht); nur ganz ohne Spur bleibt der Trace.
+	if (!bLane)
+	{
+		bLane = NearestLaneZ(FinalX, FinalY, RoadReachCm, LaneZ);
+	}
 	const double GroundZ = bLane ? LaneZ : TraceZ;
 	if (bGroundAudit) { AuditGround(k, St.ArcLengthCm, FinalX, FinalY, TraceZ, bLane, LaneZ, RejectedDevCm); }
 	const double BusZ = GroundZ + MeshBottomCm + BusLiftCm;
@@ -720,8 +791,8 @@ void AWiesbadenBusRoute::PlaceBusAt(int32 k, const WiesbadenBusLine::FBusState& 
 
 	if (bLogThisTick)
 	{
-		const bool bEndpunkt = LineRoute->Route.StopArcCm.Num() > 0
-			&& St.ArcLengthCm > LineRoute->Route.StopArcCm.Last() - 50.0;
+		const bool bEndpunkt = StopsFor(St).Num() > 0
+			&& St.ArcLengthCm > StopsFor(St).Last() - 50.0;
 		if (St.bDwelling)
 		{
 			UE_LOG(LogWbBus, Log, TEXT("Linie %s Wagen %d: X=%.0f Y=%.0f Z=%.0f Bogen %.0f m VERWEILT noch %.0f s von %.0f s | Richtung %s%s SICHTBAR"),
@@ -746,18 +817,20 @@ void AWiesbadenBusRoute::PlaceBusAt(int32 k, const WiesbadenBusLine::FBusState& 
 	// belegen, ohne die Zeilen aller uebrigen Wagen mitzulesen. Eigener Takt,
 	// damit -WbBusLogWagon allein reicht (ohne -WbBusLog).
 	{
-		const bool bEndpunkt = LineRoute->Route.StopArcCm.Num() > 0
-			&& St.ArcLengthCm > LineRoute->Route.StopArcCm.Last() - 50.0;
+		const bool bEndpunkt = StopsFor(St).Num() > 0
+			&& St.ArcLengthCm > StopsFor(St).Last() - 50.0;
 		if (bLogWagonTick && WagonId(k) == LogWagonId)
 		{
+			// Auf dem eigenen Rueckweg ist dessen letzte Halte der Ausstieg am
+			// Anfangspunkt (Nordfriedhof) - nicht das ferne Ende.
 			const TCHAR* EndFlag =
-				(bEndpunkt ? TEXT(" (Endpunkt fern)")
-					: (St.ArcLengthCm < 50.0 ? TEXT(" (Endpunkt Start)") : TEXT("")));
+				(bEndpunkt ? (St.bReturnPath ? TEXT(" (Ausstieg, Pause)") : TEXT(" (Endpunkt fern)"))
+					: (St.ArcLengthCm < 50.0 && !St.bReturnPath ? TEXT(" (Endpunkt Start)") : TEXT("")));
 			UE_LOG(LogWbBus, Log,
 				TEXT("Umlauf Wagen %d (%s): t=%.0f s Bogen %.1f von %.1f m | Unterkante %.2f m | Grundlage %s (Gelaende-Trace %.2f m, Abweichung %+.0f cm) | %s%s | Richtung %s | Spurseite %s (Abstand rechts %.0f / links %.0f cm) | Mitfahrt %s | X=%.0f Y=%.0f"),
 				WagonId(k), *LineRef,
 				GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0,
-				St.ArcLengthCm / 100.0, LineRoute->Route.TotalLengthCm / 100.0,
+				St.ArcLengthCm / 100.0, LengthFor(St) / 100.0,
 				BusZ / 100.0,
 				bLane ? TEXT("Fahrbahn aus dem Strassennetz") : TEXT("Gelaende-Trace (keine brauchbare Spur)"),
 				TraceZ / 100.0, TraceZ - GroundZ,
@@ -803,6 +876,36 @@ void AWiesbadenBusRoute::BuildLaneIndex()
 	}
 	UE_LOG(LogWbBus, Log, TEXT("Bus-Fahrbahn: %d Spur-Stuetzpunkte indexiert (%d Zellen)."),
 		LanePt.Num(), LaneCells.Num());
+
+	// Fahrbahnkante je Halte (einmal): dort haelt der Bus statt pauschal
+	// LaneOffset + Bucht neben der Linie.
+	if (LineRoute)
+	{
+		auto Kerbs = [&](const TArray<FVector>& Path, const TArray<double>& Arc, const TArray<double>& Stops,
+			TArray<double>& Out)
+		{
+			Out.Init(-1.0, Stops.Num());
+			int32 Known = 0;
+			for (int32 i = 0; i < Stops.Num(); ++i)
+			{
+				FVector Pos, Tangent;
+				double Kerb = 0.0;
+				if (WiesbadenRailTransport::SamplePolyline(Path, Arc, Stops[i], Pos, Tangent)
+					&& WiesbadenBusLineFile::RightKerbOffsetCm(Builder->RoadNetwork, Pos, Tangent, Kerb) && Kerb > 0.0)
+				{
+					Out[i] = Kerb;
+					++Known;
+				}
+			}
+			return Known;
+		};
+		const int32 KF = Kerbs(LineRoute->WorldPath, LineRoute->ArcCm, LineRoute->Route.StopArcCm, StopKerbCm);
+		const int32 KR = Kerbs(LineRoute->ReturnWorldPath, LineRoute->ReturnArcCm, LineRoute->Route.ReturnStopArcCm, ReturnStopKerbCm);
+		UE_LOG(LogWbBus, Log, TEXT("Linie %s: Fahrbahnkante an %d/%d Halten des Hinwegs, %d/%d des Rueckwegs aus dem Strassennetz%s."),
+			*LineRef, KF, StopKerbCm.Num(), KR, ReturnStopKerbCm.Num(),
+			ReturnStopKerbCm.Num() > 0 && ReturnStopKerbCm.Last() > 0.0
+				? *FString::Printf(TEXT(" (Ausstieg %.0f cm rechts der Linie)"), ReturnStopKerbCm.Last()) : TEXT(""));
+	}
 }
 
 bool AWiesbadenBusRoute::RoadSurfaceZ(double X, double Y, double MaxDistCm, double HintZ,
@@ -861,6 +964,41 @@ bool AWiesbadenBusRoute::RoadSurfaceZ(double X, double Y, double MaxDistCm, doub
 	if (DevCm > MaxLaneDeviationCm) { return false; }
 	OutZ = BestZ;
 	return true;
+}
+
+bool AWiesbadenBusRoute::NearestLaneZ(double X, double Y, double MaxDistCm, double& OutZ)
+{
+	if (!bLaneIndexBuilt) { BuildLaneIndex(); }
+	const int64 CX = (int64)FMath::FloorToDouble(X / 20000.0);
+	const int64 CY = (int64)FMath::FloorToDouble(Y / 20000.0);
+	double BestD2 = MaxDistCm * MaxDistCm;
+	bool bFound = false;
+	for (int64 dx = -1; dx <= 1; ++dx)
+	{
+		for (int64 dy = -1; dy <= 1; ++dy)
+		{
+			const TArray<int32>* Cell = LaneCells.Find((CX + dx) * 1000003LL ^ (CY + dy));
+			if (!Cell) { continue; }
+			for (const int32 Idx : *Cell)
+			{
+				const FVector& A = LanePt[Idx];
+				const bool bSeg = LaneNext.IsValidIndex(Idx) && LaneNext[Idx] != INDEX_NONE;
+				const FVector& B = bSeg ? LanePt[LaneNext[Idx]] : A;
+				const double SX = B.X - A.X, SY = B.Y - A.Y;
+				const double L2 = SX * SX + SY * SY;
+				const double t = (L2 > 1.0) ? FMath::Clamp(((X - A.X) * SX + (Y - A.Y) * SY) / L2, 0.0, 1.0) : 0.0;
+				const double PX = A.X + SX * t - X, PY = A.Y + SY * t - Y;
+				const double D2 = PX * PX + PY * PY;
+				if (D2 < BestD2)
+				{
+					BestD2 = D2;
+					OutZ = A.Z + (B.Z - A.Z) * t;
+					bFound = true;
+				}
+			}
+		}
+	}
+	return bFound;
 }
 
 double AWiesbadenBusRoute::AlignedLaneDistanceCm(double X, double Y, const FVector& TravelDir, double MaxDistCm) const
@@ -1135,7 +1273,20 @@ void AWiesbadenBusRoute::Tick(float DeltaSeconds)
 		St.ArcLengthCm = LineRoute->Route.StopArcCm[ParkStop];
 		St.bDwelling = true;
 		St.bForward = true;  PlaceBusAt(0, St, false);
-		if (N > 1) { St.bForward = false; PlaceBusAt(1, St, false); }
+		if (N > 1)
+		{
+			// Mit eigenem Rueckweg steht der Gegen-Bus an der gleichnamigen Halte
+			// SEINER Linie (am Hauptbahnhof auf der anderen Fahrbahn).
+			const int32 ReturnIndex = (LineRoute->Route.HasReturnLeg() && LineRoute->File.StopNames.IsValidIndex(ParkStop))
+				? LineRoute->File.ReturnStopNames.IndexOfByKey(LineRoute->File.StopNames[ParkStop]) : INDEX_NONE;
+			if (LineRoute->Route.ReturnStopArcCm.IsValidIndex(ReturnIndex))
+			{
+				St.bReturnPath = true;
+				St.ArcLengthCm = LineRoute->Route.ReturnStopArcCm[ReturnIndex];
+			}
+			St.bForward = false;
+			PlaceBusAt(1, St, false);
+		}
 	}
 
 	const double SpeedCmS = FMath::Max(SpeedKmh, 1.0f) * 100000.0 / 3600.0;
@@ -1519,6 +1670,16 @@ void AWiesbadenBusRoute::UpdateRiding(float DeltaSeconds)
 	if (bDown && !bBoardKeyHeld) { ToggleBoarding(); }
 	bBoardKeyHeld = bDown;
 
+	// Innenraum NUR in der Innenansicht: seine Wandkaesten umschliessen die
+	// Aussenhaut und verdeckten in der Verfolger-/Orbitansicht Lackierung,
+	// Fenster und Raeder - der Bus war dann ein texturloser dunkelblauer Kasten
+	// ("Textur verschwindet beim Einsteigen"). Aussen gilt die normale Huelle
+	// (die Kamera blendet sie nur im Cockpit aus).
+	if (RideSession.IsRiding() && PassengerCamera)
+	{
+		ShowInterior(PassengerCamera->GetCameraMode() == EWiesbadenVehicleCameraMode::Cockpit);
+	}
+
 	// Alle 5 s melden, was die Kamera gerade sieht (siehe LogRideDiag).
 	if (RideSession.IsRiding())
 	{
@@ -1787,6 +1948,15 @@ void AWiesbadenBusRoute::SetupAnnouncements()
 int32 AWiesbadenBusRoute::NextStopIndex(const WiesbadenBusLine::FBusState& St) const
 {
 	// Datenreine Kernlogik in WiesbadenBusLine (unit-getestet BusLine.NextStop).
+	if (St.bReturnPath && LineRoute->Route.HasReturnLeg())
+	{
+		// Rueckweg: Index in SEINER Halteliste, auf die Hinweg-Halte gleichen
+		// Namens abgebildet (die Ansagen sind nach Namen zugeordnet).
+		const int32 R = WiesbadenBusLine::NextStopIndex(St.ArcLengthCm, true, LineRoute->Route.ReturnStopArcCm);
+		const int32 Same = LineRoute->File.ReturnStopNames.IsValidIndex(R)
+			? LineRoute->File.StopNames.IndexOfByKey(LineRoute->File.ReturnStopNames[R]) : INDEX_NONE;
+		return Same;
+	}
 	return WiesbadenBusLine::NextStopIndex(St.ArcLengthCm, St.bForward, LineRoute->Route.StopArcCm);
 }
 

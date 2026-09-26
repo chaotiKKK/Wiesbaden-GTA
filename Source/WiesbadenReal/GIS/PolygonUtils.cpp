@@ -1296,3 +1296,24 @@ bool FPolygonUtils::ComputeMinimumAreaBox2D(
 
 	return bFound;
 }
+
+bool FPolygonUtils::IsInsideRotatedBox2D(
+	const FVector2D& Point, const FVector2D& Center,
+	const FVector2D& Extent, double YawDeg)
+{
+	if (Extent.IsNearlyZero())
+	{
+		return false;
+	}
+
+	const FVector2D Delta = Point - Center;
+	const double Yaw = FMath::DegreesToRadians(-YawDeg);
+	const double CosYaw = FMath::Cos(Yaw);
+	const double SinYaw = FMath::Sin(Yaw);
+	const FVector2D Local(
+		Delta.X * CosYaw - Delta.Y * SinYaw,
+		Delta.X * SinYaw + Delta.Y * CosYaw);
+
+	return FMath::Abs(Local.X) <= Extent.X
+		&& FMath::Abs(Local.Y) <= Extent.Y;
+}

@@ -73,7 +73,19 @@ bool FSebboHqShellTest::RunTest(const FString& Parameters)
 			Decken += Teil.Material == EHqMaterial::Concrete ? 1 : 0;
 			Glas += Teil.Material == EHqMaterial::Glass ? 1 : 0;
 		}
-		TestEqual(*FString::Printf(TEXT("Geschoss %d hat eine Decke"), Floor), Decken, 1);
+		TestTrue(*FString::Printf(TEXT("Geschoss %d hat eine Decke um den Kern"), Floor), Decken >= 4);
+		const double LiftY = D.CoreCm * 0.25;
+		for (const FHqPart& Teil : Teile)
+		{
+			if (Teil.Floor != Floor || Teil.Material != EHqMaterial::Concrete)
+			{
+				continue;
+			}
+			const bool bUeberSchacht = FMath::Abs(Teil.CenterCm.X) < Teil.SizeCm.X * 0.5
+				&& FMath::Abs(Teil.CenterCm.Y - LiftY) < Teil.SizeCm.Y * 0.5;
+			TestFalse(*FString::Printf(TEXT("Geschoss %d laesst den Aufzugsschacht offen"), Floor),
+				bUeberSchacht);
+		}
 		if (Floor == 0)
 		{
 			// Die Einfahrt und das Portal teilen nur die Erdgeschossfassade. Ein
@@ -82,7 +94,15 @@ bool FSebboHqShellTest::RunTest(const FString& Parameters)
 		}
 		else
 		{
-			TestEqual(*FString::Printf(TEXT("Geschoss %d hat ein Glasband"), Floor), Glas, 1);
+			TestTrue(*FString::Printf(TEXT("Geschoss %d hat vier Fassadenseiten"), Floor), Glas >= 4);
+			for (const FHqPart& Teil : Teile)
+			{
+				if (Teil.Floor == Floor && Teil.Material == EHqMaterial::Glass)
+				{
+					TestTrue(*FString::Printf(TEXT("Geschoss %d bleibt innen hohl"), Floor),
+						Teil.SizeCm.X <= 40.0 || Teil.SizeCm.Y <= 40.0);
+				}
+			}
 		}
 	}
 
@@ -546,11 +566,14 @@ bool FSebboHqPortalDurchgangTest::RunTest(const FString& Parameters)
 	constexpr double BelagCm = 118.0;
 
 	// Der Sturz ist das unterste Metallteil ueber der Portaloeffnung.
+	const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
+	const double PortalY = Layout.PedestrianTarget.CenterCm.Y;
 	double SturzUnterkanteCm = TNumericLimits<double>::Max();
 	for (const FHqPart& Teil : Layout.Parts)
 	{
 		const bool bUeberDemPortal = Teil.Material == EHqMaterial::Metal
-			&& Teil.CenterCm.X > D.FootprintCm * 0.4
+			&& Teil.CenterCm.X >= Half - 60.0 && Teil.CenterCm.X <= Half
+			&& FMath::Abs(Teil.CenterCm.Y - PortalY) < 10.0
 			&& Teil.SizeCm.Z < 150.0;
 		if (bUeberDemPortal)
 		{
@@ -583,121 +606,63 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqSchwellenrampeTest,
 
 bool FSebboHqSchwellenrampeTest::RunTest(const FString& Parameters)
 {
-	// Der Garagenboden darf nicht als Kante ueber der Zufahrt enden.
-	//
-	// GEMESSEN am 21.09.2026: die Zufahrt steigt in Fahrtrichtung von 9987 auf
-	// 10094 cm und trifft den Garagenboden (10096) fast genau - aber erst
-	// unter dem Gebaeude. An der Fassadenlinie liegt sie noch bei rund
-	// 10054 cm. Die ueberstehende Bodenplatte stand dort als 40-cm-Stufe quer
-	// im Weg, und der Fahrzeugquader blieb daran haengen.
+	// Alkis23: Die Platter-Fahrbahn liegt am Garagenanker bei 11013 cm.
+	// Der private Garagenboden hat dieselbe Hoehe. Die Verbindung muss daher
+	// bis an den Fahrbahnrand reichen und dabei ohne harte Kanten eine kleine
+	// Kuppe ueber dem tieferen oeffentlichen Fuss-/Radweg bilden.
 	const FSebboHqDimensions D;
 	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(D);
 	const double Half = D.FootprintCm * 0.5 + FMath::Max(0.0, D.PodiumOversizeCm);
-	const double BodenZ = SebboHq::GetAccessFloorCm(D);
+	const double FloorZ = SebboHq::GetAccessFloorCm(D);
+	const double GarageY = Layout.GarageTarget.CenterCm.Y;
 
-	// Bauteile VOR der Fassade auf Garagenhoehe UND IN DER FAHRSPUR: das ist
-	// die Rampe. Die Boeschung darunter ist breiter als die Oeffnung und
-	// faellt in groben Lagen ab - sie ist Anschuettung, keine Fahrflaeche, und
-	// wuerde die Stufenpruefung unten sonst zu Recht reissen.
-	// Die Oeffnungsbreite steht nicht oeffentlich, wohl aber das Zielvolumen
-	// der Garage - es ist aus derselben Luecke gerechnet: halbe Breite
-	// abzueglich 30 cm Rand je Seite.
-	const double SpurBreiteCm = (Layout.GarageTarget.ExtentCm.Y + 30.0) * 2.0;
-	double TiefsteKanteCm = BodenZ;
-	int32 Stufen = 0;
-	TArray<double> Oberkanten;
-	for (const FHqPart& Teil : Layout.Parts)
+	struct FDeck
 	{
-		const double Aussenkante = Teil.CenterCm.X + Teil.SizeCm.X * 0.5;
-		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
-		const bool bVorDerFassade = Aussenkante > Half + 1.0;
-		const bool bAufFahrhoehe = Oberkante <= BodenZ + 1.0 && Oberkante > BodenZ - 200.0;
-		const bool bInDerSpur = Teil.SizeCm.Y <= SpurBreiteCm + 1.0;
-		if (bVorDerFassade && bAufFahrhoehe && bInDerSpur && Teil.CenterCm.Y < 0.0)
+		double X0;
+		double X1;
+		double Top;
+	};
+	TArray<FDeck> Decks;
+	for (const FHqPart& Part : Layout.Parts)
+	{
+		const double Y0 = Part.CenterCm.Y - Part.SizeCm.Y * 0.5;
+		const double Y1 = Part.CenterCm.Y + Part.SizeCm.Y * 0.5;
+		const double X0 = Part.CenterCm.X - Part.SizeCm.X * 0.5;
+		if (Part.Material == EHqMaterial::Concrete && Part.SizeCm.Z <= 20.0
+			&& Y0 < GarageY && Y1 > GarageY && X0 >= Half - 1.0)
 		{
-			TiefsteKanteCm = FMath::Min(TiefsteKanteCm, Oberkante);
-			Oberkanten.Add(Oberkante);
-			++Stufen;
+			Decks.Add({ X0, Part.CenterCm.X + Part.SizeCm.X * 0.5,
+				Part.CenterCm.Z + Part.SizeCm.Z * 0.5 });
 		}
 	}
-
-	TestTrue(*FString::Printf(TEXT("Vor der Garage liegt eine Rampe (%d Stufen)"), Stufen),
-		Stufen >= 3);
-	// Sie muss den gemessenen Rest von rund 40 cm ueberbruecken.
-	TestTrue(*FString::Printf(
-		TEXT("Die Rampe faellt weit genug (%.0f cm unter den Boden)"), BodenZ - TiefsteKanteCm),
-		BodenZ - TiefsteKanteCm >= 40.0);
-
-	// UND SIE MUSS ALS SCHRAEGE LESEN, nicht als Treppe.
-	//
-	// GESEHEN am 21.09.2026 auf Alkis17: mit 5 Stufen ueber denselben 60 cm
-	// zeichnete sich jede Kante einzeln ab - vor der Garage stand ein
-	// gestuftes Betonpodest, keine Zufahrtsschuerze. Der Weg war gemessen
-	// frei, das Bild trotzdem falsch; darum haelt der Vertrag jetzt auch die
-	// Stufenhoehe fest und nicht nur den Gesamtfall.
-	Oberkanten.Sort();
-	double GroessteStufeCm = 0.0;
-	for (int32 i = 1; i < Oberkanten.Num(); ++i)
+	if (!TestTrue(TEXT("Vor der Garage liegt ein durchgehendes Fahrdeck"), Decks.Num() >= 20))
 	{
-		GroessteStufeCm = FMath::Max(GroessteStufeCm, Oberkanten[i] - Oberkanten[i - 1]);
+		return false;
 	}
-	TestTrue(*FString::Printf(
-		TEXT("Keine Stufe steht als Kante heraus (groesste %.1f cm)"), GroessteStufeCm),
-		GroessteStufeCm <= 6.0);
+	Decks.Sort([](const FDeck& A, const FDeck& B) { return A.X0 < B.X0; });
 
-	// UND SIE DARF NICHT IN DER LUFT ENDEN.
-	//
-	// GESEHEN am 21.09.2026 auf Alkis17: das Gelaende faellt quer zur Zufahrt,
-	// die Schuerze ist waagerecht - ihre talseitige Ecke stand rund 1,5 m frei
-	// ueber der Wiese. Feine Stufen haben daran nichts geaendert; es blieb ein
-	// Betonpodest. Erst die Boeschung darunter laesst den Beton als Schraege
-	// ins Gelaende laufen.
-	double BoeschungFallCm = 0.0;
-	double BreitesteLageCm = 0.0;
-	for (const FHqPart& Teil : Layout.Parts)
+	double EndeX = Half;
+	double VorigesTop = FloorZ;
+	double GroessteKante = 0.0;
+	double GroessteLuecke = 0.0;
+	double HoechstesTop = FloorZ;
+	for (const FDeck& Deck : Decks)
 	{
-		const double Aussenkante = Teil.CenterCm.X + Teil.SizeCm.X * 0.5;
-		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
-		const bool bUnterDerRampe = Oberkante <= TiefsteKanteCm + 1.0;
-		if (Aussenkante > Half + 1.0 && bUnterDerRampe
-			&& Teil.SizeCm.Y > SpurBreiteCm + 1.0 && Teil.CenterCm.Y < 0.0)
-		{
-			BoeschungFallCm = FMath::Max(BoeschungFallCm, TiefsteKanteCm - Oberkante);
-			BreitesteLageCm = FMath::Max(BreitesteLageCm, Teil.SizeCm.Y);
-		}
+		GroessteLuecke = FMath::Max(GroessteLuecke, Deck.X0 - EndeX);
+		GroessteKante = FMath::Max(GroessteKante, FMath::Abs(Deck.Top - VorigesTop));
+		HoechstesTop = FMath::Max(HoechstesTop, Deck.Top);
+		EndeX = FMath::Max(EndeX, Deck.X1);
+		VorigesTop = Deck.Top;
 	}
-	TestTrue(*FString::Printf(
-		TEXT("Unter der Rampe steht eine Boeschung (%.0f cm tief)"), BoeschungFallCm),
-		BoeschungFallCm >= 100.0);
-	TestTrue(*FString::Printf(
-		TEXT("Sie greift ueber die Fahrspur hinaus (%.0f statt %.0f cm)"),
-		BreitesteLageCm, SpurBreiteCm),
-		BreitesteLageCm >= SpurBreiteCm + 200.0);
+	GroessteKante = FMath::Max(GroessteKante, FMath::Abs(VorigesTop - FloorZ));
 
-	// UND SIE MUSS BIS AN DIE FAHRBAHN REICHEN.
-	//
-	// GEMESSEN am 21.09.2026 auf Alkis17 (Saved/Diagnose/zufahrtsprobe.json,
-	// "fahrbahn_lokal"): die turmseitige Kante der Wolkenbruch liegt vor der
-	// Garagenoeffnung bei 1946..2162 cm vom Mittelpunkt. Mit 300 cm endete
-	// die Schuerze bei 1851 cm - bis zu 3 m davor, im Gras. Der Vertrag haelt
-	// darum die LAENGE fest und nicht nur die Form; eine kuerzere Schuerze
-	// waere wieder eine Zufahrt, die nirgendwohin fuehrt.
-	double FussDerSchuerzeCm = Half;
-	for (const FHqPart& Teil : Layout.Parts)
-	{
-		const double Oberkante = Teil.CenterCm.Z + Teil.SizeCm.Z * 0.5;
-		if (Oberkante <= BodenZ + 1.0 && Oberkante > BodenZ - 200.0
-			&& Teil.CenterCm.Y < 0.0 && Teil.SizeCm.Y <= SpurBreiteCm + 1.0)
-		{
-			FussDerSchuerzeCm = FMath::Max(FussDerSchuerzeCm,
-				Teil.CenterCm.X + Teil.SizeCm.X * 0.5);
-		}
-	}
-	TestTrue(*FString::Printf(
-		TEXT("Die Schuerze reicht bis an die Fahrbahn (%.0f cm, noetig 2162)"),
-		FussDerSchuerzeCm),
-		FussDerSchuerzeCm >= 2162.0);
-
+	TestTrue(TEXT("Das Fahrdeck erreicht den Platter-Fahrbahnrand"), EndeX >= Half + 1150.0);
+	TestTrue(TEXT("Das Fahrdeck deckt den tieferen oeffentlichen Weg ab"),
+		HoechstesTop >= FloorZ + 25.0);
+	TestTrue(*FString::Printf(TEXT("Keine Luecke zwischen den Decks (%.1f cm)"), GroessteLuecke),
+		GroessteLuecke <= 1.0);
+	TestTrue(*FString::Printf(TEXT("Keine harte Fahrkante (%.1f cm)"), GroessteKante),
+		GroessteKante <= 6.0);
 	return true;
 }
 
@@ -735,7 +700,7 @@ bool FSebboHqPortalSchwelleTest::RunTest(const FString& Parameters)
 		const double X0 = Teil.CenterCm.X - Teil.SizeCm.X * 0.5;
 		const bool bImPortalband = PortalY > Y0 && PortalY < Y1;
 		const bool bAufTritthoehe = Oberkante >= D.SlabCm - 1.0 && Oberkante <= FloorZ + 1.0;
-		const bool bImDurchgang = X0 > Half - 500.0 && X0 < Half + 30.0;
+		const bool bImDurchgang = X0 > Half - 500.0 && X0 < Half;
 		if (bImPortalband && bAufTritthoehe && bImDurchgang)
 		{
 			Stufen.Add({ Teil.CenterCm.X + Teil.SizeCm.X * 0.5, Oberkante });

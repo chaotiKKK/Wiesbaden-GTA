@@ -486,11 +486,76 @@ struct WIESBADENREAL_API FRoadIntersection
 	int32 GetArmCount() const { return Arms.Num(); }
 };
 
+/**
+ * Gepflasterte Wendeplatte am Ende einer Sackgasse.
+ *
+ * Deckt die Wendeschleife des Verkehrs (WiesbadenTurnaround::LoopCircle) samt
+ * halber Fahrzeugbreite ab - vorher fuhren wendende Autos ueber die Wiese.
+ * Eine EBENE, die das Laengsgefaelle der Strasse fortsetzt: dieselbe Hoehe
+ * gilt fuer Pflaster, Gelaendeanschmiegen und die Wendeschleife.
+ */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FRoadTurningPlate
+{
+	GENERATED_BODY()
+
+	/** Index des Abschnitts, der hier endet. */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	int32 SegmentIndex = INDEX_NONE;
+
+	/** Spur, die hier ohne Nachfolger endet (Index in FRoadNetwork::Lanes). */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	int32 LaneId = INDEX_NONE;
+
+	/** Mittelpunkt der Platte (= der Wendeschleife), Z auf der Plattenebene. */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	FVector Center = FVector::ZeroVector;
+
+	/** Radius des Pflasters in cm. */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	double RadiusCm = 0.0;
+
+	/** Hoehenaenderung je cm in X und Y (Laengsgefaelle der Strasse). */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	FVector2D Gradient = FVector2D::ZeroVector;
+
+	/** Umriss (konvex, gegen den Uhrzeigersinn) auf der Plattenebene. */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	TArray<FVector> Polygon;
+
+	/** Hoehe der Plattenebene an einem Punkt. */
+	double HeightAt(const FVector2D& P) const
+	{
+		return Center.Z + Gradient.X * (P.X - Center.X) + Gradient.Y * (P.Y - Center.Y);
+	}
+
+	/**
+	 * Als Kreuzungsplatte mit einem Arm - so vermaschen Generator und
+	 * Gelaendeanschmiegen sie mit demselben Code wie Kreuzungen.
+	 */
+	FRoadIntersection AsJunction() const
+	{
+		FRoadIntersection Junction;
+		Junction.Polygon = Polygon;
+		Junction.Location = Center;
+		Junction.RadiusCm = RadiusCm;
+		FIntersectionArm Arm;
+		Arm.SegmentId = SegmentIndex;
+		Junction.Arms.Add(Arm);
+		return Junction;
+	}
+};
+
 namespace WiesbadenTurnaround
 {
+	/** Zuschlag vom Schleifenradius zum Pflasterrand: halbe Fahrzeugbreite + Rand, cm. */
+	constexpr double PlateMarginCm = 130.0;
+
 	/**
 	 * Kreis der Wendeschleife HINTER dem Spurende E (Richtung Dir), durch E und
-	 * - bei zweispurigen Strassen - durch den Start S der Gegenspur.
+	 * - bei zweispurigen Strassen - durch den Start S der Gegenspur. EINE
+	 * Rechnung fuer Verkehr (Schleife) und Generator (Pflaster), sonst fuehre
+	 * die Schleife neben der Platte.
 	 */
 	inline void LoopCircle(const FVector& E, const FVector& Dir, const FVector& S,
 		FVector2D& OutCenter, double& OutRadiusCm)
@@ -576,6 +641,10 @@ struct WIESBADENREAL_API FRoadNetwork
 
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	TArray<FLaneConnection> Connections;
+
+	/** Wendeplatten an Sackgassen (je Spur ohne Nachfolger hoechstens eine). */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	TArray<FRoadTurningPlate> TurningPlates;
 
 	/** Nachfolgerliste je Spur: LaneId -> Indizes in Connections. */
 	TMap<int32, TArray<int32>> LaneSuccessors;

@@ -46,8 +46,16 @@ if eal.does_directory_exist(temporary):
     report('ERROR: temporary import folder already exists; inspect it manually')
     save_report()
     raise RuntimeError(lines[-1])
+# WB_ERSETZEN=1 replaces existing targets (after a re-bake, e.g. the 25.09.
+# tyre-only wheel). Both meshes are loaded by path from C++ only - no asset
+# references them - so deleting and re-importing is safe. Without the switch
+# existing targets are preserved as before.
+replace = os.environ.get('WB_ERSETZEN') == '1'
 for name in ('SM_BusBody', 'SM_BusWheel'):
     if eal.does_asset_exist(root + '/' + name):
+        if replace and eal.delete_asset(root + '/' + name):
+            report('replaced: old %s deleted' % name)
+            continue
         report('ERROR: target %s already exists; preserving it' % name)
         save_report()
         raise RuntimeError(lines[-1])

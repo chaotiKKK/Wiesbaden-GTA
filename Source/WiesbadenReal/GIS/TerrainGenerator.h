@@ -190,6 +190,10 @@ struct WIESBADENREAL_API FTerrainSitePad
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain", meta = (ClampMin = "100.0"))
 	double RoadSearchRadiusCm = 5000.0;
 
+	/** Leer: naechster Abschnitt. Sonst dieselbe benannte Strasse wie die Zufahrt. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+	FString PreferredStreetName;
+
 	/**
 	 * Hoehe des privaten Bodens ueber dem Plateau (cm).
 	 *

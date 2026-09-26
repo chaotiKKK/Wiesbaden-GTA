@@ -2,6 +2,7 @@
 
 #include "Vehicles/WiesbadenFootPawn.h"
 
+#include "Core/WiesbadenInputMap.h"       // Belegungstabelle (Tastatur + XBox)
 #include "Vehicles/WiesbadenHelicopter.h"   // ApplyStickShaping: eine Kennlinie fuer alle Sticks
 #include "Weapons/WiesbadenWeaponComponent.h"
 #include "Weapons/WiesbadenWeaponSpec.h"
@@ -43,7 +44,7 @@ AWiesbadenFootPawn::AWiesbadenFootPawn()
 	// Fuss und am Steuer optisch ruhig.
 	CameraArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraArm"));
 	CameraArm->SetupAttachment(Capsule);
-	CameraArm->TargetArmLength = 300.0f;
+	CameraArm->TargetArmLength = ShoulderArmLengthCm;
 	CameraArm->bUsePawnControlRotation = false;
 	CameraArm->bDoCollisionTest = true;
 	CameraArm->SetRelativeLocation(FVector(0.0f, 0.0f, 60.0f));
@@ -99,6 +100,13 @@ void AWiesbadenFootPawn::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Grund-FOV merken: der Zielmodus teilt es durch den Zoomfaktor, und wer
+	// den Wert hier liest, muss ihn nicht zur Kameraeinstellung doppeln.
+	if (Camera)
+	{
+		BaseCameraFOV = Camera->FieldOfView;
+	}
+
 	// Erst hier, nicht im Konstruktor: die Materialien liegen als Assets vor
 	// und sind zur Konstruktionszeit des CDO noch nicht sicher ladbar.
 	BuildBody();
@@ -110,6 +118,9 @@ void AWiesbadenFootPawn::BeginPlay()
 		Weapon->SetupWeapon();
 	}
 
+	// Waffenlage und Zielzustand einmal sauber setzen - dann gilt die
+	// Armlaenge aus den Eigenschaften, nicht nur der Konstruktionswert.
+	ApplyCameraMode();
 }
 
 void AWiesbadenFootPawn::Tick(float DeltaSeconds)
@@ -175,8 +186,10 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 	// Ducken, solange X (oder der rechte Stick) gehalten wird. Aufstehen nur mit
 	// Platz darueber: unter einer niedrigen Decke bleibt die Figur geduckt,
 	// bis sie hervorkommt.
-	const bool bCrouchDown = PC->IsInputKeyDown(EKeys::X)
-		|| PC->IsInputKeyDown(EKeys::Gamepad_RightThumbstick);
+	// Ducken: X (halten) oder R3 am Gamepad - aus der Belegungstabelle,
+	// nicht als verstreute Einzelabfrage.
+	const bool bCrouchDown =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::DuckenHalten);
 	if (bCrouchDown && !bCrouched && !bAirborne)
 	{
 		SetCrouched(true);
@@ -206,8 +219,9 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 		// A am Gamepad ist SPRINGEN, nicht mehr Rennen: das ist die uebliche
 		// Belegung, und beide auf derselben Taste hiesse, dass jeder Sprung
 		// zugleich einen Sprint ausloest.
-		const bool bSprint = PC->IsInputKeyDown(EKeys::LeftShift)
-			|| PC->IsInputKeyDown(EKeys::Gamepad_LeftThumbstick);
+		// Rennen: Umschalt oder L3 (Vorbild RDR2: Sprint auf dem linken Stick).
+		const bool bSprint =
+			WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::RennenHalten);
 		const float SpeedCmPerS = (bCrouched ? CrouchSpeedKmh : bSprint ? SprintSpeedKmh : WalkSpeedKmh)
 			* KmhToCmPerS;
 		const FVector Wanted = Move.GetSafeNormal() * SpeedCmPerS * DeltaSeconds;
@@ -280,8 +294,8 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 
 	// Springen auf die Leertaste. Flanke, damit Halten nicht dauerspringt,
 	// und nur vom Boden aus - kein zweiter Sprung in der Luft.
-	const bool bJumpDown = PC->IsInputKeyDown(EKeys::SpaceBar)
-		|| PC->IsInputKeyDown(EKeys::Gamepad_FaceButton_Bottom);
+	const bool bJumpDown =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::Springen);
 	if (bJumpDown && !bJumpKeyHeld && !bAirborne && !bCrouched)
 	{
 		VerticalSpeedCmS = JumpSpeedCmS;
@@ -289,16 +303,17 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 	}
 	bJumpKeyHeld = bJumpDown;
 
-	// Angriff auf die linke Maustaste - Strg und Enter bleiben als Ersatz.
-	const bool bFireDown = PC->IsInputKeyDown(EKeys::LeftMouseButton)
-		|| PC->IsInputKeyDown(EKeys::LeftControl)
-		|| PC->IsInputKeyDown(EKeys::Enter)
-		|| PC->GetInputAnalogKeyState(EKeys::Gamepad_RightTriggerAxis) > 0.35f;
+	// Feuern: linke Maustaste, Strg/Enter als Ersatz, RT am Gamepad
+	// (RDR2-Layout: rechter Trigger schiesst).
+	const bool bFireDown =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::Feuern);
 
 	// Ansicht und Waffenwahl vor dem Feuern abfragen: ein Druck auf C oder
 	// eine Ziffer gilt im selben Bild schon fuer die neue Lage.
 	PollWeaponKeys(PC);
-	const bool bEgoDown = PC->IsInputKeyDown(EKeys::C);
+	PollAimAndWheel(PC);
+	const bool bEgoDown =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::AnsichtWechseln);
 	if (bEgoDown && !bEgoKeyHeld)
 	{
 		ToggleEgoCamera();
@@ -515,7 +530,7 @@ void AWiesbadenFootPawn::ApplyCameraMode()
 	else
 	{
 		// Schulterkamera: die bekannte Verfolgerlage zurueck.
-		CameraArm->TargetArmLength = 300.0f;
+		CameraArm->TargetArmLength = ShoulderArmLengthCm;
 		CameraArm->SetRelativeLocation(FVector(0.0f, 0.0f, 60.0f));
 
 		if (BodyMesh) { BodyMesh->SetOwnerNoSee(false); }
@@ -531,6 +546,9 @@ void AWiesbadenFootPawn::ApplyCameraMode()
 		}
 	}
 
+	// Zielzustand zuletzt: Zoom, Armlaenge und Streuung gelten fuer beide
+	// Lagen (Schulter und Ego).
+	ApplyAimState();
 }
 
 void AWiesbadenFootPawn::PollWeaponKeys(const APlayerController* PC)
@@ -540,20 +558,167 @@ void AWiesbadenFootPawn::PollWeaponKeys(const APlayerController* PC)
 		return;
 	}
 
-	// Tasten 1-9 auf die Tabelle (Pistole .. Kettensaege). Flankenerkennung
-	// je Taste, damit Halten nicht springt.
-	static const FKey Keys[9] = {
-		EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
-		EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine };
+	// Ziffern 1-8 auf die acht Waffen des Auftrags, in dessen Reihenfolge
+	// (Pistole, Gewehr, MG, Laserpistole, Lichtschwert, Raketenwerfer,
+	// Granatwerfer, Plasmacutter). Die vier Nebenwaffen (MP, Schrotflinte,
+	// Scharfschuetze, Kettensaege) haben keine eigene Ziffer mehr - sie
+	// liegen auf dem Mausrad, das durch die ganze Tabelle blaettern kann.
+	// Flankenerkennung je Taste, damit Halten nicht springt.
+	static const FKey Keys[8] = {
+		EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four,
+		EKeys::Five, EKeys::Six, EKeys::Seven, EKeys::Eight };
+	static const int32 CoreWeapons[8] = {
+		static_cast<int32>(EWiesbadenWeaponId::Pistole),
+		static_cast<int32>(EWiesbadenWeaponId::Gewehr),
+		static_cast<int32>(EWiesbadenWeaponId::Maschinengewehr),
+		static_cast<int32>(EWiesbadenWeaponId::Laserpistole),
+		static_cast<int32>(EWiesbadenWeaponId::Lichtschwert),
+		static_cast<int32>(EWiesbadenWeaponId::Raketenwerfer),
+		static_cast<int32>(EWiesbadenWeaponId::Granatwerfer),
+		static_cast<int32>(EWiesbadenWeaponId::Plasmacutter) };
 
-	for (int32 Index = 0; Index < 9; ++Index)
+	for (int32 Index = 0; Index < 8; ++Index)
 	{
 		const bool bDown = PC->IsInputKeyDown(Keys[Index]);
-		if (bDown && !WeaponKeyHeld[Index] && UWiesbadenWeaponComponent::IsValidWeaponIndex(Index))
+		if (bDown && !WeaponKeyHeld[Index]
+			&& UWiesbadenWeaponComponent::IsValidWeaponIndex(CoreWeapons[Index]))
 		{
-			SelectWeapon(Index);
+			SelectWeapon(CoreWeapons[Index]);
 		}
 		WeaponKeyHeld[Index] = bDown;
+	}
+}
+
+void AWiesbadenFootPawn::PollAimAndWheel(const APlayerController* PC)
+{
+	if (!PC)
+	{
+		return;
+	}
+
+	// Zielen (ADS): rechte Maustaste ODER linker Trigger am Gamepad
+	// (RDR2-Layout: LT zielt). Kamera zoomt heran, Streuung halbiert sich;
+	// Loslassen stellt beides sofort wieder her.
+	const bool bAimDown =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::Zielen);
+	if (bAimDown != bAiming)
+	{
+		bAiming = bAimDown;
+		if (!bAiming)
+		{
+			AdsZoomLevel = 1.0f;
+		}
+		ApplyAimState();
+	}
+
+	// Waffenwechsel an den Schultertasten (Flanke je Taste): der Gamepad-Weg
+	// fuer das, was am PC das Mausrad tut.
+	const bool bVorHeld =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::WaffeVor);
+	if (bVorHeld && !bWaffeVorHeld && Weapon)
+	{
+		SelectWeapon(WiesbadenWeapons::NextWeaponIndex(Weapon->WeaponIndex, +1));
+	}
+	bWaffeVorHeld = bVorHeld;
+
+	const bool bZurueckHeld =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::WaffeZurueck);
+	if (bZurueckHeld && !bWaffeZurueckHeld && Weapon)
+	{
+		SelectWeapon(WiesbadenWeapons::NextWeaponIndex(Weapon->WeaponIndex, -1));
+	}
+	bWaffeZurueckHeld = bZurueckHeld;
+
+	// "Mausrad": die Achse meldet ein Delta je Bild, das D-Pad liefert
+	// Klicks als Flanken. Erst ab einem ganzen Klick handeln, damit ein
+	// langsames Scrollen nicht mehrere Stufen springt.
+	WheelAccumulator += PC->GetInputAnalogKeyState(EKeys::MouseWheelAxis);
+	const bool bPadUp = PC->IsInputKeyDown(EKeys::Gamepad_DPad_Up);
+	const bool bPadDown = PC->IsInputKeyDown(EKeys::Gamepad_DPad_Down);
+	if (bPadUp && !bPadUpHeld)
+	{
+		WheelAccumulator += 1.0f;
+	}
+	if (bPadDown && !bPadDownHeld)
+	{
+		WheelAccumulator -= 1.0f;
+	}
+	bPadUpHeld = bPadUp;
+	bPadDownHeld = bPadDown;
+
+	if (FMath::Abs(WheelAccumulator) < 1.0f)
+	{
+		return;
+	}
+	const int32 Clicks = FMath::TruncToInt(WheelAccumulator);
+	WheelAccumulator -= static_cast<float>(Clicks);
+
+	// Aufteilung des Klicks - dieselbe reine Funktion wie am PC, im Test
+	// geprueft (WiesbadenReal.Input.MausradRoute).
+	bool bCuts = false;
+	if (Weapon)
+	{
+		bCuts = WiesbadenWeapons::Spec(Weapon->WeaponIndex).bCuts;
+	}
+
+	switch (WiesbadenInputMap::RouteMausrad(bCuts, bAiming))
+	{
+	case WiesbadenInputMap::EMausradRoute::Schnittebene:
+		// Plasma-Trennen: die Schnittebene dreht in Rasten (Spec), weder
+		// Zoom noch Waffenwechsel. Das Dead-Space-Prinzip.
+		if (Weapon)
+		{
+			const FWiesbadenWeaponSpec& CutSpec =
+				WiesbadenWeapons::Spec(Weapon->WeaponIndex);
+			Weapon->RotateCutPlane(Clicks * CutSpec.CutAngleStepDeg);
+		}
+		break;
+
+	case WiesbadenInputMap::EMausradRoute::Zoom:
+	{
+		// Zielmodus: das Rad zoomt. Die Obergrenze gehoert zur Waffe
+		// (Scharfschuetze 3.5, Plasmacutter 1.4), nicht zum Pawn.
+		const float MaxZoom = Weapon
+			? WiesbadenWeapons::Spec(Weapon->WeaponIndex).AdsZoomMax
+			: 2.0f;
+		AdsZoomLevel = WiesbadenInputMap::ZoomStufe(
+			AdsZoomLevel, Clicks, AdsZoomStep, MaxZoom);
+		ApplyAimState();
+		break;
+	}
+
+	case WiesbadenInputMap::EMausradRoute::Waffenwechsel:
+	default:
+		// Sonst blaettern: durch die ganze Tabelle, ueber beide Raender.
+		if (Weapon)
+		{
+			SelectWeapon(WiesbadenWeapons::NextWeaponIndex(Weapon->WeaponIndex, Clicks));
+		}
+		break;
+	}
+}
+
+void AWiesbadenFootPawn::ApplyAimState()
+{
+	// Zoom = FOV teilen: 2.0 halbiert den Bildausschnitt. Der Grundwert
+	// stammt aus der Kamera selbst (gemerkt beim Start), damit niemand zwei
+	// FOV-Zahlen synchron halten muss.
+	if (Camera)
+	{
+		Camera->SetFieldOfView(BaseCameraFOV / FMath::Max(AdsZoomLevel, 1.0f));
+	}
+
+	// Im Zielmodus rueckt die Kamera dichter an die Schulter.
+	if (CameraArm)
+	{
+		const float BaseArm = bEgoCamera ? EgoArmLengthCm : ShoulderArmLengthCm;
+		CameraArm->TargetArmLength = bAiming ? BaseArm * AdsArmLengthScale : BaseArm;
+	}
+
+	// Zielen macht praezise: halbe Streuung.
+	if (Weapon)
+	{
+		Weapon->SpreadScale = bAiming ? 0.5f : 1.0f;
 	}
 }
 
@@ -573,6 +738,9 @@ void AWiesbadenFootPawn::SelectWeapon(int32 Index)
 	// Feuerrate des Pawns an die neue Waffe.
 	const FWiesbadenWeaponSpec& Spec = WiesbadenWeapons::Spec(Index);
 	FireCooldownSeconds = FMath::Max(FireCooldownSeconds, Spec.ShotIntervalSeconds());
+
+	// Zoom bleibt gueltig, aber nie ueber die Grenze der neuen Waffe.
+	AdsZoomLevel = FMath::Min(AdsZoomLevel, FMath::Max(Spec.AdsZoomMax, 1.0f));
 
 	// Die Kettensaege (Slot 9) schwingt die Figur und tuckert; jede andere
 		// Waffe zeigt die Waffenkomponente und feuert Projektile. Ein laufender

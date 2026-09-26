@@ -24,10 +24,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHelicopterModelTest,
  *      "<Paket>.<Objekt>" lauten. Ein Tippfehler kostet keinen Build, keinen
  *      Log-Eintrag - nur den Wuerfel-Rueckfall.
  *
- *   2. MASTACHSE. Der Mesh-Ursprung liegt beim Neubau per Definition auf der
- *      Rotorachse; der Blatt-Component traegt nur -Hubhoehe. Liegt der
- *      Blatt-Versatz in XY nicht bei ~0, kreist der Rotor um etwas anderes
- *      als den Mast (der sichtbare Fehler "Rotor schlenkert").
+ *   2. MASTACHSE. Der Blatt-Component traegt -Hubhoehe und die Korrektur des
+ *      gemessenen Scheiben-Drehpunkts (ComputeRotorMountOffset). Ein
+ *      XY-Versatz von "~0" ist gerade NICHT richtig: der Drehpunkt der
+ *      unteren Scheibe liegt 5,4 cm neben dem Modellursprung (gemessen an der
+ *      Importquelle, Saved/Diagnose/ka52/rotorachse_fbx.txt). Ohne Korrektur
+ *      kreist der untere Rotor sichtbar neben der Nabe - der Fehler
+ *      "Rotor schlenkert".
  *
  *   3. MATERIAL. `AssetTools.create_asset` legt ein Material nur IM SPEICHER
  *      an; ohne `save_loaded_asset` zeigen die gespeicherten Meshes auf ein
@@ -160,18 +163,27 @@ bool FHelicopterModelTest::RunTest(const FString& Parameters)
 	}
 
 	// -- Mastachse -----------------------------------------------------------
-	const TPair<const TCHAR*, const TCHAR*> Rotors[] = {
-		{ TEXT("MainRotorHub"),  TEXT("MainRotorBlade") },
-		{ TEXT("LowerRotorHub"), TEXT("LowerRotorBlade") },
+	// bUnten gehoert zur Zuordnung: die gemessenen Drehpunkte der beiden
+	// Scheiben sind verschiedene Zahlen, und ein Tausch wuerde an der
+	// Assertion unten auffallen.
+	const struct
+	{
+		const TCHAR* HubName;
+		const TCHAR* BladeName;
+		bool bUnten;
+	} Rotors[] = {
+		{ TEXT("MainRotorHub"),  TEXT("MainRotorBlade"),  false },
+		{ TEXT("LowerRotorHub"), TEXT("LowerRotorBlade"), true },
 	};
 
-	for (const TPair<const TCHAR*, const TCHAR*>& R : Rotors)
+	for (const auto& R : Rotors)
 	{
-		USceneComponent* Hub = FindObject<USceneComponent>(CDO, R.Key);
-		USceneComponent* Blade = FindObject<USceneComponent>(CDO, R.Value);
+		USceneComponent* Hub = FindObject<USceneComponent>(CDO, R.HubName);
+		USceneComponent* Blade = FindObject<USceneComponent>(CDO, R.BladeName);
 		if (!Hub || !Blade)
 		{
-			AddError(FString::Printf(TEXT("%s/%s fehlt am CDO"), R.Key, R.Value));
+			AddError(FString::Printf(TEXT("%s/%s fehlt am CDO"),
+				R.HubName, R.BladeName));
 			continue;
 		}
 
@@ -181,23 +193,43 @@ bool FHelicopterModelTest::RunTest(const FString& Parameters)
 		// Der Blatt-Component hebt die eingebackene Modellage wieder auf: sein
 		// z-Versatz muss exakt die negative Nabenhoehe sein.
 		TestTrue(FString::Printf(TEXT("%s: Blatt-z %.1f hebt Nabe %.1f auf"),
-			R.Key, BladeLoc.Z, HubLoc.Z),
+			R.HubName, BladeLoc.Z, HubLoc.Z),
 			FMath::IsNearlyEqual(BladeLoc.Z, -HubLoc.Z, 0.5f));
 
-		// Und in XY darf gar kein Versatz stehen - sonst laeuft der Rotor
-		// exzentrisch um die Mastachse.
-		const double OffsetXY = FMath::Sqrt(
-			static_cast<double>(BladeLoc.X - HubLoc.X) * (BladeLoc.X - HubLoc.X) +
-			static_cast<double>(BladeLoc.Y - HubLoc.Y) * (BladeLoc.Y - HubLoc.Y));
-		TestTrue(FString::Printf(TEXT("%s: XY-Abstand Blatt<->Mastachse %.2f cm (erwartet <5)"),
-			R.Key, OffsetXY), OffsetXY < 5.0);
+		// Der XY-Versatz ist die KORREKTUR, nicht null: der Drehpunkt der
+		// Scheibe liegt nachweislich nicht auf (0, 0) (unten 5,4 cm in X,
+		// gemessen an der Importquelle). "Versatz 0" war die alte Annahme,
+		// und sie liess den unteren Rotor 5 cm neben der Nabe kreisen. Der
+		// Versatz wird deshalb gegen dieselbe Funktion geprueft, die ihn
+		// erzeugt - ein fest verdrahteter Wert an zweiter Stelle faellt auf.
+		const FVector Soll = AWiesbadenHelicopter::ComputeRotorMountOffset(
+			AWiesbadenHelicopter::GetRotorDrehpunktCm(R.bUnten),
+			Blade->GetRelativeRotation(), HubLoc.Z);
+		const FVector Fehler = BladeLoc - Soll;
+		TestTrue(FString::Printf(
+			TEXT("%s: Blatt-Versatz (%.2f, %.2f) cm entspricht der Achsenkorrektur "
+				"(%.2f, %.2f) cm, Abweichung %.4f cm"),
+			R.HubName, BladeLoc.X, BladeLoc.Y, Soll.X, Soll.Y,
+			FMath::Sqrt(static_cast<double>(Fehler.X) * Fehler.X
+				+ static_cast<double>(Fehler.Y) * Fehler.Y)),
+			FMath::Abs(Fehler.X) < 0.01f && FMath::Abs(Fehler.Y) < 0.01f);
+
+		// Und das Ergebnis muss auf der Mastachse liegen: Nabe + Versatz +
+		// Modelldrehung hebt den gemessenen Drehpunkt auf.
+		const FVector AufDerAchse = HubLoc + BladeLoc
+			+ Blade->GetRelativeRotation().RotateVector(
+				AWiesbadenHelicopter::GetRotorDrehpunktCm(R.bUnten));
+		TestTrue(FString::Printf(
+			TEXT("%s: gemessener Drehpunkt liegt nach der Kette bei (%.4f, %.4f) cm"),
+			R.HubName, AufDerAchse.X, AufDerAchse.Y),
+			FMath::Abs(AufDerAchse.X) < 0.01f && FMath::Abs(AufDerAchse.Y) < 0.01f);
 
 		// Nabenhoehen des Neubaus (z 495 / 376,5 cm), Abstand ~118 cm.
 		TestTrue(FString::Printf(TEXT("%s: Nabenhoehe %.1f cm (erwartet 370..500)"),
-			R.Key, HubLoc.Z), HubLoc.Z > 370.0 && HubLoc.Z < 500.0);
+			R.HubName, HubLoc.Z), HubLoc.Z > 370.0 && HubLoc.Z < 500.0);
 
-		Ist.Add(FString::Printf(TEXT("%s Nabe z=%.1f, Blatt-z=%.1f, XY-Offset=%.2f cm"),
-			R.Key, HubLoc.Z, BladeLoc.Z, OffsetXY));
+		Ist.Add(FString::Printf(TEXT("%s Nabe z=%.1f, Blatt (%.2f, %.2f, %.1f) cm"),
+			R.HubName, HubLoc.Z, BladeLoc.X, BladeLoc.Y, BladeLoc.Z));
 	}
 
 	// Eine Zeile, alles drin: Mesh-Namen, Material je Slot, Rumpfmasse,

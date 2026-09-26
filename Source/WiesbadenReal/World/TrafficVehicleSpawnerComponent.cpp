@@ -309,6 +309,7 @@ void UTrafficVehicleSpawnerComponent::UpdateCollisionProxies(const TArray<FTraff
 		CollisionProxies.Num(),
 		Nearest);
 
+	ProxyVehicleIds.Init(INDEX_NONE, CollisionProxies.Num());
 	for (int32 i = 0; i < CollisionProxies.Num(); ++i)
 	{
 		UBoxComponent* Box = CollisionProxies[i];
@@ -320,6 +321,7 @@ void UTrafficVehicleSpawnerComponent::UpdateCollisionProxies(const TArray<FTraff
 		if (i < Nearest.Num())
 		{
 			const FTrafficVehicle& Vehicle = Vehicles[Nearest[i]];
+			ProxyVehicleIds[i] = Vehicle.VehicleId;
 
 			// Kastengroesse und -lage aus der Karosserie DIESES Typs, an der
 			// sichtbaren Karosserie (nicht an der Sollbahn) - man stoesst an
@@ -352,6 +354,18 @@ void UTrafficVehicleSpawnerComponent::UpdateCollisionProxies(const TArray<FTraff
 	}
 
 	ActiveCollisionProxyCount = Nearest.Num();
+}
+
+int32 UTrafficVehicleSpawnerComponent::FindVehicleIdForProxy(const UPrimitiveComponent* Component) const
+{
+	for (int32 i = 0; i < CollisionProxies.Num(); ++i)
+	{
+		if (CollisionProxies[i] == Component)
+		{
+			return ProxyVehicleIds.IsValidIndex(i) ? ProxyVehicleIds[i] : INDEX_NONE;
+		}
+	}
+	return INDEX_NONE;
 }
 
 void UTrafficVehicleSpawnerComponent::EnsureLampPools()

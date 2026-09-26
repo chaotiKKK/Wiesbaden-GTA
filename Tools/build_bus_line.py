@@ -18,12 +18,27 @@ Halte: die Node-Mitglieder mit Rolle stop/stop_entry_only in Relations-Reihenfol
 mit ihren Namen (die liefert die OSM-API mit). Die Zuordnung auf die Polylinie
 macht der Actor (naechster Punkt).
 
+RUECKWEG (25.09.): die Gegenrichtung faehrt NICHT mehr dieselbe Linie
+rueckwaerts, sondern ihre eigene OSM-Relation (LINE_RETURN) mit eigenen Halten.
+Auf getrennten Richtungsfahrbahnen (Hauptbahnhof) liegt ihre Halte auf der
+ANDEREN Fahrbahn - rueckwaerts auf der Hinweg-Linie stand der Bus dort auf der
+falschen Strassenseite. Dazu die Anschlussfahrten im echten Strassennetz
+(Overpass, Einbahnstrassen beachtet): am fernen Ende vom Hinweg-Ende zum
+Rueckweg-Anfang, am Nordfriedhof von der Ausstiegs- zur Einstiegshaltestelle -
+real biegen 3 und 6 vor der Kreuzung rechts in den Hellkundweg (Ausstieg,
+Pause) und fahren in einer Linkskurve zur Einstiegshaltestelle.
+Neue Schluessel: return_path, return_stops, return_stop_names, return_source.
+
 Aufruf: python Tools/build_bus_line.py [ref ...]
 """
+import hashlib
+import heapq
 import json
 import math
 import os
 import sys
+import urllib.parse
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
 PROJ = HERE.rsplit("/Tools", 1)[0]
@@ -57,6 +72,26 @@ LINE_DISPLAY = {
     "3": {"forward": "Biebrich Rheinufer", "backward": "Nordfriedhof", "all_stops": True},
 }
 
+# Gegenrichtung je Linie (Tools/fetch_bus_lines.py holt sie mit). Gewaehlt ist
+# jeweils die Relation mit demselben "via" wie die Hinfahrt.
+LINE_RETURN = {
+    "6": 1730099,   # Mainz Gonsenheim Wildpark -> Wiesbaden Nordfriedhof
+    "3": 7190688,   # Wilhelm-Kopp-Strasse -> Nordfriedhof (via Welfenstrasse)
+}
+
+# Ausstieg am Nordfriedhof, wo die OSM-Relation veraltet ist: die 3 biegt wie
+# die 6 vor der Kreuzung rechts in den Hellkundweg (Ortskenntnis, 25.09.); die
+# Relation 7190688 fuehrt den Ausstieg noch an der Platter Strasse.
+ARRIVAL_OVERRIDE = {
+    "3": (50.0968507, 8.2211677),
+}
+
+# Anschlussfahrten laufen ueber diese Strassenarten (Overpass-Ausschnitt).
+LINK_HIGHWAYS = {"motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential",
+                 "service", "living_street", "busway", "motorway_link", "trunk_link", "primary_link",
+                 "secondary_link", "tertiary_link", "bus_guideway"}
+OVERPASS = ["https://lz4.overpass-api.de/api/interpreter", "https://overpass-api.de/api/interpreter"]
+
 BLIND_DIR = "/Game/Vehicles/Bus/Blind"
 
 # Ab dieser Laenge gilt ein ueberbruecktes Stueck als verdaechtig und wird laut
@@ -86,7 +121,135 @@ def load_relation(rel_id):
 
 
 def build(ref):
-    rel_id = LINE_RELATIONS[ref]
+    fwd = assemble(ref, LINE_RELATIONS[ref])
+    out = fwd["out"]
+    ret_id = LINE_RETURN.get(ref)
+    if ret_id:
+        ret = assemble(ref, ret_id, quiet=False)
+        add_return_leg(ref, out, fwd, ret)
+    os.makedirs(BUS_DIR, exist_ok=True)
+    out_path = "%s/line%s.json" % (BUS_DIR, ref)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=1)
+    print("           Datei geschrieben: %s" % os.path.basename(out_path))
+    return out
+
+
+def fetch_roads(lo, hi):
+    """Strassen in einem Ausschnitt (Overpass), zwischengespeichert in Data/Raw/OSM."""
+    key = hashlib.sha1(("%.5f,%.5f,%.5f,%.5f" % (lo[0], lo[1], hi[0], hi[1])).encode()).hexdigest()[:12]
+    cache = "%s/links_%s.json" % (OSM_DIR, key)
+    if os.path.exists(cache):
+        with open(cache, encoding="utf-8") as f:
+            return json.load(f)
+    q = '[out:json][timeout:90];way(%.5f,%.5f,%.5f,%.5f)["highway"];(._;>;);out body;' % (lo[0], lo[1], hi[0], hi[1])
+    last = None
+    for host in OVERPASS:
+        try:
+            req = urllib.request.Request(host + "?data=" + urllib.parse.quote(q),
+                                         headers={"User-Agent": "WiesbadenReal/1.0 (Buslinien)", "Accept": "application/json"})
+            d = json.load(urllib.request.urlopen(req, timeout=120))
+            with open(cache, "w", encoding="utf-8") as f:
+                json.dump(d, f)
+            return d
+        except Exception as ex:   # naechster Server
+            last = ex
+    raise SystemExit("Overpass nicht erreichbar: %s" % last)
+
+
+def route_link(a, b, label):
+    """Fahrweg von a nach b im OSM-Strassennetz (Dijkstra, Einbahnstrassen beachtet)."""
+    if dist_m(a, b) < 3.0:
+        return []
+    m = 0.004
+    lo = (min(a[0], b[0]) - m, min(a[1], b[1]) - m)
+    hi = (max(a[0], b[0]) + m, max(a[1], b[1]) + m)
+    net = fetch_roads(lo, hi)
+    nodes = {e["id"]: (e["lat"], e["lon"]) for e in net["elements"] if e["type"] == "node"}
+    graph = {}
+    for w in net["elements"]:
+        if w["type"] != "way":
+            continue
+        t = w.get("tags", {})
+        if t.get("highway") not in LINK_HIGHWAYS or t.get("access") in ("no", "private") and t.get("psv") != "yes":
+            continue
+        ns = [n for n in w["nodes"] if n in nodes]
+        one = t.get("oneway") in ("yes", "1", "true") and t.get("oneway:bus") != "no"
+        for p, q in zip(ns, ns[1:]):
+            d = dist_m(nodes[p], nodes[q])
+            graph.setdefault(p, []).append((q, d))
+            if not one:
+                graph.setdefault(q, []).append((p, d))
+    if not graph:
+        print("  WARNUNG: %s - kein Strassennetz, gerade verbunden" % label)
+        return [b]
+    na = min(graph, key=lambda n: dist_m(nodes[n], a))
+    nb = min(graph, key=lambda n: dist_m(nodes[n], b))
+    best, prev, heap = {na: 0.0}, {}, [(0.0, na)]
+    while heap:
+        d, n = heapq.heappop(heap)
+        if n == nb:
+            break
+        if d > best.get(n, 1e18):
+            continue
+        for q, w in graph.get(n, []):
+            if d + w < best.get(q, 1e18):
+                best[q], prev[q] = d + w, n
+                heapq.heappush(heap, (d + w, q))
+    if nb not in best:
+        print("  WARNUNG: %s - kein Fahrweg gefunden, gerade verbunden (%.0f m)" % (label, dist_m(a, b)))
+        return [b]
+    chain = [nb]
+    while chain[-1] != na:
+        chain.append(prev[chain[-1]])
+    pts = [nodes[n] for n in reversed(chain)]
+    print("           Anschluss %s: %.0f m ueber %d Knoten (Luftlinie %.0f m)"
+          % (label, best[nb], len(pts), dist_m(a, b)))
+    return pts + [b]
+
+
+def join_paths(*parts):
+    out = []
+    for part in parts:
+        for p in part:
+            p = (round(p[0], 7), round(p[1], 7))
+            if not out or dist_m(out[-1], p) > 0.05:
+                out.append(p)
+    return out
+
+
+def add_return_leg(ref, out, fwd, ret):
+    """Rueckweg = Anschluss am fernen Ende + Gegenrichtungs-Relation + Nordfriedhof-Anschluss."""
+    fpath, rpath = fwd["path"], ret["path"]
+    far = route_link(fpath[-1], rpath[0], "fernes Ende (Hinweg-Ende -> Rueckweg-Anfang)")
+    stops, names = list(ret["stops"]), list(ret["names"])
+    arrival = ARRIVAL_OVERRIDE.get(ref)
+    if arrival:
+        # Veralteter Ausstieg: die letzte Halte (Nordfriedhof) an die echte Stelle legen.
+        stops[-1] = [round(arrival[0], 7), round(arrival[1], 7)]
+    departure = fpath[0]
+    near = route_link(rpath[-1], departure, "Nordfriedhof (Ausstieg -> Einstieg)")
+    path = join_paths(far, rpath, near)
+    # Pruefen: liegen die Rueckweg-Halte aufsteigend auf dem Rueckweg?
+    arc = [0.0]
+    for i in range(1, len(path)):
+        arc.append(arc[-1] + dist_m(path[i - 1], path[i]))
+    sa = []
+    for c in stops:
+        bi = min(range(len(path)), key=lambda i: dist_m(c, path[i]))
+        sa.append((arc[bi], dist_m(c, path[bi])))
+    ok = all(sa[i][0] <= sa[i + 1][0] + 1.0 for i in range(len(sa) - 1))
+    out["return_path"] = [[p[0], p[1]] for p in path]
+    out["return_stops"] = stops
+    out["return_stop_names"] = names
+    out["return_source"] = "OSM Relation %d (%s), abgerufen per OSM-API full.json" % (ret["rel_id"], ret["name"])
+    print("Linie %-2s Rueckweg: %d Punkte, %.2f km, %d Halte, aufsteigend %s, groesster Halt-Abstand %.0f m"
+          % (ref, len(path), arc[-1] / 1000.0, len(stops), "ja" if ok else "NEIN", max(x[1] for x in sa)))
+    print("           Ausstieg Nordfriedhof bei Bogen %.0f m, Rueckweg endet an der Einstiegshaltestelle (%.0f m daneben)"
+          % (sa[-1][0], dist_m(path[-1], departure)))
+
+
+def assemble(ref, rel_id, quiet=False):
     data = load_relation(rel_id)
     els = data["elements"]
     rel = next(e for e in els if e["type"] == "relation")
@@ -224,6 +387,7 @@ def build(ref):
     order_ok = all(stop_arc[i][0] <= stop_arc[i + 1][0] + 1.0 for i in range(len(stop_arc) - 1))
 
     disp = LINE_DISPLAY.get(ref, {})
+    result = {"rel_id": rel_id, "name": rel["tags"].get("name"), "path": path, "stops": stops, "names": names}
     if disp.get("all_stops"):
         mon_stops = ["*"]
     else:
@@ -257,11 +421,7 @@ def build(ref):
         "stops": stops,
         "stop_names": names,
     }
-    os.makedirs(BUS_DIR, exist_ok=True)
-    out_path = "%s/line%s.json" % (BUS_DIR, ref)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=1)
-
+    result["out"] = out
     total = arc[-1] / 1000.0
     print("Linie %-2s: %d/%d Wege verbaut, %d Punkte, %.2f km, %d Halte"
           % (ref, len(used), len(way_members), len(path), total, len(stops)))
@@ -306,10 +466,9 @@ def build(ref):
             shown += 1
             if shown >= 6:
                 break
-    print("           Datei geschrieben: %s" % os.path.basename(out_path))
     if not order_ok:
         print("           WARNUNG: Halte-Reihenfolge passt nicht zur Fahrtrichtung.")
-    return out
+    return result
 
 
 def main():

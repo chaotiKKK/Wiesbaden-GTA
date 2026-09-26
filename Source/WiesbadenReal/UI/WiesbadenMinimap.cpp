@@ -482,11 +482,187 @@ bool FWiesbadenMinimap::FindStreetCenter(
 	return false;
 }
 
+bool FWiesbadenMinimap::FindStreetWarpTarget(
+	const FRoadNetwork& Network, const FString& Name,
+	FVector2D& OutWorldXY, float& OutYawDeg, double& OutZCm)
+{
+	const FString Gesucht = Name.TrimStartAndEnd();
+	if (Gesucht.IsEmpty())
+	{
+		return false;
+	}
+
+	// Zwei Durchgaenge wie beim Kartenzentrum: erst der exakte Name, sonst der
+	// erste Teiltreffer. Sonst wuerde "Am Ring" die Strasse "Am Ringweg"
+	// schlagen, nur weil sie im Alphabet frueher steht.
+	const TArray<FVector>* BesteLinie = nullptr;
+	int32 BesteLaenge = -1;
+	for (int32 Pass = 0; Pass < 2; ++Pass)
+	{
+		BesteLinie = nullptr;
+		BesteLaenge = -1;
+		for (const FRoadSegment& Segment : Network.Segments)
+		{
+			if (Segment.StreetName.IsEmpty())
+			{
+				continue;
+			}
+			const bool bMatch = (Pass == 0)
+				? Segment.StreetName.Equals(Gesucht, ESearchCase::IgnoreCase)
+				: Segment.StreetName.Contains(Gesucht, ESearchCase::IgnoreCase);
+			if (!bMatch)
+			{
+				continue;
+			}
+			const TArray<FVector>& Linie = Segment.Centerline.Num() >= 2
+				? Segment.Centerline : Segment.TrimmedCenterline;
+			// Die Laenge in Metern, nicht die Zahl der Punkte: ein dicht
+			// abgetasteter kurzer Bogen hat viele Punkte und ist kurz.
+			double Laenge = 0.0;
+			for (int32 i = 1; i < Linie.Num(); ++i)
+			{
+				Laenge += FVector::Dist2D(Linie[i - 1], Linie[i]);
+			}
+			if (Laenge > static_cast<double>(BesteLaenge))
+			{
+				BesteLaenge = static_cast<int32>(Laenge);
+				BesteLinie = &Linie;
+			}
+		}
+		if (BesteLinie && BesteLinie->Num() >= 2)
+		{
+			break;
+		}
+	}
+
+	if (!BesteLinie || BesteLinie->Num() < 2)
+	{
+		return false;
+	}
+
+	// Mittelpunkt des gewaehlten Segments, als Mittel aufeinanderfolgender
+	// Punktpaare - das ist bei ungleichmaessiger Punktdichte der Mittelpunkt
+	// der STRECKE und nicht der Mittelwert der Stuetzpunkte.
+	FVector2D Summe = FVector2D::ZeroVector;
+	double ZSumme = 0.0;
+	int32 Paare = 0;
+	for (int32 i = 1; i < BesteLinie->Num(); ++i)
+	{
+		const FVector& A = (*BesteLinie)[i - 1];
+		const FVector& B = (*BesteLinie)[i];
+		Summe += FVector2D(A.X, A.Y) + FVector2D(B.X, B.Y);
+		ZSumme += (A.Z + B.Z) * 0.5;
+		++Paare;
+	}
+	if (Paare == 0)
+	{
+		return false;
+	}
+	OutWorldXY = Summe / (2.0 * Paare);
+	OutZCm = ZSumme / Paare;
+
+	// Richtung: vom Mittelpunkt des ersten zum Mittelpunkt des letzten
+	// Drittels. Die ganze Linie als Richtung zu nehmen faellt bei einem
+	// S-Bogen aus, weil sich Anfang und Ende fast aufheben.
+	const int32 Drittel = FMath::Max(1, BesteLinie->Num() / 3);
+	const FVector2D A((*BesteLinie)[0].X, (*BesteLinie)[0].Y);
+	const FVector2D B((*BesteLinie)[Drittel].X, (*BesteLinie)[Drittel].Y);
+	const FVector2D C((*BesteLinie)[BesteLinie->Num() - 1 - Drittel].X,
+		(*BesteLinie)[BesteLinie->Num() - 1 - Drittel].Y);
+	FVector2D Richtung = (C - B);
+	if (Richtung.SizeSquared() < 1.0)
+	{
+		Richtung = (B - A);
+	}
+	if (Richtung.SizeSquared() < 1.0)
+	{
+		Richtung = FVector2D(1.0, 0.0);
+	}
+	Richtung.Normalize();
+	// Grad, 0 = nach Osten, im Uhrzeigersinn - dieselbe Rechnung, mit der
+	// das Strassennamen-Overlay die Richtung eines Segmentes beschriftet.
+	OutYawDeg = FMath::RadiansToDegrees(FMath::Atan2(Richtung.Y, Richtung.X));
+	return true;
+}
+
+void FWiesbadenMinimap::FindStreetSuggestions(
+	const FRoadNetwork& Network, const FString& Query,
+	TArray<FString>& OutNames, int32 MaxHoechst)
+{
+	OutNames.Reset();
+	const FString Gesucht = Query.TrimStartAndEnd();
+	if (MaxHoechst <= 0)
+	{
+		return;
+	}
+
+	// Drei Klassen, danach wird nicht weiter unterschieden: exakt, beginnt mit,
+	// enthaelt. Die Reihenfolge IST das Bedienungsgefuehl - wer "Am" tippt,
+	// will die Strassen, die damit BEGINNEN, nicht die, die es irgendwo
+	// enthalten.
+	struct FFund { FString Name; int32 Rang; };
+	TArray<FFund> Funde;
+	for (const FRoadSegment& Segment : Network.Segments)
+	{
+		const FString& Name = Segment.StreetName;
+		if (Name.IsEmpty())
+		{
+			continue;
+		}
+		int32 Rang = -1;
+		if (Gesucht.IsEmpty())
+		{
+			Rang = 0;
+		}
+		else if (Name.Equals(Gesucht, ESearchCase::IgnoreCase))
+		{
+			Rang = 0;
+		}
+		else if (Name.StartsWith(Gesucht, ESearchCase::IgnoreCase))
+		{
+			Rang = 1;
+		}
+		else if (Name.Contains(Gesucht, ESearchCase::IgnoreCase))
+		{
+			Rang = 2;
+		}
+		if (Rang < 0)
+		{
+			continue;
+		}
+		const bool bSchonDa = Funde.ContainsByPredicate([&Name](const FFund& F)
+		{
+			return F.Name.Equals(Name, ESearchCase::IgnoreCase);
+		});
+		if (!bSchonDa)
+		{
+			Funde.Add({ Name, Rang });
+		}
+	}
+
+	Funde.Sort([](const FFund& A, const FFund& B)
+	{
+		if (A.Rang != B.Rang)
+		{
+			return A.Rang < B.Rang;
+		}
+		return A.Name.Compare(B.Name, ESearchCase::IgnoreCase) < 0;
+	});
+
+	for (const FFund& Fund : Funde)
+	{
+		if (OutNames.Num() >= MaxHoechst)
+		{
+			break;
+		}
+		OutNames.Add(Fund.Name);
+	}
+}
+
 FString FWiesbadenMinimap::FindStreetName(
 	const FRoadNetwork& Network,
 	const FVector& PlayerLocation,
-	double MaxDistanceCm)
-{
+	double MaxDistanceCm){
 	const FVector2D Player2D(PlayerLocation.X, PlayerLocation.Y);
 	const double MaxSq = MaxDistanceCm * MaxDistanceCm;
 

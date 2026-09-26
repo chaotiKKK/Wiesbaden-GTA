@@ -96,6 +96,13 @@ public:
 	int32 ActiveCollisionProxyCount = 0;
 
 	/**
+	 * Welches Verkehrsauto traegt diesen Kollisionskoerper? INDEX_NONE, wenn
+	 * es keiner der Koerper ist oder er gerade ruht. Das Spielerauto fragt so
+	 * nach, wen es angestossen hat (Zusammenstoss).
+	 */
+	int32 FindVehicleIdForProxy(const UPrimitiveComponent* Component) const;
+
+	/**
 	 * Lampenpaar im WELT-Raum (datenrein, testbar): links am Katalogpunkt
 	 * (Unreal: links = -Y), rechts gespiegelt.
 	 */
@@ -167,6 +174,9 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<UBoxComponent*> CollisionProxies;
+
+	/** Fahrzeug-Id je Kollisionskoerper (INDEX_NONE = ruht). */
+	TArray<int32> ProxyVehicleIds;
 
 	/** Zahl der Lampen-Gruppen: Bremse, Blinker, Scheinwerfer, Rueckleuchte. */
 	static constexpr int32 LampPoolCount = 4;

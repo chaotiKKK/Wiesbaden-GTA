@@ -725,8 +725,22 @@ int32 UTerrainGenerator::FlattenUnderRoads(
 	// Boden, wenn nur ihr niedrigster Punkt unterschritten wird.
 	int32 JunctionCellsLowered = 0;
 	int32 JunctionsSkippedAtStructures = 0;
-	for (const FRoadIntersection& Intersection : Network.Intersections)
+	// Wendeplatten an Sackgassen sind Pflaster wie Kreuzungsplatten - als
+	// Kreuzung mit einem Arm laufen sie durch dieselben Durchgaenge.
+	TArray<FRoadIntersection> WendeplattenAlsKreuzung;
+	WendeplattenAlsKreuzung.Reserve(Network.TurningPlates.Num());
+	for (const FRoadTurningPlate& Plate : Network.TurningPlates)
 	{
+		WendeplattenAlsKreuzung.Add(Plate.AsJunction());
+	}
+	TArray<const FRoadIntersection*> Platten;
+	Platten.Reserve(Network.Intersections.Num() + WendeplattenAlsKreuzung.Num());
+	for (const FRoadIntersection& Intersection : Network.Intersections) { Platten.Add(&Intersection); }
+	for (const FRoadIntersection& Intersection : WendeplattenAlsKreuzung) { Platten.Add(&Intersection); }
+
+	for (const FRoadIntersection* PlattePtr : Platten)
+	{
+		const FRoadIntersection& Intersection = *PlattePtr;
 		if (Intersection.Polygon.Num() < 1)
 		{
 			continue;
@@ -1056,10 +1070,11 @@ int32 UTerrainGenerator::FlattenUnderRoads(
 		}
 	}
 
-	// Kreuzungsplatten: Faecher vom Schwerpunkt zu den Randpunkten (wie
-	// URoadNetworkGenerator::BuildIntersectionMesh) - Proben auf jedem Dreieck.
-	for (const FRoadIntersection& Intersection : Network.Intersections)
+	// Kreuzungs- und Wendeplatten: Faecher vom Schwerpunkt zu den Randpunkten
+	// (wie URoadNetworkGenerator::BuildIntersectionMesh) - Proben auf jedem Dreieck.
+	for (const FRoadIntersection* PlattePtr : Platten)
 	{
+		const FRoadIntersection& Intersection = *PlattePtr;
 		if (!Settings.bConformToPavement || Intersection.Polygon.Num() < 3)
 		{
 			continue;
@@ -1211,7 +1226,9 @@ bool UTerrainGenerator::ResolveSitePadPlateauCm(
 	bool bFound = false;
 	for (const FRoadSegment& Segment : Network.Segments)
 	{
-		if (Segment.bIsArea || Segment.bIsBridge || Segment.bIsTunnel || Segment.Layer != 0)
+		if (Segment.bIsArea || Segment.bIsBridge || Segment.bIsTunnel || Segment.Layer != 0
+			|| (!Pad.PreferredStreetName.IsEmpty()
+				&& !Segment.StreetName.Equals(Pad.PreferredStreetName, ESearchCase::IgnoreCase)))
 		{
 			continue;
 		}

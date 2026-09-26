@@ -49,9 +49,11 @@ FString WiesbadenOptions::GroupLabel(EWbOptionGroup Group)
 	switch (Group)
 	{
 	case EWbOptionGroup::Grafik:    return TEXT("GRAFIK");
-	case EWbOptionGroup::Ton:       return TEXT("TON");
+	case EWbOptionGroup::Ton:       return TEXT("SOUND");
 	case EWbOptionGroup::Steuerung: return TEXT("STEUERUNG");
-	case EWbOptionGroup::Spielwelt: return TEXT("SPIELWELT");
+	case EWbOptionGroup::Bild:      return TEXT("BILD");
+	case EWbOptionGroup::Debug:     return TEXT("DEBUG");
+	case EWbOptionGroup::Spielwelt: return TEXT("CONFIG");
 	default:                        return FString();
 	}
 }
@@ -102,8 +104,31 @@ void WiesbadenOptions::BuildRows(int32 AudioBusCount,
 		TEXT("Partikel, Spiegelungen und Nachbearbeitung - dazu gehoert der Niederschlag."));
 	Add(EWbOptionId::Texturen, EWbOptionGroup::Grafik, EWbOptionKind::Qualitaet, TEXT("Texturen"),
 		TEXT("Aufloesung der Oberflaechen. Kostet vor allem Grafikspeicher."));
-	Add(EWbOptionId::Bildratengrenze, EWbOptionGroup::Grafik, EWbOptionKind::Bildrate, TEXT("Bildratengrenze"),
+
+	// --- Bild ---------------------------------------------------------------
+	// Die Bildratengrenze ist keine Grafik-, sondern eine Bild-Einstellung:
+	// sie sagt, wie viele Bilder SECUNDE gezeigt werden, waehrend die
+	// Grafikstufen sagen, wie teuer ein Bild ist. Beides steht deshalb im
+	// selben Fenster, ohne doppelt.
+	Add(EWbOptionId::Bildratengrenze, EWbOptionGroup::Bild, EWbOptionKind::Bildrate, TEXT("Bildratengrenze"),
 		TEXT("Obergrenze der Bilder je Sekunde. Ohne Grenze laeuft die Karte so schnell sie kann."));
+	Add(EWbOptionId::Vollbild, EWbOptionGroup::Bild, EWbOptionKind::Schalter, TEXT("Vollbild"),
+		TEXT("Fenster oder ganzer Bildschirm. Ohne Vollbild laesst sich leichter nebenbei etwas anderes tun."));
+	Add(EWbOptionId::VSync, EWbOptionGroup::Bild, EWbOptionKind::Schalter, TEXT("V-Sync"),
+		TEXT("Passt die Bilder an den Bildschirm an. Aus laeuft es glatter, reisst aber."));
+	Add(EWbOptionId::Aufloesungsskalierung, EWbOptionGroup::Bild, EWbOptionKind::Anteil, TEXT("Aufloesungsskalierung"),
+		TEXT("Zeichnet das Bild kleiner und rechnet es hoch - die guenstigste Art, schneller zu werden."));
+
+	// --- Debug --------------------------------------------------------------
+	// Nichts davon gehoert zum Spiel, darum in einer eigenen Gruppe: wer sie
+	// einschaltet, will Zahlen sehen, und diese Zeilen sind dann auch die
+	// einzigen, die den Spielablauf in Zahlen verwandeln.
+	Add(EWbOptionId::FpsAnzeige, EWbOptionGroup::Debug, EWbOptionKind::Schalter, TEXT("Bilder je Sekunde"),
+		TEXT("Zaehlt die Bilder im HUD - die Zeiten stehen in der Profil-Tafel."));
+	Add(EWbOptionId::StatEinblendung, EWbOptionGroup::Debug, EWbOptionKind::Schalter, TEXT("Profil-Tafel"),
+		TEXT("Halb so grosse, halbtransparente Tafel mit den Bildzeiten (Bild, Spiel, Draw, GPU) - das Bild bleibt erkennbar."));
+	Add(EWbOptionId::KollisionsOverlay, EWbOptionGroup::Debug, EWbOptionKind::Schalter, TEXT("Kollisionsboxen"),
+		TEXT("Zeichnet die Kollisionskoerper der Welt - zeigt, was wirklich stoessen kann."));
 
 	// --- Ton ----------------------------------------------------------------
 	// Eine Zeile je Bus des Mischpults - und KEINE, wenn es kein Mischpult gibt.

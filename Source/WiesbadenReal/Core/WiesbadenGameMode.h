@@ -431,6 +431,70 @@ private:
 	/** Ein Bild des Figur-Pruef-Laufs (Tick). */
 	void TickFigurProbe(float DeltaSeconds);
 
+	/**
+	 * Gamepad-Pruef-Lauf (-WbPadProbe, mit -WbZuFuss): spielt eine feste
+	 * Sitzung auf dem Gamepad ab und belegt sie im Log - LT zielt (ADS),
+	 * RT feuert, RB/LB wechseln die Waffe.
+	 *
+	 * Warum ueberhaupt eine Probe: die Belegungstabelle
+	 * (Core/WiesbadenInputMap.h) ist im Unit-Test geprueft, sagt aber nichts
+	 * darueber, ob der echte Weg durch PlayerInput, Pawn und Waffenkomponente
+	 * auch wirklich ankommt. Genau diese Kette war nie belegt.
+	 *
+	 * Die Eingaben laufen als SIMULIERTE Tastenereignisse durch
+	 * APlayerController::InputKey - derselbe Weg, den die Tastatur-Proben
+	 * seit dem Sebbo-Haus nehmen. Der Pawn weiss nicht, dass er geprobt
+	 * wird: er sieht nur Tasten. Das ist ein Testwerkzeug, kein Spielcode -
+	 * ohne den Schalter passiert nichts.
+	 */
+	bool bPadProbe = false;
+	float PadProbeTime = 0.0f;
+	int32 PadProbeStep = 0;
+	float PadProbeStepTime = 0.0f;
+	int32 PadProbeSchuesseStart = 0;
+	/** Hoehe der Figur beim Sprungschritt (Startwert, cm). */
+	float PadProbeSprungZ = 0.0f;
+	/** Hoechste erreichte Hoehe waehrend des Sprungs (cm). */
+	float PadProbeSprungMaxZ = 0.0f;
+	/** Ansichtszustand einmalig erfasst? (sonst wird er beim Umschalten mitgelesen). */
+	bool PadProbeAnsichtErfasst = false;
+	/** Ortspunkt beim Beginn einer Laufphase (L3-Probe). */
+	FVector PadProbeLaufStart = FVector::ZeroVector;
+	/** Ansicht vor dem Y-Druck (Ego oder Schulter). */
+	bool PadProbeAnsichtVorher = false;
+	/** Anzahl der bewerteten Schritte am Ende des Laufs. */
+	int32 PadProbeSchritte = 12;
+	/**
+	 * Hat der laufende Schritt seine erwartete Wirkung erreicht? Die
+	 * Tastenschritte warten darauf, statt nach einer festen Zeit zu
+	 * urteilen: bei einem Hänger im Spiel fiel der Messpunkt sonst in
+	 * eine Zeitlupe und die Probe meldete eine Wirkungslosigkeit, die
+	 * es nicht gab.
+	 */
+	bool PadProbeBedingtErreicht = false;
+	/** Strecke der letzten Laufphase in cm (L3-Probe). */
+	float PadProbeLaufStrecke = 0.0f;
+	/** Strecke mit L3 gedrueckt in cm (L3-Probe). */
+	float PadProbeRennStrecke = 0.0f;
+	/** Zoom-Stufe vor dem D-Pad-Schritt. */
+	float PadProbeZoomVorher = 1.0f;
+	/** Schnittwinkel vor dem D-Pad-Schritt mit Trennwaffe (Grad). */
+	float PadProbeSchnittVorher = 0.0f;
+	/**
+	 * Waffenstand VOR dem Schultertasten-Druck. Einmal je Schritt lesen:
+	 * der Schritt laeuft viele Bilder, und der Pawn schaltet im selben Bild,
+	 * in dem der Druck ankommt. Jedes Bild neu gelesen ergaebe "2 -> 2" und
+	 * liesse einen Waffenwechsel, der stattgefunden hat, als Fehler erscheinen.
+	 */
+	int32 PadProbeWaffeVorher = INDEX_NONE;
+	/** Anzahl der Schritte, die ihre Erwartung erfuellt haben. */
+	int32 PadProbeOk = 0;
+	/** Anzahl der Schritte, die ihre Erwartung verfehlt haben. */
+	int32 PadProbeFehl = 0;
+
+	/** Ein Schritt des Gamepad-Pruef-Laufs (Tick). */
+	void TickPadProbe(float DeltaSeconds);
+
 	/** Spielzeit seit BeginPlay in Sekunden. */
 	float ElapsedSeconds = 0.0f;
 

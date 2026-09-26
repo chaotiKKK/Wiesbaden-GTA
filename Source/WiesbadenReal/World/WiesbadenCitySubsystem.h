@@ -85,6 +85,26 @@ public:
 	static FWbGotoTarget ParseGotoTarget(const FString& Raw);
 
 	/**
+	 * Zerlegt den Ablaufplan aus `-WbShotSteps=<plan>` (datenrein, testbar).
+	 *
+	 * AUFBE-WERKZEUG, KEIN SPIELVERHALTEN: der Plan sagt einer Aufnahme-
+	 * sitzung nur, was sie in welcher Reihenfolge knipsen soll. Er wird
+	 * ausserhalb von -WbShotWhenReady gelesen und steuert nichts, was ein
+	 * Spielzustand bemerkt.
+	 *
+	 * Schritte: "modus=N" (Fahrzeugkamera 0 Folge, 1 Orbit, 2 Cockpit),
+	 * "hold" (ein Bild aus der aktuellen Sicht), "turm" (Hubschrauber auf
+	 * den markierten Helipad des Sebbotower). Alles andere wird als
+	 * Posenzeile gelesen - derselbe Weg wie bei -WbShotPoseFile.
+	 *
+	 * Warum das Pluszeichen der Trenner ist: FParse::Value haelt den Wert am
+	 * ersten Komma an, aus "modus=2,hold,hold" wurde deshalb "modus=2" und
+	 * die ganze Serie lief als EIN Schritt. Das Pluszeichen umgeht das, ohne
+	 * dass die Schritte Kommas enthalten duerfen.
+	 */
+	static void ParseShotPlan(const FString& Raw, TArray<FString>& OutSteps);
+
+	/**
 	 * Mittelpunkt des LAENGSTEN Segments mit diesem Namen (datenrein, testbar).
 	 *
 	 * Das laengste ist bei Strassen, die es in mehreren Stadtteilen gibt, der
@@ -298,6 +318,10 @@ public:
 	 *  Rohzahlen; Interpretation/JSON liegen in FWiesbadenHealthReport). Fuer den
 	 *  WbHealth-Exec und externe Analyse. */
 	FWiesbadenHealthReport BuildHealthReport() const;
+
+	/** Laufende Bildzeit-Mittelwerte des Fenster-Profilers - die Datenquelle
+	 *  der halbtransparenten Profil-Tafel im HUD (WiesbadenProfilOverlay). */
+	FWbFrameReport GetFrameReport() const { return FrameProfiler.Report(); }
 
 	// -- Ereignisse ------------------------------------------------------------
 

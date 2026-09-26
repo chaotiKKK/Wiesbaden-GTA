@@ -206,6 +206,19 @@ struct WIESBADENREAL_API FTrafficVehicle
 	float BodyLagCm = 0.0f;
 	bool bPrevOnLane = true;
 	int32 PrevEdgeIndex = INDEX_NONE;
+
+	/**
+	 * ZUSAMMENSTOSS mit dem Spielerauto (ApplyPlayerImpact): Versatz und
+	 * Drehung der Karosserie gegen ihre Fahrlinie samt Rutsch- und
+	 * Drehgeschwindigkeit. Der Fahrer bremst, bleibt kurz stehen und faehrt
+	 * dann langsam in seine Spur zurueck (StepKnock).
+	 */
+	FVector2D KnockOffsetCm = FVector2D::ZeroVector;
+	FVector2D KnockVelCmS = FVector2D::ZeroVector;
+	float KnockYawRad = 0.0f;
+	float KnockYawRateRadS = 0.0f;
+	float KnockRestSeconds = 0.0f;
+	bool bKnocked = false;
 };
 
 /** Parameter der Verkehrs-Simulation. */
@@ -491,6 +504,32 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	 *  unsichtbar mitgezogen, damit Kolonnen nicht ineinander rutschen. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrbild", meta = (ClampMin = "0.0"))
 	double MaxBodyLagCm = 200.0;
+
+	/**
+	 * ZUSAMMENSTOSS mit dem Spielerauto: Stosszahl (0 = plastisch, 1 =
+	 * elastisch; Blech knautscht, darum wenig), Rutschverzoegerung der
+	 * querstehenden Reifen (cm/s^2, ~0,7 g), Abbau der Drehung (rad/s^2), wie
+	 * lange der Fahrer nach dem Stillstand erschrocken stehen bleibt (s), auf
+	 * welcher Strecke er in seine Spur zurueckfaehrt (cm) und wie langsam
+	 * (cm/s).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double KnockRestitution = 0.2;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "50.0"))
+	double KnockFrictionCmS2 = 700.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "0.1"))
+	double KnockYawDampingRadS2 = 4.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "0.0"))
+	double KnockWaitSeconds = 1.5;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "100.0"))
+	double KnockRecoverDistanceCm = 700.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "50.0"))
+	double KnockRecoverSpeedCmS = 300.0;
 
 	// (Die Regel dazu steht als RequiredLaneChangeGapCm weiter unten.)
 
@@ -1089,6 +1128,8 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 		int32 LaneChanges = 0;
 		int32 LaneChangesSlow = 0;       // davon unter einem Drittel des Wunschtempos
 	};
+	int32 GetLifetimePlayerImpacts() const { return LifetimePlayerImpacts; }
+
 	FMotionQuality TakeMotionQuality()
 	{
 		const FMotionQuality Out = Motion;
@@ -1339,6 +1380,47 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	 *  beginnen und enden bei null). Datenrein. */
 	static double LaneShiftOffsetCm(double StartCm, double Elapsed, double Duration);
 
+	/** Ergebnis eines Stosses (ComputeImpact): Geschwindigkeitsaenderungen beider
+	 *  Fahrzeuge (cm/s, Ebene), Aenderung der Gierrate des Verkehrsautos (rad/s,
+	 *  wie BodyYawRad: von +X nach +Y positiv) und der Stossimpuls (kg*cm/s). */
+	struct FImpactResult
+	{
+		FVector2D PlayerDeltaVCmS = FVector2D::ZeroVector;
+		FVector2D TrafficDeltaVCmS = FVector2D::ZeroVector;
+		double TrafficDeltaYawRateRadS = 0.0;
+		double ImpulseKgCmS = 0.0;
+	};
+
+	/**
+	 * Stoss zweier Fahrzeuge in der Ebene nach Impulserhaltung: das Spielerauto
+	 * als Masse, das Verkehrsauto als Koerper mit Masse und Gier-
+	 * Traegheitsmoment. Trifft der Stoss ausserhalb seiner Mitte, dreht es sich
+	 * (Hebelarm r x n). NormalIntoTraffic zeigt vom Spieler IN das
+	 * Verkehrsauto. False, wenn sie sich schon voneinander entfernen.
+	 * Datenrein (Test Traffic.Zusammenstoss).
+	 */
+	static bool ComputeImpact(const FVector2D& ContactCm, const FVector2D& NormalIntoTraffic,
+		const FVector2D& PlayerVelocityCmS, double PlayerMassKg,
+		const FVector2D& TrafficCenterCm, const FVector2D& TrafficVelocityCmS,
+		double TrafficMassKg, double TrafficYawInertiaKgM2, double Restitution, FImpactResult& Out);
+
+	/**
+	 * Ein Zusammenstoss-Tick: Rutschen und Ausdrehen mit Reibung, dann
+	 * erschrocken stehen, dann auf KnockRecoverDistanceCm Fahrstrecke zurueck
+	 * in die Spur (auch im Stand langsam). Datenrein.
+	 */
+	static void StepKnock(FTrafficVehicle& Vehicle, const FWiesbadenTrafficSettings& InSettings, double Dt);
+
+	/**
+	 * Das Spielerauto stoesst an ein Verkehrsauto (Treffer an seinem
+	 * Kollisionskoerper). Stoss nach ComputeImpact; das Verkehrsauto rutscht
+	 * und dreht, sein Fahrer bremst. OutPlayerDeltaVCmS ist die Geschwindig-
+	 * keitsaenderung des Spielerautos (Welt, Ebene). False = Fahrzeug unbekannt
+	 * oder kein Aufeinanderzu.
+	 */
+	bool ApplyPlayerImpact(int32 VehicleId, const FVector& ContactPoint, const FVector& NormalIntoTraffic,
+		const FVector& PlayerVelocityCmS, double PlayerMassKg, FVector& OutPlayerDeltaVCmS);
+
 	/** Bogenlaenge des naechstgelegenen Punkts einer Polylinie (Ebene). Datenrein. */
 	static double ProjectOntoPolylineCm(const TArray<FVector>& Line, const FVector& Point);
 
@@ -1475,7 +1557,8 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	static int32 AddDeadEndTurnarounds(FRoadNetwork& InOutNetwork, int32* OutReverseLanes = nullptr);
 
 	/** Wendeschleife vom Spurende E (Fahrtrichtung Dir) zum Start S der Gegenrichtung. */
-	static TArray<FVector> BuildTurnaroundPath(const FVector& E, const FVector& Dir, const FVector& S);
+	static TArray<FVector> BuildTurnaroundPath(const FVector& E, const FVector& Dir, const FVector& S,
+		const FRoadTurningPlate* Plate = nullptr);
 
 	/** Fahrzeuge insgesamt und davon auf Service-Wegen (Diagnose -WbStauLog). */
 	void CountVehiclesOnServiceRoads(int32& OutOnService, int32& OutTotal) const;
@@ -1748,6 +1831,9 @@ private:
 
 	/** Fahrbild-Summen seit dem letzten TakeMotionQuality. */
 	FMotionQuality Motion;
+
+	/** Zusammenstoesse mit dem Spielerauto seit Start (ApplyPlayerImpact). */
+	int32 LifetimePlayerImpacts = 0;
 	int32 LifetimeLaneChangeCandidates = 0;
 	int32 LifetimeLaneChangeNoNeighbour = 0;
 	int32 LifetimeLaneChangeBlockedByGap = 0;

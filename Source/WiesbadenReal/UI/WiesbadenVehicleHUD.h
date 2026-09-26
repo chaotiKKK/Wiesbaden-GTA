@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/HUD.h"
+#include "UI/WiesbadenMenuFlow.h"
 #include "UI/WiesbadenMinimap.h"
 #include "WiesbadenVehicleHUD.generated.h"
 
@@ -272,6 +273,55 @@ private:
 	/** Zeichnet das Pausemenue mittig. */
 	void DrawPauseMenu(float Width, float Height);
 
+	// -- Intro, Titelbildschirm und Hauptmenue ------------------------------
+	//
+	// Der Titel liegt ueber allem anderen und nimmt die Eingabe an sich. Er
+	// PAUSIERT nicht: die Stadt laeuft hinter ihm weiter, sonst muesste der
+	// Titelbildschirm das Streaming abwarten, und im Automationslauf (der
+	// Befehlzeile enthaelt dann -ExecCmds) erscheint er gar nicht.
+	//
+	// @return true, wenn ein Titelbildschirm offen ist (dann zeichnet der
+	//         Aufrufer ihn und den Rest des HUD nicht).
+	bool UpdateTitleMenu();
+
+	/** Zeichnet Intro, Titel, Hauptmenue, Optionsseite oder Belegung. */
+	void DrawTitleScreen(float Width, float Height);
+
+	/** Baut MenuEntries passend zum aktuellen Bildschirm neu auf. */
+	void RebuildMenuEntries();
+
+	/** Fuehrt den gewaehlten Eintrag aus (Enter / A). */
+	void ActivateMenuEntry();
+
+	/** Die Belegungs-Seite (Tastatur und Xbox-360 nebeneinander). */
+	void DrawBindingPage(float Width, float Height);
+
+	/**
+	 * Text mittig ueber MitteX, bzw. rechtsbuendig mit RechtsX als rechter
+	 * Kante.
+	 *
+	 * Eigene Helfer, weil AHUD::DrawText in UE 5.8 KEINEN
+	 * Ausrichtungsparameter hat (der siebte ist bScalePosition). Werte rechts
+	 * im Kasten und Ueberschriften in der Mitte lassen sich sonst nicht
+	 * setzen - geschweige denn an einer gedachten Spalte ausrichten.
+	 */
+	void DrawTextMittig(const FString& Text, FLinearColor Color, float MitteX, float Y,
+		UFont* Font, float Scale = 1.0f);
+
+	/** Wie DrawTextMittig, aber die Angabe ist die RECHTE Kante. */
+	void DrawTextRechts(const FString& Text, FLinearColor Color, float RechtsX, float Y,
+		UFont* Font, float Scale = 1.0f);
+
+	/**
+	 * Die halbtransparente, halb so grosse Profil-Tafel (Option Profil-Tafel):
+	 * Zeilen aus WbProfilZeilen, Groesse aus WbProfilTafelGroesse
+	 * (UI/WiesbadenProfilOverlay - datenrein, dort getestet).
+	 */
+	void DrawProfilTafel(float X, float Y);
+
+	/** Der Zeiger aus dem linken Stick, mit Halte-Flanke (ein Schritt). */
+	bool StickStep(float Axis, bool& bHeld);
+
 	/** Wertet die Tasten des Pausemenues aus (Escape, Pfeile, Eingabe). */
 	void UpdatePauseMenu();
 
@@ -307,6 +357,18 @@ private:
 
 	/** Schreibt einen Wert an sein System und macht ihn dauerhaft. */
 	void WriteOptionValue(const FWbOptionRow& Row, double Value);
+
+	/**
+	 * Ein Schritt nach links (-1) oder rechts (+1), mit Nachweis im Protokoll.
+	 *
+	 * Der WEG fuer BEIDE Fenster, die Werte verstellen: das alte
+	 * Optionsfenster des Pausemenues und die Optionsseite des Hauptmenues.
+	 * Zwei Kopien dieser Rechnung waeren zwei Orte, an denen sich die Meldung
+	 * "gesetzt: ..." unterscheiden koennte.
+	 *
+	 * @return true, wenn sich der Wert tatsaechlich geaendert hat
+	 */
+	bool StepOptionValue(const FWbOptionRow& Row, int32 Richtung);
 
 	/**
 	 * Gespeicherte Optionen anwenden.
@@ -362,8 +424,69 @@ public:
 	UFUNCTION(Exec)
 	void WbOption(int32 Zeile, int32 Schritte);
 
+	/**
+	 * Entwicklerbefehl: den Titelbildschirm mit dem Hauptmenue wieder oeffnen.
+	 *
+	 * WOFUER: Das Intro laeuft nur beim ersten Start einer Sitzung. Wer es
+	 * uebersprungen hat, kommt so ohne Neustart zurueck - und ein Lauf, der
+	 * das Hauptmenue belegen soll, muss es ohne Tastatur oeffnen koennen.
+	 *
+	 * @param Bildschirm 0 = Intro, 1 = Titel mit Hauptmenue, 2 = Optionen,
+	 *                   3 = Belegung; 9 = schliessen
+	 */
+	UFUNCTION(Exec)
+	void WbTitel(int32 Bildschirm = 1);
+
 
 private:
+	// -- Titelbildschirm ----------------------------------------------------
+	/** MAX = kein Titelbildschirm; jeder andere Wert liegt ueber dem Spiel. */
+	EWbMenuScreen MenuScreen = EWbMenuScreen::MAX;
+	/** Weltzeit beim Wechsel des Bildschirms - der Intro-Ablauf rechnet damit. */
+	double MenuOpenedAt = 0.0;
+	/** Die Eintraege des aktuellen Bildschirms (Hauptmenu, Gruppe, ...). */
+	TArray<FWbMenuEntry> MenuEntries;
+	/** Die Optionszeilen, zu denen die Eintraege gehoeren (fuer den Wert). */
+	TArray<FWbOptionRow> MenuRows;
+	int32 MenuSelection = 0;
+	/** Welche Optionsgruppe offen ist (Bildschirm Gruppe). */
+	EWbOptionGroup MenuGruppe = EWbOptionGroup::Ton;
+	/** Welcher Kontext in der Belegungs-Seite offen ist. */
+	EWbControlContext MenuBelegung = EWbControlContext::Fahrzeug;
+	/** Einmal-Merker: die Intro-Entscheidung wurde beim Start getroffen. */
+	bool bTitleGeprueft = false;
+	/**
+	 * Soll das Intro beim Start laufen? true = ja.
+	 *
+	 * Bewusst noch KEIN Schalter im Menue: die Entscheidung faellt beim
+	 * Start ueber WiesbadenMenu::ShouldShowIntro, und wer es abschalten
+	 * will, startet mit -WbKeinIntro (oder im Automationslauf, wo es ohnehin
+	 * aus bleibt). Ein Schalter, den man im Menue sucht und nicht findet,
+	 * ist schlechter als keiner - bis er gebaut ist, steht hier der Grund,
+	 * an dem er ansetzen muss.
+	 */
+	bool bIntroGewuenscht = true;
+
+	// Debug-Schalter (Gruppe DEBUG). Sie stehen hier statt im Menue, weil das
+	// Menue sie nur liest: was ein Schalter bewirkt, kann keine Zeile tun, die
+	// einen Wert zurueckgibt.
+	bool bFpsAnzeige = false;
+	bool bStatEinblendung = false;
+	bool bKollisionsOverlay = false;
+
+	// Halte-Flanken der Titeleingabe. Ohne sie wuerde ein gehaltenes Steuer-
+	// kreuz in jedem Bild eine Zeile weiterspringen.
+	bool bTitleHochHeld = false;
+	bool bTitleRunterHeld = false;
+	bool bTitleLinksHeld = false;
+	bool bTitleRechtsHeld = false;
+	bool bTitleEnterHeld = false;
+	bool bTitleZurueckHeld = false;
+	bool bTitleStickHochHeld = false;
+	bool bTitleStickRunterHeld = false;
+	bool bTitleStickLinksHeld = false;
+	bool bTitleStickRechtsHeld = false;
+
 	/** True, solange das Spiel pausiert ist. */
 	bool bPaused = false;
 
@@ -628,6 +751,23 @@ private:
 	FString MapSearchQuery;
 	/** Halte-Flanke der Umschalt-Taste (Tab), damit ein Druck einmal wirkt. */
 	bool bMapSearchToggleHeld = false;
+
+	// -- Suchfeld, Vorschlaege und Warp -------------------------------------
+	//
+	// Drei Zustaende, die zusammen die Bedienung ergeben: tippen (Query),
+	// Vorschlaege ansehen (MapSuggestions) und dann eine Strasse BESTAETIGT
+	// haben (MapSearchStreet != leer). Erst dann ist der Knopf "Warp to
+	// Location" scharf - vorher wuerde er ins Leere springen.
+	TArray<FString> MapSuggestions;
+	/** Welcher Vorschlag markiert ist (Pfeil hoch/runter). */
+	int32 MapSuggestion = 0;
+	/** Die bestaetigte Strasse - Ziel des Warp. */
+	FString MapSearchStreet;
+	/** Sekunden seit der letzten Vorschlagssuche (das Netz ist gross). */
+	float MapSuggestionAge = 0.0f;
+	/** Halte-Flanken fuer die Tasten des Warp-Knopfes. */
+	bool bWarpKeyHeld = false;
+	bool bMapResetKeyHeld = false;
 
 public:
 	/**

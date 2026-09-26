@@ -27,6 +27,12 @@ enum class EWiesbadenWeaponId : uint8
 	Granatwerfer,
 	Lichtschwert,
 	Kettensaege,
+	// Neu am 26.09.2026. Angehaengt, NICHT einsortiert: die Nummern stehen
+	// in Konfigurationen und Dev-Befehlen (WbFussWaffe <n>), und ein Ruecken
+	// der Werte wuerde dort stillschweigend eine andere Waffe treffen.
+	Laserpistole,
+	Raketenwerfer,
+	Plasmacutter,
 	Count
 };
 
@@ -78,6 +84,47 @@ struct FWiesbadenWeaponSpec
 	int32 MagazineSize = 15;
 	float ReloadSeconds = 1.6f;
 
+	// -- Klang ------------------------------------------------------------
+	/**
+	 * Pfad eines realistischen Schuss-Samples (leer = prozeduraler Rueckfall).
+	 *
+	 * Stand frueher hart im Code (if/else ueber den Waffenschlitz). In der
+	 * Tabelle gehoert er hin, weil der Klang zur Waffe gehoert und nicht zur
+	 * Komponente - sonst vergisst jede neue Waffe ihren Klang.
+	 */
+	const TCHAR* ShotSoundPath = TEXT("");
+
+	/** Lautstaerke des Schussklangs. */
+	float ShotVolume = 1.0f;
+
+	/** Pitch-Variation je Schuss (0.06 = +-6 %), damit Serien nicht monoton klingen. */
+	float ShotPitchJitter = 0.06f;
+
+	// -- Sicht ------------------------------------------------------------
+	/** Kurzname fuer die Anzeige beim Waffenwechsel. */
+	const TCHAR* ShortName = TEXT("");
+
+	/** Blender-Mesh der Waffe (Soft-Pfad; leer = prozedurale Huelle aus AddPart). */
+	const TCHAR* MeshAssetPath = TEXT("");
+
+	// -- Zielen ------------------------------------------------------------
+	/** Staerkster Zoom im Zielmodus (1.0 = kein Zoom). */
+	float AdsZoomMax = 2.0f;
+
+	// -- Schneiden (Plasmacutter) ------------------------------------------
+	/** true = die Waffe trennt Teile aus schneidbaren Objekten. */
+	bool bCuts = false;
+
+	/** Schnittgeschwindigkeit beim Halten in cm/s. */
+	float CutSpeedCmPerS = 70.0f;
+
+	/** Drehung der Schnittebene je Mausradrast in Grad (Dead-Space-Prinzip). */
+	float CutAngleStepDeg = 15.0f;
+
+	// -- Sichtbares Geschoss -----------------------------------------------
+	/** true = die Rakete fliegt sichtbar, nicht nur als Leuchtspur. */
+	bool bVisibleProjectile = false;
+
 	// -- Nahkampf ----------------------------------------------------------
 	/** Reichweite Nahkampf in cm (ab Kamera/Pawn). */
 	float MeleeReachCm = 220.0f;
@@ -108,4 +155,12 @@ namespace WiesbadenWeapons
 	/** Nahkampf-Hilfspruefung datenrein: Ist ein Ziel in Schwungreichweite? */
 	WIESBADENREAL_API bool InMeleeReach(const FVector& From, const FVector& Target,
 		const FWiesbadenWeaponSpec& Spec);
+
+	/**
+	 * Blaettern ueber die Tabelle (Mausrad): Steps nach vorn oder hinten,
+	 * ueber beide Raender zurueck. Datapure Klammer, damit der Wechsel ohne
+	 * laufende Welt pruefbar ist - die Regel gehoert zur Tabelle, nicht zum
+	 * Pawn.
+	 */
+	WIESBADENREAL_API int32 NextWeaponIndex(int32 CurrentIndex, int32 Steps);
 }
