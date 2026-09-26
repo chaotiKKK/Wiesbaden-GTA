@@ -1624,6 +1624,18 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		TrafficLightSystem.Tick(DeltaTime);
 		const double TrafficStart = FPlatformTime::Seconds();
 		TrafficSimulation.Tick(DeltaTime);
+		// -WbAmpelSpur=<Spur>: Schlangenprobe je Gruenphase (StepQueueProbe).
+		static const int32 AmpelSpur = []()
+		{
+			int32 Spur = INDEX_NONE;
+			FParse::Value(FCommandLine::Get(), TEXT("WbAmpelSpur="), Spur);
+			return Spur;
+		}();
+		if (AmpelSpur != INDEX_NONE)
+		{
+			TrafficSimulation.SetQueueProbeLane(AmpelSpur);
+			TrafficSimulation.StepQueueProbe(DeltaTime);
+		}
 		const double PedestrianStart = FPlatformTime::Seconds();
 		PedestrianSimulation.Tick(DeltaTime);
 		const double End = FPlatformTime::Seconds();
@@ -4505,6 +4517,14 @@ void UWiesbadenCitySubsystem::InitializeCity()
 					LightSettings.bConflictFreeGroups = false;
 					UE_LOG(LogWbTraffic, Warning,
 						TEXT("-WbOhneKonfliktgruppen: Freigabegruppen NICHT konfliktfrei (nur zum Messen)."));
+				}
+				// A/B: -WbGeschuetzteLinks stellt die alte Regel her (jeder
+				// Linksabbieger bekommt seine eigene, kurze Phase).
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbGeschuetzteLinks")))
+				{
+					LightSettings.bPermissiveLeftOnSharedLanes = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbGeschuetzteLinks: Linksabbieger auf gemischten Spuren wieder mit eigener Phase (nur zum Messen)."));
 				}
 				// Die beiden Hebel der Gruppenbildung, einzeln abschaltbar, damit
 				// sich ihr Anteil am Fluss TRENNEN laesst. Ohne getrennte

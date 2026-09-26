@@ -94,9 +94,23 @@ int32 FWiesbadenTrafficLightSystem::GroupForApproach(int32 Axis, bool bLeftTurn)
 	return FMath::Clamp(Axis, 0, 1) * 2 + (bLeftTurn ? 1 : 0);
 }
 
+bool FWiesbadenTrafficLightSystem::IsPermissivePair(const FRoadNetwork& InNetwork, int32 A, int32 B,
+	const TSet<int32>* PermissiveLefts, const TMap<int32, int32>* AxisOfConnection)
+{
+	if (!PermissiveLefts || !AxisOfConnection || !PermissiveLefts->Contains(A)
+		|| !InNetwork.Connections.IsValidIndex(B) || IsLeftTurn(InNetwork.Connections[B].TurnType))
+	{
+		return false;
+	}
+	const int32* AchseA = AxisOfConnection->Find(A);
+	const int32* AchseB = AxisOfConnection->Find(B);
+	return AchseA && AchseB && *AchseA == *AchseB;
+}
+
 int32 FWiesbadenTrafficLightSystem::MakeGroupsConflictFree(
 	const FRoadNetwork& InNetwork, TMap<int32, int32>& InOutGroups,
-	bool bSameTargetLaneBlocksGroup, bool bOrderGroupsByConflictDegree)
+	bool bSameTargetLaneBlocksGroup, bool bOrderGroupsByConflictDegree,
+	const TSet<int32>* PermissiveLefts, const TMap<int32, int32>* AxisOfConnection)
 {
 	if (InOutGroups.Num() == 0)
 	{
@@ -144,7 +158,9 @@ int32 FWiesbadenTrafficLightSystem::MakeGroupsConflictFree(
 			{
 				for (int32 b = a + 1; b < Am.Num(); ++b)
 				{
-					if (FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
+					if (!IsPermissivePair(InNetwork, Am[a], Am[b], PermissiveLefts, AxisOfConnection)
+						&& !IsPermissivePair(InNetwork, Am[b], Am[a], PermissiveLefts, AxisOfConnection)
+						&& FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
 						InNetwork.Connections[Am[a]], InNetwork.Connections[Am[b]],
 						bSameTargetLaneBlocksGroup))
 					{
@@ -168,7 +184,7 @@ int32 FWiesbadenTrafficLightSystem::MakeGroupsConflictFree(
 	TMap<int32, TArray<int32>> Belegung;
 
 	const bool bZielspurSperrt = bSameTargetLaneBlocksGroup;
-	const auto Passt = [&InNetwork, &Belegung, bZielspurSperrt](int32 Gruppe, int32 Kandidat)
+	const auto Passt = [&InNetwork, &Belegung, bZielspurSperrt, PermissiveLefts, AxisOfConnection](int32 Gruppe, int32 Kandidat)
 	{
 		const TArray<int32>* Drin = Belegung.Find(Gruppe);
 		if (!Drin)
@@ -177,6 +193,11 @@ int32 FWiesbadenTrafficLightSystem::MakeGroupsConflictFree(
 		}
 		for (const int32 Anderer : *Drin)
 		{
+			if (IsPermissivePair(InNetwork, Kandidat, Anderer, PermissiveLefts, AxisOfConnection)
+				|| IsPermissivePair(InNetwork, Anderer, Kandidat, PermissiveLefts, AxisOfConnection))
+			{
+				continue;   // bedingt vertraeglich: der Linksabbieger wartet im Fahrverhalten
+			}
 			if (FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
 				InNetwork.Connections[Kandidat], InNetwork.Connections[Anderer],
 				bZielspurSperrt))
@@ -255,6 +276,7 @@ void FWiesbadenTrafficLightSystem::Initialize(
 	Settings = InSettings;
 	Lights.Reset();
 	ConnectionToLight.Reset();
+	PermissiveLeftConnections.Reset();
 	ConflictMovedConnections = 0;
 	ConflictExtraGroups = 0;
 	MaxGroupsAtOneLight = 0;
@@ -309,6 +331,40 @@ void FWiesbadenTrafficLightSystem::Initialize(
 			}
 		}
 
+		// Linksabbieger auf GEMISCHTER Spur: Wunschgruppe = Geradeausgruppe
+		// ihrer Achse, und ihr Konflikt mit dem Verkehr derselben Achse trennt
+		// die Gruppen nicht (bPermissiveLeftOnSharedLanes).
+		TSet<int32> Bedingt;
+		TMap<int32, int32> Achse;
+		if (Settings.bPermissiveLeftOnSharedLanes)
+		{
+			if (const TArray<int32>* NodeConnections = ConnectionsByNode.Find(Intersection.NodeId))
+			{
+				TMap<int32, bool> SpurHatNichtLinks;
+				for (const int32 C : *NodeConnections)
+				{
+					bool& Nicht = SpurHatNichtLinks.FindOrAdd(InNetwork.Connections[C].FromLaneId, false);
+					Nicht = Nicht || !IsLeftTurn(InNetwork.Connections[C].TurnType);
+				}
+				for (const int32 C : *NodeConnections)
+				{
+					const FLaneConnection& Connection = InNetwork.Connections[C];
+					if (!InNetwork.Lanes.IsValidIndex(Connection.FromLaneId) || !Light.ConnectionGroups.Contains(C))
+					{
+						continue;
+					}
+					const FRoadLane& Spur = InNetwork.Lanes[Connection.FromLaneId];
+					Achse.Add(C, ComputeGroupIndex(Spur, ETurnType::Through));
+					if (IsLeftTurn(Connection.TurnType) && SpurHatNichtLinks.FindRef(Connection.FromLaneId))
+					{
+						Bedingt.Add(C);
+						Light.ConnectionGroups[C] = ComputeGroupIndex(Spur, ETurnType::Through);
+						PermissiveLeftConnections.Add(C);
+					}
+				}
+			}
+		}
+
 		// Aus der Faustregel eine KONFLIKTFREIE Einteilung machen. Erst danach
 		// darf das Signalprogramm gebaut werden - es richtet sich nach den
 		// tatsaechlich benutzten Gruppen.
@@ -316,7 +372,8 @@ void FWiesbadenTrafficLightSystem::Initialize(
 		{
 			TMap<int32, int32> Vorher = Light.ConnectionGroups;
 			Light.GroupCount = MakeGroupsConflictFree(InNetwork, Light.ConnectionGroups,
-				Settings.bSameTargetLaneBlocksGroup, Settings.bOrderGroupsByConflictDegree);
+				Settings.bSameTargetLaneBlocksGroup, Settings.bOrderGroupsByConflictDegree,
+				&Bedingt, &Achse);
 			for (const TPair<int32, int32>& Paar : Light.ConnectionGroups)
 			{
 				ConflictMovedConnections += (Vorher[Paar.Key] != Paar.Value) ? 1 : 0;
@@ -709,6 +766,7 @@ void FWiesbadenTrafficLightSystem::Reset()
 	Network = nullptr;
 	Lights.Reset();
 	ConnectionToLight.Reset();
+	PermissiveLeftConnections.Reset();
 	ConflictMovedConnections = 0;
 	ConflictExtraGroups = 0;
 	MaxGroupsAtOneLight = 0;

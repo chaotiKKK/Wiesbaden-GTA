@@ -115,6 +115,21 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSettings
 	bool bProtectedLeftTurns = true;
 
 	/**
+	 * Linksabbieger auf einer GEMISCHTEN Spur (dieselbe Spur fuehrt auch
+	 * geradeaus/rechts) fahren mit dem Geradeausverkehr ihrer Achse und lassen
+	 * den Gegenverkehr durch ("bedingt vertraeglich", StVO 9 Abs. 3). Nur
+	 * reine Linksabbiegespuren behalten die geschuetzte Phase.
+	 *
+	 * GEMESSEN am 26.09.2026 (-WbAmpelSpur, Landesstrasse nahe Garagenhof,
+	 * einspurige Zufahrt): stand ein Linksabbieger vorn, wartete er die 9,8 s
+	 * Geradeaus-Gruen ab, in der 3,2-s-Linksphase stand dafuer ein
+	 * Geradeausfahrer - je Gruen kam genau EIN Fahrzeug ueber die Linie, die
+	 * Schlange wuchs auf ueber 40 Fahrzeuge.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "TrafficLights")
+	bool bPermissiveLeftOnSharedLanes = true;
+
+	/**
 	 * Konfliktfreie Freigabegruppen (an). Nur zum MESSEN abschaltbar.
 	 *
 	 * Aus bleibt die Faustregel Achse x Abbiegeart stehen, und zwei
@@ -364,7 +379,21 @@ struct WIESBADENREAL_API FWiesbadenTrafficLightSystem
 	static int32 MakeGroupsConflictFree(
 		const FRoadNetwork& InNetwork, TMap<int32, int32>& InOutGroups,
 		bool bSameTargetLaneBlocksGroup = false,
-		bool bOrderGroupsByConflictDegree = true);
+		bool bOrderGroupsByConflictDegree = true,
+		const TSet<int32>* PermissiveLefts = nullptr,
+		const TMap<int32, int32>* AxisOfConnection = nullptr);
+
+	/**
+	 * Darf der bedingt vertraegliche Linksabbieger A mit B zusammen Gruen
+	 * haben? Ja, wenn B selbst nicht links abbiegt und von derselben Achse
+	 * kommt (Gegen- oder Mitverkehr) - den Rest regelt das Fahrverhalten
+	 * (IsPermissiveLeft + Wartepflicht in der Verkehrssimulation).
+	 */
+	static bool IsPermissivePair(const FRoadNetwork& InNetwork, int32 A, int32 B,
+		const TSet<int32>* PermissiveLefts, const TMap<int32, int32>* AxisOfConnection);
+
+	/** Ist diese Verbindung ein bedingt vertraeglicher Linksabbieger (wartepflichtig)? */
+	bool IsPermissiveLeft(int32 ConnectionIndex) const { return PermissiveLeftConnections.Contains(ConnectionIndex); }
 
 	/**
 	 * Wie viele Verbindungen die Faustregel verlassen mussten (Diagnose).
@@ -561,4 +590,7 @@ private:
 	// Nicht-reflektierte Laufzeit-Daten.
 	const FRoadNetwork* Network = nullptr;
 	TMap<int32, int32> ConnectionToLight; // ConnectionIndex -> Lights-Index
+
+	/** Bedingt vertraegliche Linksabbieger (gemischte Spur, fahren mit dem Geradeausverkehr). */
+	TSet<int32> PermissiveLeftConnections;
 };

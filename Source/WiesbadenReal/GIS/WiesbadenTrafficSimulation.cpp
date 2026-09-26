@@ -2285,6 +2285,23 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 					break;
 				}
 
+				// LINKSABBIEGER LASSEN DEN GEGENVERKEHR DURCH (StVO 9 Abs. 3).
+				// Bedingt vertraegliche Linksabbieger (gemischte Spur) haben mit
+				// dem Geradeausverkehr ihrer Achse zugleich Gruen - das
+				// Signalprogramm trennt sie nicht mehr, also wartet hier der
+				// Linksabbieger, bis niemand mehr entgegenkommt. Ein STEHENDER
+				// Gegenverkehr kommt nicht (TimeToLineSeconds) - kein Dauersperren.
+				if (TrafficLights && Settings.JunctionYieldSeconds > 0.0
+					&& TrafficLights->IsPermissiveLeft(Candidate.ConnectionIndex)
+					&& Network->Connections.IsValidIndex(Conflict.OtherConnection)
+					&& !FWiesbadenTrafficLightSystem::IsLeftTurn(Network->Connections[Conflict.OtherConnection].TurnType)
+					&& TimeToLineSeconds(Conflict.OtherConnection) < Settings.JunctionYieldSeconds)
+				{
+					bBlocked = true;
+					++LastBlockedYielding;
+					break;
+				}
+
 				// VORFAHRT: wer aus der kleineren Strasse kommt, wartet auf eine
 				// Luecke in der groesseren. Ohne das haelt auch die Hauptachse
 				// an jeder Wohnstrassen-Einmuendung - und die Stadt steht.
@@ -3932,4 +3949,167 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		? (SpeedSum / Vehicles.Num()) * 3600.0 / 100000.0 : 0.0;
 	const double DrivableKm = Network->GetTotalDrivableLengthKm();
 	Report.ActiveVehiclesPerKm = DrivableKm > 0.0 ? Vehicles.Num() / DrivableKm : 0.0;
+}
+
+void FWiesbadenTrafficSimulation::StepQueueProbe(float DeltaSeconds)
+{
+	if (ProbeLaneId == INDEX_NONE || !Network || !TrafficLights
+		|| !Network->Lanes.IsValidIndex(ProbeLaneId))
+	{
+		return;
+	}
+	ProbeTime += DeltaSeconds;
+
+	// Gruen = irgendeine Fortsetzung dieser Zufahrt ist frei; dazu je
+	// Verbindung ihr eigener Zustand fuer die Logzeile.
+	const TArray<int32>* Successors = LaneSuccessorIndices.Find(ProbeLaneId);
+	bool bAnyGreen = false;
+	FString Frei;
+	if (Successors)
+	{
+		for (const int32 C : *Successors)
+		{
+			if (TrafficLights->IsConnectionControlled(C) && TrafficLights->IsConnectionGreen(C))
+			{
+				bAnyGreen = true;
+				Frei += StaticEnum<ETurnType>()->GetNameStringByValue(
+					static_cast<int64>(Network->Connections[C].TurnType)) + TEXT(" ");
+			}
+		}
+	}
+
+	// Wer steht auf der Zufahrt, wer ist vorn, wer hat sie verlassen?
+	TSet<int32> JetztAufSpur;
+	int32 Wartend = 0;
+	const FTrafficVehicle* Vorderster = nullptr;
+	for (const FTrafficVehicle& V : Vehicles)
+	{
+		if (V.bOnLane && V.LaneId == ProbeLaneId)
+		{
+			JetztAufSpur.Add(V.VehicleId);
+			Wartend += V.SpeedCmS < 139.0 ? 1 : 0;
+			if (!Vorderster || V.DistanceCm > Vorderster->DistanceCm)
+			{
+				Vorderster = &V;
+			}
+		}
+		else if (!V.bOnLane && ProbeOnLane.Contains(V.VehicleId)
+			&& Network->Connections.IsValidIndex(V.ConnectionIndex)
+			&& Network->Connections[V.ConnectionIndex].FromLaneId == ProbeLaneId)
+		{
+			++ProbeDeparted;   // hat die Haltelinie in diesem Bild ueberfahren
+		}
+	}
+	ProbeOnLane = MoveTemp(JetztAufSpur);
+
+	if (Vorderster)
+	{
+		ProbeHeadConnection = PickSuccessorConnection(*Vorderster);
+		bProbeHeadGreenSeen |= ProbeHeadConnection != INDEX_NONE
+			&& TrafficLights->IsConnectionGreen(ProbeHeadConnection);
+	}
+
+	// Waehrend Gruen jede Sekunde: die ersten drei der Schlange.
+	if (bProbeGreen && bAnyGreen
+		&& FMath::FloorToInt(ProbeTime - ProbePhaseStart) != FMath::FloorToInt(ProbeTime - DeltaSeconds - ProbePhaseStart))
+	{
+		TArray<const FTrafficVehicle*> Reihe;
+		for (const FTrafficVehicle& V : Vehicles)
+		{
+			if (V.bOnLane && V.LaneId == ProbeLaneId) { Reihe.Add(&V); }
+		}
+		Reihe.Sort([](const FTrafficVehicle& A, const FTrafficVehicle& B) { return A.DistanceCm > B.DistanceCm; });
+		const double Linie = Network->Lanes[ProbeLaneId].LengthCm - GetStopDistanceCm(ProbeLaneId);
+		FString Zeile;
+		for (int32 i = 0; i < FMath::Min(3, Reihe.Num()); ++i)
+		{
+			const int32 C = PickSuccessorConnection(*Reihe[i]);
+			const bool bFrei = C != INDEX_NONE && TrafficLights->IsConnectionGreen(C);
+			Zeile += FString::Printf(TEXT(" | #%d %.0f km/h, %+.0f cm zur Linie, Luecke %s, Pfeil %s"),
+				i + 1, Reihe[i]->SpeedCmS * 0.036, Linie - Reihe[i]->DistanceCm,
+				i == 0 ? TEXT("-") : *FString::Printf(TEXT("%.0f"), Reihe[i - 1]->DistanceCm - Reihe[i]->DistanceCm),
+				bFrei ? TEXT("frei") : TEXT("rot"));
+		}
+		UE_LOG(LogWbTraffic, Log, TEXT("Ampelprobe Spur %d t=%.0f s%s"), ProbeLaneId,
+			ProbeTime - ProbePhaseStart, *Zeile);
+	}
+
+	// 3 s nach Gruenbeginn: warum faehrt der Vorderste (nicht)?
+	if (bProbeGreen && bAnyGreen && Vorderster && ProbeTime - ProbePhaseStart >= 3.0
+		&& ProbeTime - DeltaSeconds - ProbePhaseStart < 3.0)
+	{
+		const FRoadLane& Spur = Network->Lanes[ProbeLaneId];
+		FString Ziel = TEXT("keine Fortsetzung");
+		if (Network->Connections.IsValidIndex(ProbeHeadConnection))
+		{
+			const FLaneConnection& Weiter = Network->Connections[ProbeHeadConnection];
+			int32 AmZielAnfang = 0;
+			double Naechster = -1.0;
+			const FTrafficVehicle* ZielFz = nullptr;
+			int32 InKreuzung = 0;
+			for (const FTrafficVehicle& V : Vehicles)
+			{
+				if (V.bOnLane && V.LaneId == Weiter.ToLaneId && V.DistanceCm < 1500.0)
+				{
+					++AmZielAnfang;
+					if (Naechster < 0.0 || V.DistanceCm < Naechster)
+					{
+						Naechster = V.DistanceCm;
+						ZielFz = &V;
+					}
+				}
+				if (!V.bOnLane && Network->Connections.IsValidIndex(V.ConnectionIndex)
+					&& Network->Connections[V.ConnectionIndex].IntersectionNodeId == Weiter.IntersectionNodeId)
+				{
+					++InKreuzung;
+				}
+			}
+			Ziel = FString::Printf(TEXT("%s gruen=%d, Zielspur %d: %d Fz in den ersten 15 m (naechstes bei %.0f cm), %d Fz in der Kreuzung"),
+				*StaticEnum<ETurnType>()->GetNameStringByValue(static_cast<int64>(Weiter.TurnType)),
+				TrafficLights->IsConnectionGreen(ProbeHeadConnection) ? 1 : 0,
+				Weiter.ToLaneId, AmZielAnfang, Naechster, InKreuzung);
+			if (ZielFz)
+			{
+				const double ZielLaenge = Network->Lanes.IsValidIndex(ZielFz->LaneId)
+					? Network->Lanes[ZielFz->LaneId].LengthCm : 0.0;
+				Ziel += FString::Printf(TEXT("; dort Fz %d mit %.0f km/h (Wunsch %.0f), Spur %.0f m lang, Vordermann-Luecke bis Spurende %.0f cm"),
+					ZielFz->VehicleId, ZielFz->SpeedCmS * 0.036, ZielFz->DesiredSpeedCmS * 0.036,
+					ZielLaenge / 100.0, ZielLaenge - ZielFz->DistanceCm);
+			}
+		}
+		UE_LOG(LogWbTraffic, Log,
+			TEXT("Ampelprobe Spur %d: 3 s nach Gruen - Vorderster Fz %d %.0f km/h (Wunsch %.0f), %.0f cm vor Spurende; %s."),
+			ProbeLaneId, Vorderster->VehicleId, Vorderster->SpeedCmS * 0.036, Vorderster->DesiredSpeedCmS * 0.036,
+			Spur.LengthCm - Vorderster->DistanceCm, *Ziel);
+	}
+
+	if (bAnyGreen != bProbeGreen)
+	{
+		const double Dauer = ProbeTime - ProbePhaseStart;
+		if (bProbeGreen)
+		{
+			// Gruen endet: Bilanz dieser Phase.
+			FString Wunsch = TEXT("-");
+			if (Network->Connections.IsValidIndex(ProbeHeadConnection))
+			{
+				Wunsch = StaticEnum<ETurnType>()->GetNameStringByValue(
+					static_cast<int64>(Network->Connections[ProbeHeadConnection].TurnType));
+			}
+			UE_LOG(LogWbTraffic, Log,
+				TEXT("Ampelprobe Spur %d: Gruen %.1f s, wartend zu Beginn %d, abgeflossen %d, ")
+				TEXT("wartend danach %d, auf der Spur %d; Vorderster will %s (sein Pfeil war %s)."),
+				ProbeLaneId, Dauer, ProbeWaitingAtStart, ProbeDeparted, Wartend, ProbeOnLane.Num(),
+				*Wunsch, bProbeHeadGreenSeen ? TEXT("gruen") : TEXT("NIE gruen"));
+		}
+		else
+		{
+			UE_LOG(LogWbTraffic, Log, TEXT("Ampelprobe Spur %d: Rot %.1f s, dann Gruen fuer: %s"),
+				ProbeLaneId, Dauer, *Frei);
+			ProbeWaitingAtStart = Wartend;
+			ProbeDeparted = 0;
+			bProbeHeadGreenSeen = false;
+		}
+		bProbeGreen = bAnyGreen;
+		ProbePhaseStart = ProbeTime;
+	}
 }

@@ -1429,6 +1429,29 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	void CountVehiclesOnServiceRoads(int32& OutOnService, int32& OutTotal) const;
 
 	/**
+	 * Ampel-Schlangenprobe (-WbAmpelSpur=<Spur>): je Gruenphase der Zufahrt
+	 * eine Logzeile - Dauer, Wartende zu Beginn, ueber die Haltelinie
+	 * Abgeflossene, Wartende danach und wohin der Vorderste will. Beantwortet
+	 * "baut sich die Schlange pro Gruen ab?" mit Zahlen statt Eindruck.
+	 * Nach TrafficSimulation.Tick aufrufen; ohne gesetzte Spur ein No-Op.
+	 */
+	void SetQueueProbeLane(int32 LaneId) { ProbeLaneId = LaneId; }
+	void StepQueueProbe(float DeltaSeconds);
+
+private:
+	int32 ProbeLaneId = INDEX_NONE;
+	double ProbeTime = 0.0;
+	double ProbePhaseStart = 0.0;
+	bool bProbeGreen = false;
+	int32 ProbeWaitingAtStart = 0;
+	int32 ProbeDeparted = 0;
+	int32 ProbeHeadConnection = INDEX_NONE;
+	bool bProbeHeadGreenSeen = false;
+	TSet<int32> ProbeOnLane;
+
+public:
+
+	/**
 	 * Die aktuellen Steher mit Grund, hoechstens MaxCount, die naechsten zuerst.
 	 * Fuer die Diagnose gedacht und deshalb nicht je Tick gerufen.
 	 */
