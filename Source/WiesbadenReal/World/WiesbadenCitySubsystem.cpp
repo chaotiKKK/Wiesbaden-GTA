@@ -1508,14 +1508,21 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			// Fahrspur blockiert.
 			if (FParse::Param(FCommandLine::Get(), TEXT("WbStauLog")))
 			{
+				int32 AufService = 0;
+				int32 Gesamt = 0;
+				TrafficSimulation.CountVehiclesOnServiceRoads(AufService, Gesamt);
+				UE_LOG(LogWbTraffic, Log, TEXT("  Auf Service-Wegen (Parkplatz/Zufahrt): %d von %d Fahrzeugen."),
+					AufService, Gesamt);
 				TArray<FWiesbadenTrafficSimulation::FStalledVehicle> Stalled;
 				TrafficSimulation.CollectStalledVehicles(10, Stalled);
 				for (const FWiesbadenTrafficSimulation::FStalledVehicle& S : Stalled)
 				{
 					UE_LOG(LogWbTraffic, Log,
-						TEXT("  Steher %d auf Spur %d bei (%.0f, %.0f): %.0f von %.0f km/h, ")
+						TEXT("  Steher %d auf Spur %d (%s) bei (%.0f, %.0f): %.0f von %.0f km/h, ")
 						TEXT("Spieler %.1f m, Vordermann %.1f m, Rot=%d, Fortsetzung=%d."),
-						S.VehicleId, S.LaneId, S.Location.X, S.Location.Y,
+						S.VehicleId, S.LaneId,
+						*StaticEnum<EOSMHighwayType>()->GetNameStringByValue(static_cast<int64>(S.HighwayType)),
+						S.Location.X, S.Location.Y,
 						S.SpeedCmS * 0.036, S.DesiredSpeedCmS * 0.036,
 						S.PlayerDistanceCm >= 0.0 ? S.PlayerDistanceCm * 0.01 : -1.0,
 						S.AheadDistanceCm >= 0.0 ? S.AheadDistanceCm * 0.01 : -1.0,

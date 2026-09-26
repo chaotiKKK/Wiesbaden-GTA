@@ -74,13 +74,22 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 	TotalDistanceCm = 0.0;
 	Report = FWiesbadenTrafficReport();
 
-	// Befahrbare Spawn-Spuren (keine Busspuren).
+	// Befahrbare Spawn-Spuren (keine Busspuren) - nur im Durchgangsnetz, nicht
+	// auf Parkplatzgassen und Zufahrten (IsThroughTrafficClass). Kennt das
+	// Netz nichts anderes (Testnetze), bleibt es bei allen Spuren.
+	TArray<int32> ServiceLaneIds;
 	for (const FRoadLane& Lane : Network->Lanes)
 	{
 		if (Lane.IsValid() && !Lane.bIsBusLane)
 		{
-			SpawnLaneIds.Add(Lane.LaneId);
+			const bool bThrough = !Network->Segments.IsValidIndex(Lane.SegmentId)
+				|| IsThroughTrafficClass(Network->Segments[Lane.SegmentId].HighwayType);
+			(bThrough ? SpawnLaneIds : ServiceLaneIds).Add(Lane.LaneId);
 		}
+	}
+	if (SpawnLaneIds.Num() == 0)
+	{
+		SpawnLaneIds = MoveTemp(ServiceLaneIds);
 	}
 
 	// Nachbarspuren fuer das Ueberholen.
@@ -436,27 +445,44 @@ int32 FWiesbadenTrafficSimulation::PickSuccessorConnection(const FTrafficVehicle
 		Network->Connections[(*Successors)[0]].IntersectionNodeId);
 	const uint32 Roll = Hash2(static_cast<uint32>(Vehicle.VehicleId), NodeId);
 
+	// In Parkplatzgassen und Zufahrten biegt der Verkehr nur, wenn es keine
+	// andere Fortsetzung gibt (IsThroughTrafficClass) - und wer doch in einer
+	// steckt, nimmt den ersten Ausgang ins Durchgangsnetz statt Runden zu
+	// drehen.
+	TArray<int32, TInlineAllocator<8>> Choices;
+	for (const int32 ConnectionIndex : *Successors)
+	{
+		if (IsThroughTrafficClass(GetSuccessorClass(ConnectionIndex)))
+		{
+			Choices.Add(ConnectionIndex);
+		}
+	}
+	if (Choices.Num() == 0)
+	{
+		Choices.Append(*Successors);
+	}
+
 	// Gewichtete Wahl: Hauptstrassen werden bevorzugt.
 	//
 	// Der Hash bleibt die Quelle des Zufalls, damit die Wahl deterministisch
 	// und ueber Laeufe reproduzierbar ist - ein Fahrzeug an derselben
 	// Kreuzung entscheidet sich immer gleich.
 	double TotalWeight = 0.0;
-	for (const int32 ConnectionIndex : *Successors)
+	for (const int32 ConnectionIndex : Choices)
 	{
 		TotalWeight += GetSuccessorWeight(ConnectionIndex);
 	}
 
 	if (TotalWeight <= KINDA_SMALL_NUMBER)
 	{
-		const int32 Pick = static_cast<int32>(Roll % static_cast<uint32>(Successors->Num()));
-		return (*Successors)[Pick];
+		const int32 Pick = static_cast<int32>(Roll % static_cast<uint32>(Choices.Num()));
+		return Choices[Pick];
 	}
 
 	// Hash auf [0, TotalWeight) abbilden und das Rad drehen.
 	const double Target = (static_cast<double>(Roll % 100000u) / 100000.0) * TotalWeight;
 	double Running = 0.0;
-	for (const int32 ConnectionIndex : *Successors)
+	for (const int32 ConnectionIndex : Choices)
 	{
 		Running += GetSuccessorWeight(ConnectionIndex);
 		if (Target < Running)
@@ -465,7 +491,41 @@ int32 FWiesbadenTrafficSimulation::PickSuccessorConnection(const FTrafficVehicle
 		}
 	}
 
-	return (*Successors)[Successors->Num() - 1];
+	return Choices.Last();
+}
+
+EOSMHighwayType FWiesbadenTrafficSimulation::GetSuccessorClass(int32 ConnectionIndex) const
+{
+	if (!Network || !Network->Connections.IsValidIndex(ConnectionIndex))
+	{
+		return EOSMHighwayType::None;
+	}
+	const int32 ToLaneId = Network->Connections[ConnectionIndex].ToLaneId;
+	if (!Network->Lanes.IsValidIndex(ToLaneId)
+		|| !Network->Segments.IsValidIndex(Network->Lanes[ToLaneId].SegmentId))
+	{
+		return EOSMHighwayType::None;
+	}
+	return Network->Segments[Network->Lanes[ToLaneId].SegmentId].HighwayType;
+}
+
+void FWiesbadenTrafficSimulation::CountVehiclesOnServiceRoads(int32& OutOnService, int32& OutTotal) const
+{
+	OutOnService = 0;
+	OutTotal = Vehicles.Num();
+	if (!Network)
+	{
+		return;
+	}
+	for (const FTrafficVehicle& Vehicle : Vehicles)
+	{
+		if (Network->Lanes.IsValidIndex(Vehicle.LaneId)
+			&& Network->Segments.IsValidIndex(Network->Lanes[Vehicle.LaneId].SegmentId)
+			&& Network->Segments[Network->Lanes[Vehicle.LaneId].SegmentId].HighwayType == EOSMHighwayType::Service)
+		{
+			++OutOnService;
+		}
+	}
 }
 
 double FWiesbadenTrafficSimulation::GetSuccessorWeight(int32 ConnectionIndex) const
@@ -1164,6 +1224,11 @@ void FWiesbadenTrafficSimulation::CollectStalledVehicles(
 		FStalledVehicle Entry;
 		Entry.VehicleId = Vehicle.VehicleId;
 		Entry.LaneId = Vehicle.LaneId;
+		if (Network->Lanes.IsValidIndex(Vehicle.LaneId)
+			&& Network->Segments.IsValidIndex(Network->Lanes[Vehicle.LaneId].SegmentId))
+		{
+			Entry.HighwayType = Network->Segments[Network->Lanes[Vehicle.LaneId].SegmentId].HighwayType;
+		}
 		Entry.Location = Vehicle.Location;
 		Entry.SpeedCmS = Vehicle.SpeedCmS;
 		Entry.DesiredSpeedCmS = Vehicle.DesiredSpeedCmS;

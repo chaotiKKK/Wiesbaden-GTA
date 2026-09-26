@@ -1404,7 +1404,29 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 
 		/** Hat die Spur ueberhaupt eine Fortsetzung? */
 		bool bHasSuccessor = true;
+
+		/** Strassenklasse der Spur - zeigt, ob der Steher im Durchgangsnetz steht. */
+		EOSMHighwayType HighwayType = EOSMHighwayType::None;
 	};
+
+	/**
+	 * Gehoert die Klasse zum DURCHGANGSNETZ des Verkehrs?
+	 *
+	 * Service-Wege (OSM highway=service: Parkplatzgassen, Zufahrten, Gassen,
+	 * Hofeinfahrten) sind es nicht. Zufahrten und Gassen sind zudem einspurig
+	 * in EINER Richtung gebaut (RoadTypeLibrary), Parkplatzgassen bilden
+	 * Schleifen: Fahrzeuge, die dort eingesetzt wurden oder hineinbogen,
+	 * kreisten auf Parkflaechen und blockierten sich gegenseitig (gemeldet
+	 * 26.09.2026). Darum setzt der Verkehr dort nicht ein und biegt nur hinein,
+	 * wenn es keine andere Fortsetzung gibt.
+	 */
+	static bool IsThroughTrafficClass(EOSMHighwayType Type)
+	{
+		return Type != EOSMHighwayType::Service;
+	}
+
+	/** Fahrzeuge insgesamt und davon auf Service-Wegen (Diagnose -WbStauLog). */
+	void CountVehiclesOnServiceRoads(int32& OutOnService, int32& OutTotal) const;
 
 	/**
 	 * Die aktuellen Steher mit Grund, hoechstens MaxCount, die naechsten zuerst.
@@ -1456,6 +1478,9 @@ private:
 
 	/** Gewicht der Zielspur einer Verbindung (Strassenklasse). */
 	double GetSuccessorWeight(int32 ConnectionIndex) const;
+
+	/** Strassenklasse der Zielspur einer Verbindung (None, wenn unbekannt). */
+	EOSMHighwayType GetSuccessorClass(int32 ConnectionIndex) const;
 
 public:
 	/**

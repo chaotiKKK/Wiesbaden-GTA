@@ -1379,6 +1379,106 @@ bool FTrafficClassShareTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficServiceRoadTest,
+	"WiesbadenReal.Traffic.KeineParkplatzRunden",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficServiceRoadTest::RunTest(const FString& Parameters)
+{
+	// Gemeldet 26.09.2026: Fahrzeuge kreisten auf Parkflaechen und blockierten
+	// sich. Gemessen im Spiel: 36-46 von 206 Fahrzeugen auf Service-Wegen
+	// (Parkplatzgassen, Zufahrten), ein Drittel der Steher stand dort.
+	//
+	// Netz: Wohnstrasse 0 verzweigt an Knoten 42 in Service-Weg 1 und
+	// Wohnstrasse 2. SegmentId == LaneId == Array-Index.
+	auto Netz = [](EOSMHighwayType Abzweig1, EOSMHighwayType Abzweig2, bool bZweiterAbzweig)
+	{
+		FRoadNetwork Network;
+		Network.Lanes.Add(MakeSimLane(0, { FVector(0.0, 0.0, 0.0), FVector(3000.0, 0.0, 0.0) }));
+		Network.Lanes.Add(MakeSimLane(1, { FVector(3200.0, 200.0, 0.0), FVector(3200.0, 20000.0, 0.0) }));
+		Network.Lanes.Add(MakeSimLane(2, { FVector(3200.0, 0.0, 0.0), FVector(23000.0, 0.0, 0.0) }));
+		const EOSMHighwayType Typen[3] = { EOSMHighwayType::Residential, Abzweig1, Abzweig2 };
+		for (int32 i = 0; i < 3; ++i)
+		{
+			FRoadSegment Segment;
+			Segment.SegmentId = i;
+			Segment.HighwayType = Typen[i];
+			Segment.LengthCm = Network.Lanes[i].LengthCm;
+			Network.Segments.Add(Segment);
+		}
+		for (int32 Ziel = 1; Ziel <= (bZweiterAbzweig ? 2 : 1); ++Ziel)
+		{
+			FLaneConnection Connection;
+			Connection.FromLaneId = 0;
+			Connection.ToLaneId = Ziel;
+			Connection.IntersectionNodeId = 42;
+			Connection.TurnType = Ziel == 1 ? ETurnType::Left : ETurnType::Through;
+			Connection.bRestricted = false;
+			Connection.ConnectionPath = { FVector(3000.0, 0.0, 0.0), Network.Lanes[Ziel].Centerline[0] };
+			Network.Connections.Add(Connection);
+		}
+		return Network;
+	};
+	auto Fahre = [](const FRoadNetwork& Network, int32& AufLane1, int32& Gesamt, int32& Eingesetzt1)
+	{
+		FWiesbadenTrafficSimulation Sim;
+		Sim.Initialize(Network, MakeSettings(1.0f));
+		AufLane1 = 0;
+		Gesamt = 0;
+		Eingesetzt1 = 0;
+		TSet<int32> Gesehen;
+		for (int32 Step = 0; Step < 400; ++Step)
+		{
+			Sim.Tick(0.1f);
+			for (const FTrafficVehicle& V : Sim.Vehicles)
+			{
+				if (!Gesehen.Contains(V.VehicleId))
+				{
+					Gesehen.Add(V.VehicleId);
+					Eingesetzt1 += (V.bOnLane && V.LaneId == 1) ? 1 : 0;
+				}
+				AufLane1 += (V.bOnLane && V.LaneId == 1) ? 1 : 0;
+				++Gesamt;
+			}
+		}
+	};
+
+	// 1) Mit Wahl: niemand setzt in der Parkplatzgasse ein oder biegt hinein.
+	{
+		int32 AufLane1, Gesamt, Eingesetzt1;
+		Fahre(Netz(EOSMHighwayType::Service, EOSMHighwayType::Residential, true), AufLane1, Gesamt, Eingesetzt1);
+		TestTrue(FString::Printf(TEXT("Es fuhr ueberhaupt Verkehr (%d Fahrzeug-Bilder)"), Gesamt), Gesamt > 100);
+		TestEqual(TEXT("Kein Fahrzeug setzt auf dem Service-Weg ein"), Eingesetzt1, 0);
+		TestEqual(TEXT("Kein Fahrzeug biegt in den Service-Weg, wenn die Wohnstrasse weitergeht"), AufLane1, 0);
+	}
+	// Gegenprobe: ist der Abzweig eine Wohnstrasse, faehrt dort auch Verkehr -
+	// der Test sieht also, wenn die Wahl den Abzweig nimmt.
+	{
+		int32 AufLane1, Gesamt, Eingesetzt1;
+		Fahre(Netz(EOSMHighwayType::Residential, EOSMHighwayType::Residential, true), AufLane1, Gesamt, Eingesetzt1);
+		TestTrue(FString::Printf(TEXT("Gegenprobe: Wohnstrassen-Abzweig wird befahren (%d)"), AufLane1), AufLane1 > 0);
+	}
+	// 2) Ohne Wahl: ist der Service-Weg die EINZIGE Fortsetzung, geht es dort weiter.
+	{
+		int32 AufLane1, Gesamt, Eingesetzt1;
+		Fahre(Netz(EOSMHighwayType::Service, EOSMHighwayType::Residential, false), AufLane1, Gesamt, Eingesetzt1);
+		TestTrue(FString::Printf(TEXT("Einzige Fortsetzung Service-Weg wird genommen (%d)"), AufLane1), AufLane1 > 0);
+	}
+	// 3) Ein Netz nur aus Service-Wegen bekommt weiter Verkehr (Rueckfall).
+	{
+		int32 AufLane1, Gesamt, Eingesetzt1;
+		FRoadNetwork NurService = Netz(EOSMHighwayType::Service, EOSMHighwayType::Service, true);
+		NurService.Segments[0].HighwayType = EOSMHighwayType::Service;
+		Fahre(NurService, AufLane1, Gesamt, Eingesetzt1);
+		TestTrue(FString::Printf(TEXT("Nur Service-Wege: trotzdem Verkehr (%d)"), Gesamt), Gesamt > 100);
+	}
+	TestTrue(TEXT("Service ist kein Durchgangsnetz"),
+		!FWiesbadenTrafficSimulation::IsThroughTrafficClass(EOSMHighwayType::Service));
+	TestTrue(TEXT("Wohnstrasse ist Durchgangsnetz"),
+		FWiesbadenTrafficSimulation::IsThroughTrafficClass(EOSMHighwayType::Residential));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficSpawnOutOfViewTest,
 	"WiesbadenReal.Vehicles.Traffic.SpawnOutOfView",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
