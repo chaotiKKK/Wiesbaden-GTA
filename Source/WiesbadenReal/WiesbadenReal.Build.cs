@@ -49,6 +49,7 @@ public class WiesbadenReal : ModuleRules
 		{
 			"Slate",
 			"SlateCore",
+			"AnimationCore",   // SolveTwoBoneIK: Fuss-IK der Spielerfigur
 			"RenderCore",
 			"RHI",
 			"Json",

@@ -9,7 +9,11 @@
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimationPoseData.h"
 #include "AnimationRuntime.h"
+#include "BonePose.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/World.h"
+#include "Misc/CommandLine.h"
+#include "TwoBoneIK.h"
 
 // -- Mischer ------------------------------------------------------------------
 
@@ -133,7 +137,79 @@ namespace
 		{
 			FAnimInstanceProxy::PreUpdate(InAnimInstance, DeltaSeconds);
 			// Spielstrang: Kopie fuer das Abtasten auf dem Anim-Strang.
-			Samples = CastChecked<UWiesbadenSebboAnimInstance>(InAnimInstance)->GetSamples();
+			const UWiesbadenSebboAnimInstance* Instance = CastChecked<UWiesbadenSebboAnimInstance>(InAnimInstance);
+			Samples = Instance->GetSamples();
+			FootIk = Instance->GetFootIk();
+		}
+
+		/**
+		 * Fuss-IK auf die gemischte Pose: Becken um PelvisOffset, dann jedes
+		 * Bein per Zwei-Knochen-IK mit dem Fussgelenk auf (animierte Lage +
+		 * FootOffset), Knie nach vorn, der Fuss in die Bodenneigung gekippt.
+		 */
+		void ApplyFootIk(FPoseContext& Output) const
+		{
+			const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+			const auto Index = [&Bones](const TCHAR* Name)
+			{
+				const int32 Mesh = Bones.GetPoseBoneIndexForBoneName(FName(Name));
+				return Mesh == INDEX_NONE ? FCompactPoseBoneIndex(INDEX_NONE)
+					: Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(Mesh));
+			};
+			const FCompactPoseBoneIndex Pelvis = Index(TEXT("pelvis"));
+			const FCompactPoseBoneIndex Thigh[2] = { Index(TEXT("thigh_l")), Index(TEXT("thigh_r")) };
+			const FCompactPoseBoneIndex Calf[2] = { Index(TEXT("calf_l")), Index(TEXT("calf_r")) };
+			const FCompactPoseBoneIndex Foot[2] = { Index(TEXT("foot_l")), Index(TEXT("foot_r")) };
+			if (!Pelvis.IsValid() || !Thigh[0].IsValid() || !Thigh[1].IsValid() || !Calf[0].IsValid()
+				|| !Calf[1].IsValid() || !Foot[0].IsValid() || !Foot[1].IsValid())
+			{
+				return;
+			}
+
+			const double Alpha = FootIk.Alpha;
+			FCSPose<FCompactPose> Pose;
+			Pose.InitPose(Output.Pose);
+
+			// Die animierte Fusslage VOR dem Becken: der Boden ist gegen sie gemessen.
+			const FVector Animated[2] = {
+				Pose.GetComponentSpaceTransform(Foot[0]).GetLocation(),
+				Pose.GetComponentSpaceTransform(Foot[1]).GetLocation() };
+
+			if (!FootIk.PelvisOffset.IsNearlyZero(0.01))
+			{
+				FTransform Hips = Pose.GetComponentSpaceTransform(Pelvis);
+				Hips.AddToTranslation(FootIk.PelvisOffset * Alpha);
+				const FBoneTransform Moved[] = { FBoneTransform(Pelvis, Hips) };
+				Pose.SafeSetCSBoneTransforms(Moved);
+			}
+
+			TArray<FBoneTransform, TInlineAllocator<6>> Legs;
+			for (int32 I = 0; I < 2; ++I)
+			{
+				FTransform Hip = Pose.GetComponentSpaceTransform(Thigh[I]);
+				FTransform Knee = Pose.GetComponentSpaceTransform(Calf[I]);
+				FTransform Ankle = Pose.GetComponentSpaceTransform(Foot[I]);
+				const FQuat AnkleRotation = Ankle.GetRotation();
+				const FVector Target = Animated[I] + FootIk.FootOffset[I] * Alpha;
+				// Beugeebene: das Knie zeigt nach vorn (ein fast gestrecktes Bein
+				// liefert sonst keine eindeutige Ebene).
+				const FVector KneeHint = Knee.GetLocation() + FootIk.Forward * 60.0;
+				AnimationCore::SolveTwoBoneIK(Hip, Knee, Ankle, KneeHint, Target, false, 1.0, 1.0);
+
+				// Fuss in die Bodenneigung, hoechstens 30 Grad.
+				FVector Axis;
+				float Angle = 0.0f;
+				FQuat::FindBetweenNormals(FootIk.Up, FootIk.GroundNormal[I]).ToAxisAndAngle(Axis, Angle);
+				Angle = FMath::Min(Angle, FMath::DegreesToRadians(30.0f)) * static_cast<float>(Alpha);
+				Ankle.SetRotation(FQuat(Axis, Angle) * AnkleRotation);
+
+				Legs.Add(FBoneTransform(Thigh[I], Hip));
+				Legs.Add(FBoneTransform(Calf[I], Knee));
+				Legs.Add(FBoneTransform(Foot[I], Ankle));
+			}
+			Legs.Sort(FCompareBoneTransformIndex());
+			Pose.SafeSetCSBoneTransforms(Legs);
+			FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(Pose), Output.Pose);
 		}
 
 		virtual bool Evaluate(FPoseContext& Output) override
@@ -160,10 +236,19 @@ namespace
 				FAnimationRuntime::BlendTwoPosesTogetherInPlace(Blended, OtherData, Summed / (Summed + Sample.Weight));
 				Summed += Sample.Weight;
 			}
-			return Summed > 0.0f;   // nichts gemeldet: Ruhepose
+			if (Summed <= 0.0f)
+			{
+				return false;   // nichts gemeldet: Ruhepose
+			}
+			if (FootIk.Alpha > 0.01f)
+			{
+				ApplyFootIk(Output);
+			}
+			return true;
 		}
 
 		TArray<FWbSebboPoseSample> Samples;
+		FWbFootIkPose FootIk;
 	};
 }
 
@@ -218,6 +303,11 @@ bool UWiesbadenSebboFigureComponent::SetupFigure(float InJumpAirSeconds)
 	}
 	JumpAirSeconds = InJumpAirSeconds;
 	bReady = true;
+	if (FParse::Param(FCommandLine::Get(), TEXT("WbOhneFussIk")))
+	{
+		bFootIk = false;
+		UE_LOG(LogWbVehicles, Warning, TEXT("-WbOhneFussIk: Spielerfigur ohne Fuss-IK (nur zum Messen)."));
+	}
 	Mixer = FWbSebboMixer();
 	CurrentMove = EWbSebboMove::Count;
 	PlayMove(EWbSebboMove::Idle, true, 1.0f);
@@ -271,7 +361,93 @@ void UWiesbadenSebboFigureComponent::Animate(float DeltaSeconds, const FWbFigure
 		return;
 	}
 	ChooseAndPlay(DeltaSeconds, Input);
+	UpdateFootIk(DeltaSeconds, Input);
 	AdvanceMixer(DeltaSeconds);
+}
+
+FWbFootIkOffsets UWiesbadenSebboFigureComponent::ComputeFootIk(float CenterGroundZ, const bool bHit[2],
+	const float FootGroundZ[2], float MaxUpCm, float MaxDownCm)
+{
+	FWbFootIkOffsets Out;
+	for (int32 I = 0; I < 2; ++I)
+	{
+		const float Height = FootGroundZ[I] - CenterGroundZ;
+		// Weiter als erlaubt: eine Kante (Fuss ueber dem Abgrund) oder eine
+		// Wand, kein Boden - der Fuss bleibt, wo die Animation ihn hat.
+		Out.FootCm[I] = (bHit[I] && Height >= -MaxDownCm && Height <= MaxUpCm) ? Height : 0.0f;
+	}
+	Out.PelvisCm = FMath::Min(Out.FootCm[0], Out.FootCm[1]);
+	return Out;
+}
+
+void UWiesbadenSebboFigureComponent::UpdateFootIk(float DeltaSeconds, const FWbFigureInput& Input)
+{
+	UWorld* World = GetWorld();
+	// In der Luft und auf dem Wagen gibt es keinen Boden unter den Fuessen.
+	const bool bWant = bFootIk && World && !Input.bAirborne && !Input.bRiding
+		&& CurrentMove != EWbSebboMove::Jump && CurrentMove != EWbSebboMove::Surf;
+
+	// Boden unter der Figur (dort steht die Kapsel) und unter jedem Fuss -
+	// Fusslage aus dem letzten Bild; senkrecht, also zaehlt nur X/Y.
+	const FVector Root = GetComponentLocation();
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbFussIk), false, GetOwner());
+	const auto Ground = [&](const FVector& At, float& OutZ, FVector& OutNormal)
+	{
+		FHitResult Hit;
+		const FVector Start(At.X, At.Y, Root.Z + FootIkMaxUpCm + 40.0f);
+		const FVector End(At.X, At.Y, Root.Z - FootIkMaxDownCm - 40.0f);
+		if (!World || !World->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params))
+		{
+			return false;
+		}
+		OutZ = Hit.ImpactPoint.Z;
+		OutNormal = Hit.ImpactNormal;
+		return true;
+	};
+	static const FName FootBones[2] = { TEXT("foot_l"), TEXT("foot_r") };
+	float CenterZ = 0.0f;
+	FVector CenterNormal = FVector::UpVector;
+	const bool bCenter = Ground(Root, CenterZ, CenterNormal);
+	bool bHit[2] = { false, false };
+	float FootZ[2] = { 0.0f, 0.0f };
+	FVector Normal[2] = { FVector::UpVector, FVector::UpVector };
+	for (int32 I = 0; I < 2; ++I)
+	{
+		const FVector Ankle = GetSocketLocation(FootBones[I]);
+		bHit[I] = Ground(Ankle, FootZ[I], Normal[I]);
+		FootAboveGroundCm[I] = bHit[I] ? Ankle.Z - FootZ[I] : -1.0f;
+	}
+
+	const bool bActive = bWant && bCenter;
+	const FWbFootIkOffsets Target = bActive
+		? ComputeFootIk(CenterZ, bHit, FootZ, FootIkMaxUpCm, FootIkMaxDownCm) : FWbFootIkOffsets();
+	// Geglaettet: ein Fuss, der ueber eine Stufenkante gleitet, springt sonst.
+	constexpr float Follow = 14.0f;
+	FootIkNow.PelvisCm = FMath::FInterpTo(FootIkNow.PelvisCm, Target.PelvisCm, DeltaSeconds, Follow);
+	for (int32 I = 0; I < 2; ++I)
+	{
+		FootIkNow.FootCm[I] = FMath::FInterpTo(FootIkNow.FootCm[I], Target.FootCm[I], DeltaSeconds, Follow);
+		const FVector Wanted = (bActive && bHit[I]) ? Normal[I] : FVector::UpVector;
+		FootIkNormal[I] = FMath::VInterpTo(FootIkNormal[I], Wanted, DeltaSeconds, Follow).GetSafeNormal();
+	}
+	FootIkAlpha = FMath::FInterpTo(FootIkAlpha, bActive ? 1.0f : 0.0f, DeltaSeconds, 10.0f);
+
+	if (UWiesbadenSebboAnimInstance* Instance = Cast<UWiesbadenSebboAnimInstance>(GetAnimInstance()))
+	{
+		const FTransform& ToComponent = GetComponentTransform();
+		FWbFootIkPose Pose;
+		Pose.Alpha = FootIkAlpha;
+		Pose.PelvisOffset = ToComponent.InverseTransformVector(FVector(0.0, 0.0, FootIkNow.PelvisCm));
+		for (int32 I = 0; I < 2; ++I)
+		{
+			Pose.FootOffset[I] = ToComponent.InverseTransformVector(FVector(0.0, 0.0, FootIkNow.FootCm[I]));
+			Pose.GroundNormal[I] = ToComponent.InverseTransformVectorNoScale(FootIkNormal[I]);
+		}
+		Pose.Up = ToComponent.InverseTransformVectorNoScale(FVector::UpVector);
+		Pose.Forward = ToComponent.InverseTransformVectorNoScale(
+			GetOwner() ? GetOwner()->GetActorForwardVector() : GetForwardVector());
+		Instance->SetFootIk(Pose);
+	}
 }
 
 void UWiesbadenSebboFigureComponent::AdvanceMixer(float DeltaSeconds)

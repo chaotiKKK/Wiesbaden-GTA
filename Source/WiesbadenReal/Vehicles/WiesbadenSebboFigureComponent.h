@@ -130,6 +130,32 @@ struct FWbSebboPoseSample
 	float Weight = 0.0f;
 };
 
+/** Hoehen der Fuss-IK in cm (datenrein, ComputeFootIk). */
+struct FWbFootIkOffsets
+{
+	/** Becken: so weit senkt (negativ) bzw. hebt es sich. */
+	float PelvisCm = 0.0f;
+	/** Boden unter linkem [0] / rechtem [1] Fuss gegenueber dem Boden unter der Figur. */
+	float FootCm[2] = { 0.0f, 0.0f };
+};
+
+/**
+ * Fuss-IK fuer den Anim-Strang, alles im Raum der Komponente: der Proxy
+ * senkt das Becken, zieht jedes Fussgelenk per Zwei-Knochen-IK auf seinen
+ * Boden und kippt den Fuss in die Bodenneigung.
+ */
+struct FWbFootIkPose
+{
+	/** 0 = aus (Luft, Mitfahrt), 1 = voll. */
+	float Alpha = 0.0f;
+	FVector PelvisOffset = FVector::ZeroVector;
+	FVector FootOffset[2] = { FVector::ZeroVector, FVector::ZeroVector };
+	FVector GroundNormal[2] = { FVector::UpVector, FVector::UpVector };
+	FVector Up = FVector::UpVector;
+	/** Blickrichtung - legt fest, wohin die Knie beugen. */
+	FVector Forward = FVector::ForwardVector;
+};
+
 /**
  * Anim-Instanz ohne Animation-Blueprint: mischt die Clips, die ihr die
  * Figur-Komponente je Bild meldet (Gewichte des FWbSebboMixer), zu EINER Pose.
@@ -145,11 +171,15 @@ public:
 	void SetSamples(TArray<FWbSebboPoseSample>&& InSamples) { Samples = MoveTemp(InSamples); }
 	const TArray<FWbSebboPoseSample>& GetSamples() const { return Samples; }
 
+	void SetFootIk(const FWbFootIkPose& InFootIk) { FootIk = InFootIk; }
+	const FWbFootIkPose& GetFootIk() const { return FootIk; }
+
 protected:
 	virtual FAnimInstanceProxy* CreateAnimInstanceProxy() override;
 
 private:
 	TArray<FWbSebboPoseSample> Samples;
+	FWbFootIkPose FootIk;
 };
 
 /**
@@ -218,6 +248,34 @@ public:
 	static float GaitStartFor(EWbSebboMove From, float FromNormalizedTime, EWbSebboMove To);
 
 	/**
+	 * FUSS-IK, datenrein: aus dem Boden unter der Figur (CenterGroundZ) und
+	 * unter jedem Fuss (bHit/FootGroundZ) die Hoehen fuer Becken und Fuesse.
+	 * Ein Fuss ohne Treffer bleibt, wo die Animation ihn hat. Jede Hoehe ist
+	 * auf [-MaxDownCm, MaxUpCm] begrenzt (tiefer ist eine Kante, kein Boden).
+	 * Das Becken folgt dem tieferen Fuss, damit dessen Bein hinunterreicht;
+	 * das hoehere Bein beugt das Knie.
+	 */
+	static FWbFootIkOffsets ComputeFootIk(float CenterGroundZ, const bool bHit[2], const float FootGroundZ[2],
+		float MaxUpCm, float MaxDownCm);
+
+	/** Fussgelenk ueber dem Boden darunter in cm, links 0 / rechts 1 (Figurprobe; -1 = kein Boden). */
+	float GetFootHeightAboveGround(int32 Foot) const
+	{
+		return (Foot == 0 || Foot == 1) ? FootAboveGroundCm[Foot] : -1.0f;
+	}
+
+	/** Fuss-IK an (Vorgabe). Nur zum Messen abschaltbar: -WbOhneFussIk. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Figur")
+	bool bFootIk = true;
+
+	/** So weit hebt bzw. senkt die Fuss-IK einen Fuss hoechstens, cm (Stufe 18, Bordstein 12). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Figur", meta = (ClampMin = "0.0"))
+	float FootIkMaxUpCm = 45.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Figur", meta = (ClampMin = "0.0"))
+	float FootIkMaxDownCm = 45.0f;
+
+	/**
 	 * Welche Dauerbewegung passt zum Zustand? Datenrein, damit testbar.
 	 *
 	 * Mitfahrt = Surf, Luft = Jump, geduckt = CrouchWalk/CrouchIdle, schneller
@@ -255,6 +313,14 @@ private:
 	/** Die laufenden Clips samt Gewicht (weiches Ueberblenden). */
 	FWbSebboMixer Mixer;
 
+	/** Boden unter Figur und Fuessen abtasten, Fuss-IK nachfuehren (Spielstrang). */
+	void UpdateFootIk(float DeltaSeconds, const FWbFigureInput& Input);
+
+	/** Geglaettete Fuss-IK (Hoehen in cm, Welt) und ihr Gewicht. */
+	FWbFootIkOffsets FootIkNow;
+	float FootIkAlpha = 0.0f;
+	FVector FootIkNormal[2] = { FVector::UpVector, FVector::UpVector };
+	float FootAboveGroundCm[2] = { -1.0f, -1.0f };
 
 	/** Clips, Index = EWbSebboMove (fehlende = nullptr). */
 	UPROPERTY(Transient)

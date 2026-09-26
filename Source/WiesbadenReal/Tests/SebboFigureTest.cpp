@@ -217,3 +217,61 @@ bool FSebboFigureBlendTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Stehen ist kein Gangzyklus"), UFig::GaitStartFor(EM::Idle, 0.3f, EM::Walk), -1.0f);
 	return true;
 }
+
+/**
+ * Fuss-IK (UWiesbadenSebboFigureComponent::ComputeFootIk): auf Hang, Bordstein
+ * und Stufe setzt jeder Fuss auf SEINEM Boden auf; das Becken folgt dem
+ * tieferen Fuss. Vorher standen die Fuesse auf der Ebene der Kapsel - am Hang
+ * steckte der bergseitige Fuss im Boden, der talseitige schwebte.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboFootIkTest,
+	"WiesbadenReal.Vehicles.SebboFigur.FussIk",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSebboFootIkTest::RunTest(const FString& Parameters)
+{
+	using UFig = UWiesbadenSebboFigureComponent;
+	constexpr float Up = 45.0f, Down = 45.0f;
+	const auto Ik = [&](float Center, bool bL, float L, bool bR, float R)
+	{
+		const bool Hit[2] = { bL, bR };
+		const float Z[2] = { L, R };
+		return UFig::ComputeFootIk(Center, Hit, Z, Up, Down);
+	};
+
+	// Ebene: nichts zu tun.
+	FWbFootIkOffsets O = Ik(100.0f, true, 100.0f, true, 100.0f);
+	TestEqual(TEXT("eben: Becken 0"), O.PelvisCm, 0.0f);
+	TestEqual(TEXT("eben: links 0"), O.FootCm[0], 0.0f);
+
+	// Quer zum Hang (20 %, Fuesse 30 cm auseinander): links 3 cm hoeher, rechts 3 tiefer.
+	O = Ik(100.0f, true, 103.0f, true, 97.0f);
+	TestEqual(TEXT("Hang: linker Fuss +3"), O.FootCm[0], 3.0f);
+	TestEqual(TEXT("Hang: rechter Fuss -3"), O.FootCm[1], -3.0f);
+	TestEqual(TEXT("Hang: Becken folgt dem tieferen Fuss (-3)"), O.PelvisCm, -3.0f);
+
+	// Bordstein: links auf dem Gehweg (+12), rechts auf der Fahrbahn.
+	O = Ik(100.0f, true, 112.0f, true, 100.0f);
+	TestEqual(TEXT("Bordstein: linker Fuss +12"), O.FootCm[0], 12.0f);
+	TestEqual(TEXT("Bordstein: Becken bleibt"), O.PelvisCm, 0.0f);
+
+	// Treppe: die Kapsel steht auf der unteren Stufe, ein Fuss auf der naechsten (+18).
+	O = Ik(100.0f, true, 100.0f, true, 118.0f);
+	TestEqual(TEXT("Treppe: rechter Fuss +18"), O.FootCm[1], 18.0f);
+
+	// Kante: rechts geht es 80 cm hinab - kein Boden, der Fuss bleibt.
+	O = Ik(100.0f, true, 100.0f, true, 20.0f);
+	TestEqual(TEXT("Kante: rechter Fuss bleibt"), O.FootCm[1], 0.0f);
+	TestEqual(TEXT("Kante: Becken sinkt nicht in den Abgrund"), O.PelvisCm, 0.0f);
+
+	// Wand: Treffer 60 cm hoeher ist kein Boden.
+	O = Ik(100.0f, true, 160.0f, true, 100.0f);
+	TestEqual(TEXT("Wand: linker Fuss bleibt"), O.FootCm[0], 0.0f);
+
+	// Kein Treffer: der Fuss bleibt; der andere zaehlt trotzdem.
+	O = Ik(100.0f, false, 0.0f, true, 90.0f);
+	TestEqual(TEXT("ohne Treffer links: 0"), O.FootCm[0], 0.0f);
+	TestEqual(TEXT("ohne Treffer: rechter Fuss -10"), O.FootCm[1], -10.0f);
+	TestEqual(TEXT("ohne Treffer: Becken -10"), O.PelvisCm, -10.0f);
+	return true;
+}

@@ -1090,9 +1090,10 @@ void AWiesbadenGameMode::TickFigurProbe(float DeltaSeconds)
 		FigurProbeLogIn = 0.5f;
 		const FVector L = Foot->GetActorLocation();
 		UE_LOG(LogWbVehicles, Log,
-			TEXT("WbFigurProbe t=%.1f: Bewegung %s (Gewicht %.2f), Rate %.2f, geduckt %d (Kapsel %.0f), Taste X %d, Ort (%.0f, %.0f, %.0f)."),
+			TEXT("WbFigurProbe t=%.1f: Bewegung %s (Gewicht %.2f), Rate %.2f, geduckt %d (Kapsel %.0f), Taste X %d, Ort (%.0f, %.0f, %.0f), Fussgelenk ueber Boden L %.1f R %.1f cm."),
 			T, *Move, Figure->GetMoveWeight(Figure->GetCurrentMove()), Figure->GetMovePlayRate(),
-			Foot->IsCrouched() ? 1 : 0, Half, PC->IsInputKeyDown(EKeys::X) ? 1 : 0, L.X, L.Y, L.Z);
+			Foot->IsCrouched() ? 1 : 0, Half, PC->IsInputKeyDown(EKeys::X) ? 1 : 0, L.X, L.Y, L.Z,
+			Figure->GetFootHeightAboveGround(0), Figure->GetFootHeightAboveGround(1));
 	}
 	if (bDone)
 	{
