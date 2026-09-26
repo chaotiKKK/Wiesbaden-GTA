@@ -4475,6 +4475,12 @@ void UWiesbadenCitySubsystem::InitializeCity()
 				// Messwerkzeug: -WbOhneKreuzungsregel schaltet die
 				// Kreuzungskonflikte ab, damit ihre Wirkung im selben Lauf und
 				// auf derselben Karte gemessen werden kann.
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbKreuzungAlt")))
+				{
+					TrafficSettings.bStrictJunctionClearance = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbKreuzungAlt: alte Kreuzungsfreihaltung (480 cm, Zielspur ohne Haltelinienabstand; nur zum Messen)."));
+				}
 				if (FParse::Param(FCommandLine::Get(), TEXT("WbOhneKreuzungsregel")))
 				{
 					TrafficSettings.bJunctionConflicts = false;

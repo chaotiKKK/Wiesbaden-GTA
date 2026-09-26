@@ -1280,6 +1280,102 @@ bool FTrafficMergeStackingTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficJunctionExitRoomTest,
+	"WiesbadenReal.Traffic.KreuzungsausfahrtFrei",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Blockierfreihaltung: wer hinter der Kreuzung keinen Platz fuer sich UND die
+ * Mindestluecke hat, bleibt vor der Kreuzung.
+ *
+ * Im Spiel steckten an belebten Ecken Wartende im Heck eines Fahrzeugs, das
+ * 2-4 m in der Querstrasse stand. Die alte Regel liess einfahren, sobald das
+ * hinterste Fahrzeug der Zielspur 480 cm hinter deren Anfang stand - die
+ * Folgeregel haelt aber 700 cm Mittenabstand. Wer bei 600 cm einfuhr, blieb
+ * nach 1 m auf der Verbindung stehen, mitten im Knoten.
+ */
+bool FTrafficJunctionExitRoomTest::RunTest(const FString& Parameters)
+{
+	FRoadNetwork Network = MakeNetwork();   // Spur 0 -> Verbindung 0 (Knoten 42) -> Spur 1
+	// Querstrom durch denselben Knoten: Spur 3 -> Verbindung 1 -> Spur 4, schneidet
+	// Verbindung 0 bei x = 102,5 m. Erst damit ist Verbindung 0 ein Kreuzungsweg.
+	Network.Lanes.Add(MakeSimLane(3, { FVector(10250.0, -5000.0, 0.0), FVector(10250.0, -300.0, 0.0) }));
+	Network.Lanes.Add(MakeSimLane(4, { FVector(10250.0, 300.0, 0.0), FVector(10250.0, 5000.0, 0.0) }));
+	FLaneConnection Cross;
+	Cross.FromLaneId = 3;
+	Cross.ToLaneId = 4;
+	Cross.IntersectionNodeId = 42;
+	Cross.TurnType = ETurnType::Through;
+	Cross.bRestricted = false;
+	Cross.ConnectionPath = { FVector(10250.0, -300.0, 0.0), FVector(10250.0, 300.0, 0.0) };
+	Network.Connections.Add(Cross);
+
+	struct FResult { bool bEntered = false; bool bOnConnectionAtEnd = false; double RemainingCm = 0.0; };
+	const auto Run = [](const FRoadNetwork& Net, bool bStrict)
+	{
+		FWiesbadenTrafficSettings Settings = MakeSettings(0.0f);
+		Settings.bStrictJunctionClearance = bStrict;
+		FWiesbadenTrafficSimulation Sim;
+		Sim.Initialize(Net, Settings);
+
+		// Steht 6 m hinter dem Anfang der Zielspur: mehr als 480, weniger als
+		// Mindestluecke + halbe Laenge.
+		FTrafficVehicle Blocker;
+		Blocker.VehicleId = 1;
+		Blocker.LaneId = 1;
+		Blocker.bOnLane = true;
+		Blocker.DistanceCm = 600.0;
+		Blocker.SpeedCmS = 0.0;
+		Blocker.DesiredSpeedCmS = 0.0;
+		Sim.Vehicles.Add(Blocker);
+
+		FTrafficVehicle Approaching;
+		Approaching.VehicleId = 2;
+		Approaching.LaneId = 0;
+		Approaching.bOnLane = true;
+		Approaching.DistanceCm = 8000.0;
+		Approaching.SpeedCmS = 800.0;
+		Approaching.DesiredSpeedCmS = 1000.0;
+		Sim.Vehicles.Add(Approaching);
+
+		FResult Result;
+		for (int32 Step = 0; Step < 150; ++Step)
+		{
+			Sim.Tick(0.1f);
+			for (const FTrafficVehicle& V : Sim.Vehicles)
+			{
+				if (V.VehicleId == 2)
+				{
+					Result.bEntered |= !V.bOnLane;
+					Result.bOnConnectionAtEnd = !V.bOnLane;
+					Result.RemainingCm = V.bOnLane ? Net.Lanes[0].LengthCm - V.DistanceCm : 0.0;
+				}
+			}
+		}
+		return Result;
+	};
+
+	const FResult Strict = Run(Network, true);
+	TestFalse(TEXT("streng: faehrt nicht in die Kreuzung"), Strict.bEntered);
+	TestTrue(FString::Printf(TEXT("streng: wartet an der Haltelinie (%.0f cm vor dem Spurende)"), Strict.RemainingCm),
+		Strict.RemainingCm < 1000.0);
+
+	// Gegenprobe mit der alten Regel: faehrt ein und bleibt IM Knoten stehen.
+	const FResult Old = Run(Network, false);
+	TestTrue(TEXT("alte Regel: faehrt ein"), Old.bEntered);
+	TestTrue(TEXT("alte Regel: steht am Ende auf der Kreuzungsverbindung"), Old.bOnConnectionAtEnd);
+
+	// Stossstelle einer zerteilten Strasse: dieselbe Geometrie, aber der
+	// Querstrom gehoert zu denselben zwei Abschnitten (Spurwechsel). Dort
+	// bleibt es bei 480 cm - streng verlangt, liess eine 8,9 m kurze
+	// Folgespur nur noch ein Fahrzeug zugleich hinein.
+	FRoadNetwork Joint = Network;
+	Joint.Lanes[3].SegmentId = 0;
+	Joint.Lanes[4].SegmentId = 1;
+	const FResult JointResult = Run(Joint, true);
+	TestTrue(TEXT("Stossstelle: faehrt wie bisher ein"), JointResult.bEntered);
+	return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficClassShareTest,
 	"WiesbadenReal.Traffic.Klassenverteilung",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)

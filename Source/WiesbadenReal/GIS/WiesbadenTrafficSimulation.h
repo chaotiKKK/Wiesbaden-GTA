@@ -301,6 +301,28 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	double JunctionExitSpaceCm = 480.0;
 
 	/**
+	 * KREUZUNG FREI HALTEN, ernst gemeint (an): eingefahren wird erst, wenn
+	 * hinter der Kreuzung mindestens MinGapCm + VehicleHalfLengthCm frei sind
+	 * (sonst gilt JunctionExitSpaceCm), und die Haltelinie einer Zufahrt haelt
+	 * auch zu ihrer EIGENEN Zielspur Abstand.
+	 *
+	 * GEMESSEN am 26.09.2026: 91 von 92 "Fahrzeuge ineinander"-Paaren lagen an
+	 * Kreuzungen, 51 davon zwischen einem Wartenden vor der Ecke und einem
+	 * Fahrzeug, das 1,6-4 m weit in der Querstrasse stand. Der Folgeabstand
+	 * gilt Mitte zu Mitte (700 cm): wer bei 480 cm freier Zielspur einfuhr,
+	 * musste 2 m VOR deren Anfang halten - mitten in der Kreuzung. Und die
+	 * Haltelinie nahm die eigene Zielspur ausdruecklich aus.
+	 * Gilt nur an echten Kreuzungen (mindestens drei Arme), nicht an den
+	 * Stossstellen zerteilter Strassen, und ein Fahrzeug auf der Zielspur
+	 * zaehlt mit seinem Bremsweg: streng ueberall kostete an der
+	 * Albrecht-Duerer-Strasse (8,9-m-Stuecke) so viel Fluss, dass der Anteil
+	 * Stehender von 29 auf 40 % stieg.
+	 * Nur zum Messen abschaltbar: -WbKreuzungAlt.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	bool bStrictJunctionClearance = true;
+
+	/**
 	 * Halbe Laenge und halbe Breite eines Verkehrsfahrzeugs in cm.
 	 *
 	 * Beschreibt DASSELBE Auto wie die Kollisionsbox des Spawners
@@ -1729,6 +1751,14 @@ private:
 	};
 
 	TMap<int32, TArray<FConnectionConflict>> ConnectionConflicts;
+
+	/**
+	 * Verbindungen an ECHTEN Kreuzungen: am Knoten treffen mindestens drei
+	 * Abschnitte zusammen. OSM zerteilt Strassen in Stuecke von wenigen
+	 * Metern; an diesen Stossstellen kreuzen sich nur Spurwechsel derselben
+	 * Strasse - dort gilt die strenge Blockierfreihaltung nicht.
+	 */
+	TSet<int32> MultiArmConnections;
 
 	/** Verbindungen je Kreuzungsknoten (fuer die Konflikt-Vorberechnung). */
 	void BuildConnectionConflicts();

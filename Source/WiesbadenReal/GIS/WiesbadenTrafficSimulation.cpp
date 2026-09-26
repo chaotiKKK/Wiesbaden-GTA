@@ -1792,9 +1792,28 @@ void FWiesbadenTrafficSimulation::BuildConnectionConflicts()
 	{
 		SideBySideCm = FMath::Max(SideBySideCm, Type.BodyWidthCm);
 	}
+	MultiArmConnections.Reset();
 	for (const TPair<int64, TArray<int32>>& Node : ConnectionsByNode)
 	{
 		const TArray<int32>& Indices = Node.Value;
+		{
+			TSet<int32> Arms;
+			for (const int32 C : Indices)
+			{
+				const FLaneConnection& Conn = Network->Connections[C];
+				for (const int32 L : { Conn.FromLaneId, Conn.ToLaneId })
+				{
+					if (Network->Lanes.IsValidIndex(L))
+					{
+						Arms.Add(Network->Lanes[L].SegmentId);
+					}
+				}
+			}
+			if (Arms.Num() >= 3)
+			{
+				MultiArmConnections.Append(Indices);
+			}
+		}
 		for (int32 a = 0; a < Indices.Num(); ++a)
 		{
 			for (int32 b = a + 1; b < Indices.Num(); ++b)
@@ -1970,6 +1989,16 @@ void FWiesbadenTrafficSimulation::BuildStopLines()
 			continue;
 		}
 
+		// Echte Kreuzung (mindestens drei Arme)? Nur dort haelt die Haltelinie
+		// auch zur eigenen Zielspur Abstand - an einer Stossstelle ist die
+		// eigene Zielspur schlicht die Fortsetzung geradeaus.
+		TSet<int32> Arms = Segments;
+		for (const int32 L : OutLanes)
+		{
+			Arms.Add(Network->Lanes[L].SegmentId);
+		}
+		const bool bClearOwnExits = Settings.bStrictJunctionClearance && Arms.Num() >= 3;
+
 		// Zwei Durchgaenge: im ersten zaehlen nur Wege und Ausfahrten; im
 		// zweiten auch die Wartebereiche der Nachbar-Zufahrten - bis zu DEREN
 		// Haltelinie, nicht bis zu ihrem Spurende (dort wartet niemand mehr).
@@ -1998,7 +2027,10 @@ void FWiesbadenTrafficSimulation::BuildStopLines()
 				for (const int32 Out : OutLanes)
 				{
 					const FRoadLane& OutLane = Network->Lanes[Out];
-					if (OutLane.SegmentId != Lane.SegmentId && !Reachable.Contains(Out))
+					// Auch die EIGENE Zielspur: dort steht der Rueckstau, und ein
+					// Wartender an der Ecke steckte sonst in dessen Heck.
+					if (OutLane.SegmentId != Lane.SegmentId
+						&& (bClearOwnExits || !Reachable.Contains(Out)))
 					{
 						AddPieces(OutLane.Centerline, 0.0, ZoneCm, Obstacles);
 					}
@@ -2169,6 +2201,7 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 	// Blockierfreihaltung: wer keinen Platz hinter der Kreuzung hat, darf nicht
 	// hinein.
 	TMap<int32, double> RearmostOnLane;
+	TMap<int32, double> RearmostStopOnLane;
 	for (const FTrafficVehicle& Vehicle : Vehicles)
 	{
 		if (!Vehicle.bOnLane || Vehicle.LaneId == INDEX_NONE)
@@ -2178,6 +2211,14 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 		double& Rearmost = RearmostOnLane.FindOrAdd(
 			Vehicle.LaneId, TNumericLimits<double>::Max());
 		Rearmost = FMath::Min(Rearmost, Vehicle.DistanceCm);
+		// Wo haelt es fruehestens, wenn es jetzt behaglich bremst? Wer zuegig
+		// wegfaehrt, macht den Platz hinter der Kreuzung frei, bevor der
+		// Naechste dort ankommt - ihn wie einen Stehenden zu zaehlen, hielt
+		// Fahrzeuge vor Kreuzungen fest, hinter denen gar niemand wartete.
+		double& Reach = RearmostStopOnLane.FindOrAdd(
+			Vehicle.LaneId, TNumericLimits<double>::Max());
+		Reach = FMath::Min(Reach, Vehicle.DistanceCm
+			+ Vehicle.SpeedCmS * Vehicle.SpeedCmS / (2.0 * ComfortDeceleration));
 	}
 
 	// Vorfahrt: Gewicht der Strassenklasse, aus der eine Verbindung kommt.
@@ -2248,9 +2289,18 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 			&& Network->Connections.IsValidIndex(Candidate.ConnectionIndex))
 		{
 			const int32 ToLane = Network->Connections[Candidate.ConnectionIndex].ToLaneId;
-			if (const double* RearmostAhead = RearmostOnLane.Find(ToLane))
+			// Streng nur an echten Kreuzungen: an den Stossstellen zerteilter
+			// Strassen sind die Folgespuren oft kuerzer als der verlangte
+			// Platz (Albrecht-Duerer-Strasse: 8,9 m) - dort durfte nur noch
+			// einer hinein, sobald irgendwer auf der Spur war.
+			const bool bStrict = Settings.bStrictJunctionClearance
+				&& MultiArmConnections.Contains(Candidate.ConnectionIndex);
+			if (const double* RearmostAhead = (bStrict ? RearmostStopOnLane : RearmostOnLane).Find(ToLane))
 			{
-				if (*RearmostAhead < FMath::Max(Settings.JunctionExitSpaceCm, 0.0))
+				const double Platz = bStrict
+					? FMath::Max(Settings.JunctionExitSpaceCm, Settings.MinGapCm + Settings.VehicleHalfLengthCm)
+					: FMath::Max(Settings.JunctionExitSpaceCm, 0.0);
+				if (*RearmostAhead < Platz)
 				{
 					bBlocked = true;
 					++LastBlockedNoRoomAhead;
