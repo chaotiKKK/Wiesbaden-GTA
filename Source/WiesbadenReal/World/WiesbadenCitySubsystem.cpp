@@ -4498,6 +4498,18 @@ void UWiesbadenCitySubsystem::InitializeCity()
 						TEXT("-WbVerkehrKinematisch: Verkehr ohne Fahrphysik (nur zum Messen)."));
 				}
 
+				// Wenden am Sackgassenende: Wendeschleifen und Rueckspuren VOR dem
+				// Verkehr (und vor den Ampeln, die dasselbe Netz lesen) ergaenzen.
+				// -WbOhneWenden: altes Verhalten (warten, unbeobachtet verschwinden).
+				if (!FParse::Param(FCommandLine::Get(), TEXT("WbOhneWenden")))
+				{
+					int32 Rueckspuren = 0;
+					const int32 Schleifen = FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(
+						Builder->RoadNetwork, &Rueckspuren);
+					UE_LOG(LogWbTraffic, Log,
+						TEXT("Sackgassen: %d Wendeschleifen, davon %d mit eigener Rueckspur (einspurige Zufahrten)."),
+						Schleifen, Rueckspuren);
+				}
 				TrafficSimulation.Initialize(Builder->RoadNetwork, TrafficSettings);
 				// -WbStauKarte: Fluss je Strasse mitschreiben. VOR Initialize
 				// setzen waere zwecklos - Initialize raeumt die Messwerte auf.

@@ -486,6 +486,32 @@ struct WIESBADENREAL_API FRoadIntersection
 	int32 GetArmCount() const { return Arms.Num(); }
 };
 
+namespace WiesbadenTurnaround
+{
+	/**
+	 * Kreis der Wendeschleife HINTER dem Spurende E (Richtung Dir), durch E und
+	 * - bei zweispurigen Strassen - durch den Start S der Gegenspur.
+	 */
+	inline void LoopCircle(const FVector& E, const FVector& Dir, const FVector& S,
+		FVector2D& OutCenter, double& OutRadiusCm)
+	{
+		const FVector2D D = FVector2D(Dir.X, Dir.Y).GetSafeNormal();
+		const FVector2D Links(D.Y, -D.X);
+		const FVector2D E2(E.X, E.Y);
+		const double W = FVector2D::DotProduct(FVector2D(S.X, S.Y) - E2, Links);
+		if (FMath::Abs(W) < 50.0)
+		{
+			// Einspurig (S = E): Kreis mit 4 m Radius, E liegt darauf.
+			OutRadiusCm = 400.0;
+			OutCenter = E2 + D * (OutRadiusCm * 0.9) + Links * (OutRadiusCm * FMath::Sqrt(1.0 - 0.81));
+			return;
+		}
+		OutRadiusCm = FMath::Clamp(FMath::Abs(W) * 0.5 + 150.0, 300.0, 600.0);
+		const double Half = FMath::Clamp(W * 0.5, -OutRadiusCm * 0.95, OutRadiusCm * 0.95);
+		OutCenter = E2 + Links * Half + D * FMath::Sqrt(OutRadiusCm * OutRadiusCm - Half * Half);
+	}
+}
+
 /** Erlaubte Fahrbeziehung von einer Spur auf eine andere ueber eine Kreuzung. */
 USTRUCT(BlueprintType)
 struct WIESBADENREAL_API FLaneConnection
@@ -515,6 +541,15 @@ struct WIESBADENREAL_API FLaneConnection
 	/** True, wenn die Beziehung durch eine OSM-Abbiegevorschrift verboten ist. */
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	bool bRestricted = false;
+
+	/**
+	 * Nachtraeglich fuer den Verkehr ergaenzt (Wenden am Sackgassenende bzw.
+	 * Rueckweg einer einspurigen Sackgasse, FWiesbadenTrafficSimulation::
+	 * AddDeadEndTurnarounds). Ampeln lassen solche Verbindungen aus ihrem
+	 * Signalprogramm - es bleibt, wie es war.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	bool bAddedTurnaround = false;
 };
 
 /**

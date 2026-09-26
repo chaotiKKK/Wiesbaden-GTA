@@ -1447,6 +1447,28 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 		return Type != EOSMHighwayType::Service;
 	}
 
+	/**
+	 * WENDEN AM SACKGASSENENDE: ergaenzt das Netz, damit Fahrzeuge am Ende
+	 * einer Spur ohne Fortsetzung wenden und zurueckfahren, statt dort zu
+	 * warten und unbeobachtet zu verschwinden.
+	 *
+	 *  - Zweispurige Sackgasse: Wendeschleife (ETurnType::UTurn) von der Spur
+	 *    auf die Gegenspur desselben Abschnitts.
+	 *  - Einspurige Sackgasse (Zufahrten, Gassen: nur EINE Spur gebaut):
+	 *    gespiegelte Rueckspur, Wendeschleife darauf, und am Anfang der
+	 *    Sackgasse Verbindungen zurueck auf die Spuren, die die Kreuzung dort
+	 *    verlassen.
+	 *
+	 * Neue Spuren/Verbindungen kommen nur ANS ENDE (bestehende Nummern bleiben
+	 * gueltig) und tragen bAddedTurnaround. Idempotent: ein Netz, das schon
+	 * Wendeschleifen hat, bleibt unveraendert. Vor Initialize aufrufen.
+	 * @return Zahl der Wendeschleifen; OutReverseLanes = angelegte Rueckspuren.
+	 */
+	static int32 AddDeadEndTurnarounds(FRoadNetwork& InOutNetwork, int32* OutReverseLanes = nullptr);
+
+	/** Wendeschleife vom Spurende E (Fahrtrichtung Dir) zum Start S der Gegenrichtung. */
+	static TArray<FVector> BuildTurnaroundPath(const FVector& E, const FVector& Dir, const FVector& S);
+
 	/** Fahrzeuge insgesamt und davon auf Service-Wegen (Diagnose -WbStauLog). */
 	void CountVehiclesOnServiceRoads(int32& OutOnService, int32& OutTotal) const;
 

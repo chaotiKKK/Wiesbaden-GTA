@@ -319,7 +319,10 @@ void FWiesbadenTrafficLightSystem::Initialize(
 			for (const int32 ConnectionIndex : *NodeConnections)
 			{
 				const FLaneConnection& Connection = InNetwork.Connections[ConnectionIndex];
-				if (!InNetwork.Lanes.IsValidIndex(Connection.FromLaneId))
+				// Wendeschleifen und Sackgassen-Rueckwege gehoeren nicht zum
+				// Signalprogramm - sonst aenderte eine Hofzufahrt den Umlauf
+				// einer ganzen Kreuzung.
+				if (!InNetwork.Lanes.IsValidIndex(Connection.FromLaneId) || Connection.bAddedTurnaround)
 				{
 					continue;
 				}

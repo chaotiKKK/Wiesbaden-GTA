@@ -5,6 +5,7 @@
 #include "WiesbadenReal.h"
 
 #include "GIS/WiesbadenTrafficLights.h"
+#include "Algo/Reverse.h"
 #include "Vehicles/WiesbadenCar.h"
 #include "Vehicles/WiesbadenTrafficCars.h"
 #include "Misc/FileHelper.h"
@@ -4162,4 +4163,178 @@ void FWiesbadenTrafficSimulation::StepQueueProbe(float DeltaSeconds)
 		bProbeGreen = bAnyGreen;
 		ProbePhaseStart = ProbeTime;
 	}
+}
+
+TArray<FVector> FWiesbadenTrafficSimulation::BuildTurnaroundPath(const FVector& E, const FVector& Dir, const FVector& S)
+{
+	// Kolbenkopf-Schleife: ein Kreis HINTER dem Spurende, der durch E geht und
+	// (bei zweispurigen Strassen) durch den Start S der Gegenrichtung
+	// (WiesbadenTurnaround::LoopCircle).
+	const FVector2D D = FVector2D(Dir.X, Dir.Y).GetSafeNormal();
+	const FVector2D E2(E.X, E.Y);
+	const double W = FVector2D::DotProduct(FVector2D(S.X, S.Y) - E2, FVector2D(D.Y, -D.X));
+	FVector2D C;
+	double R;
+	WiesbadenTurnaround::LoopCircle(E, Dir, S, C, R);
+
+	auto Winkel = [&C](const FVector2D& P) { return FMath::Atan2(P.Y - C.Y, P.X - C.X); };
+	auto Positiv = [](double A) { A = FMath::Fmod(A, 2.0 * UE_DOUBLE_PI); return A < 0.0 ? A + 2.0 * UE_DOUBLE_PI : A; };
+	const double A0 = Winkel(E2);
+	const double A1 = FMath::Abs(W) < 50.0 ? A0 : Winkel(FVector2D(S.X, S.Y));
+	const double AFern = FMath::Atan2(D.Y, D.X);   // der Punkt C + D*R liegt am weitesten hinten
+
+	// Richtung so waehlen, dass der Bogen ueber den fernen Punkt laeuft.
+	double Bogen = Positiv(A1 - A0);
+	if (Bogen < 1e-3) { Bogen = 2.0 * UE_DOUBLE_PI; }
+	double Vorzeichen = 1.0;
+	if (Positiv(AFern - A0) > Bogen)
+	{
+		Vorzeichen = -1.0;
+		Bogen = Positiv(A0 - A1);
+		if (Bogen < 1e-3) { Bogen = 2.0 * UE_DOUBLE_PI; }
+	}
+
+	TArray<FVector> Pfad;
+	const int32 Stuecke = FMath::Max(8, FMath::CeilToInt(Bogen * R / 80.0));
+	Pfad.Reserve(Stuecke + 2);
+	Pfad.Add(E);
+	for (int32 i = 1; i < Stuecke; ++i)
+	{
+		const double T = static_cast<double>(i) / Stuecke;
+		const double A = A0 + Vorzeichen * Bogen * T;
+		// Hoehe zwischen den Spurenden gemittelt.
+		const FVector2D P(C.X + R * FMath::Cos(A), C.Y + R * FMath::Sin(A));
+		Pfad.Add(FVector(P.X, P.Y, FMath::Lerp(E.Z, S.Z, T)));
+	}
+	Pfad.Add(S);
+	return Pfad;
+}
+
+int32 FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(FRoadNetwork& Net, int32* OutReverseLanes)
+{
+	if (OutReverseLanes) { *OutReverseLanes = 0; }
+	for (const FLaneConnection& C : Net.Connections)
+	{
+		if (C.bAddedTurnaround) { return 0; }   // schon ergaenzt
+	}
+
+	const int32 AlteSpuren = Net.Lanes.Num();
+	const int32 AlteVerbindungen = Net.Connections.Num();
+	TSet<int32> HatNachfolger;
+	TMap<int32, TArray<int32>> Zulaeufe;
+	TMap<int64, TArray<int32>> AmKnoten;
+	for (int32 i = 0; i < AlteVerbindungen; ++i)
+	{
+		const FLaneConnection& C = Net.Connections[i];
+		HatNachfolger.Add(C.FromLaneId);
+		Zulaeufe.FindOrAdd(C.ToLaneId).Add(i);
+		AmKnoten.FindOrAdd(C.IntersectionNodeId).Add(i);
+	}
+	TMap<int32, TArray<int32>> JeAbschnitt;
+	for (int32 i = 0; i < AlteSpuren; ++i)
+	{
+		if (Net.Lanes[i].IsValid()) { JeAbschnitt.FindOrAdd(Net.Lanes[i].SegmentId).Add(i); }
+	}
+	TMap<int64, FVector> KnotenOrt;
+	for (const FRoadIntersection& K : Net.Intersections) { KnotenOrt.Add(K.NodeId, K.Location); }
+	auto Abbiegeart = [](const FVector& Raus, const FVector& Rein)
+	{
+		const FVector2D A = FVector2D(Raus.X, Raus.Y).GetSafeNormal();
+		const FVector2D B = FVector2D(Rein.X, Rein.Y).GetSafeNormal();
+		const double Links = FVector2D::DotProduct(B, FVector2D(A.Y, -A.X));
+		if (Links > 0.35) { return ETurnType::Left; }
+		if (Links < -0.35) { return ETurnType::Right; }
+		return FVector2D::DotProduct(A, B) >= 0.0 ? ETurnType::Through : ETurnType::UTurn;
+	};
+
+	int64 KuenstlicherKnoten = -1000000000LL;
+	int32 Schleifen = 0;
+	for (int32 L = 0; L < AlteSpuren; ++L)
+	{
+		const FRoadLane Spur = Net.Lanes[L];   // Kopie: Net.Lanes waechst unten
+		if (!Spur.IsValid() || Spur.bIsBusLane || Spur.bIsBikeLane || HatNachfolger.Contains(L))
+		{
+			continue;
+		}
+		const FVector Ende = Spur.GetEndPoint();
+
+		// 1) Gegenspur desselben Abschnitts, die am Sackgassenende beginnt.
+		int32 Gegen = INDEX_NONE;
+		double Bester = 1500.0;
+		if (const TArray<int32>* Geschwister = JeAbschnitt.Find(Spur.SegmentId))
+		{
+			for (const int32 O : *Geschwister)
+			{
+				if (O != L && Net.Lanes[O].Direction != Spur.Direction && !Net.Lanes[O].bIsBusLane)
+				{
+					const double Dist = FVector::Dist2D(Net.Lanes[O].GetStartPoint(), Ende);
+					if (Dist < Bester) { Bester = Dist; Gegen = O; }
+				}
+			}
+		}
+
+		if (Gegen == INDEX_NONE)
+		{
+			// 2) Einspurig: Rueckspur nur, wenn die Sackgasse von einer Kreuzung
+			//    kommt - sonst gibt es keinen Weg zurueck ins Netz.
+			const TArray<int32>* Rein = Zulaeufe.Find(L);
+			if (!Rein || Rein->Num() == 0)
+			{
+				continue;
+			}
+			FRoadLane Rueck = Spur;
+			Rueck.LaneId = Net.Lanes.Num();
+			Algo::Reverse(Rueck.Centerline);
+			Rueck.Direction = Spur.Direction == ELaneDirection::Forward ? ELaneDirection::Backward : ELaneDirection::Forward;
+			Gegen = Net.Lanes.Add(Rueck);
+			if (OutReverseLanes) { ++*OutReverseLanes; }
+
+			// Am Anfang der Sackgasse zurueck auf die Spuren, die die Kreuzung
+			// dort verlassen (nicht in die Sackgasse selbst).
+			TSet<int32> Ziele;
+			for (const int32 CI : *Rein)
+			{
+				const int64 Knoten = Net.Connections[CI].IntersectionNodeId;
+				if (const TArray<int32>* Dort = AmKnoten.Find(Knoten))
+				{
+					for (const int32 DI : *Dort)
+					{
+						const int32 Ziel = Net.Connections[DI].ToLaneId;
+						if (Ziel != L && Net.Lanes.IsValidIndex(Ziel) && !Ziele.Contains(Ziel))
+						{
+							Ziele.Add(Ziel);
+							FLaneConnection Raus;
+							Raus.FromLaneId = Gegen;
+							Raus.ToLaneId = Ziel;
+							Raus.IntersectionNodeId = Knoten;
+							const FRoadLane& ZielSpur = Net.Lanes[Ziel];
+							Raus.TurnType = Abbiegeart(Net.Lanes[Gegen].GetExitDirection(), ZielSpur.GetEntryDirection());
+							const FVector A = Net.Lanes[Gegen].GetEndPoint();
+							const FVector B = ZielSpur.GetStartPoint();
+							FVector Mitte = (A + B) * 0.5;
+							if (const FVector* K = KnotenOrt.Find(Knoten))
+							{
+								Mitte = FMath::Lerp(Mitte, *K, 0.5);
+								Mitte.Z = (A.Z + B.Z) * 0.5;
+							}
+							Raus.ConnectionPath = { A, Mitte, B };
+							Raus.bAddedTurnaround = true;
+							Net.Connections.Add(Raus);
+						}
+					}
+				}
+			}
+		}
+
+		FLaneConnection Wende;
+		Wende.FromLaneId = L;
+		Wende.ToLaneId = Gegen;
+		Wende.IntersectionNodeId = KuenstlicherKnoten--;
+		Wende.TurnType = ETurnType::UTurn;
+		Wende.ConnectionPath = BuildTurnaroundPath(Ende, Spur.GetExitDirection(), Net.Lanes[Gegen].GetStartPoint());
+		Wende.bAddedTurnaround = true;
+		Net.Connections.Add(Wende);
+		++Schleifen;
+	}
+	return Schleifen;
 }

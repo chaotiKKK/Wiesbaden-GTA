@@ -1575,6 +1575,135 @@ bool FTrafficServiceRoadTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficDeadEndTurnaroundTest,
+	"WiesbadenReal.Traffic.WendenInSackgassen",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficDeadEndTurnaroundTest::RunTest(const FString& Parameters)
+{
+	// Frueher wartete ein Fahrzeug am Sackgassenende, solange es jemand sah,
+	// und verschwand dann - am Garagenhof standen so mehrere Autos dauerhaft
+	// in der Zufahrt vor dem Spieler (26.09.2026). Jetzt wendet es.
+	//
+	// Netz (Links von Fahrtrichtung +X ist -Y, Rechtsverkehr):
+	//   Spur 0: Abschnitt 1 vorwaerts (0,0)->(5000,0), Sackgasse
+	//   Spur 1: Abschnitt 1 rueckwaerts (5000,-300)->(0,-300), Gegenspur
+	//   Spur 2: Zufahrt zur Kreuzung 7 bei (10000,0)
+	//   Spur 3: einspurige Hofzufahrt ab Kreuzung 7, Sackgasse
+	//   Spur 4: Weiterfahrt ab Kreuzung 7
+	auto Spur = [](int32 Id, int32 Abschnitt, ELaneDirection Richtung, FVector A, FVector B)
+	{
+		FRoadLane L = MakeSimLane(Id, { A, B }, 30.0);
+		L.SegmentId = Abschnitt;
+		L.Direction = Richtung;
+		return L;
+	};
+	auto Netz = [&Spur]()
+	{
+		FRoadNetwork N;
+		N.Lanes.Add(Spur(0, 1, ELaneDirection::Forward, FVector(0, 0, 0), FVector(5000, 0, 0)));
+		N.Lanes.Add(Spur(1, 1, ELaneDirection::Backward, FVector(5000, -300, 0), FVector(0, -300, 0)));
+		N.Lanes.Add(Spur(2, 2, ELaneDirection::Forward, FVector(8000, 0, 0), FVector(9900, 0, 0)));
+		N.Lanes.Add(Spur(3, 3, ELaneDirection::Forward, FVector(10000, 100, 0), FVector(10000, 3000, 0)));
+		N.Lanes.Add(Spur(4, 4, ELaneDirection::Forward, FVector(10100, 0, 0), FVector(13000, 0, 0)));
+		for (int32 i = 0; i < 5; ++i)
+		{
+			FRoadSegment S;
+			S.SegmentId = i;
+			S.HighwayType = EOSMHighwayType::Residential;
+			N.Segments.Add(S);
+		}
+		for (const int32 Ziel : { 3, 4 })
+		{
+			FLaneConnection C;
+			C.FromLaneId = 2;
+			C.ToLaneId = Ziel;
+			C.IntersectionNodeId = 7;
+			C.TurnType = Ziel == 3 ? ETurnType::Right : ETurnType::Through;
+			C.ConnectionPath = { FVector(9900, 0, 0), N.Lanes[Ziel].Centerline[0] };
+			N.Connections.Add(C);
+		}
+		FRoadIntersection K;
+		K.NodeId = 7;
+		K.Location = FVector(10000, 0, 0);
+		N.Intersections.Add(K);
+		return N;
+	};
+
+	FRoadNetwork N = Netz();
+	const int32 AlteSpuren = N.Lanes.Num();
+	int32 Rueck = 0;
+	const int32 Schleifen = FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(N, &Rueck);
+	// Sackgassen: 0 und 1 (gegenseitig), 3 (Hofzufahrt), 4 (Netzrand) - 2 hat Nachfolger.
+	TestEqual(TEXT("Wendeschleifen an allen vier Spurenden"), Schleifen, 4);
+	TestEqual(TEXT("Rueckspuren fuer die zwei einspurigen Enden"), Rueck, 2);
+
+	const FLaneConnection* Wende0 = N.Connections.FindByPredicate([](const FLaneConnection& C)
+		{ return C.FromLaneId == 0 && C.TurnType == ETurnType::UTurn; });
+	if (TestNotNull(TEXT("Spur 0 wendet"), Wende0))
+	{
+		TestEqual(TEXT("... auf ihre Gegenspur"), Wende0->ToLaneId, 1);
+		TestTrue(TEXT("... als nachtraeglich markiert"), Wende0->bAddedTurnaround);
+		TestTrue(TEXT("Schleife beginnt am Spurende"), FVector::Dist(Wende0->ConnectionPath[0], FVector(5000, 0, 0)) < 1.0);
+		TestTrue(TEXT("... endet am Anfang der Gegenspur"), FVector::Dist(Wende0->ConnectionPath.Last(), FVector(5000, -300, 0)) < 1.0);
+		double Weitest = 0.0;
+		for (const FVector& P : Wende0->ConnectionPath) { Weitest = FMath::Max(Weitest, P.X); }
+		TestTrue(FString::Printf(TEXT("... und laeuft hinter dem Spurende herum (%.0f cm)"), Weitest - 5000.0), Weitest > 5200.0);
+	}
+
+	// Hofzufahrt: Rueckspur (gespiegelt) + Anschluss an die Kreuzung.
+	const FLaneConnection* Wende3 = N.Connections.FindByPredicate([](const FLaneConnection& C)
+		{ return C.FromLaneId == 3 && C.TurnType == ETurnType::UTurn; });
+	if (TestNotNull(TEXT("Hofzufahrt wendet"), Wende3))
+	{
+		const int32 R = Wende3->ToLaneId;
+		TestTrue(TEXT("... auf eine NEUE Rueckspur"), R >= AlteSpuren && N.Lanes.IsValidIndex(R));
+		if (N.Lanes.IsValidIndex(R))
+		{
+			TestTrue(TEXT("Rueckspur ist gespiegelt"), FVector::Dist(N.Lanes[R].Centerline.Last(), N.Lanes[3].Centerline[0]) < 1.0);
+			const FLaneConnection* Zurueck = N.Connections.FindByPredicate([R](const FLaneConnection& C)
+				{ return C.FromLaneId == R; });
+			if (TestNotNull(TEXT("Rueckspur fuehrt zurueck in die Kreuzung"), Zurueck))
+			{
+				TestEqual(TEXT("... an Knoten 7"), Zurueck->IntersectionNodeId, static_cast<int64>(7));
+				TestEqual(TEXT("... auf die Weiterfahrt (nicht zurueck in die Zufahrt)"), Zurueck->ToLaneId, 4);
+			}
+		}
+	}
+
+	const int32 Vorher = N.Connections.Num();
+	TestEqual(TEXT("Idempotent: zweiter Aufruf ergaenzt nichts"), FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(N), 0);
+	TestEqual(TEXT("... und laesst das Netz, wie es ist"), N.Connections.Num(), Vorher);
+
+	// In der Simulation: ein Fahrzeug kurz vor dem Ende von Spur 0 wendet und
+	// faehrt auf Spur 1 zurueck. Gegenprobe ohne Ergaenzung: kommt nie dorthin.
+	auto Faehrt = [](const FRoadNetwork& Netz)
+	{
+		FWiesbadenTrafficSimulation Sim;
+		Sim.Initialize(Netz, MakeSettings(0.0f));
+		FTrafficVehicle V;
+		V.VehicleId = 1;
+		V.LaneId = 0;
+		V.bOnLane = true;
+		V.DistanceCm = 4200.0;
+		V.SpeedCmS = 600.0;
+		V.DesiredSpeedCmS = 600.0;
+		Sim.Vehicles.Add(V);
+		for (int32 Schritt = 0; Schritt < 300; ++Schritt)
+		{
+			Sim.Tick(0.1f);
+			for (const FTrafficVehicle& X : Sim.Vehicles)
+			{
+				if (X.VehicleId == 1 && X.bOnLane && X.LaneId == 1) { return true; }
+			}
+		}
+		return false;
+	};
+	TestTrue(TEXT("Fahrzeug wendet und faehrt auf der Gegenspur zurueck"), Faehrt(N));
+	TestFalse(TEXT("Gegenprobe ohne Wendeschleifen: es kommt nie zurueck"), Faehrt(Netz()));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficSpawnOutOfViewTest,
 	"WiesbadenReal.Vehicles.Traffic.SpawnOutOfView",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
