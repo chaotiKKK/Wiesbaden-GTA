@@ -57,6 +57,13 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 | `WbDennoAuftrag` | `WbDennoAuftrag [Seed] [VerzoegerungS]` | Denno-Laden in der Welt | Lieferauftrag bei Denno annehmen, ohne dort zu stehen (fester Zufallswert); Denno reicht das Paket an der Cafetuer |
 | `WbFussAnsicht` | `WbFussAnsicht <0/1/2>` | zu Fuss (FootPawn besessen) | Kamera zu Fuss: 0 Schulter, 1 Ego, 2 umschalten (wie Taste C) |
 | `WbFussWaffe` | `WbFussWaffe <0-8>` | zu Fuss (FootPawn besessen) | Waffe 0..8 waehlen (wie Tasten 1-9; 8 = Kettensaege) |
+| `WbHeliTurm` | `WbHeliTurm` | Helikopter besessen | Auf den markierten Helipad des Sebbotower setzen (derselbe Weg wie der Respawn) |
+| `WbHeliKamera` | `WbHeliKamera <0-2>` | keiner (CVar merkt sich) | Kameramodus des Helikopters: 0 Folge, 1 Orbit, 2 Cockpit |
+| `WbHeliFeuer` | `WbHeliFeuer [0/1]` | Helikopter besessen | Bordabzug halten (1) oder loslassen (0) |
+| `WbHeliZiel` | `WbHeliZiel <Xcm> <Ycm> <HoeheUeberBodenCm> <DistanzMeter>` | Helikopter besessen | Heli vor einen Weltpunkt stellen und die Kanone darauf peilen lassen |
+| `WbHeliLicht` | `WbHeliLicht [0/1]` | Helikopter besessen | Beide Suchscheinwerfer an (1) oder aus (0) |
+| `WbWarp` | `WbWarp [Strasse]` | besessener Pawn | Auf die Strasse springen (derselbe Weg wie der Menuepunkt) |
+| `WbTitel` | `WbTitel <0-3>` | HUD vorhanden | Bildschirm des Menues direkt setzen: 0 Intro, 1 Titel, 2 Optionen, 3 Belegung |
 
 ---
 
@@ -228,6 +235,137 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
   - Autopilot war aktiv: `WbDev: WbHeliOff - Autopilot aus, Steuerung zurueck an Tastatur/Gamepad.`
   - Keiner aktiv: `WbDev: WbHeliOff - kein Autopilot aktiv.`
   - Kein Heli (Warning): `WbDev: WbHeliOff erkannt, aber kein Helikopter besessen.`
+
+---
+
+## WbHeliTurm
+
+- **Signatur:** `WbHeliTurm`
+- **Wirkung:** Setzt den besessenen Helikopter auf den markierten Helipad des
+  Sebbotower - derselbe Weg wie der Respawn nach einem Absturz
+  (`RespawnOnTowerHelipad`). Der Befehl entstand aus einem Aufnahmemangel: die
+  Ka-52 stand zum Start auf einer Wiese, und `RespawnOnTowerHelipad()` hatte
+  keine Konsolenschnittstelle.
+- **Voraussetzung:** ein besessener `AWiesbadenHelicopter` (zuvor `WbHeli`).
+- **Log-Nachweis:**
+  - Erfolg: `WbDev: Ka-52 auf dem Turm-Helipad des Sebbotower bei (%.0f, %.0f, %.0f) cm.`
+    - die Meldung nennt erst die Flaeche selbst und dann die Position, weil
+    ein Bild den Ort nicht belegen kann.
+  - Helipad nicht erreichbar (Warning): `WbDev: WbHeliTurm - der Turm-Helipad war nicht erreichbar.`
+  - Kein Heli (Warning): `WbDev: WbHeliTurm erkannt, aber kein Helikopter besessen (erst WbHeli).`
+- **Beispiel:** `-ExecCmds="WbHeli,WbHeliTurm,WbHeliKamera 2"` - Ka-52
+  uebernehmen, auf den Turm-Helipad setzen, Cockpitkamera.
+
+---
+
+## WbHeliKamera
+
+- **Signatur:** `WbHeliKamera <Modus:int 0-2>`
+- **Wirkung:** Setzt den Kameramodus des Helikopters: 0 = Folge, 1 = Orbit,
+  2 = Cockpit. Ohne Argument kommt der Wunschmodus aus der CVar
+  `wb.HeliKamera`; die CVar ist der einzige Weg, weil sie auch dann greift,
+  wenn der Befehl VOR der Uebernahme eintrifft - der Wert bleibt stehen, bis
+  der Pawn tickt. Taste C erreicht das Spiel nicht zuverlaessig (am 26.09.2026
+  blieb der Modus in einem Lauf auf 0, das Bild war trotzdem "Cockpit"
+  beschriftet).
+- **Voraussetzung:** keiner; der Wert greift, sobald ein Helikopter besessen
+  ist.
+- **Log-Nachweis:**
+  - Erfolg: `WbDev: WbHeliKamera - Sollmodus %d gesetzt.`
+  - Modus ausserhalb (Warning): `WbDev: WbHeliKamera - Modus %d liegt nicht zwischen 0 und 2.`
+
+---
+
+## WbHeliFeuer
+
+- **Signatur:** `WbHeliFeuer [An:int 0/1]`
+- **Wirkung:** Haelt (1) oder loest (0) den Bordabzug des besessenen
+  Helikopters - die echte Kanone mit Licht, Spur und Schusszaehler. Ohne
+  Argument kommt der Wert aus der CVar `wb.HeliFeuer`. Das Bordgeschoetz
+  haengt an der Maustaste, und die laesst sich von aussen nicht halten (am
+  26.09.2026 vier Wege gefahren, null Flanken im Log); 0 ist ein
+  ausdrueckliches "loslassen" und darf nicht wie "kein Argument" behandelt
+  werden, sonst laesst sich das Geschaeft nicht wieder einfahren.
+- **Voraussetzung:** ein besessener `AWiesbadenHelicopter` (zuvor `WbHeli`).
+- **Log-Nachweis:**
+  - Erfolg: `WbDev: Bordabzug gehalten.` bzw. `WbDev: Bordabzug losgelassen.`
+  - Wert unzulaessig (Warning): `WbDev: WbHeliFeuer - Wert %d ist weder 0 noch 1.`
+  - Kein Heli (Warning): `WbDev: WbHeliFeuer erkannt, aber kein Helikopter besessen (erst WbHeli).`
+
+---
+
+## WbHeliZiel
+
+- **Signatur:** `WbHeliZiel <Xcm:float> <Ycm:float> <HoeheUeberBodenCm:float> <DistanzMeter:float>`
+- **Wirkung:** Stellt den besessenen Helikopter `DistanzMeter` vor einen
+  Zielpunkt (Weltkoordinaten in cm, die Hoehe ueber dem dortigen Boden) und
+  peilt ihn an (`AimAtWorldTarget`). Aufnahmewerkzeug: ohne ihn zeigte die
+  Kanone nur "nach vorn", und ein Schuss auf ein bestimmtes Bauwerk war nicht
+  einstellbar.
+- **Voraussetzung:** ein besessener `AWiesbadenHelicopter` (zuvor `WbHeli`).
+- **Log-Nachweis:**
+  - Ziel nicht erreichbar (Warning): `WbDev: WbHeliZiel - Zielpunkt nicht erreichbar.`
+  - Kein Heli (Warning): `WbDev: WbHeliZiel erkannt, aber kein Helikopter besessen (erst WbHeli).`
+- **Beispiel:** `-ExecCmds="WbHeli,WbHeliZiel -71366 -124226 1200 60"` -
+  60 m vor eine Weltstelle stellen und das Geschuetz darauf richten.
+
+---
+
+## WbHeliLicht
+
+- **Signatur:** `WbHeliLicht [An:int 0/1]`
+- **Wirkung:** Beide Suchscheinwerfer an (1) oder aus (0). Beim Einschalten
+  wird erst der Lichtkasten auf "alle an" gestellt - `SetSearchlights(1)`
+  bleibt wirkungslos, solange er auf "alle aus" steht. Beim Ausschalten
+  bleiben die Positionslichter an, nur die beiden Strahlen gehen aus. Taste L
+  erreicht das Spiel nicht zuverlaessig (dieselbe Eingabeluecke wie beim
+  Abzug, am 26.09.2026 gemessen), und ein Nachtbild ohne die Strahlen belegt
+  nichts.
+- **Voraussetzung:** ein besessener `AWiesbadenHelicopter` (zuvor `WbHeli`).
+- **Log-Nachweis:**
+  - Kein Heli (Warning): `WbDev: WbHeliLicht erkannt, aber kein Helikopter besessen (erst WbHeli).`
+  - Erfolg: der Befehl loggt selbst keine Bestaetigung - der Nachweis ist der
+    Lichtkegel im Bild, gestuetzt auf `WiesbadenHeliLightRig::SetAllLightsEnabled`
+    und `AWiesbadenHelicopter::SetSearchlights`.
+
+---
+
+## WbWarp
+
+- **Signatur:** `WbWarp [Strasse:FString]`
+- **Wirkung:** Springt den besessenen Pawn auf die Mitte des laengsten
+  Segments der genannten Strasse und richtet ihn in Fahrtrichtung aus. Die
+  Auswertung steht in `WarpToStreet` - derselbe Weg, den auch der Menuepunkt
+  "Auf diese Strasse" nimmt; dieser Befehl ist die skriptbare Fassung
+  davon, damit sich der Sprung ohne Menue belegen laesst. Ohne Strasse
+  springt der Pawn an seinen aktuellen Ort zurueck (das ist der
+  "Zurueck"-Weg des Menues).
+- **Voraussetzung:** ein besessener Pawn und ein geladenes Strassennetz
+  (der Weltbauer traegt es).
+- **Log-Nachweis:**
+  - Erfolg: `WbDev: Warp nach "%s" ausgefuehrt: von (%.0f,%.0f,%.0f) nach (%.0f,%.0f,%.0f), Distanz %d cm.`
+  - Keine Strasse (Warning): `WbDev: Warp gescheitert - keine Strasse passt zu "%s".`
+  - Kein Netz (Warning): `WbDev: Warp nach "%s" nicht ausgefuehrt: kein Strassennetz geladen.`
+  - Keine Welt oder kein Pawn (Warning): `WbDev: Warp nach "%s" nicht ausgefuehrt: keine Welt oder kein Pawn.`
+- **Beispiel:** `-ExecCmds="WbWarp Wilhelmstrasse"`.
+
+---
+
+## WbTitel
+
+- **Signatur:** `WbTitel <Bildschirm:int 0-3>`
+- **Wirkung:** Setzt den Bildschirm des Menues direkt: 0 = Intro, 1 = Titel,
+  2 = Optionen, 3 = Belegung. Der Befehl darf den Weg durch die Ebenen
+  abkuerzen - `WbTitel 2` soll die Optionsseite zeigen und nicht erst das
+  Hauptmenue, das man sich erst durchspielen muesste. Die Auswahl springt auf
+  den ersten Eintrag, und die Protokollierung des Bildschirmwechsels
+  beginnt neu, damit die Wartezeit des Menues stimmt.
+- **Voraussetzung:** ein HUD.
+- **Log-Nachweis:**
+  - `HUD: WbTitel %d -> Bildschirm %d, %d Eintraege.` - die Zahl hinter
+    "Bildschirm" ist derEnum-Wert, der dritte Wert die Zahl der gebauten
+    Zeilen (nach dem Umbau des Menues, nicht die gewaehlte).
+- **Beispiel:** `-ExecCmds="WbTitel 2,WbOptionen"` - direkt in die Optionen.
 
 ---
 

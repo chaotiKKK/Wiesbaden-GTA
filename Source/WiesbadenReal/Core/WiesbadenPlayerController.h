@@ -31,7 +31,7 @@ class WIESBADENREAL_API AWiesbadenPlayerController : public APlayerController
 
 public:
 	// Teleportiert den besessenen Pawn: 0=Platter Strasse, 1=Nerobergbahn, 2=Garten.
-	UFUNCTION(Exec)
+	//
 	// ALLE Exec-Parameter haben einen Standardwert. Grund, am 26.09.2026 an
 	// der Engine gemessen: ein UFUNCTION(Exec) OHNE Standardwert laesst sich
 	// ueber die Konsole gar nicht aufrufen, auch nicht argumentlos. Die
@@ -41,6 +41,15 @@ public:
 	// nicht geben - "WbHeliFly 24" und "WbHeliFly=24" scheitern beide. Die
 	// Dauer der Flugbefehle kommt deshalb aus der CVar wb.Sekunden, wenn
 	// hier 0 ankommt.
+	//
+	// Der Kommentar steht VOR dem UFUNCTION und nicht zwischen Makro und
+	// Deklaration: Tools/check_wbdev_docs.ps1 liest das Makro nur direkt
+	// vor der Zeile und meldete WbTeleport daraufhin als "dokumentiert, aber
+	// es gibt keinen UFUNCTION(Exec) dieses Namens" (PHANTOM). Die Engine
+	// selbst ist tolerant - der Befehl laeuft, im Rauchtest steht
+	// "WbDev: WbTeleport 2 ausgefuehrt" -, aber die Pruefung darf nicht an
+	// der Formatierung des Headers haengen.
+	UFUNCTION(Exec)
 	void WbTeleport(int32 Ziel = 0);
 
 	/**
