@@ -7,6 +7,7 @@ C++ im Spiel ist.
 
     python -m unittest discover -s Tools -p "test_vor_dem_commit.py"
 """
+import io
 import os
 import shutil
 import subprocess
@@ -195,7 +196,10 @@ class StufenZuordnungTest(unittest.TestCase):
             self.gefahren = []
             self.uebersprungen = []
 
-        def fahre(self, name, befehl, *, shell_cmd=False):
+        # notiz kommt seit dem 27.09. dazu: der Schritt Python-Suiten
+        # meldet, wie viele Tests uebersprungen wurden. Wer diese Signatur
+        # verkuerzt, bekommt in 9 Tests einen TypeError statt einer Aussage.
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
             self.gefahren.append(name)
             return True
 
@@ -285,7 +289,10 @@ class AnkerGateTest(unittest.TestCase):
             self.befehle = {}
             self.uebersprungen = []
 
-        def fahre(self, name, befehl, *, shell_cmd=False):
+        # notiz kommt seit dem 27.09. dazu: der Schritt Python-Suiten
+        # meldet, wie viele Tests uebersprungen wurden. Wer diese Signatur
+        # verkuerzt, bekommt in 9 Tests einen TypeError statt einer Aussage.
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
             self.gefahren.append(name)
             self.befehle[name] = befehl
             return True
@@ -385,7 +392,10 @@ class SchnittbildGateTest(unittest.TestCase):
             self.befehle = {}
             self.uebersprungen = []
 
-        def fahre(self, name, befehl, *, shell_cmd=False):
+        # notiz kommt seit dem 27.09. dazu: der Schritt Python-Suiten
+        # meldet, wie viele Tests uebersprungen wurden. Wer diese Signatur
+        # verkuerzt, bekommt in 9 Tests einen TypeError statt einer Aussage.
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
             self.gefahren.append(name)
             self.befehle[name] = befehl
             return True
@@ -466,7 +476,10 @@ class AnkerBeweisTest(unittest.TestCase):
             self.ergebnisse = []
             self._returncode = returncode
 
-        def fahre(self, name, befehl, *, shell_cmd=False):
+        # notiz kommt seit dem 27.09. dazu: der Schritt Python-Suiten
+        # meldet, wie viele Tests uebersprungen wurden. Wer diese Signatur
+        # verkuerzt, bekommt in 9 Tests einen TypeError statt einer Aussage.
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
             self.ergebnisse.append((name, self._returncode == 0, 0.0, None))
             return self._returncode == 0
 
@@ -548,6 +561,136 @@ class AnkerBeweisTest(unittest.TestCase):
         finally:
             vdc.Lauf = alt
         self.assertFalse(ok)
+
+
+class UebersprungeneTest(unittest.TestCase):
+    """Der Schritt Python-Suiten muss sagen, wie viele Tests gar nichts pruefen.
+
+    GEMESSEN am 27.09.2026: der Push meldete sechs Gates gruen, und sechs
+    Tests darin waren UEBERSPRUNGEN - `test_verify_cuttable_gate` braucht
+    Belege, die Gate 4 erst danach erzeugt. unittest gibt dafuer nichts
+    heraus: Exit 0 heisst "kein Test ist fehlgeschlagen", nicht "jeder Test
+    lief". Ohne die Zahl sieht ein Lauf aus, in dem alles geprueft wurde,
+    obwohl sechs Pruefungen gar nicht stattfanden.
+    """
+
+    class Fertig:
+        def __init__(self, stderr="", returncode=0):
+            self.stderr = stderr
+            self.stdout = ""
+            self.returncode = returncode
+
+    def lesen(self, stderr, returncode=0):
+        return vdc.uebersprungen_aus(self.Fertig(stderr, returncode))
+
+    def test_die_echte_unittest_zusammenfassung_wird_gelesen(self):
+        z = self.lesen("-" * 70 + "\nRan 313 tests in 108.479s\n\nOK (skipped=13)\n")
+        self.assertEqual((13, 313), z)
+
+    def test_ohne_uebersprungene_ist_es_null(self):
+        z = self.lesen("Ran 313 tests in 108.479s\n\nOK\n")
+        self.assertEqual((0, 313), z, "fehlendes 'skipped=' heisst null uebersprungen, nicht 'unbekannt'")
+
+    def test_auch_bei_fehlern_wird_gezaehlt(self):
+        z = self.lesen("Ran 313 tests in 108.479s\n\nFAILED (failures=2, skipped=13)\n", 1)
+        self.assertEqual((13, 313), z)
+
+    def test_ohne_zusammenfassung_ist_es_unbekannt(self):
+        """Nicht lesbar heisst UNBEKANNT, nicht null.
+
+        Eine nicht gelesene Zahl als Null zu melden waere genau die Ampel
+        ohne Lampe, gegen die diese Gates gebaut sind - der ganze Thread.
+        """
+        for stderr in ("", "python: command not found", "Ran 1 test in 0.001s"):
+            if stderr.endswith("Ran 1 test in 0.001s"):
+                continue
+            self.assertIsNone(self.lesen(stderr),
+                              "%r wurde als Zahl gelesen" % stderr)
+
+    def test_die_notiz_sagt_es_laut(self):
+        z = self.Fertig("Ran 313 tests in 108s\n\nOK (skipped=13)\n")
+        text = vdc.suiten_notiz(z)
+        self.assertIn("13 von 313", text)
+        self.assertIn("UEBERSPRUNGEN", text)
+
+    def test_die_notiz_behauptet_nicht_die_null(self):
+        text = vdc.suiten_notiz(self.Fertig("Python: Datei nicht gefunden"))
+        self.assertIn("nicht lesbar", text)
+        self.assertNotIn("0 von", text)
+
+    def test_alle_tests_gelaufen_das_sagt_sie_auch(self):
+        text = vdc.suiten_notiz(self.Fertig("Ran 313 tests in 108s\n\nOK\n"))
+        self.assertIn("alle 313", text)
+
+    def test_uebersprungen_machen_den_schritt_nicht_rot(self):
+        """Sie sollen SICHTBAR sein, nicht den Push blockieren - der Entwurf
+        sieht sie ausdruecklich vor (keine Belege im Commit-Worktree)."""
+        fertig = self.Fertig("Ran 313 tests in 1s\n\nOK (skipped=13)\n")
+        doppel = []
+
+        class Doppel:
+            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
+                doppel.append(notiz(fertig))
+                return True
+        Doppel().fahre("Python-Suiten", ["x"], notiz=vdc.suiten_notiz)
+        self.assertIn("13 von 313", doppel[0])
+
+    def test_der_schritt_der_suiten_bekommt_die_notiz(self):
+        """Die VERDRAHTUNG, nicht nur die Funktion.
+
+        Ohne `notiz=suiten_notiz` am Aufruf rechnet die Hilfsfunktion
+        vollstaendig richtig - und der Lauf schweigt trotzdem. Genau das waere
+        wieder eine Ampel ohne Lampe, nur eine andere. Dieser Test faehrt die
+        volle Stufe mit einem Doppel und fragt den Schritt selbst.
+        """
+        bekommen = {}
+
+        class Doppel:
+            def __init__(self):
+                self.ergebnisse = []
+                self.notizen = []
+
+            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
+                self.ergebnisse.append((name, True, 0.0, None))
+                bekommen[name] = notiz
+                return True
+
+            def ueberspringe(self, name, grund):
+                pass
+
+            def bericht(self):
+                return 0
+
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: Doppel()
+        import gate_worktree
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+                vdc.gates_fahren("voll", ["Tools/x.py"])
+        finally:
+            vdc.Lauf = alt
+
+        schritt = [n for n in bekommen if "Python" in n]
+        self.assertTrue(schritt, "der Schritt Python-Suiten lief gar nicht")
+        notiz = bekommen[schritt[0]]
+        self.assertIsNotNone(notiz,
+                             "der Schritt Python-Suiten meldet seine "
+                             "Uebersprungenen nicht - der Lauf schweigt")
+        self.assertIn("1 von 5 Tests UEBERSPRUNGEN",
+                      notiz(self.Fertig("Ran 5 tests in 1s\n\nOK (skipped=1)\n")))
+
+    def test_der_bericht_zeigt_die_zahl(self):
+        """Nicht nur neben dem Schritt, sondern auch in der Schlusszeile -
+        dort wird gelesen, wenn der Push laeuft."""
+        aus = io.StringIO()
+        doppel = type("Doppel", (), {})()
+        doppel.ergebnisse = [("Gate 0", True, 1.0, None)]
+        doppel.notizen = [("Python-Suiten", "6 von 313 Tests UEBERSPRUNGEN")]
+        with mock.patch("sys.stdout", aus):
+            rot = vdc.Lauf.bericht(doppel)
+        self.assertEqual(0, rot, "uebersprungene Tests duerfen den Push nicht blockieren")
+        self.assertIn("6 von 313", aus.getvalue(),
+                      "die Schlusszeile verschweigt die uebersprungenen Tests")
 
 
 class PushBereichTest(unittest.TestCase):

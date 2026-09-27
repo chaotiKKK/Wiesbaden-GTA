@@ -73,6 +73,7 @@ absichtlich da - ein Wachposten ohne Tuer wird eingerissen, nicht benutzt.
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 import time
@@ -164,13 +165,42 @@ def braucht_compiler(dateien):
     return any(d.lower().endswith(CPP_ENDUNGEN) for d in dateien)
 
 
+def uebersprungen_aus(fertig):
+    """Wie viele Tests haben die Suiten uebersprungen? (Anzahl, Gesamtzahl)
+
+    unittest schreibt seine Zusammenfassung nach STDERR:
+
+        Ran 313 tests in 108.479s
+        OK (skipped=13)
+
+    Wofuer das ueberhaupt: EIN EXIT-CODE 0 heisst "kein Test ist
+    fehlgeschlagen" - er sagt nichts darueber, wie viele ueberhaupt gelaufen
+    sind. Ein uebersprungener Test ist aber genau der, der nichts geprueft
+    hat. GEMESSEN am 27.09.2026: sechs Gates gruen, davon sechs Tests, die
+    uebersprungen waren (test_verify_cuttable_gate braucht Belege, die Gate 4
+    erst danach erzeugt). Ohne diese Zahl sieht das Ergebnis vollstaendig
+    aus.
+
+    None heisst: die Zusammenfassung war nicht lesbar. Das ist bewusst NICHT
+    "0 uebersprungen" - eine nicht gelesene Zahl als Null zu melden waere
+    genau die Art Ampel ohne Lampe, gegen die diese Gates gebaut sind.
+    """
+    text = (getattr(fertig, "stderr", "") or "") + (getattr(fertig, "stdout", "") or "")
+    gesamt = re.search(r"Ran (\d+) tests?", text)
+    if not gesamt:
+        return None
+    ueber = re.search(r"skipped=(\d+)", text)
+    return (int(ueber.group(1)) if ueber else 0), int(gesamt.group(1))
+
+
 class Lauf:
     """Ein Gate mit seiner gemessenen Dauer - Zahlen statt Eindruecke."""
 
     def __init__(self):
         self.ergebnisse = []
+        self.notizen = []
 
-    def fahre(self, name, befehl, *, shell_cmd=False):
+    def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
         print("  ... %s" % name, flush=True)
         start = time.time()
         if shell_cmd:
@@ -185,7 +215,15 @@ class Lauf:
         dauer = time.time() - start
         ok = fertig.returncode == 0
         self.ergebnisse.append((name, ok, dauer, fertig))
-        print("      %s  %.0f s" % ("gruen" if ok else "ROT  ", dauer), flush=True)
+        print("      %s  %.0f s" % ("gruen" if ok else "ROT  ", dauer), end="",
+              flush=True)
+        if notiz is not None:
+            zusatz = notiz(fertig)
+            if zusatz:
+                self.notizen.append((name, zusatz))
+                print("  (%s)" % zusatz, flush=True)
+                return ok
+        print("", flush=True)
         return ok
 
     def ueberspringe(self, name, grund):
@@ -196,6 +234,8 @@ class Lauf:
         rot = [e for e in self.ergebnisse if e[1] is False]
         gesamt = sum(e[2] for e in self.ergebnisse)
         print("\n  %d Gate(s) in %.0f s." % (len(self.ergebnisse), gesamt))
+        for name, zusatz in self.notizen:
+            print("  %s: %s" % (name, zusatz))
         for name, ok, _, fertig in rot:
             print("\nROT: %s" % name)
             text = ((fertig.stdout or "") + (fertig.stderr or "")).strip().splitlines()
@@ -276,6 +316,19 @@ def gate0_befehl(dateien):
     return befehl
 
 
+def suiten_notiz(fertig):
+    """Der Zusatz hinter dem Schritt Python-Suiten: wie viele haben gar nichts
+    geprueft?"""
+    z = uebersprungen_aus(fertig)
+    if z is None:
+        return ("Zusammenfassung der Suites nicht lesbar - wie viele Tests "
+                "uebersprungen wurden, weiss dieser Lauf nicht")
+    ueber, gesamt = z
+    if ueber == 0:
+        return "alle %d Tests gelaufen" % gesamt
+    return "%d von %d Tests UEBERSPRUNGEN (sie haben nichts geprueft)" % (ueber, gesamt)
+
+
 def gates_fahren(stufe, dateien):
     lauf = Lauf()
     print("Gates vor dem Commit (Stufe: %s)" % stufe)
@@ -307,7 +360,7 @@ def gates_fahren(stufe, dateien):
     if stufe == "voll":
         lauf.fahre("Python-Suiten",
                    [sys.executable, "-m", "unittest", "discover",
-                    "-s", "Tools", "-p", "test_*.py"])
+                    "-s", "Tools", "-p", "test_*.py"], notiz=suiten_notiz)
     else:
         lauf.ueberspringe("Python-Suiten",
                           "Stufe schnell - sie laufen vor dem Push")
