@@ -10,6 +10,8 @@ Vier Sorten Dokument, nach dem, was du gerade brauchst:
 | Genau NACHSCHLAGEN | **Reference** | informationsorientiert, trocken, vollstaendig |
 | Etwas VERSTEHEN (warum) | **Explanation** | verstaendnisorientiert, Hintergrund |
 
+**Das Projekt auf einer Seite (Ziel, Code-Ordner, Agenten-Regeln):** [Projekt-Quicksicht](projekt-quicksicht.md).
+
 ---
 
 ## Tutorials
