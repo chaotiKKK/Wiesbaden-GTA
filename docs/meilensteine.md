@@ -49,7 +49,7 @@ Stufen setzen seine Füße auf dem Boden auf.
 
 | | | |
 |---|---|---|
-| ![Gehen](meilensteine/bilder/13-sebbo-gehen.jpg) | ![Mitten im Übergang zum Rennen](meilensteine/bilder/13-sebbo-rennen-blende.jpg) | ![Geduckt](meilensteine/bilder/13-sebbo-ducken.jpg) |
+| ![Gehen](meilensteine/bilder/14-sebbo-gehen.jpg) | ![Mitten im Übergang zum Rennen](meilensteine/bilder/14-sebbo-rennen-blende.jpg) | ![Geduckt](meilensteine/bilder/14-sebbo-ducken.jpg) |
 
 ---
 
@@ -68,7 +68,7 @@ unterschiedlicher Kleidung.
 
 | | |
 |---|---|
-| ![Dichter Verkehr in einer Kurve](meilensteine/bilder/04-verkehr-kurve.jpg) | ![VW-Bus T6 von nah](meilensteine/bilder/04-verkehr-t6.jpg) |
+| ![Dichter Verkehr in einer Kurve](meilensteine/bilder/13-verkehr-kurve.jpg) | ![VW-Bus T6 von nah](meilensteine/bilder/13-verkehr-t6.jpg) |
 
 ---
 
@@ -113,7 +113,7 @@ mit dem Hubschrauber. *Noch offen:* Innenräume, Türen und Beleuchtung.
 
 | | |
 |---|---|
-| ![Der Turm](meilensteine/bilder/12-hq-turm.jpg) | ![SEBBO auf dem Dach](meilensteine/bilder/12-hq-logo.jpg) |
+| ![Der Turm](meilensteine/bilder/10-hq-turm.jpg) | ![SEBBO auf dem Dach](meilensteine/bilder/10-hq-logo.jpg) |
 
 ---
 
@@ -127,7 +127,7 @@ an der richtigen Stelle. *Noch offen:* Zebrastreifen und weitere Markierungen.
 
 | | |
 |---|---|
-| ![Kaiser-Friedrich-Ring](meilensteine/bilder/02-strassen-ring.jpg) | ![Markierte Straße mit Laterne](meilensteine/bilder/02-strassen-laterne.jpg) |
+| ![Kaiser-Friedrich-Ring](meilensteine/bilder/09-strassen-ring.jpg) | ![Markierte Straße mit Laterne](meilensteine/bilder/09-strassen-laterne.jpg) |
 
 ---
 
@@ -142,7 +142,7 @@ Wald und über eine Million Bäume. *Noch offen:* echte Dachformen.
 
 | | |
 |---|---|
-| ![Blick über die Stadt bis zur Marktkirche](meilensteine/bilder/01-stadt-marktkirche.jpg) | ![Das Nerotal von oben](meilensteine/bilder/01-stadt-nerotal.jpg) |
+| ![Blick über die Stadt bis zur Marktkirche](meilensteine/bilder/08-stadt-marktkirche.jpg) | ![Das Nerotal von oben](meilensteine/bilder/08-stadt-nerotal.jpg) |
 
 ---
 
@@ -156,7 +156,7 @@ Landen. *In Arbeit:* Cockpit-Innenraum und Nachtlichter.
 
 | | |
 |---|---|
-| ![Ka-52 über Wiesbaden](meilensteine/bilder/06-ka52-flug.jpg) | ![Im Hof zwischen den Häusern](meilensteine/bilder/06-ka52-hof.jpg) |
+| ![Ka-52 über Wiesbaden](meilensteine/bilder/07-ka52-flug.jpg) | ![Im Hof zwischen den Häusern](meilensteine/bilder/07-ka52-hof.jpg) |
 
 ---
 
@@ -170,7 +170,7 @@ die Haltestellen angesagt.
 
 | | |
 |---|---|
-| ![Gelenkbus an der Haltestelle](meilensteine/bilder/07-bus-haltestelle.jpg) | ![Mitfahrt hinter der Linie 6](meilensteine/bilder/07-bus-mitfahrt.jpg) |
+| ![Gelenkbus an der Haltestelle](meilensteine/bilder/06-bus-haltestelle.jpg) | ![Mitfahrt hinter der Linie 6](meilensteine/bilder/06-bus-mitfahrt.jpg) |
 
 ---
 
@@ -184,7 +184,7 @@ Fenster und Laternen an; es gibt Nebel, Gewitterblitze, Regen und Schnee.
 
 | | | |
 |---|---|---|
-| ![Die Stadt bei Nacht](meilensteine/bilder/09-wetter-nacht.jpg) | ![Regen](meilensteine/bilder/09-wetter-regen.jpg) | ![Gewitterstimmung](meilensteine/bilder/09-wetter-gewitter.jpg) |
+| ![Die Stadt bei Nacht](meilensteine/bilder/05-wetter-nacht.jpg) | ![Regen](meilensteine/bilder/05-wetter-regen.jpg) | ![Gewitterstimmung](meilensteine/bilder/05-wetter-gewitter.jpg) |
 
 ---
 
@@ -199,7 +199,7 @@ Bremsen und neigt sich in Kurven.
 
 | | | |
 |---|---|---|
-| ![Im Garagenhof Platter Straße](meilensteine/bilder/05-kaefer-garagenhof.jpg) | ![Bremsspuren](meilensteine/bilder/05-kaefer-bremsspuren.jpg) | ![Nachts mit Scheinwerfern](meilensteine/bilder/05-kaefer-nacht.jpg) |
+| ![Im Garagenhof Platter Straße](meilensteine/bilder/04-kaefer-garagenhof.jpg) | ![Bremsspuren](meilensteine/bilder/04-kaefer-bremsspuren.jpg) | ![Nachts mit Scheinwerfern](meilensteine/bilder/04-kaefer-nacht.jpg) |
 
 ---
 
