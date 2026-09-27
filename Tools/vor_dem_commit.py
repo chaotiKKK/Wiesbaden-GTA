@@ -193,14 +193,103 @@ def uebersprungen_aus(fertig):
     return (int(ueber.group(1)) if ueber else 0), int(gesamt.group(1))
 
 
+# GEMESSEN am 27.09.2026 an unittest 3.14: mit `-v` schreibt unittest
+# EINE Zeile je Test nach STDERR, im Format
+#     test_bericht_vorhanden (test_ka52_rotorachse.Ka52RotorachseTest.test_bericht_vorhanden) ... skipped 'Messbericht fehlt: ...'
+# Ohne `-v` steht dort nur `OK (skipped=14)` - die Zahl ohne Namen.
+RE_SKIP_ZEILE = re.compile(
+    r"^(?P<kurz>test_\w+)\s+\((?P<voll>[^)]+)\)\s+\.\.\.\s+skipped\s+'(?P<grund>.*)'\s*$")
+# ZWEITES FORMAT, ebenfalls gemessen: hat ein Test einen DOCSTRING, druckt
+# unittest statt des Namens dessen erste Zeile:
+#     Der Fund vom 27.09.2026 als Test: ein HALBER Lauf ist kein Beleg. ... skipped 'keine Belege...'
+# Wer nur auf `test_\w+` lauscht, uebersieht diese - und die Zahl im
+# Bericht passt dann nicht zur Liste. GEMESSEN am 27.09.2026: 14 gemeldet,
+# 12 gefunden, genau wegen dieser zwei Zeilen.
+RE_SKIP_DOCSTRING = re.compile(
+    r"^(?P<kurz>.+?)\s*\.\.\.\s+skipped\s+'(?P<grund>.*)'\s*$")
+RE_GRUND_NICHT_GEPARST = re.compile(
+    r"^(?P<kurz>test_\w+)\s+\((?P<voll>[^)]+)\)\s+\.\.\.\s+(?:skipped.*)?$")
+
+
+def uebersprungene_namen(fertig):
+    """Welche Tests wurden uebersprungen - und mit welchem Grund?
+
+    Rueckgabe: Liste (kurzname, vollname, grund). Leere Liste heisst
+    "keine gefunden", NICHT "keine uebersprungen" - der Unterschied ist
+    wichtig, siehe `suiten_notiz`.
+
+    WOFUER: eine Zahl sagt, dass 14 Tests nichts geprueft haben, aber
+    nicht, WELCHE. Am 27.09.2026 waren es zweimal voellig verschiedene
+    Gruende zur selben Zahl: im Commit-Worktree fehlten die Belege fuer
+    `test_verify_cuttable_gate` (11), im Gate-Worktree dagegen
+    `test_worktree_zeitstrahl` (4), weil dort kein `.planning` lag. Wer
+    nur "14" liest, kann nicht entscheiden, ob das normal ist.
+
+    GEMESSEN: unittest kappt den Grund NICHT, schreibt ihn aber als
+    Python-String-Literal. Zeilen, deren Ende im Log abgeschnitten ist,
+    werden deshalb als "(Grund nicht lesbar)" ausgewiesen und nicht
+    stillschweigend als leerer Grund.
+    """
+    text = getattr(fertig, "stderr", "") or ""
+    raus = []
+    for zeile in text.splitlines():
+        m = RE_SKIP_ZEILE.match(zeile.strip())
+        if m:
+            raus.append((m.group("kurz"), m.group("voll"), m.group("grund")))
+            continue
+        # Docstring-Tests: der Name fehlt in der Zeile, der Grund steht da.
+        d = RE_SKIP_DOCSTRING.match(zeile.strip())
+        if d and "skipped" in zeile:
+            raus.append((d.group("kurz").strip(), "(Docstring-Test)",
+                         d.group("grund")))
+            continue
+        # Ein abgeschnittener Grund: der Test stand da, der Grund nicht.
+        n = RE_GRUND_NICHT_GEPARST.match(zeile.strip())
+        if n and "skipped" in zeile:
+            raus.append((n.group("kurz"), n.group("voll"), "(Grund nicht lesbar)"))
+    return raus
+
+
+def skip_zeilen(namen, grenze=6, laenge=110):
+    """Die Namensliste als kurze, ehrliche Zusatzzeilen.
+
+    Nicht alle 14 Namen hintereinander - das waere eine zweite
+    Ampel ohne Lampe, nur laenger. Die Zahl bleibt im Bericht, die Namen
+    kommen bis zur Grenze, und wie viele es sind, wird genannt.
+
+    GEMESSEN am 27.09.2026: manche Gruende sind ganze Kommandozeilen
+    (bei `test_ka52_rotorachse` 240 Zeichen ueber den Blender-Aufruf).
+    Sie werden gekuerzt - mit sichtbarem "..." und NICHT weggelassen: der
+    Grund ist das Eigentliche an dieser Zeile, und ein Grund, den man
+    nicht sieht, ist wieder eine Ampel ohne Lampe.
+    """
+    if not namen:
+        return []
+    zeilen = []
+    for kurz, _voll, grund in namen[:grenze]:
+        text = " ".join(grund.split())
+        if len(text) > laenge:
+            text = text[:laenge].rstrip() + " ..."
+        zeilen.append("      %s: %s" % (kurz, text))
+    if len(namen) > grenze:
+        zeilen.append("      ... und %d weitere" % (len(namen) - grenze))
+    return zeilen
+
+
 class Lauf:
     """Ein Gate mit seiner gemessenen Dauer - Zahlen statt Eindruecke."""
 
     def __init__(self):
         self.ergebnisse = []
         self.notizen = []
+        self.notiz_zeilen = []
 
-    def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
+    def notiz_anhaengen(self, name, zeilen):
+        """Mehrzeilige Zusatznotiz zum Bericht - z. B. die Skip-Namen."""
+        if zeilen:
+            self.notiz_zeilen.append((name, list(zeilen)))
+
+    def fahre(self, name, befehl, *, shell_cmd=False, notiz=None, notiz_zeilen=None):
         print("  ... %s" % name, flush=True)
         start = time.time()
         if shell_cmd:
@@ -217,6 +306,8 @@ class Lauf:
         self.ergebnisse.append((name, ok, dauer, fertig))
         print("      %s  %.0f s" % ("gruen" if ok else "ROT  ", dauer), end="",
               flush=True)
+        if notiz_zeilen is not None:
+            self.notiz_anhaengen(name, notiz_zeilen(fertig))
         if notiz is not None:
             zusatz = notiz(fertig)
             if zusatz:
@@ -236,6 +327,9 @@ class Lauf:
         print("\n  %d Gate(s) in %.0f s." % (len(self.ergebnisse), gesamt))
         for name, zusatz in self.notizen:
             print("  %s: %s" % (name, zusatz))
+        for _name, zeilen in getattr(self, "notiz_zeilen", []):
+            for zeile in zeilen:
+                print(zeile)
         for name, ok, _, fertig in rot:
             print("\nROT: %s" % name)
             text = ((fertig.stdout or "") + (fertig.stderr or "")).strip().splitlines()
@@ -318,7 +412,7 @@ def gate0_befehl(dateien):
 
 def suiten_notiz(fertig):
     """Der Zusatz hinter dem Schritt Python-Suiten: wie viele haben gar nichts
-    geprueft?"""
+    geprueft - und WELCHE."""
     z = uebersprungen_aus(fertig)
     if z is None:
         return ("Zusammenfassung der Suites nicht lesbar - wie viele Tests "
@@ -327,6 +421,45 @@ def suiten_notiz(fertig):
     if ueber == 0:
         return "alle %d Tests gelaufen" % gesamt
     return "%d von %d Tests UEBERSPRUNGEN (sie haben nichts geprueft)" % (ueber, gesamt)
+
+
+def suiten_notiz_zeilen(fertig):
+    """Dieselbe Notiz PLUS die Namen - fuer den Bericht am Laufende.
+
+    Zwei Moeglichkeiten, beide ehrlich behandelt:
+
+    * Die Zahl ist lesbar, die Namen nicht (der Lauf fuhr ohne `-v`).
+      Dann wird die Notiz genannt und die Namen ausdruecklich als nicht
+      abrufbar bezeichnet - NICHT weggelassen, als waere nichts
+      uebersprungen worden.
+    * Die Zahl ist lesbar und `ueber` ist groesser als die Zahl der
+      gefundenen Namen: auch das wird gesagt, mit der Differenz. Eine
+      Meldung "nichts weiter" bei nachweislich 14 Skips waere die
+      schlimmere Luecke.
+    """
+    z = uebersprungen_aus(fertig)
+    if z is None:
+        return []
+    ueber, gesamt = z
+    if ueber == 0:
+        return []
+    # Die Kopfzeile kommt aus `notizen`; hier nur die Namen. Sonst steht
+    # dieselbe Zeile zweimal im Bericht (GEMESSEN am 27.09.2026).
+    zeilen = []
+    namen = uebersprungene_namen(fertig)
+    if not namen:
+        return ["      WELCHE: unbekannt - dieser Lauf hat die Testnamen "
+                "nicht ausgegeben (unittest ohne -v)"]
+    zeilen.append("      WELCHE:")
+    zeilen += skip_zeilen(namen)
+    if len(namen) < ueber:
+        zeilen.append("      ACHSUNG: %d uebersprungene Tests gefunden, aber %d "
+                      "gemeldet - die Liste ist unvollstaendig."
+                      % (len(namen), ueber))
+    elif len(namen) > ueber:
+        zeilen.append("      ACHSUNG: %d Namen gefunden, aber nur %d gemeldet."
+                      % (len(namen), ueber))
+    return zeilen
 
 
 def gates_fahren(stufe, dateien):
@@ -360,7 +493,8 @@ def gates_fahren(stufe, dateien):
     if stufe == "voll":
         lauf.fahre("Python-Suiten",
                    [sys.executable, "-m", "unittest", "discover",
-                    "-s", "Tools", "-p", "test_*.py"], notiz=suiten_notiz)
+                    "-s", "Tools", "-p", "test_*.py", "-v"],
+                   notiz=suiten_notiz, notiz_zeilen=suiten_notiz_zeilen)
     else:
         lauf.ueberspringe("Python-Suiten",
                           "Stufe schnell - sie laufen vor dem Push")

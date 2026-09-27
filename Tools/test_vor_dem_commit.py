@@ -9,6 +9,7 @@ C++ im Spiel ist.
 """
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -199,7 +200,8 @@ class StufenZuordnungTest(unittest.TestCase):
         # notiz kommt seit dem 27.09. dazu: der Schritt Python-Suiten
         # meldet, wie viele Tests uebersprungen wurden. Wer diese Signatur
         # verkuerzt, bekommt in 9 Tests einen TypeError statt einer Aussage.
-        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
             self.gefahren.append(name)
             return True
 
@@ -292,7 +294,8 @@ class AnkerGateTest(unittest.TestCase):
         # notiz kommt seit dem 27.09. dazu: der Schritt Python-Suiten
         # meldet, wie viele Tests uebersprungen wurden. Wer diese Signatur
         # verkuerzt, bekommt in 9 Tests einen TypeError statt einer Aussage.
-        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
             self.gefahren.append(name)
             self.befehle[name] = befehl
             return True
@@ -395,7 +398,8 @@ class SchnittbildGateTest(unittest.TestCase):
         # notiz kommt seit dem 27.09. dazu: der Schritt Python-Suiten
         # meldet, wie viele Tests uebersprungen wurden. Wer diese Signatur
         # verkuerzt, bekommt in 9 Tests einen TypeError statt einer Aussage.
-        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
             self.gefahren.append(name)
             self.befehle[name] = befehl
             return True
@@ -479,7 +483,8 @@ class AnkerBeweisTest(unittest.TestCase):
         # notiz kommt seit dem 27.09. dazu: der Schritt Python-Suiten
         # meldet, wie viele Tests uebersprungen wurden. Wer diese Signatur
         # verkuerzt, bekommt in 9 Tests einen TypeError statt einer Aussage.
-        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
             self.ergebnisse.append((name, self._returncode == 0, 0.0, None))
             return self._returncode == 0
 
@@ -629,7 +634,8 @@ class UebersprungeneTest(unittest.TestCase):
         doppel = []
 
         class Doppel:
-            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
+            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
                 doppel.append(notiz(fertig))
                 return True
         Doppel().fahre("Python-Suiten", ["x"], notiz=vdc.suiten_notiz)
@@ -650,7 +656,8 @@ class UebersprungeneTest(unittest.TestCase):
                 self.ergebnisse = []
                 self.notizen = []
 
-            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None):
+            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
                 self.ergebnisse.append((name, True, 0.0, None))
                 bekommen[name] = notiz
                 return True
@@ -691,6 +698,250 @@ class UebersprungeneTest(unittest.TestCase):
         self.assertEqual(0, rot, "uebersprungene Tests duerfen den Push nicht blockieren")
         self.assertIn("6 von 313", aus.getvalue(),
                       "die Schlusszeile verschweigt die uebersprungenen Tests")
+
+
+class SkipNamenTest(unittest.TestCase):
+    """WELCHE Tests fehlten - nicht nur wie viele.
+
+    GEMESSEN am 27.09.2026: zur selben Zahl 14 gab es zwei voellig
+    verschiedene Gruende. Im Commit-Worktree waren es 11 Belege
+    (`test_verify_cuttable_gate`), im Gate-Worktree 4 Push-Logs
+    (`test_worktree_zeitstrahl`, weil dort kein `.planning` lag). Wer nur
+    "14" liest, kann nicht entscheiden, ob das normal ist.
+    """
+
+    VERBOS = ("test_bericht_vorhanden (test_ka52_rotorachse.Ka52RotorachseTest.test_bericht_vorhanden) ... skipped 'Messbericht fehlt: rotorachse_fbx.txt'\n"
+              "test_ohne_messbericht (test_ka52_rotorachse.Ka52RotorachseTest.test_ohne_messbericht) ... skipped 'ohne Messbericht nicht pruefbar'\n"
+              "test_ein_lauf (test_x.Lauftest.test_ein_lauf) ... ok\n"
+              "Ran 3 tests in 1.0s\n\nOK (skipped=2)\n")
+
+    class Fertig:
+        def __init__(self, stderr="", returncode=0):
+            self.stderr = stderr
+            self.stdout = ""
+            self.returncode = returncode
+
+    def test_name_und_grund_werden_gelesen(self):
+        namen = vdc.uebersprungene_namen(self.Fertig(self.VERBOS))
+        self.assertEqual(len(namen), 2)
+        kurz, voll, grund = namen[0]
+        self.assertEqual(kurz, "test_bericht_vorhanden")
+        self.assertEqual(voll, "test_ka52_rotorachse.Ka52RotorachseTest.test_bericht_vorhanden")
+        self.assertEqual(grund, "Messbericht fehlt: rotorachse_fbx.txt")
+
+    def test_ohne_verbose_kommen_keine_namen(self):
+        # Das ist der Grund fuer das `-v`: ohne es steht nur `OK (skipped=2)`.
+        self.assertEqual(vdc.uebersprungene_namen(
+            self.Fertig("Ran 3 tests in 1.0s\n\nOK (skipped=2)\n")), [])
+
+    def test_erfolgreiche_tests_werden_nicht_gezaehlt(self):
+        # Ein 'ok' ist kein Skip - wer alle Zeilen mit 'test_' nimmt,
+        # zaehlt die ganze Suite als uebersprungen.
+        nur_ok = "test_a (m.T.test_a) ... ok\ntest_b (m.T.test_b) ... ok\n"
+        self.assertEqual(vdc.uebersprungene_namen(self.Fertig(nur_ok)), [])
+
+    def test_abgeschnittener_grund_wird_als_solcher_gesagt(self):
+        # GEMESSEN: unittest schreibt den Grund als String-Literal; bricht
+        # das Log mitten darin ab, ist er nicht lesbar. Das darf nicht wie
+        # ein leerer Grund aussehen.
+        kaputt = "test_a (m.T.test_a) ... skipped 'Messbericht fehlt: /langer/Pfad"
+        namen = vdc.uebersprungene_namen(self.Fertig(kaputt))
+        self.assertEqual(len(namen), 1, "der Test wurde nicht erkannt")
+        self.assertIn("nicht lesbar", namen[0][2],
+                      "ein abgeschnittener Grund wurde als leerer Grund gemeldet")
+
+    def test_der_bericht_nennt_die_testnamen(self):
+        zeilen = vdc.suiten_notiz_zeilen(self.Fertig(self.VERBOS))
+        text = "\n".join(zeilen)
+        self.assertIn("test_bericht_vorhanden", text)
+        self.assertIn("Messbericht fehlt", text, "der Grund fehlt - der ist der eigentliche Inhalt")
+        # Die Zahl steht in `notizen`, die Namen hier. GEMESSEN am
+        # 27.09.2026: mit der Zahl auch hier stand dieselbe Zeile zweimal
+        # im Bericht. Sie darf deshalb nicht auf beiden Wegen kommen.
+        self.assertNotIn("2 von 3", text, "die Kopfzeile gehoert in `notizen`")
+        self.assertIn("2 von 3", vdc.suiten_notiz(self.Fertig(self.VERBOS)))
+
+    def test_fehlende_namen_werden_als_fehlend_gesagt(self):
+        # Ohne `-v`: die Zahl ist da, die Namen nicht. Das muss BENANNT
+        # werden - die Zeile darf nicht einfach fehlen, sonst liest sich
+        # "2 uebersprungen" wie eine vollstaendige Meldung.
+        zeilen = vdc.suiten_notiz_zeilen(
+            self.Fertig("Ran 3 tests in 1.0s\n\nOK (skipped=2)\n"))
+        text = "\n".join(zeilen)
+        self.assertIn("unbekannt", text)
+        self.assertIn("-v", text, "der Hinweis auf die Ursache fehlt")
+
+    def test_tests_mit_docstring_werden_auch_gefunden(self):
+        # GEMESSEN am 27.09.2026: unittest druckt bei einem Test mit
+        # Docstring DESSEN erste Zeile statt des Namens. Ohne diesen Fall
+        # fand die Liste 12 von 14 - die Zahl passte nicht zur Liste.
+        roh = ("Der Fund vom 27.09.2026 als Test: ein HALBER Lauf ist kein Beleg. ... skipped 'keine Belege in Saved/Diagnose'\n"
+               "test_a (m.T.test_a) ... skipped 'Pillow fehlt'\n"
+               "Ran 5 tests in 1.0s\n\nOK (skipped=2)\n")
+        namen = vdc.uebersprungene_namen(self.Fertig(roh))
+        self.assertEqual(len(namen), 2, "ein Docstring-Test wurde nicht erkannt")
+        self.assertIn("HALBER Lauf", namen[0][0])
+        self.assertIn("keine Belege", namen[0][2])
+
+    def test_weniger_namen_als_gemeldet_ist_ein_befund(self):
+        # Die Zahl sagt 5, gefunden werden 2. Das ist eine Luecke in der
+        # Liste und wird gesagt - nicht mit "und 3 weitere" geglaettet,
+        # denn die drei sind nicht ausgewaehlt, sondern nicht gesehen.
+        text = "\n".join(vdc.suiten_notiz_zeilen(self.Fertig(
+            "test_a (m.T.test_a) ... skipped 'x'\nRan 9 tests in 1.0s\n\nOK (skipped=5)\n")))
+        self.assertIn("unvollstaendig", text)
+        self.assertIn("gefunden", text)
+
+    def test_mehr_namen_als_gemeldet_ist_auch_ein_befund(self):
+        text = "\n".join(vdc.suiten_notiz_zeilen(self.Fertig(
+            "test_a (m.T.test_a) ... skipped 'x'\ntest_b (m.T.test_b) ... skipped 'y'\n"
+            "Ran 9 tests in 1.0s\n\nOK (skipped=1)\n")))
+        self.assertIn("ACHSUNG", text)
+
+    def test_keine_skips_erzeugen_keine_zeilen(self):
+        self.assertEqual(vdc.suiten_notiz_zeilen(
+            self.Fertig("Ran 3 tests in 1.0s\n\nOK\n")), [])
+
+    def test_ohne_zusammenfassung_erzeugen_keine_zeilen(self):
+        self.assertEqual(vdc.suiten_notiz_zeilen(self.Fertig("command not found")), [])
+
+    def test_lange_gruende_werden_gekuerzt_nicht_verschluckt(self):
+        # GEMESSEN: der ka52-Grund ist 240 Zeichen (ein Blender-Aufruf).
+        lang = "verweis_messbericht_fehlt " * 20
+        zeilen = vdc.skip_zeilen([("test_x", "m.T.test_x", lang)])
+        self.assertIn("...", zeilen[0], "der Grund wurde gekuerzt ohne sichtbares Ende")
+        self.assertLessEqual(len(zeilen[0]), 130, "die Zeile ist unlesbar lang geworden")
+        self.assertIn("verweis_messbericht_fehlt", zeilen[0])
+
+    def test_viele_namen_werden_gezaehlt_nicht_alle_gedruckt(self):
+        namen = [("test_%d" % i, "m.T.test_%d" % i, "grund %d" % i) for i in range(14)]
+        zeilen = vdc.skip_zeilen(namen)
+        self.assertIn("und 8 weitere", "\n".join(zeilen),
+                      "14 Namen alle zu drucken waere die lange Ampel ohne Lampe")
+
+    def test_der_lauf_bekommt_die_mehrzeilige_notiz(self):
+        """Die VERDRAHTUNG. Sonst rechnet alles richtig und der Bericht
+        schweigt - dieselbe Luecke, nur eine Ebene tiefer."""
+        bekommen = {}
+
+        class Doppel:
+            def __init__(self):
+                self.ergebnisse = []
+                self.notizen = []
+                self.notiz_zeilen = []
+
+            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
+                bekommen[name] = notiz_zeilen
+                return True
+
+            def ueberspringe(self, name, grund):
+                pass
+
+            def bericht(self):
+                return 0
+
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: Doppel()
+        import gate_worktree
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+                vdc.gates_fahren("voll", ["Tools/x.py"])
+        finally:
+            vdc.Lauf = alt
+
+        schritt = [n for n in bekommen if "Python" in n]
+        self.assertTrue(schritt, "der Schritt Python-Suiten lief gar nicht")
+        self.assertIsNotNone(bekommen[schritt[0]],
+                             "die Namensnotiz ist nicht verdrahtet - der "
+                             "Bericht schweigt")
+
+    def test_discover_bekommt_das_verbose(self):
+        """`-v` fehlt, kommen keine Namen an. Auch das ist Verdrahtung."""
+        aufgerufen = {}
+
+        class Doppel:
+            def __init__(self):
+                self.ergebnisse = []
+
+            def fahre(self, name, befehl, **kwargs):
+                aufgerufen[name] = befehl
+                return True
+
+            def ueberspringe(self, name, grund):
+                pass
+
+            def bericht(self):
+                return 0
+
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: Doppel()
+        import gate_worktree
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+                vdc.gates_fahren("voll", ["Tools/x.py"])
+        finally:
+            vdc.Lauf = alt
+
+        befehl = aufgerufen[[n for n in aufgerufen if "Python" in n][0]]
+        self.assertIn("-v", befehl,
+                      "unittest laeuft ohne -v - es gibt keine Testnamen, "
+                      "die man nennen koennte")
+
+    def test_der_bericht_druckt_die_namen(self):
+        doppel = type("Doppel", (), {})()
+        doppel.ergebnisse = [("Gate 0", True, 1.0, None)]
+        doppel.notizen = [("Python-Suiten", "2 von 3 Tests UEBERSPRUNGEN")]
+        doppel.notiz_zeilen = [("Python-Suiten", ["      WELCHE:", "      test_a: grund"])]
+        aus = io.StringIO()
+        with mock.patch("sys.stdout", aus):
+            vdc.Lauf.bericht(doppel)
+        self.assertIn("test_a: grund", aus.getvalue(),
+                      "die Namen stehen in der Notiz, aber nicht im Bericht")
+
+
+class GegenprobeSkipNamenTest(unittest.TestCase):
+    """DER BEWEIS, DASS DIE NAMEN-TESTS NICHT BLIND SIND."""
+
+    VERBOS = SkipNamenTest.VERBOS
+
+    class Fertig:
+        def __init__(self, stderr):
+            self.stderr = stderr
+            self.stdout = ""
+            self.returncode = 0
+
+    def test_ohne_die_auswertung_waere_der_bericht_stumm(self):
+        # a) so wie es GINGE, wenn niemand die Namen auswertet: die Zahl
+        # steht da, die Zeile sagt alles, was sie weiss - und niemand
+        # erfahrt, dass 2 Tests gar nichts geprueft haben.
+        nur_zahl = vdc.suiten_notiz(self.Fertig(self.VERBOS))
+        self.assertIn("2 von 3", nur_zahl)
+        self.assertNotIn("test_bericht_vorhanden", nur_zahl)
+        # b) mit der Auswertung: die Namen stehen drin.
+        zeilen = "\n".join(vdc.suiten_notiz_zeilen(self.Fertig(self.VERBOS)))
+        self.assertIn("test_bericht_vorhanden", zeilen)
+
+    def test_ein_regex_nur_auf_testnamen_verpasst_die_zaehlung_nicht(self):
+        # Die Gegenprobe zur Docstring-Messung: der alte Regex fand 1 von 2,
+        # die Zahl sagte 2. Genau diese Diskrepanz war der Befund.
+        roh = ("Der Fund vom 27.09.2026 als Test: ein HALBER Lauf ist kein Beleg. ... skipped 'keine Belege'\n"
+               "test_a (m.T.test_a) ... skipped 'Pillow fehlt'\n"
+               "Ran 5 tests in 1.0s\n\nOK (skipped=2)\n")
+        alt = re.compile(r"^(?P<kurz>test_\w+)\s+\([^)]+\)\s+\.\.\.\s+skipped\s+'(?P<grund>.*)'\s*$")
+        nur_alt = [z for z in roh.splitlines() if alt.match(z.strip())]
+        self.assertEqual(len(nur_alt), 1, "Gegenprobe: der alte Regex verpasst den Docstring-Test")
+        self.assertEqual(len(vdc.uebersprungene_namen(self.Fertig(roh))), 2,
+                         "der neue Parser muss beide Zeilen finden")
+
+    def test_ein_regex_zu_eng_faellt_auf(self):
+        # GEMESSEN, warum das noetig ist: unittest schreibt den Grund in
+        # einfachen Anfuehrungszeichen und der kann Apostrophe enthalten.
+        mit_apostroph = ("test_a (m.T.test_a) ... skipped 'Pillow fehlt - "
+                         "irgendwer's Datei'\nRan 2 tests in 1.0s\n\nOK (skipped=1)\n")
+        namen = vdc.uebersprungene_namen(self.Fertig(mit_apostroph))
+        self.assertEqual(len(namen), 1, "der Test mit Apostroph im Grund fiel durch")
+        self.assertIn("irgendwer", namen[0][2])
 
 
 class PushBereichTest(unittest.TestCase):
