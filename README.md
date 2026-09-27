@@ -7,6 +7,16 @@ GIS-Daten (OpenStreetMap + Copernicus/SRTM-Höhendaten).
 **Engine:** Unreal Engine 5.8.1+ · **Sprache:** C++ (Core) + Blueprints ·
 **Maßstab:** 1 Unreal Unit = 1 cm · **Georeferenz:** WGS84 → ECEF → East-South-Up
 
+## 🏁 Meilensteine
+
+| Neue Spielfigur Sebbo | Stadtverkehr | Dennos Laden |
+|---|---|---|
+| ![Sebbo rennt](docs/meilensteine/bilder/14-sebbo-rennen.gif) | ![Verkehr am Kaiser-Friedrich-Ring](docs/meilensteine/bilder/13-verkehr-ring.gif) | ![Dennos Laden am Sedanplatz](docs/meilensteine/bilder/11-denno-laden.gif) |
+
+Alle 14 Meilensteine mit GIFs und Fotos aus dem Spiel:
+**[docs/meilensteine.md](docs/meilensteine.md)** – dazu je ein
+[Release](https://github.com/chaotiKKK/Wiesbaden-GTA/releases).
+
 ## 📖 Dokumentation
 
 Anleitungen, Referenzen und Hintergründe liegen unter [`docs/`](docs/README.md) —
