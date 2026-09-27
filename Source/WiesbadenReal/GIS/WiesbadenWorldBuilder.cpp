@@ -2216,15 +2216,11 @@ void AWiesbadenWorldBuilder::BeginPlay()
 
 	if (LayoutCount > 0)
 	{
-		// Leitpfosten nach der AKTUELLEN Regel (nur ausserorts): aeltere Bakes
-		// tragen noch die Pfosten der alten Regel, die jede Stadtstrasse
-		// beidseitig bestueckte. Dieselbe Regel wie im Bake, kein Einzelfall.
+		// Aeltere Bakes tragen noch Pfosten an jeder Strasse.
 		const int32 OhnePfosten =
 			URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(RoadNetwork, FurnitureLayout);
 		if (OhnePfosten > 0)
 		{
-			// Aufschluesseln, damit die Zahl pruefbar ist: Landstrassen
-			// (primary bis unclassified) gegen Autobahn/Kraftfahrstrasse.
 			TMap<int32, EOSMHighwayType> Klasse;
 			for (const FRoadSegment& Segment : RoadNetwork.Segments)
 			{

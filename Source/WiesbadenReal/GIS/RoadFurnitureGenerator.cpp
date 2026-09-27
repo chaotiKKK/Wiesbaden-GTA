@@ -906,8 +906,6 @@ void URoadFurnitureGenerator::PlaceSigns(
 
 bool URoadFurnitureGenerator::WantsDelineators(const FRoadSegment& Segment)
 {
-	// Nur Klassen, die es ausserorts gibt - Wohn-, Spiel- und Erschliessungs-
-	// strassen liegen im Ort, auch wenn sie ungewoehnlich schnell getaggt sind.
 	switch (Segment.HighwayType)
 	{
 	case EOSMHighwayType::Motorway:     case EOSMHighwayType::MotorwayLink:
@@ -920,51 +918,24 @@ bool URoadFurnitureGenerator::WantsDelineators(const FRoadSegment& Segment)
 	default:
 		return false;
 	}
-
-	// Ausserorts-Signal: Tempo ueber 50 oder ein rural-Tag. Das Tempo ist bei
-	// primary bis unclassified nur dann ueber 50, wenn OSM es sagt (maxspeed,
-	// maxspeed:type, zone:maxspeed - Vorgabe dieser Klassen ist 50); Autobahn
-	// und Kraftfahrstrasse sind schon per Vorgabe schnell.
-	if (Segment.MaxSpeedKmh <= 50.0 && !Segment.bRuralTagged)
+	// Ueber 50 km/h kommt bei primary bis unclassified nur aus einem Tag
+	// (maxspeed, maxspeed:type=DE:rural) - ihre Vorgabe ist 50.
+	if (Segment.MaxSpeedKmh <= 50.0)
 	{
 		return false;
 	}
-
-	// Nur ein GETAGGTER Gehweg an der Fahrbahn spricht dagegen. Die bloss
-	// angenommene Vorgabe "beidseitig" (RoadTypeLibrary) haette 2110 von 2194
-	// secondary-Wegen ausgeschlossen - fast jede Landstrasse. "separate" liegt
-	// abseits der Fahrbahn und sperrt nicht. Links/rechts entsteht nur aus
-	// einem Tag und gilt darum auch in aelteren Bakes (ohne bSidewalkTagged)
-	// als getaggt.
-	const bool bGehwegAnDerFahrbahn = Segment.SidewalkType == EOSMSidewalkType::Left
+	// Nur ein getaggter Gehweg an der Fahrbahn zaehlt; einseitig entsteht nur
+	// aus einem Tag (so auch in Bakes ohne bSidewalkTagged).
+	const bool bGehweg = Segment.SidewalkType == EOSMSidewalkType::Left
 		|| Segment.SidewalkType == EOSMSidewalkType::Right
 		|| (Segment.SidewalkType == EOSMSidewalkType::Both && Segment.bSidewalkTagged);
-	return !bGehwegAnDerFahrbahn;
-}
-
-namespace
-{
-	/** Waagrechter Abstand eines Punkts zu einer Linie (cm). */
-	double AbstandZurLinie(const FVector& P, const TArray<FVector>& Linie)
-	{
-		double Best = TNumericLimits<double>::Max();
-		for (int32 i = 1; i < Linie.Num(); ++i)
-		{
-			const FVector2D A(Linie[i - 1]), B(Linie[i]), Q(P);
-			const FVector2D AB = B - A;
-			const double L2 = AB.SizeSquared();
-			const double T = L2 > 0.0 ? FMath::Clamp(FVector2D::DotProduct(Q - A, AB) / L2, 0.0, 1.0) : 0.0;
-			Best = FMath::Min(Best, FVector2D::Distance(Q, A + AB * T));
-		}
-		return Best;
-	}
+	return !bGehweg;
 }
 
 int32 URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(
 	const FRoadNetwork& Network, FRoadFurnitureLayout& Layout)
 {
 	TMap<int32, const FRoadSegment*> NachId;
-	NachId.Reserve(Network.Segments.Num());
 	for (const FRoadSegment& Segment : Network.Segments)
 	{
 		NachId.Add(Segment.SegmentId, &Segment);
@@ -972,26 +943,27 @@ int32 URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(
 	const int32 Vorher = Layout.Delineators.Num();
 	Layout.Delineators.RemoveAllSwap([&NachId](const FDelineatorInstance& Pfosten)
 	{
-		const FRoadSegment* const* Gefunden = NachId.Find(Pfosten.SegmentId);
-		if (!Gefunden)
+		const FRoadSegment* const* Segment = NachId.Find(Pfosten.SegmentId);
+		if (!Segment)
 		{
-			return false;   // ohne Segment laesst sich nichts pruefen
+			return false;
 		}
-		const FRoadSegment& Segment = **Gefunden;
-		if (!WantsDelineators(Segment))
+		if (!WantsDelineators(**Segment))
 		{
 			return true;
 		}
-		// Aeltere Bakes setzten die Reihe entlang der UNGEKUERZTEN Linie bis
-		// in den Knoten. Wer weiter als eine Pfostenreihe (halbe Fahrbahn +
-		// Randabstand, 1 m Luft) von der gekuerzten Linie steht, stand dort.
-		if (Segment.TrimmedCenterline.Num() >= 2)
+		// Aeltere Bakes fuehrten die Reihe bis in den Knoten: weiter als eine
+		// Pfostenreihe (+1 m) von der gekuerzten Linie heisst "im Knoten".
+		const TArray<FVector>& Linie = (*Segment)->TrimmedCenterline;
+		const FVector P(Pfosten.Location.X, Pfosten.Location.Y, 0.0);
+		double Abstand = TNumericLimits<double>::Max();
+		for (int32 i = 1; i < Linie.Num(); ++i)
 		{
-			const double Reihe = Segment.CarriagewayWidthCm * 0.5
-				+ WiesbadenRoadMarkings::DelineatorOffsetFromEdgeCm + 100.0;
-			return AbstandZurLinie(Pfosten.Location, Segment.TrimmedCenterline) > Reihe;
+			Abstand = FMath::Min<double>(Abstand, FMath::PointDistToSegment(P,
+				FVector(Linie[i - 1].X, Linie[i - 1].Y, 0.0), FVector(Linie[i].X, Linie[i].Y, 0.0)));
 		}
-		return false;
+		return Linie.Num() >= 2 && Abstand > (*Segment)->CarriagewayWidthCm * 0.5
+			+ WiesbadenRoadMarkings::DelineatorOffsetFromEdgeCm + 100.0;
 	});
 	return Vorher - Layout.Delineators.Num();
 }
@@ -1008,9 +980,7 @@ void URoadFurnitureGenerator::PlaceDelineators(
 		{
 			continue;
 		}
-		// Die an den Kreuzungen GEKUERZTE Linie: die volle Mittellinie laeuft
-		// bis in den Knoten, und die Pfostenreihe stand dann in der Fahrbahn
-		// der einmuendenden Strasse.
+		// Gekuerzte Linie: die volle laeuft bis in den Knoten.
 		const TArray<FVector>& Linie = Segment.TrimmedCenterline.Num() >= 2
 			? Segment.TrimmedCenterline : Segment.Centerline;
 		if (Linie.Num() < 2)

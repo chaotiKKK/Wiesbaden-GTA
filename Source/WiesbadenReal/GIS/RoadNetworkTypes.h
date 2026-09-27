@@ -329,22 +329,9 @@ struct WIESBADENREAL_API FRoadSegment
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	bool bBegleitweg = false;
 
-	/**
-	 * Gehweg ausdruecklich in OSM getaggt (sidewalk*) - SidewalkType allein
-	 * sagt das nicht: ohne Tag setzt RoadTypeLibrary fuer primary bis
-	 * residential "beidseitig" als Annahme. Fuer die Leitpfosten-Regel ist
-	 * nur ein GETAGGTER Gehweg ein Innerorts-Zeichen. Aeltere Bakes: false.
-	 */
+	/** Gehweg in OSM getaggt - ohne Tag ist SidewalkType nur die Typ-Vorgabe. */
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	bool bSidewalkTagged = false;
-
-	/**
-	 * Ausdruecklich als ausserorts getaggt (zone:traffic, source:maxspeed oder
-	 * maxspeed:type = DE:rural). Wird NICHT ins Tempo uebernommen - der Verkehr
-	 * faehrt wie bisher; nur die Leitpfosten-Regel liest es. Aeltere Bakes: false.
-	 */
-	UPROPERTY(BlueprintReadOnly, Category = "Road")
-	bool bRuralTagged = false;
 
 	/** OSM-Node am Anfang bzw. Ende des Segments. */
 	UPROPERTY(BlueprintReadOnly, Category = "Road")

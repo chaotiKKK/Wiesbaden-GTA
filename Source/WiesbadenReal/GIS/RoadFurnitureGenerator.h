@@ -508,28 +508,10 @@ public:
 	static int32 RemoveFurnitureOnCarriageway(
 		const FRoadNetwork& Network, FRoadFurnitureLayout& Layout);
 
-	/**
-	 * Bekommt dieses Segment Leitpfosten?
-	 *
-	 * Leitpfosten stehen in Deutschland AUSSERORTS. Ausserorts heisst hier:
-	 * eine Klasse von Autobahn bis unclassified, ein Ausserorts-Signal aus OSM
-	 * (Tempo ueber 50 oder ein rural-Tag) und kein GETAGGTER Gehweg an der
-	 * Fahrbahn - der bloss angenommene Vorgabe-Gehweg zaehlt nicht, sonst
-	 * verloren fast alle Landstrassen ihre Pfosten. Bis 27.09.2026 bekam JEDE
-	 * befahrbare Strasse Pfosten (187.077 in Alkis31), auch in Einmuendungen
-	 * quer auf der Fahrbahn (Platter Str./Rembrandtstr., Video des Nutzers).
-	 */
+	/** Leitpfosten nur ausserorts: Klasse Autobahn..unclassified, ueber 50 km/h, kein getaggter Gehweg. */
 	static bool WantsDelineators(const FRoadSegment& Segment);
 
-	/**
-	 * Wendet WantsDelineators auf ein GESPEICHERTES Layout an: aeltere Bakes
-	 * tragen die Pfosten der alten Regel im Layout, gebaut wird daraus erst
-	 * zur Laufzeit. Entfernt auch Pfosten, die jenseits der gekuerzten Linie
-	 * im Knoten stehen. Pfosten, deren Segment im Netz fehlt, bleiben (ohne
-	 * Segment laesst sich die Regel nicht pruefen).
-	 *
-	 * @return Anzahl der entfernten Leitpfosten.
-	 */
+	/** Wendet WantsDelineators auf ein gespeichertes Layout an und entfernt Pfosten im Knoten. */
 	static int32 RemoveDelineatorsAgainstRule(
 		const FRoadNetwork& Network, FRoadFurnitureLayout& Layout);
 

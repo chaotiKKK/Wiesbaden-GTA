@@ -750,16 +750,10 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 			Segment.SidewalkWidthCm = TypeDef.SidewalkWidthMeters * MetersToCm;
 			Segment.KerbHeightCm = TypeDef.KerbHeightMeters * MetersToCm;
 			Segment.MaxSpeedKmh = MaxSpeed;
-			// Rohsignale fuer die Leitpfosten-Regel: was OSM AUSDRUECKLICH sagt,
-			// nicht was die Typ-Vorgaben annehmen.
 			Segment.bSidewalkTagged = Way.HasTag(TEXT("sidewalk"))
 				|| Way.HasTag(TEXT("sidewalk:both"))
 				|| Way.HasTag(TEXT("sidewalk:left"))
 				|| Way.HasTag(TEXT("sidewalk:right"));
-			for (const TCHAR* Schluessel : { TEXT("zone:traffic"), TEXT("source:maxspeed"), TEXT("maxspeed:type") })
-			{
-				Segment.bRuralTagged |= Way.GetTag(Schluessel).Contains(TEXT("rural"));
-			}
 			Segment.Layer = Way.GetLayer();
 			Segment.bIsBridge = Way.IsBridge();
 
