@@ -21,6 +21,17 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 SEITE = REPO / "docs" / "meilensteine.md"
 BILDER = REPO / "docs" / "meilensteine" / "bilder"
 
+# Fuer den Lauf gegen einen anderen Stand (z. B. die Seite von origin/main,
+# waehrend der Arbeitszweig noch nicht nachgezogen ist) lassen sich beide
+# Pfade ueberschreiben - sonst nennt das Werkzeug Dateien, die der andere
+# Thread gerade erst angelegt hat.
+def pfad_setzen(seite: str | None, bilder: str | None) -> None:
+    global SEITE, BILDER
+    if seite:
+        SEITE = pathlib.Path(seite).resolve()
+    if bilder:
+        BILDER = pathlib.Path(bilder).resolve()
+
 TAGS = {
     1: "meilenstein-01-wahrzeichen",
     2: "meilenstein-02-nerobergbahn",
@@ -69,7 +80,10 @@ def bilder_pro_meilenstein() -> dict[int, list[str]]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--anwenden", action="store_true", help="Aenderungen ausfuehren")
+    ap.add_argument("--seite", help="andere Meilenstein-Seite als Quelle")
+    ap.add_argument("--bilder", help="anderes Bilderverzeichnis als Quelle")
     args = ap.parse_args()
+    pfad_setzen(args.seite, args.bilder)
 
     soll = bilder_pro_meilenstein()
     fehler = False

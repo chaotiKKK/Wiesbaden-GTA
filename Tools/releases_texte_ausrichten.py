@@ -19,11 +19,14 @@ import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SEITE = REPO / "docs" / "meilensteine.md"
+# Wird von --seite ueberschrieben. Wichtig: dieses Modul hat sein eigenes SEITE,
+# das pfad_setzen() im Bildmodul nicht erreicht - ohne den Zuweis hier laeuft
+# die Textquelle still ueber den lokalen Stand, waehrend --bilder auf main zeigt.
 REPO_URL = "https://github.com/chaotiKKK/Wiesbaden-GTA"
 PFAD = "docs/meilensteine.md"
 
 sys.path.insert(0, str(REPO / "Tools"))
-from releases_bilder_ausrichten import TAGS  # noqa: E402
+from releases_bilder_ausrichten import TAGS, pfad_setzen  # noqa: E402
 
 SEITEN_TITEL = {
     1: "Wahrzeichen",
@@ -82,9 +85,16 @@ def release_text(num: int, sha: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--anwenden", action="store_true")
+    ap.add_argument("--seite", help="andere Meilenstein-Seite als Quelle")
+    ap.add_argument("--bilder", help="anderes Bilderverzeichnis als Quelle")
+    ap.add_argument("--sha", help="Stand im Code (Vorgabe: origin/main)")
     args = ap.parse_args()
+    pfad_setzen(args.seite, args.bilder)
+    if args.seite:
+        global SEITE
+        SEITE = pathlib.Path(args.seite).resolve()
 
-    sha = subprocess.run(
+    sha = args.sha or subprocess.run(
         ["git", "rev-parse", "origin/main"],
         cwd=REPO, capture_output=True, text=True, check=True,
     ).stdout.strip()
@@ -111,6 +121,8 @@ def main() -> int:
             # Ueber eine Datei schreiben: "--notes" mit Umlauten und Zeilenumbruechen
             # zerlegt die Shell, und diealten Texte enthalten doppelte CRs.
             notiz = REPO / "Saved" / f"release_{tag}.md"
+            if args.seite:
+                notiz = pathlib.Path(args.seite).resolve().parent / f"release_{tag}.md"
             notiz.parent.mkdir(parents=True, exist_ok=True)
             notiz.write_text(neu, encoding="utf-8", newline="\n")
             subprocess.run(
