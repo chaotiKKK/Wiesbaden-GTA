@@ -124,3 +124,8 @@ Content/Maps/WiesbadenCity_Alkis20.umap
 Content/Maps/WiesbadenCity_Alkis21.umap
 Content/Maps/WiesbadenCity_Alkis23.umap
 Content/Maps/WiesbadenCity_Alkis24.umap
+
+# === Lokale Ablage fuer Log-/Report-Auswuerfe aus dem Projektstamm (27.09.2026) ===
+# Bewusst nur Archiv/ und nicht *.log global: geloggte Dateien unter Tools/, docs/
+# o.ae. sollen sichtbar bleiben, bis sie committed sind.
+Archiv/

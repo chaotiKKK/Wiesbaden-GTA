@@ -4797,3 +4797,15 @@ sauberem Baum gruen, bei Bearbeitung rot, und er sagt etwas Falsches aus.
   sind richtig (`test_ausliefern`, `test_uebersicht`, `test_gate_worktree` machen
   das so); gegen das echte Repo darf nur gelesen werden, was git aus dem Index
   liefert.
+
+## Projektstamm sauber halten: Archiv/ statt lose Logs (27.09.2026)
+- Diagnose-Auswuerfe aus dem Stamm gehoeren nach `Archiv/` (`Logs/`, `Ergebnisse/`,
+  `Skripte/`, `Sonstiges/`) - der Stamm traegt nur noch die 99 getrackten Dateien
+  plus `INHALT*.sha256` und `skills-lock.json`. Neue Lauf-Skripte ab ~27.09. Log
+  direkt dorthin schreiben (`Archiv/Logs/<name>.log`) oder nach dem Lauf verschieben.
+- `Archiv/` ist in der .gitignore und reine Ablage: keine Historie, kein Commit.
+  Eine Datei, die ins Repo soll (z. B. ein wertvoller Report), zurueckkopieren und
+  normal adden - und sie dann aus `Archiv/` loeschen, sonst liegt sie doppelt.
+- Beim Verschieben gilt: nur UNGETRACKTE Stamm-Dateien anfassen. Getrackte Skripte
+  (`anchor_bounds.cmd` & Co.) bleiben, egal wie alt sie aussehen - fremde Threads
+  und alte Loefe rufen sie ueber relative Pfade.
