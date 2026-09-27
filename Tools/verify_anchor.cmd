@@ -48,7 +48,8 @@ rem
 rem Ergebnis: Saved\Diagnose\anchor_verify.txt (neu je Lauf)
 rem Log:      Saved\Logs\verify_anchor_<HIMMMS>.log
 rem Exit 0 = gueltige Messung, 2 = Skript fehlt, 3 = Engine ohne Ergebnis,
-rem 4 = keine Ergebnisdatei, 5 = falsche/leere Karte, 6 = keine Messzeile.
+rem 4 = keine Ergebnisdatei, 5 = falsche/leere Karte, 6 = keine Messzeile,
+rem 7 = LEERE Komponenten am Kartenursprung (der World-Partition-Bruch).
 rem Gemessen: ein Kartenname, den es nicht gibt ("Alkis99"), endet auf 3
 rem und NICHT auf 5 - das Skript bricht mit RuntimeError "Karte nicht
 rem geladen" ab und schreibt nichts, also greift 4/5 gar nicht erst. Die
@@ -119,6 +120,21 @@ if errorlevel 1 goto :falsche_karte
 findstr /C:"LEERE Komponenten:" "%ERGEBNIS%" >nul
 if errorlevel 1 goto :keine_messung
 
+rem -- 3a. SCHWELLE: null leere Komponenten am Kartenursprung ---------------
+rem Die Zeile lautet "LEERE Komponenten: 23799 insgesamt, davon 0 am
+rem Kartenursprung (...)"; das sechste Feld ist die Zahl am Ursprung. OHNE
+rem diese Pruefung waere das Skript eine Messung ohne Aussage - die Datei im
+rem Baum nennt 23 799 leere Komponenten und 0 am Ursprung, und beides sieht
+rem gleich gruen aus. Genau die zweite Zahl ist der World-Partition-Bruch, an
+rem dem die Verankerung erkannt wird (0 = geheilt).
+rem
+rem Bewusst als Vergleich mit der Ziffer "0" und ohne numerische Rechnung:
+rem dass die Zeile ueberhaupt existiert, ist oben geprueft, ein fruehestes
+rem leeres Feld ist also auch ein Befund - und kein Anlass fuer eine
+rem Arithmetik, die im Klammerblock zerbrechen koennte.
+for /f "tokens=6" %%A in ('findstr /C:"LEERE Komponenten:" "%ERGEBNIS%"') do set "WBAMORIGIN=%%A"
+if not "%WBAMORIGIN%"=="0" goto :leere_am_ursprung
+
 if not "%WB%"=="0" goto :messung_mit_abweichung
 
 rem -- 4. Befund auf den Bildschirm ------------------------------------------
@@ -178,3 +194,16 @@ exit /b 5
 echo FEHLER: die Ergebnisdatei enthaelt keine Zeile "LEERE Komponenten:".
 echo   Log: %LOG%
 exit /b 6
+
+
+:leere_am_ursprung
+echo FEHLER: %WBAMORIGIN% LEERE Komponenten liegen am Kartenursprung.
+findstr /C:"LEERE Komponenten:" "%ERGEBNIS%"
+echo   Das ist der World-Partition-Bruch, den die Verankerung behebt: eine
+echo   leere Komponente (keine Sections, kein Mesh, keine Instanzen) bekommt
+echo   Punkt-Bounds an ihrem eigenen Ort, der Chunk-Actor steht auf (0,0,0),
+echo   und ohne StreamingAnchor wandert die Komponente damit an den
+echo   Kartenursprung. 0 ist der gesunde Wert, 20 404 waren es am 25.09.2026.
+echo   Befund: Saved\Diagnose\anchor_verify.txt
+echo   Log:    %LOG%
+exit /b 7

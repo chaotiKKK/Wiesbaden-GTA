@@ -185,7 +185,8 @@ class EchterFehlschlagTest(unittest.TestCase):
     def test_jeder_fehlerfall_hat_eigenen_code(self):
         """Jede Fehlermarke endet ungleich null - sonst ist 0 nicht lesbar."""
         for marke in (":kein_skript", ":engine_fehler", ":kein_ergebnis",
-                      ":falsche_karte", ":keine_messung"):
+                      ":falsche_karte", ":keine_messung",
+                      ":leere_am_ursprung"):
             self.assertRegex(
                 self.cmd, re.escape(marke) + r"\b[\s\S]*?exit /b [1-9]",
                 "Die Fehlermarke %s gibt 0 zurueck - Fehler sind dann nicht "
@@ -238,6 +239,7 @@ class EchterFehlschlagTest(unittest.TestCase):
     def test_messzeile_wird_geprueft(self):
         self.assertIn("LEERE Komponenten:", self.cmd,
                       "Ohne diese Zeile ist die Datei kein Messergebnis.")
+
 
     def test_erfolgsfall_gibt_null_zurueck(self):
         ausgaenge = re.findall(r"exit /b (\d+)", self.cmd)
@@ -390,3 +392,48 @@ class MesskarteAlsArgumentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SchwelleUrsprungTest(unittest.TestCase):
+    """Vertrag 4: aus der Messung muss ein BEFUND werden.
+
+    Die DateiSaved\\Diagnose\\anchor_verify.txt nennt zwei Zahlen: leere
+    Komponenten insgesamt und - entscheidend - wie viele davon am
+    Kartenursprung liegen. Nur die zweite ist der World-Partition-Bruch, an
+    dem die Verankerung erkannt wird. Ein Lauf, der nur die Existenz der
+    Datei prueft, liefert bei 20 404 Komponenten am Ursprung dieselbe
+    gruene Auskunft wie bei 0 - das Skript waere eine Messung ohne
+    Aussage, und ein Gate, das daraus gebaut wird, waere eine Ampel ohne
+    Lampe.
+    """
+
+    def setUp(self):
+        self.cmd = lies(CMD)
+
+    def test_die_zahl_am_ursprung_wird_gelesen(self):
+        self.assertRegex(
+            self.cmd, r'for /f "tokens=6"[^\n]*findstr /C:"LEERE Komponenten:"',
+            "Die Zahl der leeren Komponenten am Kartenursprung wird nicht "
+            "gelesen. Das sechste Feld der Messzeile ist sie - ohne sie "
+            "faellt der World-Partition-Bruch durch das Skript.")
+
+    def test_nur_null_ist_erlaubt(self):
+        self.assertRegex(
+            self.cmd, r'if\s+not\s+"%WBAMORIGIN%"\s*==\s*"0"\s+goto\s+:leere_am_ursprung',
+            "Der Lauf akzeptiert auch eine Zahl groesser 0 am Kartenursprung. "
+            "Genau die Zahl, die den Bruch ausmacht, wird dann als Erfolg "
+            "gemeldet.")
+
+    def test_die_pruefung_steht_vor_dem_erfolg(self):
+        """Der Sprung muss VOR exit /b 0 stehen, sonst waertet er nichts aus."""
+        sprung = self.cmd.index("goto :leere_am_ursprung")
+        erfolg = self.cmd.index("exit /b 0")
+        self.assertLess(sprung, erfolg,
+                        "Die Ursprungspruefung steht hinter dem Erfolgsausgang "
+                        "- sie koennte dann nie etwas ausloesen.")
+
+    def test_der_befund_nennt_die_grenze(self):
+        self.assertRegex(
+            self.cmd, r":leere_am_ursprung\b[\s\S]*?0 ist der gesunde Wert",
+            "Der Fehlerfall benennt nicht, was gesund ist. Wer ihn liest, "
+            "muss an der Zahl 0 erkennen koennen, dass der Zustand stimmt.")
