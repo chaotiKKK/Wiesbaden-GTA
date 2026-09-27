@@ -343,14 +343,20 @@ namespace SebboHq
 	};
 
 	/**
-	 * Dachaufbauten: Werbe-Logo auf der Krone, Antennen und Satelliten-
-	 * schuessel auf der Dachflaeche.
+	 * Dachaufbauten: Werbe-Logo auf der Krone, Antennen, Satelliten-
+	 * schuessel, Magazinstaender und vier Topfpflanzen.
 	 *
 	 * GRENZEN (Vertrag mit SebboHq.Dachaufbauten): nichts ragt in den
 	 * Anflugkorridor des Landeplatzes (Rotorradius um den Platz bei +X) und
 	 * nichts steht im Kerngrundriss. Darum stehen Schuessel und Masten hinter
 	 * dem Kern (-X) und das Logo so weit zurueckgesetzt auf der Krone, dass
 	 * sein Vorsprung den Korridor nicht erreicht.
+	 *
+	 * Blattwerk und Magazinstaender stehen an den vier Ecken des Dachrands
+	 * bzw. an der +Y-Kante. Beide Gruende sind pruefbar: die Kuebel kommen
+	 * nicht in den Laufweg (Konvexhuelle, Steckenbleiben zaehlt als Fehlschlag)
+	 * und der Magazinstaender zeigt mit +X zur Strasse, weil sein Cover
+	 * aufgemalte Grafik ist.
 	 */
 	WIESBADENREAL_API void BuildDachaufbauten(
 		const FSebboHqDimensions& Dimensions, TArray<FSebboHqDachProp>& OutProps);

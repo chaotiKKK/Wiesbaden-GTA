@@ -1,17 +1,23 @@
 # Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 #
 # Baut die Dachaufbauten des SebboTower parametrisch: Satellitenschuessel,
-# Antennenmast und die Dachreklame mit der SEBBO-Wortmarke. Alles wird als
-# getrennte FBX exportiert und ein Manifest (sebbo_dach.json) beschreibt je
-# Materialslot Grundfarbe und ART, damit der Unreal-Import
-# (Tools/import_sebbo_dach.py) weiss, ob ein Slot einen Volltonlack oder die
-# maskierte Logo-Textur bekommt.
+# Antennenmast und die Dachreklame, dazu der Magazinstaender und die
+# Topfpflanze. Alles wird als getrennte FBX exportiert und ein Manifest
+# (sebbo_dach.json) beschreibt je Materialslot Grundfarbe und ART, damit der
+# Unreal-Import (Tools/import_sebbo_dach.py) weiss, ob ein Slot einen Volltonlack
+# oder eine maskierte Bildtextur bekommt.
 #
 # Lage im Turm (lokale Bauteil-Koordinaten, cm - siehe SebboHqShape.cpp,
 # BuildDachaufbauten): Schuessel und Masten stehen auf der Dachflaeche
 # (Oberkante Attika) HINTER dem Kern, damit der Anflugkorridor des
 # Landeplatzes (+X) frei bleibt. Das Logo-Schild steht auf der Krone und zeigt
-# mit +X zur Platter Strasse.
+# mit +X zur Platter Strasse. Magazinstaender und Topfpflanzen stehen am
+# Dachrand (siehe SebboHq::BuildDachaufbauten).
+#
+# Die Bildvorlagen liegen in Data/Raw/SebboTower/quellen/:
+#   sebbo_ag_logo.jpg       -> T_WbSeboLogoAG.png  (linkes Schildfeld)# sebbo_magazin_cover.jpg  -> T_WbSeboMagazin.png (Plakattafel)
+#   sebbo_pflanze_01..03.jpg -> Geometrie von build_pflanze()
+# Die Texturen erzeugt Tools/make_sebbo_dach_textures.py (Pillow).
 #
 # Modelliert wird in METERN; der FBX-Export liefert Zentimeter, Unreal
 # importiert mit Skalierung 1,0. Die Meshes haben z = 0 am Standfuss.
@@ -34,9 +40,10 @@ from mathutils import Matrix, Vector
 OUT_DIR_DEFAULT = (r"C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal"
                    r"\Data\Raw\SebboTower")
 
-# Logo-Textur (Tools/make_sebbo_dach_textures.py). Wird fuer den Kontroll-
-# render gebraucht: ohne das Bild zeigt der Render bloss die dunkle Platte,
-# und gerade die Wortmarke muss geprueft werden (aufrecht, nicht gespiegelt).
+# Logo-Texturen (Tools/make_sebbo_dach_textures.py). Werden fuer den
+# Kontrollrender gebraucht: ohne das Bild zeigt der Render bloss die dunkle
+# Platte, und gerade die Schrift muss geprueft werden (aufrecht, nicht
+# gespiegelt).
 TEX_DIR_DEFAULT = (r"C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal"
                    r"\Content\SebboTower\Textures\Source")
 
@@ -52,39 +59,72 @@ def log(msg):
     print("###WBSD### %s" % msg)
 
 
+def srgb(hexwert):
+    """sRGB-Hex -> lineares RGB.
+
+    Unreal-LinearColor erwartet LINEARE Werte, die Basisfarben im Manifest
+    werden unveraendert durchgereicht. Das marineblaue Schildfeld muss exakt
+    zum Grundton des Logo-Fotos passen (063b6d), sonst steht ein heller Rand
+    um die freigestellte Wortmarke - darum wird der Ton hier gerechnet und
+    nicht von Hand eingetragen.
+    """
+    kanale = [int(hexwert[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+
+    def linear(c):
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    return tuple(linear(c) for c in kanale)
+
+
 # ---------------------------------------------------------------------------
 # Materialtabelle: Name -> (Grundfarbe RGB, ART).
 #
 # ART steuert den Unreal-Import: "paint"/"metal"/"dark" werden zu farbigen
-# Materialinstanzen (Metall/Rauheit passend), "decal" bekommt die maskierte
-# Logo-Textur.
+# Materialinstanzen (Metall/Rauheit passend), "foliage" zum ZWEISEITIGEN
+# Blattmaterial (Blattflaechen sind einzelne Streifen - Unreal wuerde die
+# Rueckseite wegcullen), "decal" bekommt die maskierte Bildtextur.
 # ---------------------------------------------------------------------------
 MATERIALS = {
     "SbMetall":   ((0.52, 0.53, 0.56), "metal"),    # Mast, Schuesselruecken
     "SbWeiss":    ((0.86, 0.86, 0.84), "paint"),    # Schuesselschale
     "SbAntrazit": ((0.09, 0.09, 0.10), "dark"),     # Schildplatte
     "SbRot":      ((0.62, 0.05, 0.04), "paint"),    # Spitze, Befeuerung
-    # Wortmarke: KEINE Lackflaeche, sondern aufgemalte Graphik - der Unreal-
-    # Import baut daraus ein maskiertes, zweiseitiges Material, damit die
-    # anthrazitfarbene Platte zwischen den Buchstaben sichtbar bleibt.
+    # Marineblaues Feld des AG-Logos: exakt der Grundton des Fotos.
+    "SbNavy":     (srgb("063b6d"), "paint"),
+    # Wortmarke und AG-Logo: KEINE Lackflaeche, sondern aufgemalte Graphik -
+    # der Unreal-Import baut daraus maskierte, zweiseitige Materialien, damit
+    # das Schildfeld zwischen Buchstaben und Formen sichtbar bleibt.
     "SbLogo":     ((1.0, 1.0, 1.0), "decal"),
+    "SbLogoAG":   ((1.0, 1.0, 1.0), "decal"),
+    # Magazinstaender
+    "MgMetall":   ((0.26, 0.27, 0.29), "metal"),    # Rahmen der Tafel
+    "MgCover":    ((1.0, 1.0, 1.0), "decal"),       # Titelbild "SeBBo"
+    # Topfpflanze
+    "PbKuebel":   ((0.34, 0.33, 0.30), "paint"),    # Betonkuebel
+    "PbErde":     ((0.045, 0.030, 0.020), "dark"),  # Substrat
+    "PbBlatt":    ((0.085, 0.170, 0.040), "foliage"),   # Fächerblaetter
+    "PbBlattHell": ((0.230, 0.330, 0.085), "foliage"),  # junge Blaetter
+    "PbReif":     ((0.560, 0.600, 0.450), "foliage"),   # Harzreif der Bluete
 }
 
-TEXTURES = {"SbLogo": "T_WbSeboLogo.png"}
+TEXTURES = {"SbLogo": "T_WbSeboLogo.png",
+            "SbLogoAG": "T_WbSeboLogoAG.png",
+            "MgCover": "T_WbSeboMagazin.png"}
 
 
 def bind_decal_texture(mat, nt, bsdf, mname):
-    """Haengt die Logo-PNG an den Kontrollrender.
+    """Haengt die Bild-PNG an den Kontrollrender.
 
-    Unreal maskiert dieselbe Datei (Slot `SbLogo` im Manifest); hier wird sie
-    als Grundfarbe UND Deckkraft angehaengt, damit die Wortmarke im
-    Vorschaubild genauso auf der dunklen Platte steht. Fehlt die Datei, laeuft
-    der Bau trotzdem durch - nur das Vorschaubild zeigt dann keine Schrift.
+    Unreal maskiert dieselbe Datei (Slot `SbLogo`/`SbLogoAG`/`MgCover` im
+    Manifest); hier wird sie als Grundfarbe UND Deckkraft angehaengt, damit
+    Schrift und Logo im Vorschaubild genauso auf der Platte stehen. Fehlt die
+    Datei, laeuft der Bau trotzdem durch - nur das Vorschaubild zeigt dann
+    keine Schrift.
     """
     datei = TEXTURES.get(mname)
     pfad = os.path.join(TEX_DIR_DEFAULT, datei) if datei else ""
     if not datei or not os.path.exists(pfad):
-        log("Hinweis: %s fehlt - %s ohne Wortmarke im Kontrollrender "
+        log("Hinweis: %s fehlt - %s ohne Bild im Kontrollrender "
             "(erst Tools/make_sebbo_dach_textures.py laufen lassen)."
             % (pfad or "TEXTURES[%s]" % mname, mname))
         return
@@ -93,7 +133,7 @@ def bind_decal_texture(mat, nt, bsdf, mname):
     node = nt.nodes.new("ShaderNodeTexImage")
     node.image = img
     node.location = (-380, 150)
-    # CLIP: die Wortmarke liegt EINMAL auf ihrer Flaeche - REPEAT wuerde sie
+    # CLIP: das Bild liegt EINMAL auf seiner Flaeche - REPEAT wuerde es
     # ueber den Rand hinaus wiederholen.
     node.extension = "CLIP"
     nt.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
@@ -145,7 +185,7 @@ class MeshBuilder:
 
     def _planar_uv(self, punkte, tpm):
         """Planare UV aus den zwei groessten Achsen der Flaeche mal Kachel-
-        dichte (Kacheln je Meter) - un unabhaengig von der Flaechengroesse."""
+        dichte (Kacheln je Meter) - unabhaengig von der Flaechengroesse."""
         p = [Vector(v) for v in punkte]
         n = (p[1] - p[0]).cross(p[2] - p[0])
         laengen = (abs(n.x), abs(n.y), abs(n.z))
@@ -176,7 +216,7 @@ class MeshBuilder:
                    self._planar_uv([tuple(v) for v in punkte], tpm))
 
     def quad_tex(self, p0, p1, p2, p3, mat):
-        """Viereck mit der ganzen Textur als UV 0..1 (Wortmarke).
+        """Viereck mit der ganzen Textur als UV 0..1 (Wortmarke, Cover).
 
         Die vier Ecken werden so uebergeben, wie man sie VON AUSSEN liest:
         unten links, unten rechts, oben rechts, oben links. Die UV-Werte
@@ -327,6 +367,79 @@ class MeshBuilder:
 
 
 # ---------------------------------------------------------------------------
+# Blattwerk (Bildvorlage Data/Raw/SebboTower/quellen/sebbo_pflanze_0*.jpg)
+# ---------------------------------------------------------------------------
+
+def blatt_kanten(ursprung, azimut, elevation, laenge, breite, segmente=10,
+                 zaehne=5, wicklung=0.35):
+    """Die beiden Randkurven eines Blatts und seine Blattnormale.
+
+    Ein Blatt ist ein Streifen aus `segmente` Vierecken: die Mittelrippe laeuft
+    ab `ursprung` in Richtung (azimut, elevation), die Halbbreite folgt
+    sin(pi * t^0,6) - schmal am Stiel, breit in der Mitte, spitz an der
+    Spitze. Genau das ist die Form der Fotos: schmale suessende Spitzen,
+    breite Mitte. `wicklung` hebt die Mittelrippe nach +Normale (mit t^2,
+    damit die Spitze staerker ausbogen ist als der Ansatz) - die Blaetter
+    stehen dadurch nicht flach, sondern gewellt. `zaehne` alterniert die
+    Breite und erzeugt so den gezaegelten Rand.
+    """
+    a = math.radians(azimut)
+    e = math.radians(elevation)
+    d = Vector((math.cos(e) * math.cos(a), math.cos(e) * math.sin(a),
+                math.sin(e)))
+    w = Vector((-math.sin(a), math.cos(a), 0.0))
+    n = d.cross(w).normalized()
+    if n.z < 0.0:
+        n = -n                       # Blattoberseite zeigt nach oben
+    links, rechts = [], []
+    for i in range(segmente + 1):
+        t = i / float(segmente)
+        p = (Vector(ursprung) + d * (laenge * t)
+             + n * (laenge * wicklung * t * t))
+        hw = 0.5 * breite * math.sin(math.pi * (t ** 0.6)) * (1.0 - 0.10 * t)
+        if zaehne:
+            hw *= 1.0 + 0.11 * math.cos(2.0 * math.pi * zaehne * t)
+        links.append(tuple(p - w * hw))
+        rechts.append(tuple(p + w * hw))
+    return links, rechts, n
+
+
+def blatt(b, mat, **kwargs):
+    """Ein Blatt als Streifen; die Normalen zeigen nach oben."""
+    links, rechts, n = blatt_kanten(**kwargs)
+    for i in range(len(links) - 1):
+        b.quad_towards(links[i], rechts[i], rechts[i + 1], links[i + 1],
+                       mat, n)
+    return n
+
+
+def faecherblatt(b, mat, ursprung, azimut, laenge, breite=0.055, anzahl=9):
+    """Fächerblatt: `anzahl` schmale Blättchen aus einem Punkt.
+
+    Die Fotos zeigen die Hanf-Fächerform - mehrere fingerartige Blaettchen,
+    die in der Mitte am laengsten sind. Jedes Blaettchen bekommt eigene
+    Spreizung und eigene Neigung, sonst waere der Faecher eine flache
+    Scheibe.
+    """
+    mitte = (anzahl - 1) * 0.5
+    for k in range(anzahl):
+        t = (k - mitte) / mitte                      # -1 .. +1
+        blatt(b, mat,
+              ursprung=ursprung,
+              azimut=azimut + 35.0 * t,
+              elevation=26.0 - 30.0 * abs(t) ** 1.4,  # Seitenblaettchen sinken
+              laenge=laenge * (1.0 - 0.30 * abs(t) ** 1.6),
+              breite=breite, segmente=7, zaehne=4, wicklung=0.22)
+
+
+def suessblatt(b, mat, ursprung, azimut, elevation, laenge, breite=0.038):
+    """Ein Bluetenblatt (Sugar Leaf): schmal, stark gewellt, nach oben."""
+    return blatt(b, mat, ursprung=ursprung, azimut=azimut,
+                 elevation=elevation, laenge=laenge, breite=breite,
+                 segmente=6, zaehne=3, wicklung=0.55)
+
+
+# ---------------------------------------------------------------------------
 # Bauteile
 # ---------------------------------------------------------------------------
 
@@ -397,6 +510,16 @@ def build_mast():
     return b.to_object("SM_WbSeboDachMast"), ["SbMetall", "SbRot"]
 
 
+# Schildfeld-Masse (Meter, im Mesh y von -2,40 bis 2,40 und z von 0,55 bis
+# 1,90). Die Seitenverhaeltnisse muessen zu den Texturmaessen in
+# Tools/make_sebbo_dach_textures.py passen (2048x843 = 2,4296 und
+# 1200x1087 = 1,1039) - sonst steht die Schrift verzerrt auf dem Schild.
+LOGO_FELD_H = 1.35
+LOGO_FELD_LINKS = -2.40          # Aussenrand des AG-Feldes
+LOGO_FELD_TRENNER = -0.91        # Feldgrenze
+LOGO_FELD_RECHTS = 2.40
+
+
 def build_logo():
     b = MeshBuilder()
     # Zwei Beine, auf denen die Platte auf der Krone steht.
@@ -405,11 +528,115 @@ def build_logo():
               "SbMetall")
     # Platte: 4,80 breit, 1,35 hoch, 0,12 tief. Rueckseite x = 0.
     b.box(0.0, 0.12, -2.40, 2.40, 0.55, 1.90, "SbAntrazit")
-    # Wortmarke 1 cm vor der Plattenfront (x = 0.13), von AUSSEN gelesen:
+
+    # Linkes Feld: marineblaues Schild 1,49 m breit, 4 cm vor der Platte
+    # stehend, weil die freigestellte Wortmarke dort keinen Hintergrund
+    # mitbringt (Tools/make_sebbo_dach_textures.py macht nur sie transparent).
+    b.box(0.12, 0.16, LOGO_FELD_LINKS, LOGO_FELD_TRENNER, 0.55, 1.90,
+          "SbNavy")
+    # Wortmarke 1 cm vor der Plattenfront (x = 0,13), von AUSSEN gelesen:
     # unten links, unten rechts, oben rechts, oben links.
-    b.quad_tex((0.13, -2.40, 0.55), (0.13, 2.40, 0.55),
-               (0.13, 2.40, 1.90), (0.13, -2.40, 1.90), "SbLogo")
-    return b.to_object("SM_WbSeboDachLogo"), ["SbMetall", "SbAntrazit", "SbLogo"]
+    b.quad_tex((0.13, LOGO_FELD_TRENNER + 0.03, 0.55),
+               (0.13, LOGO_FELD_RECHTS, 0.55),
+               (0.13, LOGO_FELD_RECHTS, 1.90),
+               (0.13, LOGO_FELD_TRENNER + 0.03, 1.90), "SbLogo")
+    # AG-Logo 1 cm vor dem marineblauen Feld (x = 0,17).
+    b.quad_tex((0.17, LOGO_FELD_LINKS, 0.55),
+               (0.17, LOGO_FELD_TRENNER, 0.55),
+               (0.17, LOGO_FELD_TRENNER, 1.90),
+               (0.17, LOGO_FELD_LINKS, 1.90), "SbLogoAG")
+    return b.to_object("SM_WbSeboDachLogo"), ["SbMetall", "SbAntrazit", "SbNavy",
+                                             "SbLogo", "SbLogoAG"]
+
+
+# Magazinstaender: Plakattafel mit dem Titelbild des Magazins "SeBBo"
+# (T_WbSeboMagazin.png, 650x800 = 0,8125). Die Tafel ist 1,30 m breit und
+# 1,60 m hoch - genau der Seitenverhaeltnis des Coverbildes, sonst waere das
+# Cover gestaucht. Der Fuss steht nach -X, das Cover zeigt nach +X zur
+# Strasse.
+MAG_BREITE = 1.30
+MAG_HOEHE = 1.60
+MAG_Z0 = 0.35
+
+
+def build_magazin():
+    b = MeshBuilder()
+    # Grundplatte und zwei Pfosten.
+    b.box(-0.06, 0.06, -0.75, 0.75, 0.0, 0.07, "MgMetall")
+    for s in (-1.0, 1.0):
+        b.box(-0.04, 0.04, s * 0.67 - 0.04, s * 0.67 + 0.04, 0.07,
+              MAG_Z0 + MAG_HOEHE, "MgMetall")
+    # Tafel, Vorderseite bei x = 0,10.
+    b.box(0.0, 0.10, -MAG_BREITE * 0.5, MAG_BREITE * 0.5, MAG_Z0,
+          MAG_Z0 + MAG_HOEHE, "MgMetall")
+    # Cover 1 cm vor der Tafel, von AUSSEN gelesen.
+    b.quad_tex((0.11, -MAG_BREITE * 0.5, MAG_Z0),
+               (0.11, MAG_BREITE * 0.5, MAG_Z0),
+               (0.11, MAG_BREITE * 0.5, MAG_Z0 + MAG_HOEHE),
+               (0.11, -MAG_BREITE * 0.5, MAG_Z0 + MAG_HOEHE), "MgCover")
+    # Strebe nach hinten, damit die Tafel nicht kippt.
+    b.balken((0.02, 0.0, MAG_Z0 + MAG_HOEHE - 0.15), (-0.50, 0.0, 0.05),
+             0.05, 0.05, "MgMetall")
+    return b.to_object("SM_WbSebboMagazin"), ["MgMetall", "MgCover"]
+
+
+# Topfpflanze nach den drei Makro-Fotos: Betonkuebel mit Substrat, Fuenf
+# Faechertblaetter aus den unteren Knoten, drei kleinere darueber und die
+# Hauptbluete als spindelfoermiger Kern mit zwei Windungen suessender
+# Bluetenblaetter. Der Harzreif ist ein eigener heller Slot - er ist auf
+# jedem der drei Fotos die hellste Stelle der Bluete.
+PFL_BLUETE_Z0 = 0.74
+PFL_BLUETE_Z1 = 1.16
+
+
+def build_pflanze():
+    b = MeshBuilder()
+    # Kuebel: Boden, konischer Mantel, umlaufender Rand, Innenwand.
+    b.lathe([(0.0, 0.0), (0.170, 0.0), (0.175, 0.02), (0.230, 0.40),
+             (0.245, 0.40), (0.245, 0.44), (0.210, 0.44), (0.200, 0.41),
+             (0.190, 0.38)], 20, "PbKuebel")
+    # Substrat als geschlossener Fladen: von unten her waere eine einseitige
+    # Scheibe im Kuebel zwar unsichtbar, aber der Import macht daraus eine
+    # Konvexhuelle, und die soll keine offene Figur sein.
+    b.lathe([(0.0, 0.355), (0.185, 0.370), (0.190, 0.400), (0.0, 0.400)],
+            20, "PbErde")
+    # Stamm.
+    b.lathe([(0.0, 0.40), (0.020, 0.42), (0.016, 0.72), (0.012, 1.02),
+             (0.008, 1.14), (0.0, PFL_BLUETE_Z1)], 8, "PbBlatt")
+
+    # Fuenf Faechertblaetter: die grossen, handfoermigen mit sieben bis neun
+    # Blaehttchen, wie im linken Bild.
+    for az, z, la in ((15.0, 0.47, 0.36), (105.0, 0.50, 0.33),
+                      (190.0, 0.47, 0.35), (275.0, 0.52, 0.31),
+                      (340.0, 0.49, 0.34)):
+        faecherblatt(b, "PbBlatt", (0.0, 0.0, z), az, la)
+    # Drei kleinere, hellere Blaetter an den oberen Knoten.
+    for az, z, la in ((60.0, 0.62, 0.24), (230.0, 0.66, 0.21),
+                      (320.0, 0.63, 0.23)):
+        faecherblatt(b, "PbBlattHell", (0.0, 0.0, z), az, la, anzahl=7,
+                     breite=0.045)
+
+    # Hauptbluete: spindelfoermiger Kern, drumher zwei Windungen
+    # suessender Blaetter, nach oben zum Reif hin kleiner werdend.
+    spannen = 8
+    spindel = []
+    for i in range(spannen + 1):
+        t = i / float(spannen)
+        spindel.append((0.052 * math.sin(math.pi * t) ** 0.75,
+                        PFL_BLUETE_Z0 + (PFL_BLUETE_Z1 - PFL_BLUETE_Z0) * t))
+    b.lathe(spindel, 12, "PbReif")
+    for i in range(18):
+        f = i / 18.0
+        a = f * 720.0                       # zwei Windungen
+        az = math.radians(a)
+        r = 0.052 * math.sin(math.pi * f) ** 0.75
+        z = PFL_BLUETE_Z0 + (PFL_BLUETE_Z1 - PFL_BLUETE_Z0) * f
+        suessblatt(b, "PbBlattHell",
+                   (r * math.cos(az), r * math.sin(az), z),
+                   azimut=a, elevation=68.0 - 22.0 * f,
+                   laenge=0.115 * (0.45 + 0.55 * math.sin(math.pi * f)))
+    return b.to_object("SM_WbSebboPflanze"), ["PbKuebel", "PbErde", "PbBlatt",
+                                             "PbBlattHell", "PbReif"]
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +644,7 @@ def build_logo():
 # ---------------------------------------------------------------------------
 
 def boden_auf_null(obj):
-    """z = 0 an die Unterkante: alle drei Bauteile stehen mit dem Ursprung
+    """z = 0 an die Unterkante: alle Bauteile stehen mit dem Ursprung
     auf ihrer Standflaeche (Dach oder Krone), so setzt sie der Actor."""
     zs = [v.co.z for v in obj.data.vertices]
     schiebe = min(zs)
@@ -475,10 +702,19 @@ def setup_world():
     out = nt.nodes.new("ShaderNodeOutputWorld")
     nt.links.new(bg.outputs[0], out.inputs[0])
     bg.inputs[0].default_value = (0.52, 0.60, 0.72, 1.0)
-    bg.inputs[1].default_value = 1.2
+    bg.inputs[1].default_value = 0.9
     sun = bpy.data.objects.new("SbSonne", bpy.data.lights.new("SbSonne", "SUN"))
-    sun.data.energy = 4.0
-    sun.rotation_euler = (math.radians(52), math.radians(12), math.radians(-40))
+    # Die Sonne kommt bewusst von +X her: Schild, Magazintafel und
+    # Satellitenschuessel zeigen alle nach +X, und mit der alten Drehung
+    # (12 Grad um Y, -40 Grad um Z) lief das Licht an ihnen vorbei - das
+    # Schild stand im Bild bei 37,58,96 statt 6,59,109, die gelbe Flamme
+    # wurde zu (181,158,84) statt (255,208,92). Ein Kontrollrender, in dem
+    # die aufgemalte Grafik matt ist, taugt nicht zur Pruefung.
+    #
+    # 58 Grad um X kippt den Lichtweg auf -X, 38 Grad um Z schiebt ihn
+    # leicht nach -Y (die Seite, von der die Kamera steht).
+    sun.data.energy = 2.4
+    sun.rotation_euler = (math.radians(58), 0.0, math.radians(38))
     bpy.context.collection.objects.link(sun)
 
 
@@ -488,6 +724,17 @@ def render_views(obj, size, out_dir, tag):
         sc.render.engine = "BLENDER_EEVEE_NEXT"
     except Exception:
         sc.render.engine = "BLENDER_EEVEE"
+    # STANDARD statt der Vorgabe AgX: AgX entsaettigt kräftige Farben, und
+    # genau um die geht es hier - das Gelb der Flamme, das Rosa des Herzens,
+    # das Gelb des Magazin-Feldes "PAGE-20". AgX macht daraus drei graue
+    # Flecken, und die Flaechenvergleiche in Tools/check_sebbo_dach_bilder.py
+    # koennen dann nichts mehr unterscheiden.
+    for attr, wert in (("view_transform", "Standard"), ("look", "None")):
+        try:
+            setattr(sc.view_settings, attr, wert)
+        except Exception:
+            pass
+    sc.view_settings.exposure = 0.0
     sc.render.resolution_x = 960
     sc.render.resolution_y = 640
     diag = max(size)
@@ -509,6 +756,14 @@ def render_views(obj, size, out_dir, tag):
         # bleibt unklar, ob die Schrift aufrecht und ungespiegelt steht
         # (180-Grad-Fehler des Wagen-Projekts, dort erst im Spiel sichtbar).
         views["front"] = Vector((2.2 * diag, 0.0, size[2] * 0.5))
+    if tag == "magazin":
+        # Dasselbe wie beim Logo: das Cover muss aufrecht und ungespiegelt
+        # lesbar sein - 1920 px, sonst ist die Titelschrift nur Pixelbrei.
+        views["front"] = Vector((2.6 * diag, 0.0, size[2] * 0.5))
+    if tag == "pflanze":
+        # Nahaussicht auf die Bluete: die Bluetenblaetter sind im
+        # Gesamtbild drei Pixel breit.
+        views["bluete"] = Vector((0.9 * diag, -1.1 * diag, 0.55 * diag))
 
     def shoot(vname, cam_pos, ziel, breite=960):
         cam.location = cam_pos
@@ -521,9 +776,15 @@ def render_views(obj, size, out_dir, tag):
         bpy.ops.render.render(write_still=True)
 
     for vname, loc in views.items():
-        ziel = centre if vname != "front" else Vector((0.13, 0.0, 1.22))
-        shoot(vname, centre + loc if vname != "front" else Vector(loc), ziel,
-              breite=1920 if vname == "front" else 960)
+        if vname == "front":
+            ziel = (Vector((0.14, 0.0, 1.22)) if tag == "logo"
+                    else Vector((0.10, 0.0, size[2] * 0.5)))
+            shoot(vname, Vector(loc), ziel, breite=1920)
+        elif vname == "bluete":
+            shoot(vname, Vector((0.55, -0.70, 1.00)),
+                  Vector((0.0, 0.0, 0.98)), breite=1400)
+        else:
+            shoot(vname, centre + loc, centre)
     bpy.data.objects.remove(cam, do_unlink=True)
 
 
@@ -541,6 +802,8 @@ def main():
         ("schuessel", lambda: build_schuessel()),
         ("mast", lambda: build_mast()),
         ("logo", lambda: build_logo()),
+        ("magazin", lambda: build_magazin()),
+        ("pflanze", lambda: build_pflanze()),
     ]
 
     for tag, fn in builders:
@@ -556,8 +819,9 @@ def main():
             "size_m": [round(s, 3) for s in size],
             "materials": slot_manifest(mat_names),
         })
-        log("%-10s %-24s %s m  Slots %s"
-            % (tag, obj.name, [round(s, 2) for s in size], mat_names))
+        log("%-10s %-24s %s m  Flaechen %d  Slots %s"
+            % (tag, obj.name, [round(s, 2) for s in size],
+               len(obj.data.polygons), mat_names))
         obj.hide_render = True
 
     with open(os.path.join(out_dir, "sebbo_dach.json"), "w",

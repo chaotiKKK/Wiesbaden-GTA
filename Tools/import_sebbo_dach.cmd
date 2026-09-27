@@ -1,5 +1,5 @@
 @echo off
-rem Importiert die drei Dach-Assets (FBX + Materialien + Logo-Textur) in das
+rem Importiert die fuenf Dach-Assets (FBX + Materialien + Bildtexturen) in das
 rem Projekt. Quelle: Data\Raw\SebboTower (gebaut von Tools\Blender\make_sebbo_dach.py).
 rem Der Editor beendet sich nach dem Import von selbst (WB_QUIT).
 rem Ergebnis-Nachweis: Data\Raw\SebboTower\import_done.txt und die

@@ -730,6 +730,46 @@ void SebboHq::BuildDachaufbauten(const FSebboHqDimensions& D, TArray<FSebboHqDac
 		Logo.ExtentCm = FVector(13.0, 240.0, 190.0);
 		OutProps.Add(Logo);
 	}
+
+	// --- Blattwerk und Magazinstaender am Dachrand -------------------------
+	// Beides sind Blender-Assets wie die Aufbauten oben (Tools/Blender/
+	// make_sebbo_dach.py, Import ueber Tools/import_sebbo_dach.py); der
+	// Ursprung ist der Standfuss, PosCm.Z ist also die Dachflaeche.
+	//
+	// Die Kuebel stehen an den vier Ecken des Dachrands, NICHT im Laufweg:
+	// die Pflanze ist ein HISS-Import mit Konvexhuelle ueber Kuebel und
+	// Blattwerk, und mitten im Dach wuerde der Spieler an einem Blatt haengen
+	// (Steckenbleiben zaehlt als Fehlslag, siehe SebboHqTest).
+	//
+	// Der Magazinstaender steht an der +Y-Kante und zeigt mit +X zur Strasse
+	// (Yaw 0) - das Cover ist aufgemalte Grafik und muss lesbar sein, nicht
+	// seitlich weggewandt. Seine Strebe ragt nach -X, das ist in den
+	// ExtentCm als 31 cm gerechnet.
+	static const FVector KuebelOrte[] = {
+		FVector(-1380.0, 1330.0, 0.0),
+		FVector(-1380.0, -1330.0, 0.0),
+		FVector(330.0, -1380.0, 0.0),
+		FVector(-330.0, -1400.0, 0.0),
+	};
+	static const double KuebelDreh[] = { 0.0, 37.0, 90.0, 143.0 };
+	constexpr int32 KuebelAnzahl = 4;
+
+	for (int32 i = 0; i < KuebelAnzahl; ++i)
+	{
+		FSebboHqDachProp Kuebel;
+		Kuebel.MeshPfad = TEXT("/Game/SebboTower/Meshes/SM_WbSebboPflanze");
+		Kuebel.PosCm = FVector(KuebelOrte[i].X, KuebelOrte[i].Y, DachZ);
+		Kuebel.YawDeg = KuebelDreh[i];
+		// Halbe Ausdehnung des Meshes: 0,58 x 0,52 x 1,21 m.
+		Kuebel.ExtentCm = FVector(29.0, 26.0, 61.0);
+		OutProps.Add(Kuebel);
+	}
+
+	FSebboHqDachProp Staender;
+	Staender.MeshPfad = TEXT("/Game/SebboTower/Meshes/SM_WbSebboMagazin");
+	Staender.PosCm = FVector(120.0, 1330.0, DachZ);
+	Staender.ExtentCm = FVector(31.0, 75.0, 100.0);
+	OutProps.Add(Staender);
 }
 
 void SebboHq::BuildInnenausbau(const FSebboHqDimensions& D, TArray<FHqPart>& OutParts)

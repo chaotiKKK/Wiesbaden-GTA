@@ -10,18 +10,19 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSebboHqDachAufbautenTest,
 
 bool FSebboHqDachAufbautenTest::RunTest(const FString& Parameters)
 {
-	// Vertrag mit SebboHq::BuildDachaufbauten: Logo, Antennen und
-	// Satellitenschuessel stehen auf Dach bzw. Krone, und nichts ragt in den
-	// Anflugkorridor des Landeplatzes. Der Korridor ist der Grund, warum die
-	// Aufbauten hinter dem Kern stehen: der Landeplatz liegt bei +X, die
-	// Silhouette mit Masten und Schuessel gehoert nach -X (die Krone hatte
-	// einmal den halben Landeplatz ueberdeckt, siehe HelipadApproach).
+	// Vertrag mit SebboHq::BuildDachaufbauten: Logo, Antennen,
+	// Satellitenschuessel, Magazinstaender und vier Topfpflanzen stehen auf
+	// Dach bzw. Krone, und nichts ragt in den Anflugkorridor des Landeplatzes.
+	// Der Korridor ist der Grund, warum die Aufbauten hinter dem Kern stehen:
+	// der Landeplatz liegt bei +X, die Silhouette mit Masten und Schuessel
+	// gehoert nach -X (die Krone hatte einmal den halben Landeplatz
+	// ueberdeckt, siehe HelipadApproach).
 	const FSebboHqDimensions D;
 	TArray<SebboHq::FSebboHqDachProp> Props;
 	SebboHq::BuildDachaufbauten(D, Props);
 
-	TestTrue(TEXT("Dachaufbauten sind vorhanden (Schuessel, Masten, Logo)"),
-		Props.Num() >= 4);
+	TestTrue(TEXT("Dachaufbauten sind vorhanden (Schuessel, Masten, Logo, "
+		"Magazin, vier Kuebel)"), Props.Num() >= 9);
 
 	const double DachZ = SebboHq::GetRoofHeightCm(D) + D.SlabCm;
 	const double KroneZ = SebboHq::GetCoreTopHeightCm(D) + D.CrownHeightCm;
@@ -33,6 +34,9 @@ bool FSebboHqDachAufbautenTest::RunTest(const FString& Parameters)
 
 	int32 AufDemDach = 0;
 	int32 AufDerKrone = 0;
+	int32 Kuebel = 0;
+	int32 Staender = 0;
+	double StaenderYaw = -999.0;
 	for (const SebboHq::FSebboHqDachProp& Prop : Props)
 	{
 		TestTrue(TEXT("Assetpfad liegt unter /Game/SebboTower/Meshes"),
@@ -64,9 +68,34 @@ bool FSebboHqDachAufbautenTest::RunTest(const FString& Parameters)
 				FMath::Abs(Prop.PosCm.X) - Prop.ExtentCm.X > KernHalb
 				|| FMath::Abs(Prop.PosCm.Y) - Prop.ExtentCm.Y > KernHalb);
 		}
+
+		// --- Blattwerk und Magazin ------------------------------------------
+		if (Prop.MeshPfad.EndsWith(TEXT("SM_WbSebboPflanze")))
+		{
+			++Kuebel;
+			// AM RAND, nicht im Laufweg: die Pflanze ist ein Konvexhuelle-
+			// Import ueber Kuebel und Blattwerk, mitten im Dach wuerde der
+			// Spieler an einem Blatt haengen.
+			TestTrue(TEXT("Kuebel steht am Dachrand (|Y| >= 12 m)"),
+				FMath::Abs(Prop.PosCm.Y) >= 1200.0);
+			TestTrue(TEXT("Kuebel ragt nicht in den Laufweg der Dachmitte"),
+				FMath::Abs(Prop.PosCm.X) >= 300.0);
+		}
+		if (Prop.MeshPfad.EndsWith(TEXT("SM_WbSebboMagazin")))
+		{
+			++Staender;
+			StaenderYaw = Prop.YawDeg;
+		}
 	}
 	TestTrue(TEXT("Dachreklame steht auf der Krone"), AufDerKrone >= 1);
-	TestTrue(TEXT("Schuessel und Masten stehen auf der Dachflaeche"), AufDemDach >= 3);
+	TestTrue(TEXT("Schuessel, Masten, Kuebel und Magazin stehen auf der "
+		"Dachflaeche"), AufDemDach >= 8);
+	TestEqual(TEXT("Es stehen vier Topfpflanzen am Dachrand"), Kuebel, 4);
+	TestEqual(TEXT("Es steht ein Magazinstaender"), Staender, 1);
+	// Das Cover ist aufgemalte Grafik: es muss zur Strasse zeigen, nicht
+	// seitlich weggewandt (Yaw 0 = +X).
+	TestTrue(TEXT("Der Magazinstaender zeigt sein Cover zur Strasse (+X)"),
+		FMath::IsNearlyZero(StaenderYaw, 0.01));
 
 	return true;
 }

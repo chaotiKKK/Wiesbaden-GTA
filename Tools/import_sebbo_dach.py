@@ -1,21 +1,30 @@
-"""Importiert die drei Dachaufbauten des SebboTower (Satellitenschuessel,
-Antennenmast, Dachreklame) und ihre Materialien.
+"""Importiert die fuenf Dachaufbauten des SebboTower (Satellitenschuessel,
+Antennenmast, Dachreklame, Magazinstaender, Topfpflanze) und ihre Materialien.
 
 Quelle der Meshes: Tools/Blender/make_sebbo_dach.py -> Data/Raw/SebboTower/
 (FBX + sebbo_dach.json). Das Manifest nennt je Materialslot Grundfarbe und
-ART; daraus entstehen hier zwei Sorten Material:
+ART; daraus entstehen hier drei Sorten Material:
 
-  * Volltonlack (Metall/Weiss/Antrazit/Rot) - EIN Master M_WbSebo_Paint mit
-    Farb-, Metall- und Rauheitsparameter, je Slot eine Instanz.
-  * Wortmarke "SEBBO" - maskiertes, zweiseitiges Master M_WbSebo_Decal mit der
-    transparenten PNG aus Tools/make_sebbo_dach_textures.py (Slot `SbLogo`).
+  * Volltonlack (Metall/Weiss/Antrazit/Rot/Marine/Kuebel/Erde) - EIN Master
+    M_WbSebo_Paint mit Farb-, Metall- und Rauheitsparameter, je Slot eine
+    Instanz.
+  * Blattwerk (ART `foliage`) - Master M_WbSebo_Blatt, GLEICHE Parameter,
+    aber ZWEISEITIG. Das Blatt der Pflanze ist ein einzelner Streifen aus
+    sieben Vierecken; ohne Two Sided waere die Pflanze von der einen Seite
+    aus leer (Unreal cullt einseitige Flaechen, im Blender-Render sieht man
+    das nie).
+  * Aufgemalte Grafik (Wortmarke, AG-Logo, Magazin-Cover) - maskiertes,
+    zweiseitiges Master M_WbSebo_Decal mit den transparenten PNG aus
+    Tools/make_sebbo_dach_textures.py (Slots `SbLogo`, `SbLogoAG`, `MgCover`).
 
 Zugeordnet wird ueber den SLOTNAMEN (aus dem FBX uebernommen), nicht ueber den
 Index - so ist die Zuordnung unabhaengig von der Slotreihenfolge des Importers.
 
 Anders als beim Nerobergbahn-Ensemble bleiben die Meshes MIT Kollision: auf
 dem Dach laeuft der Spieler herum, Mast und Schuessel sollen nicht passierbar
-sein. Auto-Kollision (Konvex) genuegt fuer diese einfachen Formen.
+sein. Auto-Kollision (Konvex) genuegt fuer diese einfachen Formen. Fuer die
+Pflanze ist die Konvexhuelle der Kuebel plus Blattwerk eine grobe, aber
+tragfaehige Annahme: sie steht am Dachrand, nicht im Laufweg.
 
 Aufruf (im vollen Editor, nicht -run=pythonscript - set_material braucht ihn):
   UnrealEditor.exe WiesbadenReal.uproject
@@ -49,6 +58,9 @@ PAINT_PBR = {
     "dark":  (0.20, 0.55),
     "timber": (0.0, 0.80),
     "gravel": (0.0, 0.90),
+    # Blattwerk: nichts metallisch, sehr rau - und NICHT cullen, siehe
+    # build_blatt_master().
+    "foliage": (0.0, 0.72),
 }
 
 
@@ -78,6 +90,45 @@ def build_paint_master():
         mat, unreal.MaterialExpressionScalarParameter, -400, 450)
     rough.set_editor_property("parameter_name", "Roughness")
     rough.set_editor_property("default_value", 0.35)
+    MEL.connect_material_property(rough, "", MP.MP_ROUGHNESS)
+
+    MEL.recompile_material(mat)
+    EAL.save_loaded_asset(mat)
+    return mat
+
+
+def build_blatt_master():
+    """Zweiseitiges Master fuer das Blattwerk der Topfpflanze.
+
+    Sonst identisch zu build_paint_master(), nur `two_sided`: die Blaetter
+    sind einzelne Streifen aus wenigen Vierecken, kein geschlossener Koerper.
+    Unreal cullt die Rueckseite, dann fehlt von der einen Seite die halbe
+    Pflanze - und im Blender-Kontrollrender ist das nicht zu sehen, weil
+    EEVEE nicht cullt.
+    """
+    path = "%s/M_WbSebo_Blatt" % MAT_DIR
+    if EAL.does_asset_exist(path):
+        EAL.delete_asset(path)
+    mat = ATH.create_asset("M_WbSebo_Blatt", MAT_DIR, unreal.Material,
+                           unreal.MaterialFactoryNew())
+    mat.set_editor_property("two_sided", True)
+
+    color = MEL.create_material_expression(
+        mat, unreal.MaterialExpressionVectorParameter, -400, 0)
+    color.set_editor_property("parameter_name", "BaseColor")
+    color.set_editor_property("default_value", unreal.LinearColor(0.1, 0.2, 0.05, 1.0))
+    MEL.connect_material_property(color, "", MP.MP_BASE_COLOR)
+
+    metal = MEL.create_material_expression(
+        mat, unreal.MaterialExpressionScalarParameter, -400, 250)
+    metal.set_editor_property("parameter_name", "Metallic")
+    metal.set_editor_property("default_value", 0.0)
+    MEL.connect_material_property(metal, "", MP.MP_METALLIC)
+
+    rough = MEL.create_material_expression(
+        mat, unreal.MaterialExpressionScalarParameter, -400, 450)
+    rough.set_editor_property("parameter_name", "Roughness")
+    rough.set_editor_property("default_value", 0.72)
     MEL.connect_material_property(rough, "", MP.MP_ROUGHNESS)
 
     MEL.recompile_material(mat)
@@ -183,18 +234,21 @@ def make_decal_instance(master, spec, texturen):
     return inst
 
 
-def make_paint_instance(master, slot):
+def make_paint_instance(master, blatt_master, slot):
+    """Materialinstanz eines Volltons - je nach ART mit anderem Master."""
+    art = slot["kind"]
     name = "MI_Sb_%s" % slot["name"]
     path = "%s/%s" % (MAT_DIR, name)
     if EAL.does_asset_exist(path):
         EAL.delete_asset(path)
     inst = ATH.create_asset(name, MAT_DIR, unreal.MaterialInstanceConstant,
                             unreal.MaterialInstanceConstantFactoryNew())
-    MEL.set_material_instance_parent(inst, master)
+    MEL.set_material_instance_parent(
+        inst, blatt_master if art == "foliage" else master)
     rgb = slot["base_color"]
     MEL.set_material_instance_vector_parameter_value(
         inst, "BaseColor", unreal.LinearColor(rgb[0], rgb[1], rgb[2], 1.0))
-    metal, rough = PAINT_PBR[slot["kind"]]
+    metal, rough = PAINT_PBR[art]
     MEL.set_material_instance_scalar_parameter_value(inst, "Metallic", metal)
     MEL.set_material_instance_scalar_parameter_value(inst, "Roughness", rough)
     EAL.save_loaded_asset(inst)
@@ -211,9 +265,10 @@ def main():
         assets = json.load(f)["assets"]
 
     paint_master = build_paint_master()
+    blatt_master = build_blatt_master()
     decal_master = build_decal_master()
     texturen = import_textures(assets)
-    log("Master-Materialien angelegt.")
+    log("Master-Materialien angelegt (Lack, Blatt, Grafik).")
 
     tasks = []
     for asset in assets:
@@ -270,9 +325,12 @@ def main():
                 inst = decal_cache[slot_name]
             else:
                 if slot_name not in paint_cache:
-                    paint_cache[slot_name] = make_paint_instance(paint_master, spec)
+                    paint_cache[slot_name] = make_paint_instance(
+                        paint_master, blatt_master, spec)
                 inst = paint_cache[slot_name]
             mesh.set_material(i, inst)
+            log("  %-22s Slot %d %-12s -> %s" % (asset["name"], i,
+                                                 slot_name, inst.get_name()))
 
         EAL.save_loaded_asset(mesh)
 
