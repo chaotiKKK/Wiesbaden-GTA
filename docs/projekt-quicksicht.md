@@ -21,7 +21,8 @@ Engine (Launcher-5.8.2, Baeume nie mischen), Zeilenenden LF per `.gitattributes`
 Release-Gates laufen als Git-Hook (`Tools/git-hooks/`, je Klon per `python Tools/hooks_einrichten.py`):
 pre-commit Besitz (Gate B), Engine-Pfade (Gate 0) und das Kompilat (Gate 1, nur wenn C++ vorgemerkt
 ist); pre-push zusaetzlich Python-Suiten, Unit-Tests und Rauchtest (Gate 2+3), Plasmacutter-Bildfolge
-(Gate 4) und Ankerzustand der Karte (Gate 5), alles in einem sauberen Worktree. Die Zuordnung prueft
+(Gate 4), Ankerzustand der Karte (Gate 5) und der Abgleich von Release-Bildern und -Texten gegen
+`docs/meilensteine.md` (Gate 6), alles in einem sauberen Worktree. Die Zuordnung prueft
 `Tools/test_projekt_quicksicht.py` gegen `Tools/vor_dem_commit.py`.
 Belegen statt behaupten - "implementiert" ist nicht "verbunden", "gebacken" nicht "live"; Funde nach
 AGENTS.md.

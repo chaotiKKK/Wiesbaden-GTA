@@ -811,6 +811,24 @@ def gates_fahren(stufe, dateien, thread=None):
         lauf.ueberspringe("Gate 5  Ankerzustand (WP)",
                           "Stufe schnell - sie laeuft vor dem Push")
 
+    # Gate 6: die Releases gegen die Meilenstein-Seite. Seitenbild, Asset-
+    # Name und Release-Text werden an drei Orten gepflegt (Seite, zwei
+    # Ausricht-Werkzeuge, GitHub) - das driftet, und niemand sieht es: die
+    # Seite ist schoen, nur der Release zeigt ein Bild, das dort nicht steht.
+    # Das Gate fragt GitHub und antwortet mit Exit 3, wenn es nicht antworten
+    # kann: "nicht gemessen" ist ausdruecklich nicht "alles in Ordnung"
+    # (dieselbe Lehre wie Gate 5, dort mit Exit 2..7).
+    #
+    # Es braucht das Netz, darum liegt es in der vollen Stufe und damit vor
+    # dem Push - vor jedem Commit waere eine GitHub-Runde pro Commit nur
+    # Aerger. Startet keinen Editor, also kein weiterer Engine-Lock noetig.
+    if stufe == "voll":
+        lauf.fahre("Gate 6  Release-Abgleich",
+                   [sys.executable, os.path.join(TOOLS, "release_abgleich.py")])
+    else:
+        lauf.ueberspringe("Gate 6  Release-Abgleich",
+                          "Stufe schnell - er laeuft vor dem Push")
+
     return lauf.bericht()
 
 
