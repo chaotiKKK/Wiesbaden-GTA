@@ -19,7 +19,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import worktree_zeitstrahl as wz  # noqa: E402
 
 WURZEL = Path(__file__).resolve().parent.parent
-STAMM = WURZEL.parent
+# DER Planordner - nicht WURZEL.parent. GEMESSEN am 27.09.2026: im
+# Gate-Worktree war WURZEL.parent der Ordner `.gate-worktree`, in dem kein
+# `.planning` liegt, also uebersprangen vier Tests dieser Datei strukturell.
+# planordner() laesst git den HAUPTBAUM zeigen, aus dem der Worktree
+# verlinkt ist. None heisst: kein Planordner auffindbar - dann wird
+# zurueckgesprungen, aber nur auf einen Ordner, dessen .planning auch
+# wirklich geprueft wurde.
+STAMM = wz.planordner() or WURZEL.parent
 
 
 def hat_log(relativ):
@@ -170,6 +177,85 @@ class ReflogTest(unittest.TestCase):
         self.assertIsNotNone(m)
         self.assertEqual(m.group(4), "1790512411")
         self.assertEqual(m.group(6), "commit: Test")
+
+
+class PlanordnerTest(unittest.TestCase):
+    """Die Aufloesung des Planordners - der Grund, warum diese Tests im
+    Gate-Worktree ueberhaupt laufen."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+
+    def test_der_echte_planordner_wird_gefunden(self):
+        gefunden = wz.planordner()
+        if gefunden is None:
+            self.skipTest("Kein .planning in Reichweite - hier gibt es nichts zu pruefen.")
+        # Er MUSS der Ordner sein, in dem die Push-Logs liegen, sonst
+        # pruefen alle Log-Tests eine fremde Ablage.
+        self.assertTrue((gefunden / ".planning").is_dir())
+        self.assertEqual(gefunden, STAMM,
+                         "planordner() und der vom Test benutzte Ordner sind "
+                         "verschieden - die Log-Tests laufen woanders als gedacht.")
+
+    def test_ohne_planning_daneben_geht_es_zurueck_auf_den_uebernachsten(self):
+        # Nachgebauter Gate-Worktree: <Aufsicht>/.gate-worktree/WiesbadenReal
+        # ohne .planning. Der naechste Kandidat (hier der Hauptbaum) muss
+        # greifen.
+        aufsicht = self.tmp / "Aufsicht"
+        haupt = aufsicht / "WiesbadenReal"
+        gate = aufsicht / ".gate-worktree" / "WiesbadenReal"
+        for d in (haupt, gate):
+            d.mkdir(parents=True)
+        (aufsicht / ".planning").mkdir()
+        # Ein Worktree ohne eigenes .git: git schlaegt fehl, also greift der
+        # rueckwaerts laufende Kandidat - genau der Fall, den der Hauptcode
+        # uebersehen hat.
+        gefunden = wz.planordner(gate)
+        self.assertEqual(gefunden, aufsicht)
+
+    def test_lieblose_falsche_kandidaten_werden_uebersprungen(self):
+        # Der ERSTE Kandidat muss .planning wirklich enthalten, sonst
+        # gewinnt ein Ordner, in dem die Dateien fehlen.
+        aufsicht = self.tmp / "A2"
+        gate = aufsicht / ".gate-worktree" / "WiesbadenReal"
+        (aufsicht / "WiesbadenReal").mkdir(parents=True)
+        gate.mkdir(parents=True)
+        (aufsicht / ".planning").mkdir()
+        gefunden = wz.planordner(gate)
+        self.assertNotEqual(gefunden, gate,
+                            "Der Gate-Ordner wurde gewaehlt, obwohl dort kein "
+                            ".planning liegt.")
+        self.assertEqual(gefunden, aufsicht)
+
+    def test_ganz_ohne_planning_ist_es_none_statt_ein_falscher_ordner(self):
+        # Nichts zu finden heisst None. Ein zurueckfallender WURZEL.parent
+        # waere hier stillschweigend falsch: die Log-Tests prueften dann einen
+        # Ordner, den es nicht gibt, und meldeten es als gemessen.
+        allein = self.tmp / "GanzAllein" / "WiesbadenReal"
+        allein.mkdir(parents=True)
+        self.assertIsNone(wz.planordner(allein))
+
+    def test_git_ordner_liefert_einen_weg_der__existiert(self):
+        gd = wz.git_ordner(WURZEL)
+        if gd is None:
+            self.skipTest("git antwortet nicht - die Aufloesung kann nicht geprueft werden.")
+        self.assertTrue(gd.is_dir(), "git nannte %s, das ist aber kein Ordner" % gd)
+
+    def test_ein_falscher_git_ordner_wird_erkannt(self):
+        # Sabotage-Gegenprobe: planordner() darf nicht blind jedem/git
+        # glauben. Ein gemeinsamer .git ohne .planning-Kandidaten darf die
+        # Aufloesung nicht zum Erfolg verhelfen.
+        tor = self.tmp / "Tor"
+        projekt = tor / ".gate-worktree" / "WiesbadenReal"
+        projekt.mkdir(parents=True)
+        (tor / "falsch.git").mkdir()
+        # Auch ohne echten .git-Inhalt: der Pfad wird nur als Kandidat
+        # benutzt, entscheidend ist der Inhalt von .planning.
+        gefunden = wz.planordner(projekt)
+        self.assertIsNone(gefunden,
+                          "planordner() erfand einen Planordner, wo keiner ist.")
 
 
 class BerichtTest(unittest.TestCase):

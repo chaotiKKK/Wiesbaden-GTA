@@ -108,6 +108,83 @@ def lies_text(pfad, grenzen=400000):
         return []
 
 
+# ------------------------------------------------- Wo liegt die Planung?
+
+def git_ordner(wurzel):
+    """Der gemeinsame .git-Ordner - oder None, wenn git nicht antwortet."""
+    try:
+        fertig = subprocess.run(["git", "rev-parse", "--path-format=absolute",
+                                 "--git-common-dir"],
+                                cwd=str(wurzel), capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if fertig.returncode != 0:
+        return None
+    zeile = (fertig.stdout or "").strip()
+    return Path(zeile) if zeile else None
+
+
+def planordner(wurzel=None):
+    """Der Ordner, in dem `.planning` liegt - AUCH aus einem Worktree heraus.
+
+    WARUM NICHT WURZEL.parent: GEMESSEN am 27.09.2026. Der Selbsttest lief
+    im Gate-Worktree `C:\\freebuff\\WiesbadenReal_Sicherung\\.gate-worktree\\
+    WiesbadenReal`. `WURZEL.parent` ist dort `.gate-worktree` - und dort
+    gibt es kein `.planning`. Vier Tests des Selbsttests uebersprangen
+    darum strukturell, ohne dass jemand sie abgeschaltet haette: der Code
+    fand die Logs nicht, also meldete er "nichts zu pruefen".
+
+    Der Weg zur Wirklichkeit ist der gemeinsame .git-Ordner. `git
+    rev-parse --git-common-dir` liefert aus JEDEM Worktree den .git des
+    Hauptbaums (gemessen oben: `C:/freebuff/WiesbadenReal_Sicherung/
+    WiesbadenReal/.git`), und dessen Elternteil ist genau der Ordner mit
+    `.planning`.
+
+    Der Weg zur Wirklichkeit ist der gemeinsame .git-Ordner. `git
+    rev-parse --git-common-dir` liefert aus JEDEM Worktree den .git des
+    Hauptbaums (gemessen: `C:/freebuff/WiesbadenReal_Sicherung/
+    WiesbadenReal/.git`), und dessen Elternteil ist genau der Ordner mit
+    `.planning`. Findet git nichts - kein Repo, git nicht da -, wird
+    hoechstens eine Strecke hochgegangen; das deckt den Fall ab, dass die
+    Kette gar nicht ueber .git laeuft.
+
+    Die Kandidaten werden der Reihe nach GEPRUEFT, nicht geraten: es gewinnt
+    der erste, in dem `.planning` wirklich liegt. Findet sich keiner, ist
+    das None - und der Aufrufer sagt das, statt einen falschen Ordner zu
+    nehmen. Ein ertauschter Planordner waere schlimmer als ein fehlender:
+    die Tests gaelten dann einer fremden Ablage als wuerden sie den echten
+    Lauf messen.
+    """
+    wurzel = Path(wurzel) if wurzel else WURZEL
+    kandidaten = []
+    gd = git_ordner(wurzel)
+    if gd is not None:
+        # <Aufsicht>/WiesbadenReal/.git -> <Aufsicht>/WiesbadenReal
+        # (Hauptbaum, .planning im Hauptprojekt) ...
+        kandidaten.append(gd.parent)
+        # ... und eine Ebene darueber (Aufsicht neben dem Projektordner).
+        kandidaten.append(gd.parent.parent)
+    # Hochlaufen als Rueckfall: im echten Gate-Worktree liegt .planning
+    # zwei Ebenen ueber WURZEL (WiesbadenReal -> .gate-worktree ->
+    # Sicherung). Genau deshalb genuegte WURZEL.parent nicht. GEMESSEN am
+    # 27.09.2026. Nur drei Ebenen - weiter waere geraten, und geraten wird
+    # hier nichts.
+    kandidat = wurzel.parent
+    for _ in range(3):
+        kandidaten.append(kandidat)
+        if kandidat.parent == kandidat:
+            break
+        kandidat = kandidat.parent
+    for kandidat in kandidaten:
+        try:
+            if (kandidat / ".planning").is_dir():
+                return kandidat
+        except OSError:
+            continue
+    return None
+
+
 # --------------------------------------------------------------- Quelle 1
 
 def reflog_ereignisse(git_dir, tag, grenze):
@@ -310,8 +387,12 @@ if __name__ == "__main__":
     ap.add_argument("--wurzel", help="Wurzelordner (Vorgabe: der Projektordner)")
     ap.add_argument("--json", action="store_true", help="als JSON ausgeben")
     args = ap.parse_args()
-    wurzel = Path(args.wurzel) if args.wurzel else WURZEL.parent
-    git_dir = wurzel / "WiesbadenReal" / ".git" if (wurzel / "WiesbadenReal" / ".git").exists() else WURZEL / ".git"
+    # Aus einem Worktree ist WURZEL.parent der Gate-Ordner, nicht der
+    # Planordner - siehe planordner(). Ohne Aufloesung bliebe die
+    # Push-Log-Quelle leer und der Bericht waere stillschweigend
+    # unvollstaendig.
+    wurzel = Path(args.wurzel) if args.wurzel else (planordner() or WURZEL.parent)
+    git_dir = git_ordner(WURZEL) or (WURZEL / ".git")
     bericht = baue_zeitleiste(git_dir, wurzel, args.stunden)
     if args.json:
         print(json.dumps(bericht, indent=2, ensure_ascii=False))
