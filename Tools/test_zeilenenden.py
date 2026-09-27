@@ -146,40 +146,101 @@ class BestandSauberTest(unittest.TestCase):
 class ChurnUnmoeglichTest(unittest.TestCase):
     """Die eigentliche Probe: der Fehler von damals, nachgestellt.
 
-    Gemessen wird der Diff VOR und NACH der Umschrift. Auf "leer" zu pruefen
-    waere falsch - die Datei darf ja gerade bearbeitet sein. Genau daran fiel
-    eine erste Fassung dieses Tests, waehrend AGENTS.md einen Anhang trug.
     Entscheidend ist nicht, dass kein Diff da ist, sondern dass die
     Zeilenenden ihn NICHT VERAENDERN.
+
+    GEMESSEN am 27.09.2026: die erste Fassung verglich `git diff --numstat`
+    VOR und NACH der Umschrift - gegen den ARBEITSBAUM. Ein fremder Thread,
+    der die Datei zwischen den beiden Messungen anfasst, aendert diese Zahl
+    auch ohne Zeilenendeneffekt. Nachgestellt: ['0','0'] -> ['2','0'], der
+    Test schlaegt an, obwohl an den Zeilenenden nichts kaputt ist. Genau
+    davon haengt er ab: bei sauberem Baum (Push-Worktree) gruen, bei
+    Bearbeitung rot.
+
+    GEMESSEN wird deshalb am INDEX (`git hash-object -w --stdin`): der
+    gehaerte Inhalt ist ein reines Argument dieser Messung, der Arbeitsbaum
+    wird nicht gelesen und nicht geschrieben. Damit ist das Ergebnis
+    unabhaengig davon, was gerade im Baum liegt oder geschrieben wird.
     """
 
-    def _numstat(self, pfad):
-        roh = subprocess.run(
-            ["git", "diff", "--numstat", "--", pfad],
-            cwd=WURZEL, capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        return roh.split("\t")[:2] if roh else ["0", "0"]
+    def _index_hash(self, pfad, inhalt):
+        """Wie wuerde git diese Bytes fuer DIESEN Pfad im Index ablegen?
 
-    def _diff_um_umschrift(self, pfad, nach_crlf):
-        voll = WURZEL / pfad
-        urzustand = voll.read_bytes()
-        vorher = self._numstat(pfad)
-        try:
-            roh = urzustand.replace(b"\r\n", b"\n")
-            voll.write_bytes(roh.replace(b"\n", b"\r\n") if nach_crlf else roh)
-            return vorher, self._numstat(pfad)
-        finally:
-            voll.write_bytes(urzustand)
+        `--path` ist nicht Beiwerk, es ist der Kern: erst dadurch wendet git
+        die .gitattributes an. GEMESSEN am 27.09.2026: ohne --path liefern
+        LF und CRLF verschiedene Hashes - und der Test schlaegt dann an,
+        obwohl die Normalisierung genau das verhindert. Mit --path liefern
+        beide denselben, das ist die Behauptung dieses Tests.
+        """
+        fertig = subprocess.run(
+            ["git", "hash-object", "-w", "--path", pfad, "--stdin"],
+            cwd=WURZEL, input=inhalt, capture_output=True, check=True)
+        return fertig.stdout.strip()
 
-    def test_umschrift_auf_lf_aendert_den_diff_nicht(self):
-        vorher, nachher = self._diff_um_umschrift("AGENTS.md", nach_crlf=False)
+    def _umschrift_aendert_den_index_nicht(self, pfad, nach_crlf):
+        """Blob des Pfads im Index, einmal Original und einmal umgeschrieben."""
+        blob = subprocess.run(
+            ["git", "show", f":{pfad}"], cwd=WURZEL,
+            capture_output=True, check=True).stdout
+        vorher = self._index_hash(pfad, blob)
+        roh = blob.replace(b"\r\n", b"\n")
+        return vorher, self._index_hash(
+            pfad, roh.replace(b"\n", b"\r\n") if nach_crlf else roh)
+
+    def test_umschrift_auf_lf_aendert_den_index_nicht(self):
+        vorher, nachher = self._umschrift_aendert_den_index_nicht(
+            "AGENTS.md", nach_crlf=False)
         self.assertEqual(vorher, nachher,
-                         "Umschrift auf LF hat den Diff veraendert - das ist der Churn")
+                         "Umschrift auf LF aendert den Index - das ist der Churn")
 
-    def test_umschrift_auf_crlf_aendert_den_diff_nicht(self):
-        vorher, nachher = self._diff_um_umschrift("AGENTS.md", nach_crlf=True)
+    def test_umschrift_auf_crlf_aendert_den_index_nicht(self):
+        vorher, nachher = self._umschrift_aendert_den_index_nicht(
+            "AGENTS.md", nach_crlf=True)
         self.assertEqual(vorher, nachher,
-                         "Umschrift auf CRLF hat den Diff veraendert - das ist der Churn")
+                         "Umschrift auf CRLF aendert den Index - das ist der Churn")
+
+    def test_der_test_beruehrt_den_arbeitsbaum_nicht(self):
+        """Die eigentliche Fehlerquelle, als Test festgehalten.
+
+        Ein Test, der eine Datei des Projekts anfasst, um etwas ueber sie zu
+        erfahren, meldet bei einem fremden Thread etwas Falsches - und
+        zerstoert nebenbei dessen Arbeit. Gemessen wird darum am Index.
+        """
+        pfad = "AGENTS.md"
+        vorher = subprocess.run(
+            ["git", "hash-object", "--", pfad], cwd=WURZEL,
+            capture_output=True, check=True).stdout.strip()
+        with open(WURZEL / pfad, "rb") as f:
+            vorher_bytes = f.read()
+        self._umschrift_aendert_den_index_nicht(pfad, nach_crlf=True)
+        with open(WURZEL / pfad, "rb") as f:
+            self.assertEqual(f.read(), vorher_bytes,
+                             "der Test hat die Datei auf der Platte veraendert")
+        nachher = subprocess.run(
+            ["git", "hash-object", "--", pfad], cwd=WURZEL,
+            capture_output=True, check=True).stdout.strip()
+        self.assertEqual(nachher, vorher, "der Test hat die Datei veraendert")
+
+    def test_ohne_path_haette_der_test_falsch_geschlagen(self):
+        """Der Weg, auf dem die erste Fassung des Fixes danebenlag.
+
+        `hash-object` OHNE --path wendet .gitattributes nicht an und haelt
+        CRLF fest. Der Test waere dann rot, obwohl genau die Normalisierung
+        greift, die er beweisen soll. Diese Probe haelt den Unterschied fest,
+        damit `--path` nicht versehentlich wieder verschwindet.
+        """
+        pfad = "AGENTS.md"
+        blob = subprocess.run(
+            ["git", "show", f":{pfad}"], cwd=WURZEL,
+            capture_output=True, check=True).stdout
+        crlf = blob.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        roh = subprocess.run(["git", "hash-object", "--stdin"],
+                             input=crlf, capture_output=True, check=True)
+        with_attribut = subprocess.run(
+            ["git", "hash-object", "--path", pfad, "--stdin"],
+            input=crlf, capture_output=True, check=True)
+        self.assertNotEqual(roh.stdout, with_attribut.stdout,
+                            "ohne --path waere die Messung nicht aussagekraeftig")
 
 
 if __name__ == "__main__":

@@ -4771,3 +4771,29 @@ Gate-Lauf rot.
   Push-Hook setzt `git worktree list` und verlinkt die Stadt in einen Pfad, der
   neben dem HAUPT-Projekt liegen muss; das ist aus einem Neben-Worktree jetzt
   zwar richtig, aber der Push-Hook erwartet den Hauptordner.
+
+## Ein Test darf die Datei, ueber die er etwas wissen will, nicht anfassen (27.09.2026)
+
+`test_zeilenenden.ChurnUnmoeglichTest` verglich `git diff --numstat` VOR und
+NACH einer Zeilenenden-Umschrift - gegen den **Arbeitsbaum**. GEMESSEN: schreibt
+ein fremder Thread die Datei zwischen den beiden Messungen, springt die Zahl von
+`['0','0']` auf `['2','0']` und der Test ist rot, **obwohl an den Zeilenenden
+nichts kaputt ist**. Genau wie bei den drei Gate-B-Tests am selben Tag: bei
+sauberem Baum gruen, bei Bearbeitung rot, und er sagt etwas Falsches aus.
+
+* **Messung am Index, nicht am Arbeitsbaum:** `git show :<pfad>` fuer den Blob
+  und `git hash-object --path <pfad> --stdin` fuer die Prognose. Das Ergebnis ist
+  ein reines Argument der Rechnung - was gerade im Baum liegt, geht nicht ein.
+* **`--path` ist nicht Beiwerk, es ist der Kern.** GEMESSEN: ohne `--path` wendet
+  git die `.gitattributes` nicht an, haelt CRLF fest und liefert fuer LF und CRLF
+  verschiedene Hashes. Der Test waere dann rot, obwohl genau die Normalisierung
+  greift, die er beweisen soll. Ein Test haelt diesen Unterschied jetzt fest.
+* **Zwei Tests der Datei lesen weiter den Arbeitsbaum** (`BestandSauberTest`) -
+  sie pruefen, was beim ARBEITEN mit einer Datei passiert, und nicht, was git
+  daraus macht. Das ist gewollt und steht dort auch so.
+- **Merksatz fuer die Suche nach mehr davon:** ein Test, der eine Datei des
+  Projekts anfasst, um etwas ueber sie zu erfahren, meldet bei einem fremden
+  Thread etwas Falsches - und zerstoert nebenbei dessen Arbeit. Wegwerf-Repos
+  sind richtig (`test_ausliefern`, `test_uebersicht`, `test_gate_worktree` machen
+  das so); gegen das echte Repo darf nur gelesen werden, was git aus dem Index
+  liefert.
