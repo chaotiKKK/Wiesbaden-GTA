@@ -40,9 +40,15 @@ versioniert). Sie werden aus dem Hauptordner VERLINKT, nicht kopiert:
 Einzelne ignorierte oder unversionierte DATEIEN sonst (etwa ein fremdes
 SK_Sylvia.uasset oder __StadtNeubau-Kratzkarten) kommen NICHT mit - das waere
 wieder fremde Arbeit im Gate.
+
+OHNE STADT KEIN GRUEN (28.09.2026): fehlt im Gate-Worktree die Standardkarte
+des Commits oder ihre World-Partition-Aktoren, ist das volle Gate rot, bevor
+ein Gate startet (stadt_maengel). Vorher meldete es gruen - auf einer leeren
+Karte.
 """
 import fnmatch
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -386,9 +392,71 @@ def vorbereiten(projekt, sha):
     return wt
 
 
+def standardkarte(wt):
+    """Die Standardkarte des Commits (`Maps/WiesbadenCity_Alkis31`), aus SEINER
+    Config/DefaultEngine.ini - oder None, wenn dort keine steht."""
+    try:
+        text = (Path(wt) / "Config" / "DefaultEngine.ini").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    treffer = re.search(r"^\s*GameDefaultMap\s*=\s*/Game/([^.\s]+)", text, re.M)
+    return treffer.group(1) if treffer else None
+
+
+def _hat_asset(ordner):
+    for _wurzel, _ordner, dateien in os.walk(ordner):
+        if any(d.endswith(".uasset") for d in dateien):
+            return True
+    return False
+
+
+def stadt_maengel(wt):
+    """Was im Gate-Worktree an der Stadt fehlt; eine leere Liste heisst: sie ist da.
+
+    WARUM: vorbereiten() verlinkt, was der Hauptordner an Stadt HAT - und
+    meldet nur die Zahl. Hat er keine (frischer Klon ohne
+    fetch_city_content, geloeschte Karte, Verbindung ins Leere), laufen
+    Rauchtest, Plasmacutter und Ankerpruefung auf einer leeren Karte, und das
+    volle Gate meldet gruen, ohne die Stadt je gesehen zu haben. Gefragt wird
+    deshalb nach der Karte, die das Spiel wirklich laedt (GameDefaultMap des
+    Commits), und nach ihren World-Partition-Aktoren - nicht danach, ob
+    irgendetwas verlinkt wurde.
+    """
+    wt = Path(wt)
+    karte = standardkarte(wt)
+    if not karte:
+        return ["keine GameDefaultMap in Config/DefaultEngine.ini - welche Stadt "
+                "gebraucht wird, ist unbekannt"]
+    maengel = []
+    if not (wt / "Content" / (karte + ".umap")).is_file():
+        maengel.append("Standardkarte fehlt: Content/%s.umap" % karte)
+    aktoren = wt / "Content" / "__ExternalActors__" / karte
+    if not aktoren.is_dir():
+        # is_dir folgt Verbindungen: eine Verbindung ins Leere landet hier.
+        maengel.append("World-Partition-Aktoren fehlen oder zeigen ins Leere: "
+                       "Content/__ExternalActors__/%s" % karte)
+    elif not _hat_asset(aktoren):
+        maengel.append("World-Partition-Aktoren leer (kein .uasset): "
+                       "Content/__ExternalActors__/%s" % karte)
+    return maengel
+
+
 def pruefen(projekt, sha):
-    """Volle Stufe im Worktree fahren - mit SEINER Fassung der Gates (der des Commits)."""
+    """Volle Stufe im Worktree fahren - mit SEINER Fassung der Gates (der des Commits).
+
+    Ohne die Stadt der Standardkarte ist das Ergebnis ROT, bevor ein Gate
+    startet (stadt_maengel)."""
     wt = vorbereiten(projekt, sha)
+    maengel = stadt_maengel(wt)
+    if maengel:
+        print("\nGate ROT: im Gate-Worktree %s ist die Stadt nicht da:" % wt, flush=True)
+        for mangel in maengel:
+            print("  - %s" % mangel, flush=True)
+        print("Ohne sie liefen Rauchtest, Plasmacutter und Ankerpruefung auf einer leeren\n"
+              "Karte - gruen hiesse dort nichts. Die Stadt gehoert in den Hauptordner\n"
+              "(%s): Tools\\fetch_city_content.cmd oder der Bake der Standardkarte."
+              % haupt_ordner(projekt), flush=True)
+        return 1
     fertig = subprocess.run([sys.executable, str(wt / "Tools" / "vor_dem_commit.py"), "--stufe", "voll"],
                             cwd=str(wt), env=saubere_umgebung())
     return fertig.returncode

@@ -1026,5 +1026,136 @@ class VerwaistMeldungTest(unittest.TestCase):
         self.assertIn("planmaessig", text)
 
 
+class StadtPflichtTest(unittest.TestCase):
+    """Ohne Stadt kein Gruen: das volle Gate ist rot, wenn im Gate-Worktree die
+    Standardkarte des Commits oder ihre World-Partition-Aktoren fehlen.
+
+    Vorher verlinkte vorbereiten() nur, was da war, und meldete die Zahl - bei
+    0 liefen Rauchtest, Plasmacutter und Ankerpruefung auf einer leeren Karte
+    und das Gate meldete gruen.
+    """
+
+    KARTE = "Maps/WiesbadenCity_Alkis31"
+
+    def setUp(self):
+        self.wt = Path(tempfile.mkdtemp(prefix="wb_stadt_"))
+        self.addCleanup(shutil.rmtree, self.wt, ignore_errors=True)
+
+    def config(self, karte=None):
+        karte = karte or self.KARTE
+        name = karte.rsplit("/", 1)[-1]
+        (self.wt / "Config").mkdir(exist_ok=True)
+        (self.wt / "Config" / "DefaultEngine.ini").write_text(
+            "[/Script/EngineSettings.GameMapsSettings]\n"
+            "GameDefaultMap=/Game/%s.%s\nEditorStartupMap=/Game/%s.%s\n" % (karte, name, karte, name),
+            encoding="utf-8")
+
+    def karte(self, karte=None):
+        pfad = self.wt / "Content" / ((karte or self.KARTE) + ".umap")
+        pfad.parent.mkdir(parents=True, exist_ok=True)
+        pfad.write_bytes(b"umap")
+
+    def aktoren(self, karte=None, mit_asset=True, wurzel=None):
+        ordner = (wurzel or self.wt / "Content" / "__ExternalActors__") / (karte or self.KARTE) / "A" / "B7"
+        ordner.mkdir(parents=True, exist_ok=True)
+        if mit_asset:
+            (ordner / "XYZ123.uasset").write_bytes(b"aktor")
+        return ordner
+
+    def vollstaendig(self):
+        self.config()
+        self.karte()
+        self.aktoren()
+
+    def test_vollstaendige_stadt_hat_keine_maengel(self):
+        self.vollstaendig()
+        self.assertEqual(gw.stadt_maengel(self.wt), [])
+
+    def test_ohne_config_ist_die_stadt_unbekannt(self):
+        self.karte()
+        self.aktoren()
+        maengel = gw.stadt_maengel(self.wt)
+        self.assertEqual(len(maengel), 1)
+        self.assertIn("GameDefaultMap", maengel[0])
+
+    def test_fehlende_karte_wird_genannt(self):
+        self.config()
+        self.aktoren()
+        self.assertEqual(gw.stadt_maengel(self.wt),
+                         ["Standardkarte fehlt: Content/%s.umap" % self.KARTE])
+
+    def test_fehlende_aktoren_werden_genannt(self):
+        self.config()
+        self.karte()
+        maengel = gw.stadt_maengel(self.wt)
+        self.assertEqual(len(maengel), 1)
+        self.assertIn("__ExternalActors__/%s" % self.KARTE, maengel[0])
+
+    def test_leere_aktoren_sind_keine_stadt(self):
+        # Die Ordnerstruktur allein ist da, aber kein einziger Aktor.
+        self.config()
+        self.karte()
+        self.aktoren(mit_asset=False)
+        maengel = gw.stadt_maengel(self.wt)
+        self.assertEqual(len(maengel), 1)
+        self.assertIn("leer", maengel[0])
+
+    def test_gezaehlt_wird_die_karte_des_commits_nicht_irgendeine(self):
+        # Alkis31 liegt komplett da, der Commit laedt aber Alkis16: rot.
+        self.karte()
+        self.aktoren()
+        self.config("Maps/WiesbadenCity_Alkis16")
+        maengel = gw.stadt_maengel(self.wt)
+        self.assertEqual(len(maengel), 2)
+        self.assertTrue(all("WiesbadenCity_Alkis16" in m for m in maengel), maengel)
+
+    @unittest.skipUnless(os.name == "nt", "Verzeichnis-Verbindungen gibt es nur unter Windows")
+    def test_verbindung_ins_leere_ist_keine_stadt(self):
+        # So verlinkt vorbereiten(): __ExternalActors__ als Verbindung in den
+        # Hauptordner. Verschwindet dort die Stadt, zeigt sie ins Leere.
+        self.config()
+        self.karte()
+        quelle = Path(tempfile.mkdtemp(prefix="wb_stadt_quelle_"))
+        self.addCleanup(shutil.rmtree, quelle, ignore_errors=True)
+        self.aktoren(wurzel=quelle)
+        verbindung = self.wt / "Content" / "__ExternalActors__"
+        gw._verbindung(verbindung, quelle)
+        # Erst die Verbindung loesen, dann loeschen - nie DURCH sie hindurch.
+        self.addCleanup(lambda: os.path.isjunction(verbindung) and os.rmdir(verbindung))
+        self.assertEqual(gw.stadt_maengel(self.wt), [], "die verlinkte Stadt muss zaehlen")
+        shutil.rmtree(quelle)
+        maengel = gw.stadt_maengel(self.wt)
+        self.assertEqual(len(maengel), 1)
+        self.assertIn("ins Leere", maengel[0])
+
+    def lauf(self):
+        """pruefen() mit einem vorbereiteten Worktree - ohne git, ohne Editor."""
+        with mock.patch.object(gw, "vorbereiten", return_value=self.wt), \
+             mock.patch.object(gw, "haupt_ordner", return_value=Path("C:/Haupt/WiesbadenReal")), \
+             mock.patch.object(gw.subprocess, "run",
+                               return_value=subprocess.CompletedProcess([], 0)) as start, \
+             mock.patch("sys.stdout", io.StringIO()) as aus:
+            rot = gw.pruefen(Path("C:/Haupt/WiesbadenReal"), "a" * 40)
+        return rot, start, aus.getvalue()
+
+    def test_ohne_stadt_ist_das_gate_rot_und_startet_nichts(self):
+        self.config()
+        rot, start, text = self.lauf()
+        self.assertEqual(rot, 1)
+        start.assert_not_called()
+        self.assertIn("Gate ROT", text)
+        self.assertIn("Standardkarte fehlt", text)
+        self.assertIn("fetch_city_content", text)
+
+    def test_mit_stadt_faehrt_die_volle_stufe(self):
+        self.vollstaendig()
+        rot, start, _text = self.lauf()
+        self.assertEqual(rot, 0)
+        start.assert_called_once()
+        befehl = start.call_args[0][0]
+        self.assertEqual(befehl[-2:], ["--stufe", "voll"])
+        self.assertTrue(str(befehl[1]).endswith("vor_dem_commit.py"))
+
+
 if __name__ == "__main__":
     unittest.main()
