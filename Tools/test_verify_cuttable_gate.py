@@ -72,6 +72,33 @@ FAELLE = (
 )
 
 
+def bild_mit_cutter_glut(diag, oben):
+    """Legt schnitt_00_vorher.png selbst an: Streifen wie der Plasmacutter.
+
+    GEMESSEN am 27.09.2026 am echten Vergleichsbild des Push-Laufs: ein
+    senkrechter Streifen x 560..599, y 550..719, RGB 175/124/80 - die Glut
+    der Waffe, die der Ego-Kamera im Bild steht. Unten macht sie 0,74 % des
+    Bildes aus, oben 0,00 %.
+
+    `oben` legt denselben Streifen in die obere Bildhaelfte: dort ist er die
+    Schnittkante, und das Gate muss ROT werden. Sonst haette die Messung
+    durch den Beschnitt keine Zaehne mehr.
+    """
+    from PIL import Image
+    im = Image.new("RGB", (1280, 720))
+    px = im.load()
+    for y in range(720):
+        for x in range(1280):
+            # Leichte Struktur statt Einheitsschwarz: sonst ist die PNG so klein,
+            # dass das Gate sie als "zu klein fuer ein Bild" abweist.
+            px[x, y] = (10 + (x * y) % 23, 12, 14)
+    y0 = 100 if oben else 550
+    for y in range(y0, 720):
+        for x in range(560, 600):
+            px[x, y] = (175, 124, 80)
+    im.save(os.path.join(diag, "schnitt_00_vorher.png"))
+
+
 def beleg_vorhanden():
     return LOG.exists() and all((DIAG / b).exists() for b in BILDER)
 
@@ -107,11 +134,14 @@ class CuttableGateFaelltTest(unittest.TestCase):
         for bild in BILDER:
             shutil.copy(os.path.join(self.quelle, bild), os.path.join(diag, bild))
         if bildaktion:
-            quelle, ziel = bildaktion
-            if quelle == "__weg__":
-                os.remove(os.path.join(diag, ziel))
+            if callable(bildaktion):
+                bildaktion(diag)
             else:
-                shutil.copy(os.path.join(diag, quelle), os.path.join(diag, ziel))
+                quelle, ziel = bildaktion
+                if quelle == "__weg__":
+                    os.remove(os.path.join(diag, ziel))
+                else:
+                    shutil.copy(os.path.join(diag, quelle), os.path.join(diag, ziel))
         text = self.log
         if ersetzung:
             alt, neu = ersetzung
@@ -158,6 +188,15 @@ class CuttableGateFaelltTest(unittest.TestCase):
 
     def test_08_glut_im_vergleichsbild(self):
         self.pruefe_fall(None, ("schnitt_02_schraeg.png", "schnitt_00_vorher.png"), True)
+
+    def test_09_cutter_glut_unten_ist_kein_schnittfehler(self):
+        # DER Fall, der Gate 4 am 27.09.2026 rot gemacht hat: 0,68 % Glut im
+        # Vergleichsbild, davon 2115 Pixel die eigene Waffe unten mittig.
+        self.pruefe_fall(None, lambda d: bild_mit_cutter_glut(d, False), False)
+
+    def test_10_glut_oben_im_vergleichsbild_bleibt_rot(self):
+        # Gegenprobe: der Beschnitt darf die Pruefung nicht entwaffnen.
+        self.pruefe_fall(None, lambda d: bild_mit_cutter_glut(d, True), True)
 
 
 if __name__ == "__main__":

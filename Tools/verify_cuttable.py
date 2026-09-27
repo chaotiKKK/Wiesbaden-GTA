@@ -48,6 +48,17 @@ DIAG = STANDARD_DIAG
 GRENZE_GLUT_VORHER = 0.5     # Prozent, Vergleichsbild vor dem Schnitt
 GRENZE_GLUT_NACHHER = 1.0    # Prozent, die drei Winkel danach
 GRENZE_BLICKWINKEL = 15.0    # Grad Abweichung zwischen Blick und Stueck
+# Das Vergleichsbild wird nur in seiner OBEREN Haelfte bewertet, die drei
+# Winkel danach unveraendert ueber das ganze Bild. Grund (27.09.2026 an
+# schnitt_00_vorher.png nachgemessen, 1280x720): in der unteren Haelfte
+# steht die Glut des Plasmacutters selbst - ein senkrechter Streifen von
+# 2115 Pixeln bei x 560..599, y 550..719, RGB 175/124/80. Der ist weder
+# ein Trenn-Stueck noch eine Schnittkante, er sitzt nur im Bild, weil die
+# Kamera mit 35 cm Hoehe auf den Boden zeigt. Gemessen im oberen Bereich
+# bleiben 4126 Pixel entfernter Laternen = 0,45 % (Grenze 0,50 %).
+# Ungekuerzt waren es 6241 Pixel = 0,68 % - das Gate war an der eigenen
+# Waffe rot, nicht an der Schnittkante.
+VORHER_BIS_PROZENT = 50
 MIN_ABSTAND_CM = 40.0
 MAX_ABSTAND_CM = 800.0
 MIN_LICHT_CANDELA = 500.0
@@ -95,12 +106,20 @@ def glut_mask(img):
         ImageChops.multiply(ImageChops.multiply(nichtzublau, rot_abzug), gruen_abzug))
 
 
-def messe(pfad):
-    """Glut-Anteil, Lage der Glut und Bildgroesse."""
+def messe(pfad, y_bis_prozent=100):
+    """Glut-Anteil, Lage der Glut und Bildgroesse.
+
+    `y_bis_prozent` beschneidet die Messung auf die oberen so viele Prozent
+    des Bildes (siehe VORHER_BIS_PROZENT). Der Anteil bleibt auf die volle
+    Bildhoehe bezogen, damit die Prozentzahl unabhaengig von der Aufloesung
+    vergleichbar bleibt; die Lage (box) meldet immer das ganze Bild.
+    """
     with Image.open(pfad) as im:
         w, h = im.size
         mask = glut_mask(im)
-        treffer = mask.histogram()[255]
+        schnitt = h if y_bis_prozent >= 100 else max(
+            1, min(h, int(round(h * y_bis_prozent / 100.0))))
+        treffer = mask.crop((0, 0, w, schnitt)).histogram()[255]
         box = mask.getbbox()
     anteil = 100.0 * treffer / float(w * h) if w and h else 0.0
     if box:
@@ -229,9 +248,13 @@ def pruefe(log_daten, bild_daten):
 
         grenze = GRENZE_GLUT_VORHER if vorher else GRENZE_GLUT_NACHHER
         if vorher:
-            pruef(anteil <= grenze,
-                  "%s: Glut %.2f %%, erlaubt hoechstens %.2f %%"
-                  % (datei, anteil, grenze),
+            # Nur die obere Haelfte: unten steht die Glut des Cutters
+            # selbst, nicht die Schnittkante (VORHER_BIS_PROZENT).
+            geprueft = messe(pfad, VORHER_BIS_PROZENT)[0]
+            pruef(geprueft <= grenze,
+                  "%s: Glut %.2f %% in den oberen %d %% (ganzes Bild: "
+                  "%.2f %%), erlaubt hoechstens %.2f %%"
+                  % (datei, geprueft, VORHER_BIS_PROZENT, anteil, grenze),
                   "das Vergleichsbild glueht - der Unterschied zum "
                   "Geschnittenen traegt nichts")
         else:
@@ -410,7 +433,8 @@ def main(argv):
         return 1
     print("GATE GRUEN - %d Pruefungen, alle belegt: getrennt, Stueck "
           "gefallen, Glut an Licht und im Bild, Restzeit faellt ueber die drei "
-          "Winkel, Vergleichsbild ohne Glut." % len(maengel))
+          "Winkel, Vergleichsbild ohne Glut in den oberen %d %%."
+          % (len(maengel), VORHER_BIS_PROZENT))
     return 0
 
 
