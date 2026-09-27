@@ -47,6 +47,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 TOOLS = REPO / "Tools"
@@ -247,6 +249,37 @@ def arbeitsvergleich(bilder_arbeit, bilder_main):
 # Pruefung 2: die Releases auf GitHub
 # ---------------------------------------------------------------------------
 
+OEFFENTLICH_BASIS = rta.OEFFENTLICH
+BILDLINK = re.compile(r"!\[[^\]]*\]\((https?://[^)\s]+)\)")
+PRIVAT = rta.PRIVAT
+
+
+def anonym_erreichen(url, sekunden=20):
+    """(code, groesse) eines HTTP-HEAD OHNE Anmeldung.
+
+    Bewusst ohne Token: die ganze Frage ist, ob jemand ohne GitHub-Konto
+    das Bild sieht. Ein 404/403 ist ein BEFUND (der Link ist tot), ein
+    Netzfehler ist "nicht messbar" - und damit nicht "in Ordnung".
+    """
+    anfrage = urllib.request.Request(url, method="HEAD", headers={
+        "User-Agent": "WiesbadenReal-Gate6"})
+    try:
+        with urllib.request.urlopen(anfrage, timeout=sekunden) as antwort:
+            return antwort.status, antwort.headers.get("Content-Length")
+    except urllib.error.HTTPError as fehler:
+        return fehler.code, None
+    except Exception as fehler:            # Timeout, DNS, TLS, keine Route
+        raise NichtMessbar("oeffentlicher Abruf %s: %s"
+                           % (url, str(fehler)[:120]))
+
+
+# Austauschbar, damit der Selbsttest NICHT ins Netz geht. Ein Test, der
+# echte raw.githubusercontent-Abrufe macht, ist ein Test, der an einem
+# schlechten Tag an einer Leitung scheitert - und dann faellt er als
+# "Gate kaputt" durch, obwohl das Gate genau das_RIGHT_ tun sollte.
+HTTP_LAUF = anonym_erreichen
+
+
 def ohne_stand(text):
     """Release-Text ohne Ueberschrift und ohne den Stand-im-Code-Fuss.
 
@@ -323,6 +356,40 @@ def releases_pruefen(text):
             befunde.append(f"M{num:02d} {tag}: Release-Text nennt keinen "
                            f"Stand im Code")
 
+    befunde.extend(oeffentlichkeit_pruefen(vorhanden))
+    return befunde
+
+
+def oeffentlichkeit_pruefen(vorhanden):
+    """Bilder der Releases MUESSEN ohne GitHub-Konto abrufbar sein.
+
+    Zwei Pruefungen, weil sie zwei verschiedene Fehlerklassen fangen:
+    der Textvergleich sieht nur, was der Erzeuger heute schreibt - ein
+    Link ins private Repo kann bytegleich "korrekt" aussehen, ist fuer
+    Fremde aber tot. Der HTTP-HEAD sagt wiederum nur etwas ueber die
+    eine abgefragte Datei; ein Bild, das es im oeffentlichen Repo nicht
+    gibt, faellt erst beim Abruf auf. Deshalb Text und Netz getrennt,
+    und beides mit eigener Meldung.
+    """
+    befunde = []
+    for tag, daten in sorted(vorhanden.items()):
+        koerper = daten["body"]
+        if PRIVAT.search(koerper):
+            befunde.append(f"{tag}: Release-Text verlinkt ins private Repo "
+                           f"({PRIVAT.search(koerper).group(0)}) - ohne "
+                           f"GitHub-Konto ist das ein toter Link")
+        links = BILDLINK.findall(koerper)
+        fremd = [l for l in links if not l.startswith(OEFFENTLICH_BASIS + "/")]
+        for link in fremd:
+            befunde.append(f"{tag}: Bildlink zeigt nicht ins oeffentliche "
+                           f"Schaufenster: {link[:110]}")
+        # EINE echte Abrufprobe je Release: der Basispfad traegt fuer alle
+        # Bilder, ein 404 an genau dieser Datei heisst "die Basis ist tot".
+        if links:
+            code, groesse = HTTP_LAUF(links[0])
+            if code != 200:
+                befunde.append(f"{tag}: erstes Bild ist ohne Konto nicht "
+                               f"abrufbar (HTTP {code}): {links[0][:110]}")
     return befunde
 
 

@@ -89,11 +89,13 @@ class AbgleichTest(unittest.TestCase):
         for name in ("01-eins.jpg", "02-zwei.jpg"):
             (self.bilder / name).write_bytes(b"x")
 
-        self.alt = (ra.SEITE_ARBEIT, ra.BILDER_ARBEIT, ra.GH_LAUF,
+        self.alt = (ra.SEITE_ARBEIT, ra.BILDER_ARBEIT, ra.GH_LAUF, ra.HTTP_LAUF,
                     ra.rba.TAGS, ra.rta.SEITEN_TITEL, ra.seite_aus_ref,
                     ra.ref_hat_datei)
         ra.SEITE_ARBEIT = self.seite
         ra.BILDER_ARBEIT = self.bilder
+        # Kein echter Abruf im Test: HTTP 200 gilt als "oeffentlich".
+        ra.HTTP_LAUF = lambda url: (200, "123")
         ra.rba.TAGS = dict(TAGS)
         ra.rta.SEITEN_TITEL = dict(TITEL)
         # Die Seite aus dem Ref ist im Test dieselbe wie im Arbeitsbaum, nur
@@ -105,8 +107,9 @@ class AbgleichTest(unittest.TestCase):
         self.raus = ""
 
     def tearDown(self):
-        (ra.SEITE_ARBEIT, ra.BILDER_ARBEIT, ra.GH_LAUF, ra.rba.TAGS,
-         ra.rta.SEITEN_TITEL, ra.seite_aus_ref, ra.ref_hat_datei) = self.alt
+        (ra.SEITE_ARBEIT, ra.BILDER_ARBEIT, ra.GH_LAUF, ra.HTTP_LAUF,
+         ra.rba.TAGS, ra.rta.SEITEN_TITEL, ra.seite_aus_ref,
+         ra.ref_hat_datei) = self.alt
 
     # -- Bausteine ---------------------------------------------------------
 
@@ -308,7 +311,64 @@ class AbgleichTest(unittest.TestCase):
         self.assertEqual(code, 0, self.raus)
         self.assertIn("auftragsgemaess", self.raus)
 
-    # -- 6. Der Hinweis, kein Fehler ---------------------------------------
+    # -- 6. Oeffentlichkeit: Bilder ohne GitHub-Konto ----------------------
+
+    def test_ein_link_ins_private_repo_ist_rot(self):
+        """Der Fehler, den der Textvergleich allein NICHT sieht: der Text
+        kann bytegleich dem Erzeuger entsprechen und trotzdem ins private
+        Repo zeigen."""
+        rel = self.releases()
+        for tag in rel:
+            rel[tag]["body"] = (rel[tag]["body"] + "\n\nFoto: "
+                                "[das Turmbild](https://github.com/chaotiKKK/"
+                                "Wiesbaden-GTA/blob/main/x.jpg)\n")
+        code = self.laufen(releases=rel)
+        self.assertEqual(code, 1, self.raus)
+        self.assertIn("verlinkt ins private Repo", self.raus)
+
+    def test_ein_bildlink_außerhalb_des_schaufensters_ist_rot(self):
+        rel = self.releases()
+        for tag in rel:
+            rel[tag]["body"] = (rel[tag]["body"] + "\n\n![x](https://example.org/a.jpg)\n")
+        code = self.laufen(releases=rel)
+        self.assertEqual(code, 1, self.raus)
+        self.assertIn("zeigt nicht ins oeffentliche Schaufenster", self.raus)
+
+    def test_ein_totes_oeffentliches_bild_ist_rot(self):
+        """Der Text ist richtig, das Bild liegt aber nicht im Schaufenster -
+        das faellt nur, wenn man es wirklich abruft."""
+        ra.HTTP_LAUF = lambda url: (404, None)
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 1, self.raus)
+        self.assertIn("ohne Konto nicht abrufbar (HTTP 404)", self.raus)
+
+    def test_ein_netzfehler_beim_abruf_ist_nicht_messbar(self):
+        def kaputt(url):
+            raise ra.NichtMessbar("Timeout")
+
+        ra.HTTP_LAUF = kaputt
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 3, self.raus)
+        self.assertIn("nicht abfragbar", self.raus)
+
+    def test_der_abruf_erfolgt_ohne_anmeldung(self):
+        """Der Aufruf darf keine Anmeldedaten mitschicken - sonst wuerde
+        200 beweisen, dass der Link mit Konto geht, und nicht das, was
+        geprueft werden soll."""
+        gesehen = []
+
+        def merker(url):
+            gesehen.append(url)
+            return 200, "1"
+
+        ra.HTTP_LAUF = merker
+        self.laufen(releases=self.releases())
+        self.assertTrue(gesehen, "es wurde gar nichts abgerufen")
+        for url in gesehen:
+            self.assertTrue(url.startswith("https://raw.githubusercontent.com/"),
+                            "falsche Basis: %s" % url)
+
+    # -- 7. Der Hinweis, kein Fehler ---------------------------------------
 
     def test_ein_neues_bild_im_zweig_ist_ein_hinweis_kein_fehler(self):
         """Der Arbeitszweig ist juenger als die veroeffentlichte Seite - das
