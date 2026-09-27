@@ -17,6 +17,7 @@ WARUM ZWEI STUFEN - und das ist eine gemessene Entscheidung, keine Meinung:
     Python-Suiten              31 s   (gemessen 21.09.2026, 172 Tests)
     Gate 2  Unit-Tests          Minuten (startet den Unreal-Editor)
     Gate 3  Rauchtest           Minuten (mehrere Editor-Sitzungen)
+    Gate B  Besitz               0 s   (Registry, kein Prozess)
     Gate 4  Plasmacutter-Bild   1 min  (startet den Unreal-Editor)
     Gate 5  Ankerzustand (WP)   3 min  (startet den Unreal-Editor)
 
@@ -30,6 +31,50 @@ Tages mit --no-verify umgangen; dann prueft er gar nichts mehr. Darum:
 * **voll** laeuft vor dem PUSH. Dort ist die Wartezeit vertretbar, und nichts
   verlaesst den Rechner ungeprueft. Die Blockade wandert damit vom
   Paketieren an die Stelle, an der sie noch billig ist.
+
+GATE B (BESITZ) beantwortet eine Frage, die keine Qualitaetspruefung stellen
+kann: **Gehoeren die Dateien in diesem Commit diesem Thread?** Gemessen am
+27.09.2026 lagen vier Tage lang fremde Arbeit (SebboHq-Innenausbau, Proben-
+Skripte) uncommitted im geteilten Arbeitsbaum, der Baum stand auf dem
+Wegwerf-Testbranch eines anderen Threads, und `git status` sah aus wie die
+eigene Arbeit. `git commit` nimmt ALLES mit, was vorgemerkt ist - git kennt
+keine Threads.
+
+    python Tools/vor_dem_commit.py --besitz-ansprechen Tools/ Source/WiesbadenReal/World/SebboHq*.cpp
+    python Tools/vor_dem_commit.py --besitz-zeigen
+    python Tools/vor_dem_commit.py --besitz-freigeben
+
+Der Anspruch steht im gemeinsamen .git-Verzeichnis (`git rev-parse
+--git-common-dir`) - von keinem Commit erfasst, fuer alle Worktrees desselben
+Repos identisch. Enthaelt er Thread, Branch, PID und die Dateimuster; ein
+Muster mit abschliessendem `/` ist ein Praefix, sonst gilt fnmatch. Faellt
+eine vorgemerkte Datei in den Anspruch eines ANDEREN Threads - anderer
+Branch ODER anderer Threadname -, ist Gate B rot und nennt den Thread.
+
+Drei Entscheidungen, die nicht selbstlaeufig sind:
+
+* **Es blockiert nur ueberlappende ANSPRUECHE, nicht jeden anderen Thread.**
+  Wer nichts beansprucht hat, wird nie blockiert - sonst muesste sich der
+  allererste Thread eines Repos unsichtbar machen.
+* **GLEICHER Branch ist nicht gleicher Thread.** Der erste echte Lauf dieses
+  Gates (27.09.2026) meldete `gruen`, weil nur der Branch verglichen wurde -
+  und der fremde Thread sass auf demselben Wegwerf-Branch `wt-gatetest` wie
+  ich. Ein Wegwerf-Branch identifiziert niemanden; darum zaehlt der
+  Thread-Name genauso wie der Branch.  * **Ein toter Prozess gibt seinen Anspruch frei** (Hinweis, kein ROT). Eine
+  Registry, die einen abgestuerzten Thread ewig festhält, endet sonst in
+  `--no-verify` fuer alle - dann waere das Gate nicht streng, sondern tot.
+  (GEMESSEN beim Schreiben dieses Gates: die erste Fassung hat auch verwaiste
+  Ansprueche blockiert. Der Test dafür ist der Grund fuer die Zweiteilung in
+  Konflikte und Hinweise.)
+* **Die kaputte Registry ist ROT, nicht "frei".** Wer sie loescht, schaltet
+  genau das Gate ab, das ihn schuetzt. Das ist der stillschweigende Ausfall,
+  vor dem hier alles andere warnt.
+
+Gate B laeuft VOR dem Engine-Lock und vor Gate 0: es kostet Mikrosekunden,
+und einen Compilerlauf fuer einen Commit, der nicht stattfinden darf, gibt
+es nicht. Beim PUSH laeuft es NICHT - dort ist der Baum frisch gebaut und
+der Commit schon geschrieben; Besitz gehoert an den Commit, sonst koennte
+nach einem fremden Thread niemand mehr ausliefern.
 
 GATE 4 (PLASMACUTTER-BILDFOLGE) ist die juengste Stufe und liegt ebenfalls
 nur auf **voll**. Sie stellt ein Trenn-Stueck auf, schneidet es, fotografiert
@@ -72,6 +117,8 @@ Notausgang: `git commit --no-verify` oder `WB_KEINE_GATES=1`. Er ist
 absichtlich da - ein Wachposten ohne Tuer wird eingerissen, nicht benutzt.
 """
 import argparse
+import fnmatch
+import json
 import os
 import subprocess
 import sys
@@ -164,6 +211,299 @@ def braucht_compiler(dateien):
     return any(d.lower().endswith(CPP_ENDUNGEN) for d in dateien)
 
 
+# --------------------------------------------------------------------------
+# BESITZ: WER DARF WAS COMMITTEN
+#
+# GEMESSEN am 27.09.2026, und der Befund ist der Grund fuer dieses Gate: Im
+# geteilten Arbeitsbaum lagen vier Tage lang fremde Dateien (SebboHq-Innenausbau,
+# Innen-Probe-Skripte eines anderen Threads) uncommitted, der Baum stand auf
+# einem Wegwerf-Testbranch `wt-gatetest` eines anderen Threads, und `git status`
+# sah aus wie die eigene Arbeit. Ein Thread, der committet, nimmt ALLES mit,
+# was vorgemerkt ist - git kennt keineThreads, und ein Hook, der es nicht
+# auch kennt, kann es nicht verhindern.
+#
+# Die Registry liegt im GEMEINSAMEN .git-Verzeichnis (`git rev-parse
+# --git-common-dir`), nicht im Arbeitsbaum: dort ist sie von keinem Commit
+# erfasst und fuer alle Worktrees desselben Repos dieselbe.
+#
+# Ein Anspruch nennt Thread, Branch und Dateimuster. Ein Muster mit
+# abschliessendem Schraegstrich bedeutet Praefix (`Tools/`), sonst gilt es als
+# fnmatch-Muster. Fremd ist ein Anspruch, wenn Branch ODER Thread nicht
+# meiner ist - der 27.09.-Fall sass auf demselben Wegwerf-Branch wie der
+# andere Thread, eine reine Branch-Pruefung waere dort gruen gewesen.
+# --------------------------------------------------------------------------
+
+BESITZ_DATEI = "wb_besitz.json"
+BESITZ_VERSION = 1
+
+
+def besitz_pfad():
+    """Wo die Registry liegt - oder None, wenn es kein Git-Repo ist."""
+    # Testbare Uebersteuerung; im Betrieb zeigt der Pfad auf das echte
+    # gemeinsame .git-Verzeichnis.
+    aus_umgebung = os.environ.get("WB_BESITZ_DATEI")
+    if aus_umgebung:
+        return aus_umgebung
+    roh = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                         cwd=WURZEL, capture_output=True, text=True,
+                         env=saubere_umgebung())
+    if roh.returncode != 0 or not roh.stdout.strip():
+        return None
+    ordner = roh.stdout.strip()
+    if not os.path.isabs(ordner):
+        ordner = os.path.join(WURZEL, ordner)
+    return os.path.join(ordner, BESITZ_DATEI)
+
+
+def besitz_laden():
+    """(Registry, Fehlertext). Eine kaputte Registry wird NICHT still ignoriert.
+
+    Wer die Datei loescht, schaltet genau das Gate ab, das ihn schuetzt - das
+    ist der stillschweigende Ausfall, vor dem hier alles andere warnt. Also:
+    unlesbar heisst ROT mit Klartext, nicht "keine Ansprueche".
+    """
+    pfad = besitz_pfad()
+    if not pfad:
+        return None, None
+    if not os.path.exists(pfad):
+        return {"version": BESITZ_VERSION, "claims": {}}, None
+    try:
+        with open(pfad, encoding="utf-8") as f:
+            daten = json.load(f)
+    except (ValueError, OSError) as fehler:
+        return None, "%s ist unlesbar (%s)" % (pfad, fehler)
+    if not isinstance(daten, dict) or not isinstance(daten.get("claims"), dict):
+        return None, "%s hat kein Format {'claims': {...}}" % pfad
+    return daten, None
+
+
+def besitz_sichern(registry):
+    """Atomar schreiben - zwei Threads, die gleichzeitig beanspruchen,
+    duerfen sich nicht gegenseitig die halbe Datei wegschreiben."""
+    pfad = besitz_pfad()
+    if not pfad:
+        raise RuntimeError("kein Git-Repo - keine Besitz-Registry")
+    os.makedirs(os.path.dirname(pfad), exist_ok=True)
+    tmp = "%s.tmp%d" % (pfad, os.getpid())
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(registry, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp, pfad)
+    return pfad
+
+
+def prozess_lebt(pid):
+    """Laeuft die PID noch? Ein toter Thread gibt seinen Anspruch frei.
+
+    Sonst blockiert die Registry irgendwann jeden Commit, niemand traut sich
+    an die Ausnahme, und alle benutzen --no-verify: das Gate ist dann nicht
+    mehr streng, sondern tot.
+    """
+    if not pid or int(pid) <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not k.GetExitCodeProcess(h, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(int(pid), 0)
+    except OSError:
+        return False
+    return True
+
+
+def besitz_treffer(muster, pfad):
+    """Passt der Pfad zu einem Anspruch? `Tools/` ist Praefix, sonst fnmatch."""
+    p = pfad.replace("\\", "/")
+    for m in muster or ():
+        m = str(m).replace("\\", "/")
+        if m.endswith("/"):
+            if p.startswith(m):
+                return True
+        elif fnmatch.fnmatchcase(p, m):
+            return True
+    return False
+
+
+def besitz_konflikte(dateien, registry, eigener_branch, eigener_thread=None):
+    """(blockierende Konflikte, Hinweise).
+
+    Konflikt = Datei aus diesem Commit liegt im Muster eines Anspruchs, der
+    einem ANDEREN Thread gehoert. Ein Anspruch zaehlt als fremd, wenn
+
+    * sein Branch nicht der eigene ist, ODER
+    * sein Thread-Name nicht der eigene ist.
+
+    GEMESSEN am 27.09.2026, beim ersten echten Lauf dieses Gates: die Fassung
+    mit NUR der Branch-Pruefung meldete `gruen` in genau der Lage, fuer die
+    sie gebaut wurde. Der fremde Thread und ich sassen beide auf dem
+    Wegwerf-Branch `wt-gatetest` - dort ist der Branch per Definition
+    "eigen", und das Gate haette den Commit durchgelassen. Der Branch allein
+    identifiziert einen Thread nicht; auf Wegwerf-Branches identifiziert er
+    gar nichts.
+
+    Ein Anspruch, dessen Prozess nicht mehr laeuft, wird NICHT blockierend
+    gemeldet - er steht in den Hinweisen. Ein abgestuerzter Thread, der einen
+    Branch fuer immer festhält, treibt jeden in `--no-verify`, und dann
+    prueft gar nichts mehr.
+    """
+    konflikte, hinweise = [], []
+    for branch, anspruch in sorted((registry.get("claims") or {}).items()):
+        anspruch_thread = anspruch.get("thread") or "?"
+        if branch == eigener_branch and (eigener_thread is None
+                                        or anspruch_thread == eigener_thread):
+            continue
+        lebt = prozess_lebt(anspruch.get("pid"))
+        treffer = [d for d in (dateien or ())
+                   if besitz_treffer(anspruch.get("muster"), d)]
+        if not lebt:
+            hinweise.append(
+                "Anspruch von '%s' auf '%s' ist verwaist (Prozess %s laeuft "
+                "nicht mehr)%s" % (
+                    anspruch_thread, branch, anspruch.get("pid"),
+                    " - %d Datei(en) waeren geschuetzt gewesen" % len(treffer)
+                    if treffer else ""))
+            continue
+        for datei in treffer:
+            konflikte.append({
+                "datei": datei,
+                "branch": branch,
+                "thread": anspruch_thread,
+                "muster": anspruch.get("muster") or [],
+                "gleicher_branch": branch == eigener_branch,
+            })
+    return konflikte, hinweise
+
+
+def besitz_gate(dateien, lauf, eigener_branch=None, thread=None):
+    """Das Besitz-Gate. True = ROT.
+
+    Es laeuft VOR dem Engine-Lock und vor Gate 0: es kostet Mikrosekunden,
+    und es waere voelliger Unsinn, fuer einen Commit, der nicht stattfinden
+    darf, einen Compiler anzustossen.
+    """
+    if eigener_branch is None:
+        eigener_branch = aktueller_branch()
+    thread = thread or threadname(eigener_branch)
+
+    registry, fehler = besitz_laden()
+    if fehler:
+        lauf.fahre_gate("Gate B  Besitz", False, 0.0, fehler)
+        return True
+    if registry is None:
+        lauf.ueberspringe("Gate B  Besitz", "kein Git-Repo")
+        return False
+
+    konflikte, hinweise = besitz_konflikte(dateien, registry, eigener_branch,
+                                          thread)
+
+    if not konflikte:
+        lauf.fahre_gate("Gate B  Besitz", True, 0.0,
+                        "\n".join(hinweise) or None)
+        return False
+
+    zeilen = list(hinweise)
+    zeilen.append("%d Datei(en) aus diesem Commit gehoeren einem anderen "
+                  "Thread:" % len(konflikte))
+    for k in sorted(konflikte, key=lambda x: x["datei"])[:20]:
+        zeilen.append("  %s  ->  %s (Branch %s, Muster %s)%s" % (
+            k["datei"], k["thread"], k["branch"], ", ".join(k["muster"]),
+            " - GLEICHER Branch, anderer Thread" if k["gleicher_branch"] else ""))
+    if len(konflikte) > 20:
+        zeilen.append("  ... und %d weitere" % (len(konflikte) - 20))
+    lauf.fahre_gate("Gate B  Besitz", False, 0.0, "\n".join(zeilen))
+    return True
+
+
+def aktueller_branch():
+    roh = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                         cwd=WURZEL, capture_output=True, text=True,
+                         env=saubere_umgebung())
+    name = roh.stdout.strip() if roh.returncode == 0 else ""
+    return name or "(kein Branch)"
+
+
+def threadname(branch=None):
+    """Wer bin ich? WB_THREAD, sonst git config, sonst der Branch."""
+    aus_umgebung = os.environ.get("WB_THREAD")
+    if aus_umgebung:
+        return aus_umgebung
+    roh = subprocess.run(["git", "config", "--get", "wb.thread"],
+                         cwd=WURZEL, capture_output=True, text=True,
+                         env=saubere_umgebung())
+    if roh.returncode == 0 and roh.stdout.strip():
+        return roh.stdout.strip()
+    return branch or aktueller_branch()
+
+
+def besitz_ansprechen(muster, thread=None, branch=None):
+    registry, fehler = besitz_laden()
+    if fehler:
+        raise RuntimeError(fehler)
+    branch = branch or aktueller_branch()
+    anspruch = (registry.get("claims") or {}).get(branch, {})
+    alt = set(anspruch.get("muster") or ())
+    registry.setdefault("claims", {})[branch] = {
+        "thread": thread or threadname(branch),
+        "pid": os.getpid(),
+        "zeit": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "muster": sorted(alt | set(muster or ())),
+    }
+    pfad = besitz_sichern(registry)
+    print("Branch '%s' (Thread '%s') beansprucht %d Muster in %s"
+          % (branch, registry["claims"][branch]["thread"],
+             len(registry["claims"][branch]["muster"]), pfad))
+    return 0
+
+
+def besitz_freigeben(branch=None):
+    registry, fehler = besitz_laden()
+    if fehler:
+        print(fehler)
+        return 3
+    branch = branch or aktueller_branch()
+    if branch not in (registry.get("claims") or {}):
+        print("Branch '%s' hat keinen Anspruch - nichts zu tun." % branch)
+        return 0
+    del registry["claims"][branch]
+    pfad = besitz_sichern(registry)
+    print("Anspruch fuer '%s' freigegeben (%s)." % (branch, pfad))
+    return 0
+
+
+def besitz_zeigen():
+    registry, fehler = besitz_laden()
+    if fehler:
+        print(fehler)
+        return 3
+    claims = registry.get("claims") or {}
+    if not claims:
+        print("Keine Ansprueche. Beanspruchen mit:\n"
+              "  python Tools/vor_dem_commit.py --besitz-ansprechen "
+              "Source/WiesbadenReal/World/SebboHq*.cpp Tools/")
+        return 0
+    for branch, anspruch in sorted(claims.items()):
+        lebt = prozess_lebt(anspruch.get("pid"))
+        print("%s  [%s]  Thread=%s  pid=%s  seit %s  %s\n    %s" % (
+            branch, "hier" if branch == aktueller_branch() else "fremd",
+            anspruch.get("thread"), anspruch.get("pid"),
+            anspruch.get("zeit") or "?",
+            "aktiv" if lebt else "VERWAIST",
+            "\n    ".join(anspruch.get("muster") or ["(keine Muster)"])))
+    return 0
+
+
 class Lauf:
     """Ein Gate mit seiner gemessenen Dauer - Zahlen statt Eindruecke."""
 
@@ -192,12 +532,28 @@ class Lauf:
         self.ergebnisse.append((name, None, 0.0, None))
         print("  ... %s\n      uebersprungen: %s" % (name, grund), flush=True)
 
+    def fahre_gate(self, name, ok, dauer, meldung):
+        """Ein Gate OHNE Unterprozess - Besitz und Zeitstempel werden so
+        protokolliert, damit der Bericht sie wie alle anderen mitzaehlt."""
+        self.ergebnisse.append((name, ok, dauer, None))
+        print("  ... %s\n      %s  %.0f s" % (
+            name, "gruen" if ok else "ROT  ", dauer), flush=True)
+        if meldung:
+            for zeile in str(meldung).splitlines():
+                print("      %s" % zeile, flush=True)
+
     def bericht(self):
         rot = [e for e in self.ergebnisse if e[1] is False]
         gesamt = sum(e[2] for e in self.ergebnisse)
         print("\n  %d Gate(s) in %.0f s." % (len(self.ergebnisse), gesamt))
         for name, ok, _, fertig in rot:
             print("\nROT: %s" % name)
+            # Ein Gate OHNE Subprozess (Besitz, Zeitstempel) hat nichts
+            # nachzuschreiben - es hat seine Zeilen schon bei fahre_gate
+            # gedruckt. GEMESSEN am 27.09.2026: hier stuerzte der Bericht ab
+            # und der Hook endete mit einer Traceback statt einer Ablehnung.
+            if fertig is None:
+                continue
             text = ((fertig.stdout or "") + (fertig.stderr or "")).strip().splitlines()
             for zeile in text[-15:]:
                 print("     " + zeile[:140])
@@ -226,9 +582,23 @@ def gate0_befehl(dateien):
     return befehl
 
 
-def gates_fahren(stufe, dateien):
+def gates_fahren(stufe, dateien, thread=None):
     lauf = Lauf()
     print("Gates vor dem Commit (Stufe: %s)" % stufe)
+
+    # Gate B (Besitz) zuerst und VOR dem Engine-Lock: es kostet nichts, und
+    # ein Compilerlauf fuer einen Commit, der nicht stattfinden darf, waere
+    # Verschwendung. Sobald es rot ist, endet der Lauf hier.
+    #
+    # DER THREAD-Parameter wird DURCHGEREICHT, nicht neu ermittelt.
+    # GEMESSEN am 27.09.2026: `--thread` wurde geparst, aber nicht
+    # weitergegeben - besitz_gate ermittelte den Namen selbst und landete
+    # beim Branchnamen. Folge: der Thread, dem die Arbeit gehoert, wurde vom
+    # eigenen Gate abgewiesen, und der Besitz war unbrauchbar, weil niemand
+    # seine eigene Arbeit committen konnte.
+    if besitz_gate(dateien, lauf, thread=thread):
+        lauf.bericht()
+        return 1
 
     # Die volle Stufe startet Editoren und beendet sie (Gate 2+3) - der
     # Engine-Lock muss sie ab Gate 0 umschliessen, nicht erst ab dem Aufruf
@@ -328,7 +698,23 @@ def hauptprogramm(argv=None):
                    help="nur vorgemerkte Dateien betrachten (fuer den Hook)")
     p.add_argument("--push-refs", action="store_true",
                    help="pre-push: Commits von stdin lesen und im sauberen Worktree pruefen")
+    p.add_argument("--thread", help="Name dieses Threads (sonst WB_THREAD/git config)")
+    p.add_argument("--besitz-zeigen", action="store_true",
+                   help="alle Ansprueche auflisten")
+    p.add_argument("--besitz-ansprechen", nargs="*", metavar="MUSTER",
+                   help="Dateimuster fuer den aktuellen Branch beanspruchen")
+    p.add_argument("--besitz-freigeben", action="store_true",
+                   help="Anspruch des aktuellen Branchs zurueckgeben")
     a = p.parse_args(argv)
+
+    # Verwaltung: die Besitz-Kommandos sind keine Gates und laufen darum
+    # auch dann, wenn WB_KEINE_GATES gesetzt ist.
+    if a.besitz_zeigen:
+        return besitz_zeigen()
+    if a.besitz_freigeben:
+        return besitz_freigeben()
+    if a.besitz_ansprechen is not None:
+        return besitz_ansprechen(a.besitz_ansprechen, thread=a.thread)
 
     if os.environ.get("WB_KEINE_GATES") == "1":
         print("WB_KEINE_GATES=1 - Gates uebersprungen.")
@@ -338,6 +724,10 @@ def hauptprogramm(argv=None):
     # Die Commits, die hinausgehen, kommen vom Hook auf stdin und werden in
     # einem eigenen Worktree gebaut, getestet und geraucht.
     if a.push_refs:
+        # Im Push-Worktree wird NICHT der Besitz geprueft: dort ist der Baum
+        # frisch gebaut und die Commits sind schon geschrieben. Der Besitz
+        # gehoert an den Commit, nicht an den Push - sonst koennte niemand
+        # mehr ausliefern, nachdem ein fremder Thread einmal unrein war.
         import gate_worktree
         return gate_worktree.push_pruefen(WURZEL, sys.stdin.read())
 
@@ -361,9 +751,13 @@ def hauptprogramm(argv=None):
     else:
         dateien = geaenderte_dateien()
 
-    rot = gates_fahren(a.stufe, dateien)
+    rot = gates_fahren(a.stufe, dateien, thread=a.thread)
     if rot:
         print("\n%d Gate(s) ROT - der Commit wird abgewiesen." % rot)
+        print("Gehoert die Arbeit wirklich dir, beanspruche sie zuerst:")
+        print("  python Tools/vor_dem_commit.py --besitz-ansprechen <Muster>")
+        print("Fremde Arbeit gehoert dem fremden Thread:")
+        print("  git commit -- <nur eigene Dateien>")
         print("Wenn das so gewollt ist: git commit --no-verify")
         return 1
     print("Alle Gates gruen.")
