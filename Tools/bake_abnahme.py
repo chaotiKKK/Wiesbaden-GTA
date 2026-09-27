@@ -43,6 +43,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from karte import standard_karte   # EINE Quelle fuer den Kartennamen
+from beleg import (BelegFehler, beleg_hinweis, ist_frisch,
+                   loesche_beleg)      # loeschen + NACHPRUEFEN, Frische messen
 
 PROJEKT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPROJECT = os.path.join(PROJEKT, "WiesbadenReal.uproject")
@@ -117,12 +119,20 @@ def fahre(karte, sekunden, still=False):
     -WbTime=13 erzwingt Tageslicht: Nacht und Tag kosten unterschiedlich viel
     Bildzeit, und zwei Karten zu unterschiedlichen Uhrzeiten zu vergleichen
     misst die Uhr, nicht den Bake.
+
+    LOG ist die LEBENDE Projektlog (Saved\\Logs\\WiesbadenReal.log) - genau
+    die Datei, an der ein haengender Editor einen Handle haelt und die das
+    Read-only-Flag tragen kann. Ein still geschlucktes `except OSError: pass`
+    laesst sie liegen, und `lies_log()` meldet dann die Kennzahlen des
+    LETZTEN Laufs als Messung dieser Karte - die Abnahme annimmt also eine
+    Karte an, weil eine andere sie gebacken hat. Deshalb: loeschen und danach
+    nachpruefen, und die Frische messen, nicht das Loeschen glauben.
     """
-    if os.path.exists(LOG):
-        try:
-            os.remove(LOG)
-        except OSError:
-            pass
+    try:
+        loesche_beleg(LOG)
+    except BelegFehler as fehler:
+        print(f"    ABBRUCH: {fehler}")
+        return None
 
     befehl = [
         EDITOR, UPROJECT, f"/Game/Maps/{karte}",
@@ -137,6 +147,13 @@ def fahre(karte, sekunden, still=False):
         subprocess.run(befehl, check=False, timeout=sekunden + 600)
     except subprocess.TimeoutExpired:
         print("    ABBRUCH: der Lauf hing laenger als erlaubt.")
+        return None
+
+    # Zweite Haelfte der Regel: die Log muss nach $start geschrieben worden
+    # sein. Das greift auch dann, wenn das Loeschen oben geklappt hat und
+    # trotzdem eine alte Datei zurueckbliebe.
+    if not ist_frisch(LOG, start):
+        print(f"    ABBRUCH: keine frische Log aus diesem Lauf. {beleg_hinweis(LOG)}")
         return None
 
     werte = lies_log()

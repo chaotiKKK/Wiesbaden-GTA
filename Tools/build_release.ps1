@@ -47,6 +47,11 @@ $ErrorActionPreference = "Stop"
 # Gate-Worktree: "Split-Path: leere Zeichenfolge").
 if (-not $Root) { $Root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
 
+# Remove-Beleg: loeschen und danach NACHPRUEFEN. SilentlyContinue auf einem
+# Beleg, aus dem spaeter gelesen wird, ist die Fehlerklasse, die Gates still
+# gruen macht - die Regel steht in Tools\beleg.ps1.
+. (Join-Path $PSScriptRoot "beleg.ps1")
+
 
 # INSTALLIERTE Engine, NICHT die Kopie unter $Root.
 #
@@ -189,7 +194,14 @@ if (Test-Path $EngineCheck) {
 # ---- Gate 1: Kompilieren -------------------------------------------------
 Section 1 "Kompilieren (WiesbadenRealEditor Win64 Development)"
 $BuildLog = Join-Path $LogDir "release_build.log"
-Remove-Item $BuildLog -ErrorAction SilentlyContinue
+# WEG oder nichts: haelt ein haengender Prozess die alte Log offen (am
+# 27.09.2026 nachgemessen: -Force raeumt das Read-only-Flag, ein offener
+# Handle nicht), schlaegt das Loeschen still fehl, und die "erste Fehler"-
+# Meldung unten zitiert dann den VORLETZTEN Bau. Ein Gate, das den falschen
+# Fehler nennt, ist schlimmer als eins, das gar keinen nennt - man repariert
+# die falsche Stelle.
+Remove-Beleg $BuildLog
+$BuildLaufStart = Get-Date
 Stop-ProjectEditors $Proj
 Start-Sleep -Seconds 2
 # WICHTIG (PS 5.1): UBT schreibt routinemaessig auf stderr (auch bei Warnungen).
@@ -205,6 +217,11 @@ $ErrorActionPreference = $prevEAP
 if ($LASTEXITCODE -ne 0) {
     $firstErr = (Select-String -Path $BuildLog -Pattern "error [A-Z]|Error:" -SimpleMatch:$false |
         Select-Object -First 3 | ForEach-Object { $_.Line.Trim() }) -join " | "
+    if (-not (Test-Frisch $BuildLog $BuildLaufStart)) {
+        $firstErr = "Log gehoert NICHT zu diesem Lauf - keine Fehlerzeile zitierbar"
+        Write-Host ("  WARNUNG: {0} ist vom {1} - der Build hat sie nicht geschrieben." -f `
+            $BuildLog, (Get-Item $BuildLog -Force -ErrorAction SilentlyContinue).LastWriteTime)
+    }
     Fail "Gate 1 (Kompilieren)" ("Exit {0}. Erste Fehler: {1}" -f $LASTEXITCODE, $firstErr) $BuildLog
 }
 Write-Host "  Gate 1 gruen: kompiliert."
@@ -277,7 +294,11 @@ $PackageCmd = Join-Path $ProjDir "package_game.cmd"
 if (-not (Test-Path $PackageCmd)) { Fail "Schritt 4 (Paketieren)" "package_game.cmd fehlt." "" }
 # Vorheriges Paket als Rollback-Ziel sichern, BEVOR das neue es ueberschreibt.
 if (Test-Path $PackageExe) {
-    Remove-Item $PrevPackageDir -Recurse -Force -ErrorAction SilentlyContinue
+    # Auch hier gilt: WEG oder nichts. Bleibt das alte Rollback-Ziel liegen
+    # (offene Datei aus einem laufenden Paket), wandert das neue Paket mit
+    # hinein - dann enthaelt "Package_previous" Alt+Neu und ein Rollback
+    # stellt den ZUSTAND VOR ZWEI Releases wieder her, nicht den vor einem.
+    Remove-Beleg $PrevPackageDir
     Move-Item $PackageDir $PrevPackageDir -Force
     Write-Host "  Vorheriges Paket gesichert -> $PrevPackageDir (fuer 'build_release.cmd -Rollback')."
 }

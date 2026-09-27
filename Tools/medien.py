@@ -22,6 +22,7 @@ ffmpeg kommt aus imageio-ffmpeg (auf diesem Rechner gibt es kein System-ffmpeg).
 import argparse
 import ctypes
 import ctypes.wintypes as wt
+import datetime
 import os
 import subprocess
 import sys
@@ -29,8 +30,27 @@ import time
 
 import imageio_ffmpeg
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from beleg import ist_frisch    # "ist das wirklich dieser Lauf?" - nicht das Wegsehen
+
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 user32 = ctypes.windll.user32
+
+# Ohne --ab-seit: wie frisch muss die Log sein, damit sie als laufende
+# Sitzung gilt? Eine laufende Sitzung schreibt im Sekundentakt, eine alte
+# Log ist Minuten alt. 120 s ist gross genug fuer einen langsamen
+# Kartenaufbau und trotzdem weit unter der Frist, in der ein Alterungs-
+# fehler auftreten wuerde.
+MAX_LOGALTER_S = 120
+
+
+def _zeitpunkt(text):
+    """--ab-seit als ISO-8601 (das, was to_string('o') in PowerShell liefert)."""
+    try:
+        return datetime.datetime.fromisoformat(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            'kein ISO-Zeitpunkt (2026-09-27T18:04:11): %r' % (text,))
 
 # Physische Pixel statt skalierter - sonst passt der Ausschnitt nicht zum Bildschirm.
 try:
@@ -101,10 +121,28 @@ def liegt_oben(hwnd, x, y, w, h):
     return True
 
 
-def warte_auf_zeile(log, text, frist):
+def warte_auf_zeile(log, text, frist, ab=None):
+    """Wartet, bis die Zeile in der Log steht - aber nur, wenn die Log auch
+    wirklich die LAUFENDE Sitzung ist.
+
+    Ohne diese Pruefung ist die Bedingung nach 0,5 s erfuellt, sobald die
+    Startzeile aus dem VORLETZTEN Lauf noch in der Datei steht: der Aufrufer
+    loescht die Log mit `Remove-Item ... -ErrorAction SilentlyContinue`, und
+    genau das schlaegt still fehl, wenn die Datei schreibgeschuetzt ist oder
+    ein haengender Prozess sie offen haelt. Die Aufnahme beginnt dann, bevor
+    das Spiel ueberhaupt geladen ist, und filmt einFenster, in dem es nichts
+    zu sehen gibt.
+
+    `ab` ist der Zeitpunkt, zu dem die Sitzung gestartet wurde, wenn der
+    Aufrufer ihn kennt (--ab-seit, ISO-Format). Ohne ihn gilt die
+    Naeherung: die Log muss in den letzten MAX_LOGALTER_S Sekunden
+    geschrieben worden sein - eine laufende Sitzung schreibt im Sekundentakt,
+    eine alte Log ist Minuten alt.
+    """
     ende = time.time() + frist
+    grenze = ab if ab is not None else time.time() - MAX_LOGALTER_S
     while time.time() < ende:
-        if os.path.isfile(log):
+        if os.path.isfile(log) and ist_frisch(log, grenze):
             with open(log, encoding='utf-8', errors='replace') as f:
                 if text in f.read():
                     return True
@@ -113,8 +151,12 @@ def warte_auf_zeile(log, text, frist):
 
 
 def aufnahme(a):
-    if a.log and not warte_auf_zeile(a.log, a.start_bei, a.frist):
-        sys.exit('Startzeile "%s" kam nicht in %d s (%s).' % (a.start_bei, a.frist, a.log))
+    ab = a.ab_seit.timestamp() if a.ab_seit else None
+    if a.log and not warte_auf_zeile(a.log, a.start_bei, a.frist, ab):
+        sys.exit('Startzeile "%s" kam nicht in %d s (%s).%s' % (
+            a.start_bei, a.frist, a.log,
+            '' if ab is None else '  Hinweis: --ab-seit ist aelter als die Log '
+                                 '(siehe Log-Zeitstempel).'))
     time.sleep(a.verzoegerung)
     hwnd, titel = spielfenster(a.titel)
     if not hwnd:
@@ -204,6 +246,10 @@ def main():
     s = p.add_subparsers(dest='cmd', required=True)
     q = s.add_parser('aufnahme')
     q.add_argument('--log', help='Spiel-Log (-abslog), auf dessen Zeile gewartet wird')
+    q.add_argument('--ab-seit', type=_zeitpunkt, default=None,
+                   help='ISO-Zeitpunkt des Sitzungsstarts. Ohne diese Angabe gilt '
+                        'die Log nur dann als die laufende Sitzung, wenn sie in den '
+                        'letzten %d s geschrieben wurde.' % MAX_LOGALTER_S)
     q.add_argument('--start-bei', default='')
     q.add_argument('--frist', type=int, default=600, help='so lange auf die Startzeile warten (s)')
     q.add_argument('--verzoegerung', type=float, default=0.0)

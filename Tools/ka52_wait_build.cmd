@@ -25,6 +25,26 @@ cd /d "%~dp0.."
 if not exist Saved\tmp mkdir Saved\tmp
 set RPT=Saved\Diagnose\ka52\build_test_ergebnis.txt
 if exist "%RPT%" del /q "%RPT%"
+rem Das Wegsein wird geprueft, nicht geglaubt: "del" laeuft nach "Zugriff
+rem verweigert" weiter, und der Aufrufer liest am Ende nur "ERGEBNIS: OK"
+rem aus %RPT%. Ein liegengebliebener alter Bericht waere eine bestandene
+rem Bau-Aussage fuer einen Lauf, der gar nicht gebaut hat. Praktisch
+rem unwahrscheinlich (der Build laeuft nur bei geschlossenem Editor), aber
+rem die Bauform soll nicht davon abhaengen, dass es klappt.
+rem Das Wegsein wird geprueft, nicht geglaubt: "del" laeuft nach einer
+rem gesperrten Datei weiter, und der Aufrufer liest am Ende nur "ERGEBNIS: OK"
+rem aus %RPT%. Ein liegengebliebener alter Bericht waere eine bestandene
+rem Bau-Aussage fuer einen Lauf, der gar nicht gebaut hat. Praktisch
+rem unwahrscheinlich (der Build laeuft nur bei geschlossenem Editor), aber die
+rem Bauform soll nicht davon abhaengen, dass das Loeschen klappt.
+if not exist "%RPT%" goto :beleg_weg
+echo.
+echo ABBRUCH: der alte Ergebnisbericht laesst sich nicht loeschen - "%RPT%"
+echo   Die Auswertung waere dann die des LETZTEN Laufs. Bitte den haengenden
+echo   Prozess beenden (Tools\cleanup_unreal_processes.cmd), dann erneut.
+exit /b 3
+
+:beleg_weg
 
 REM Kein PID eintippen: der war 24628, als das Skript entstand, und laeuft
 REM Jahre spaeter als Text mit. Wer danach im Task-Manager nachsucht, findet

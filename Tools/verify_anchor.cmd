@@ -98,6 +98,29 @@ set "LOG=%PROJ%\Saved\Logs\verify_anchor_%STAMP%.log"
 rem -- 1. Vorbereiten: Skript da? altes Ergebnis weg? -------------------------
 if not exist "%SCRIPT%" goto :kein_skript
 if exist "%ERGEBNIS%" del /q "%ERGEBNIS%"
+rem DEM WEGSEIN WIRD NICHT GLAUBT, ES WIRD GEPRUEFT. "del" meldet einen
+rem gesperrten Pfad und laeuft trotzdem weiter - nachgemessen am 27.09.2026
+rem an einer Datei mit offenem Handle (FileShare::None): "Der Prozess kann
+rem nicht auf die Datei zugreifen, da sie von einem anderen Prozess verwen-
+rem det wird", Errorlevel 1, Ablauf geht weiter. Genau dann wertet Schritt 3
+rem die ERGEBNISDATEI DES LETZTEN LAUFS aus und meldet "0 leere Komponen-
+rem ten am Kartenursprung" fuer einen Lauf, der gar nicht gemessen hat. Das
+rem ist genau der Befund, vor dem dieses Skript steht, und der Stillfall
+rem waere schlimmer als ein Fehlschlag: er gibt den Auftrag zum Weitermach-
+rem en. Also hier abbrechen. (Nebenbei gemessen: das Read-only-Flag blockiert
+rem "del /q" nicht - der offene Handle ist der Fall.)
+rem (Nach dem Loeschen kann die Datei nur noch von DIESEM Lauf stammen - ein
+rem Frische-Messen waere in cmd nur Theater.)
+if not exist "%ERGEBNIS%" goto :ergebnis_weg
+echo.
+echo ABBRUCH: die alte Ergebnisdatei laesst sich nicht loeschen:
+echo   "%ERGEBNIS%"
+echo   Jede Auswertung waere dann die des LETZTEN Laufs, nicht diese Messung -
+echo   also gar keine. Bitte den haengenden Prozess beenden
+echo   (Tools\cleanup_unreal_processes.cmd) und erneut starten.
+exit /b 8
+
+:ergebnis_weg
 
 rem -- 2. Lauf ----------------------------------------------------------------
 "%UE%" "%PROJ%\WiesbadenReal.uproject" -run=pythonscript -script="%SCRIPT%" -unattended -nop4 -nosplash -nullrhi > "%LOG%" 2>&1

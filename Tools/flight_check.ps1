@@ -37,6 +37,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Remove-Beleg / Test-Frisch: loeschen und danach NACHPRUEFEN, und beim Lesen
+# messen, OB die Datei zu diesem Lauf gehoert (Tools\beleg.ps1).
+. (Join-Path $PSScriptRoot "beleg.ps1")
+
 # Nur Editoren DIESES Projektordners beenden. "Get-Process UnrealEditor* |
 # Stop-Process" haette am Ende jeder Sitzung auch die eines fremden Laufs
 # abgeschossen - derselbe Fehler wie im roten Push-Lauf vom 25.09.2026, nur
@@ -63,7 +67,17 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & "$PSScriptRoot\cleanup_unreal_processes.cmd"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-Remove-Item $Log -ErrorAction SilentlyContinue
+# Die alte Log muss WEG sein, nicht nur gewollt sein: liegt sie noch da (Read-
+# only am Ordner-Eintrag oder offener Handle eines haengenden Editors), zaehlt
+# die Schleife unten nach fuenf Sekunden deren Zeilen und meldet "N Mast-
+# Messpunkte" von GESTERN - bei lebendem Zaehler bricht sie ab, beendet den
+# gerade gestarteten Editor (Zeile "Stop-Process") und sagt Erfolg.
+Remove-Beleg $Log
+# Ab hier zaehlt nur, was dieser Lauf schreibt. Auch wenn das Loeschen
+# geklappt haette: das ist die zweite Haelfte der Regel, und sie faengt den
+# Fall, in dem die Log von einem parallel geschriebenen Pfad neu angelegt
+# wurde.
+$LaufStart = Get-Date
 
 # Die Quotes um -ExecCmds MUESSEN die Engine bekommen, und Start-Process
 # nimmt sie weg: es baut aus der Argumentliste eine Befehlszeile und
@@ -90,7 +104,9 @@ $deadline = (Get-Date).AddSeconds($TimeoutSec)
 $n = 0
 while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 5
-    if (Test-Path $Log) { $n = @(Select-String -Path $Log -Pattern "WbDev Mast t=").Count }
+    if ((Test-Path $Log) -and (Test-Frisch $Log $LaufStart)) {
+        $n = @(Select-String -Path $Log -Pattern "WbDev Mast t=").Count
+    }
     if ($n -ge $MinSeconds) { break }
     if (-not (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)) { break }
 }
@@ -122,13 +138,20 @@ if (Test-Path $Log) {
 # nicht flog, sah auf der Konsole aus wie ein bestandener Lauf. Ein
 # Messwerkzeug, das nichts misst und Erfolg meldet, ist das Schlimmste, was
 # ein Werkzeug tun kann.
+$Frisch = Test-Frisch $Log $LaufStart
 $Gemessen = $false
-if (Test-Path $Log) {
+if ($Frisch) {
     $Gemessen = @(Select-String -Path $Log -Pattern "WbDev Mast t=").Count -ge $MinSeconds
 }
 if (-not $Gemessen) {
-    Write-Host ("FEHLER: nur {0} von mindestens {1} Mast-Messpunkten im Log." -f $n, $MinSeconds)
-    Write-Host ("       Log: {0}" -f $Log)
+    if (-not $Frisch) {
+        Write-Host "FEHLER: die Log gehoert nicht zu diesem Lauf - es wurde nichts gemessen."
+        Write-Host ("       Log: {0}" -f $Log)
+        Write-BelegHinweis $Log
+    } else {
+        Write-Host ("FEHLER: nur {0} von mindestens {1} Mast-Messpunkten im Log." -f $n, $MinSeconds)
+        Write-Host ("       Log: {0}" -f $Log)
+    }
     $verdaechtig = Select-String -Path $Log -Pattern "Bad or missing property" -ErrorAction SilentlyContinue |
                    Select-Object -First 3
     if ($verdaechtig) {
