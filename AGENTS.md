@@ -4657,3 +4657,37 @@ Ergebnis nach `Saved/Diagnose/ka52/build_test_ergebnis.txt`.
 - **Der Aufnahmefahrer belegt JEDES Bild mit dem Kameramodus aus dem Log**
   (Textdatei neben dem PNG) - ein Follow-Bild mit Cockpit-Titel beweist
   nichts, genau das ist am 26.09.2026 zweimal passiert.
+
+## Gate B (Besitz): der geteilte Arbeitsbaum gehoert nicht automatisch mir (27.09.2026)
+
+Vier Tage lang lagen fremde Dateien uncommitted im Arbeitsbaum, der Baum stand
+auf dem Wegwerf-Testbranch `wt-gatetest` eines anderen Threads, und
+`git status` sah aus wie die eigene Arbeit. `git commit` nimmt ALLES mit, was
+vorgemerkt ist - git kennt keine Threads, und `vor_dem_commit.py` kann das erst
+seit dem 27.09.2026.
+
+* **Anspruch nehmen:** `python Tools/vor_dem_commit.py --besitz-ansprechen
+  Tools/ Source/WiesbadenReal/World/SebboHq*.cpp`. Steht in `.git/wb_besitz.json`
+  (gemeinsames .git-Verzeichnis, von keinem Commit erfasst, fuer alle
+  Worktrees identisch). `--besitz-zeigen` listet, `--besitz-freigeben` gibt
+  zurueck.
+* **Fremd heisst: anderer Branch ODER anderer Thread.** Nur den Branch zu
+  vergleichen war die erste Fassung - und der erste echte Lauf meldete
+  `gruen`, weil der fremde Thread auf demselben Wegwerf-Branch sass wie ich.
+  Ein Wegwerf-Branch identifiziert niemanden. Thread-Name aus `--thread`,
+  `WB_THREAD` oder `git config wb.thread`, sonst der Branchname.
+* **Ein toter Prozess gibt den Anspruch frei** (Hinweis, kein ROT). Die erste
+  Fassung blockierte auch verwaiste Ansprueche - eine Registry, die einen
+  abgestuerzten Thread ewig festhält, endet in `--no-verify` fuer alle, und
+  dann prueft gar nichts mehr. Eine kaputte Registry ist dagegen ROT: wer sie
+  loescht, schaltet genau das Gate ab, das ihn schuetzt.
+* **Gate B laeuft VOR dem Engine-Lock und vor Gate 0**, ohne Prozess. Beim
+  Push laeuft es NICHT (dort ist der Commit schon geschrieben) - sonst
+  koennte nach einem fremden Thread niemand mehr ausliefern.
+- **Zwei Fallen beim Erweitern, beide am 27.09. gemessen:** `Lauf.bericht()`
+  griff auf das Ergebnis-Objekt eines Gates OHNE Subprozess zu und endete mit
+  Traceback statt mit einer Ablehnung (`fertig is None` abpruefen). Und
+  `--thread` wurde geparst, aber nicht an `gates_fahren()` durchgereicht -
+  Besitz_gate ermittelte den Namen selbst, landete beim Branchnamen und wies
+  den Thread ab, dem die Arbeit gehoerte. Beides decken jetzt Tests in
+  `Tools/test_vor_dem_commit.py` (86 Tests in der Datei, 324 in der Suite).
