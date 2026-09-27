@@ -17,6 +17,7 @@ WARUM ZWEI STUFEN - und das ist eine gemessene Entscheidung, keine Meinung:
     Python-Suiten              31 s   (gemessen 21.09.2026, 172 Tests)
     Gate 2  Unit-Tests          Minuten (startet den Unreal-Editor)
     Gate 3  Rauchtest           Minuten (mehrere Editor-Sitzungen)
+    Gate 5  Ankerzustand (WP)   3 min  (startet den Unreal-Editor)
 
 Ein Hook, der vor JEDEM Commit eine Viertelstunde braucht, wird binnen eines
 Tages mit --no-verify umgangen; dann prueft er gar nichts mehr. Darum:
@@ -252,6 +253,29 @@ def gates_fahren(stufe, dateien):
     else:
         lauf.ueberspringe("Gate 2+3  Tests und Rauchtest",
                           "Stufe schnell - sie laufen vor dem Push")
+
+    # Gate 5: der gespeicherte ANKERZUSTAND der gebackenen Karte. Die
+    # Verankerung ist die Voraussetzung dafuer, dass eine leere Komponente
+    # nicht am Kartenursprung landet - und sie entsteht in einem Bake, nicht
+    # im Code. Ein Push, der den Zustand nicht liest, kann ihn zerstoeren,
+    # ohne dass jemand etwas bemerkt: die Datei ist dann nicht kaputt,
+    # nur falsch verankert, und der Bruch faellt erst beim Laden auf.
+    #
+    # Das Skript endet ungleich null, wenn nicht 0 leere Komponenten am
+    # Kartenursprung liegen (Exit 7) - und mit eigenen Codes, wenn ueberhaupt
+    # keine Messung zustande kam (2/3/4/5/6). Damit ist "nichts gemessen"
+    # nicht mit "alles in Ordnung" verwechselbar. Genau an dieser Verwechslung
+    # ist der Alkis24-Stand wochenlang als Messung durchgegangen: die Datei
+    # war da, die Zahl war falsch, und der Lauf meldete Erfolg.
+    #
+    # Startet einen Editor, also in derselben Stufe wie die anderen Editor-
+    # Laeufe; den Engine-Lock haelt vor_dem_commit von Gate 0 an.
+    if stufe == "voll":
+        lauf.fahre("Gate 5  Ankerzustand (WP)",
+                   r"Tools\verify_anchor.cmd", shell_cmd=True)
+    else:
+        lauf.ueberspringe("Gate 5  Ankerzustand (WP)",
+                          "Stufe schnell - sie laeuft vor dem Push")
 
     return lauf.bericht()
 
