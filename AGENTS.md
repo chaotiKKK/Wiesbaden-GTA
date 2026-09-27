@@ -5042,3 +5042,45 @@ sauberem Baum gruen, bei Bearbeitung rot, und er sagt etwas Falsches aus.
   Releases des privaten Repos. Die Text- und Asset-Inhalte sind gespiegelt,
   das Original bleibt privat.
 
+## Ein Lauf richtet alle Release-Ausgaben aus (28.09.2026)
+- **Vier Werkzeuge, feste Reihenfolge, sonst richtet der Lauf mehr kaputt als
+  er repariert:** `schaufenster.py` (Seite + Bilder ins oeffentliche Repo,
+  committen, pushen) -> `releases_bilder_ausrichten.py` -> `releases_texte_
+  ausrichten.py` -> `releases_oeffentlich.py`. `releases_ausrichten.py` macht
+  das in einem Lauf, mit `--anwenden` zum Schreiben und ohne zum Planen.
+- **Warum das Schaufenster ZUERST laufen muss:** die Bildnamen der
+  Ausrichter kommen aus `origin/main`. Wer die Assets vorher ausrichtet,
+  loescht dem Release genau die Bilder, die der gerade gemergte Zweig
+  hinzugefuegt hat - am 27.09.2026 so geschehen, zwei Bilder weg. Deshalb
+  exportiert das Werkzeug Seite UND Bilder per `git archive` aus EINEM Ref und
+  reicht genau diese Dateien beiden Ausrichtern; `--ref` (Vorgabe
+  `origin/main`), nicht der Arbeitszweig.
+- **Die falsche Reihenfolge war bis heute eine Sache, die man sich merken
+  musste.** GEMESSEN: der Plan brauchte 27,5 s und meldete 14x "passt" - nach
+  dem Merge ist er genau ein Aufruf.
+- **Exit-Codes sind eine Aussage, kein Boolean:** 0 fertig, 1 beim Ausrichten
+  gescheitert, 2 Voraussetzung fehlt (Ref ohne Seite, falscher Klon, schmutziger
+  Klon), 3 Gate am Ende war rot - ausdruecklich NICHT "fertig". Das Gate
+  (`release_abgleich.py`) ist der Beweis; `--kein-gate` nimmt ihn weg.
+- **Ein schmutziger Klon bricht ab, weil `git add -A` sonst fremde Arbeit
+  mitveroeffentlicht.** Ebenso ein Klon, dessen `origin` nicht auf
+  `chaotiKKK/wiesbaden-real-meilensteine` zeigt: dort waere jeder Schreibzugriff
+  gelandet. `klon_finden()` sucht `--ziel`, dann `WB_SCHAUFENSTER`, dann alle
+  Elternebenen, dann das Home - und nennt bei Misserfolg alle geprueften Pfade,
+  statt einen zu raten. Der Klon liegt eine Ebene ueber dem Projektordner.
+- **FALLE, die einen ganzen Tag gekostet hat: die Stand-Zeile ist ein Inhalt,
+  kein Uhrwerk.** Die Seite schreibt "Stand TT.MM.JJJJ" in die Fusszeile. Mit
+  `date.today()` meldete der Plan am 28.09. "geaendert: index.html" fuer einen
+  Klon, der am Vortag aus DEMSELBEN Ref gebaut worden war - der einzige
+  Unterschied waren vier Ziffern, und `git` haette nichts zu committen gehabt.
+  `stand_text(ref)` nimmt deshalb `git log -1 --format=%cs <ref>`: derselbe Ref
+  ergibt immer dieselbe Seite. `stand_hinweis()` sagt im Plan, WENN der
+  Unterschied nur in der Stand-Zeile liegt, statt einen Encoding-Fehler zu
+  vermuten, den es nicht gibt.
+- **Zweiter gleichartiger Fall: die Zeilenenden.** Der oeffentliche Klon hat
+  kein `.gitattributes`, sein Arbeitsbaum hat CRLF, `schaufenster.erzeugen`
+  schreibt LF. `gleich()` vergleicht Text tolerant gegen CRLF und Bilder
+  byteweise, sonst meldet jeder Lauf dieselbe erfundene Aenderung.
+- **Tests:** `Tools/test_releases_ausrichten.py` (20) - `LAUF` ist eine
+  Attrappe, `git archive` liefert ein gebautes tar, also kein git, kein gh,
+  kein Netz.
