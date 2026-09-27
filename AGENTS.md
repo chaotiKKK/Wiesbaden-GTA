@@ -4983,3 +4983,42 @@ sauberem Baum gruen, bei Bearbeitung rot, und er sagt etwas Falsches aus.
   Zonen: zwischen Meldegrenze und Gate heisst es "bricht ab" als ZUKUNFT ("erst
   aufraeumen, dann bauen"), unter dem Gate ist es das Jetzt ("ABBRICHT JEDER
   Engine-Start"). GEMESSEN: 12 % und 6 % gegen dieselbe Vorlage.
+
+## Release-Bilder kommen aus dem oeffentlichen Schaufenster (27.09.2026)
+- **Das Spiel-Repo ist privat, also ist JEDER Link dorthin fuer Fremde tot.**
+  GEMESSEN am 27.09.2026 anonym, ohne Token: `.../Wiesbaden-GTA/blob/main/docs/
+  meilensteine/bilder/x.jpg?raw=true` -> **404**, die Release-Seite selbst ->
+  **404**, das Release-Asset unter `/releases/download/<tag>/<name>` -> **404**.
+  Mit Konto ist alles 200. Wer eine Release-Seite mit privaten Bildlinks
+  baut, zeigt Fremden nur Broken-Image-Platzhalter - und bemerkt es nie
+  selbst, weil man mit Konto immer auf 200 laeuft.
+- **OEFFENTLICH sind genau zwei Dinge:** das Schaufenster-Repo
+  `chaotiKKK/wiesbaden-real-meilensteine` (PUBLIC) und die Pages-Seite
+  `https://chaotikkk.github.io/wiesbaden-real-meilensteine/`. Beide erzeugt
+  `Tools/schaufenster.py` aus derselben `docs/meilensteine.md`. Bild-URL:
+  `https://raw.githubusercontent.com/chaotiKKK/wiesbaden-real-meilensteine/main/bilder/<name>`
+  - GEMESSEN anonym 200 fuer alle 35 Bildlinks aus allen 15 Releases.
+- **Deshalb zeigt `releases_texte_ausrichten.py` dorthin** (Konstanten
+  `OEFFENTLICH` und `SCHaufenster`), und die Fusszeile zeigt aufs Schaufenster
+  statt auf `docs/meilensteine.md`. Das Muster `PRIVAT` bricht den Lauf ab,
+  sobald doch ein `Wiesbaden-GTA`-Link entsteht; es unterscheidet die beiden
+  Aehnlich benannten Repos an einem einzigen Zeichen.
+- **Gate 6 prueft das, statt es zu behaupten** (`Tools/release_abgleich.py`):
+  Release-Text und Bildbasis werden verglichen, UND je Release kommt ein
+  HTTP-HEAD **ohne** Anmeldung dazu. GEMESSEN: 15 s Laufzeit. Ein Netzfehler
+  dabei ist "nicht messbar" (Exit 3) und niemals "in Ordnung".
+- **FALLE, die Zeit kostete: das Schaufenster kann aelter sein als die Seite.**
+  Am 27.09.2026 trug es noch die Bildnamen von vor PR #20 (`12-hq-turm.jpg`
+  statt `10-hq-turm.jpg`) - jeder neue oeffentliche Link lieferte 404, obwohl
+  im Text kein privater Repo-Name mehr stand. Nach jeder Umbenennung:
+  `python Tools/schaufenster.py --ziel <Klon> --ref origin/main`, dort
+  committen und pushen, DANN die Release-Texte neu erzeugen.
+- **`--anwenden` loescht mit.** `releases_bilder_ausrichten.py --anwenden`
+  nimmt Assets weg, die auf der geprueften Seite fehlen. Also immer gegen den
+  Stand ausrichten, aus dem die Releases wirklich stammen (`--seite` mit dem
+  Ref-Stand von `origin/main`), nicht gegen den Arbeitszweig - sonst raust es
+  dem Release genau die Bilder, die der Zweig gerade erst hinzufuegt.
+- **Was damit NICHT oeffentlich ist:** der Quellcode, `docs/meilensteine.md`
+  und die Releases selbst. Die Release-Texte tragen jetzt keine Konto-Pflicht
+  mehr, sind aber weiterhin nur im privaten Repo zu sehen. Oeffentlich
+  zaehlt heute allein das Schaufenster.
