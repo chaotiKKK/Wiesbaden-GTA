@@ -72,8 +72,32 @@ FAELLE = (
 )
 
 
+def beleg_vollstaendig():
+    """Passt der Log zu den Bildern - und ist er ueberhaupt fertig?
+
+    GEMESSEN am 27.09.2026, beim ersten Push dieses Branches: die Python-
+    Suiten laufen VOR Gate 4. Sie fanden die Reste eines frueheren, TEILWEISE
+    gelaufenen Schnittlaufs im Gate-Worktree und hielten sie fuer einen
+    gültigen Beleg - die Dateien existierten, mehr wurde nicht gefragt. Die
+    Tests bauten daraus ihre Faelle und meldeten Falsches (2 Fehler).
+
+    Ein Log zaehlt nur, wenn er ANFANG und ENDE hat. Genau so unterscheidet
+    der echte Lauf einen Abbruch von einem Lauf, und genau daran liess sich
+    der Fehler festmachen.
+    """
+    if not LOG.exists() or not all((DIAG / b).exists() for b in BILDER):
+        return False
+    try:
+        text = LOG.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return ("Log file open" in text
+            and "Log file closed" in text
+            and "WbCutShots: fertig - getrennt" in text)
+
+
 def beleg_vorhanden():
-    return LOG.exists() and all((DIAG / b).exists() for b in BILDER)
+    return beleg_vollstaendig()
 
 
 def gate(logpfad, diag):
@@ -89,9 +113,9 @@ def gate(logpfad, diag):
 @unittest.skipUnless(HAT_PIL, "Pillow fehlt - ohne die Bibliothek lassen sich "
                                "die PNGs nicht messen")
 @unittest.skipUnless(beleg_vorhanden(),
-                     "keine Belege in Saved/Diagnose bzw. kein Lauf-Log - "
-                     "im Commit-Worktree normal, dort fahrt Gate 4 den Lauf "
-                     "erst danach")
+                     "keine vollstaendigen Belege in Saved/Diagnose bzw. kein "
+                     "abgeschlossener Lauf-Log - im Commit-Worktree normal, dort "
+                     "faehrt Gate 4 den Lauf erst danach")
 class CuttableGateFaelltTest(unittest.TestCase):
     """Jeder Fehlerfall muss das Gate zu ROT bringen - und der echte Lauf bleibt gruen."""
 
@@ -99,8 +123,46 @@ class CuttableGateFaelltTest(unittest.TestCase):
         self.quelle = str(WURZEL / "Saved" / "Diagnose")
         with io.open(str(LOG), "r", encoding="utf-8", errors="replace") as fh:
             self.log = fh.read()
+        # Der Beleg muss zu DEN BILDERN passen, die gleich kopiert werden.
+        # Sonst baut der Test seine Faelle aus einem Log, der zu einem
+        # anderen Lauf gehoert - und meldet damit etwas Falsches.
+        self.assertIn("WbCutShots: fertig - getrennt", self.log,
+                      "der Log ist kein vollstaendiger Lauf")
         self.schnipsel = tempfile.mkdtemp(prefix="wb_cuttest_")
         self.addCleanup(shutil.rmtree, self.schnipsel, ignore_errors=True)
+
+    def test_der_beleg_muss_vollstaendig_sein(self):
+        """Der Fund vom 27.09.2026 als Test: ein HALBER Lauf ist kein Beleg.
+
+        Genau daran scheiterte der erste Push dieses Branches - die Suiten
+        liefen vor Gate 4 und fanden die Reste eines abgebrochenen Laufs.
+        """
+        self.assertTrue(beleg_vollstaendig(),
+                        "der Beleg wurde als vollstaendig angenommen, ist es aber nicht")
+        text = LOG.read_text(encoding="utf-8", errors="replace")
+        for merkmal in ("Log file open", "Log file closed",
+                        "WbCutShots: fertig - getrennt"):
+            self.assertIn(merkmal, text, merkmal)
+
+    def test_ein_abgebrochener_log_ist_kein_beleg(self):
+        """Ein Log ohne Ende darf NICHT als Beleg durchgehen."""
+        alt = LOG.read_text(encoding="utf-8", errors="replace")
+        try:
+            LOG.write_text(alt.replace("WbCutShots: fertig - getrennt", "abgebrochen"),
+                           encoding="utf-8")
+            self.assertFalse(beleg_vollstaendig(),
+                             "ein abgebrochener Lauf gilt als Beleg")
+        finally:
+            LOG.write_text(alt, encoding="utf-8")
+        self.assertTrue(beleg_vollstaendig(), "der Test hat den Log nicht wiederhergestellt")
+
+    def test_fehlende_bilder_sind_kein_beleg(self):
+        alt = (DIAG / BILDER[0]).read_bytes()
+        try:
+            (DIAG / BILDER[0]).unlink()
+            self.assertFalse(beleg_vorhanden(), "fehlendes Bild gilt als Beleg")
+        finally:
+            (DIAG / BILDER[0]).write_bytes(alt)
 
     def baue_fall(self, ersetzung, bildaktion):
         diag = tempfile.mkdtemp(dir=self.schnipsel)
