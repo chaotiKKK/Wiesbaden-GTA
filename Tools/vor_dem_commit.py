@@ -184,6 +184,56 @@ class Lauf:
         return len(rot)
 
 
+def anker_gate_fahren(lauf, ziel=None):
+    """Gate 5 mit BEWEIS statt Exit-Code.
+
+    GEMESSEN am 27.09.2026: der Schritt meldete in einem echten Push-Lauf
+    nach 10 Sekunden "gruen", ohne ein Log und ohne Ergebnisdatei zu
+    hinterlassen - es wurde gar nicht gemessen. Ein Gate, das nur auf den
+    Exit-Code schaut, ist genau die Ampel ohne Lampe, die Gate 5 verhindern
+    soll.
+
+    Der Beweis ist der Zeitstempel der Ergebnisdatei: sie muss aus diesem
+    Lauf stammen, nicht von gestern. Bewusst NICHT "Datei vorher loeschen" -
+    das wuerde bei jedem Testlauf eine echte Messung im Arbeitsbaum
+    wegraeumen, und ein Test, der nebenbei Dateien loescht, ist kein guter
+    Test. Das Skript selbst loescht sein Ergebnis ohnehin vor dem Messen.
+
+    `ziel` ist nur fuer die Tests da; im Betrieb ist es die Ergebnisdatei
+    der Standardkarte im Projektwurzelverzeichnis.
+    """
+    if ziel is None:
+        ziel = os.path.join(WURZEL, "Saved", "Diagnose", "anchor_verify.txt")
+
+    start = time.time()
+    ok = lauf.fahre("Gate 5  Ankerzustand (WP)",
+                    r"Tools\verify_anchor.cmd", shell_cmd=True)
+
+    # Eine Sekunde Toleranz: die Dateisysteme runden die Zeitstempel je
+    # nach Plattform, und eine Messung, die im selben Lauf endet, darf
+    # nicht daran scheitern, dass ihr Zeitstempel eine Hauchsekunde
+    # aelter ist als der Laufbeginn.
+    neu = False
+    try:
+        neu = os.path.getmtime(ziel) >= start - 1.0
+    except OSError:
+        neu = False
+    if not neu:
+        print("      ROT   kein neues Ergebnis unter %s - der Lauf hat "
+              "nicht gemessen." % ziel, flush=True)
+        # fahre() hat den Schritt schon als gruen vermerkt; der Beweis
+        # entscheidet, also wird der Eintrag auf rot gezogen. Die
+        # Testdoppel kennen `ergebnisse` nicht - dann gibt es nur den
+        # Rueckgabewert, und die Stufenzuordnung bleibt unberuehrt.
+        ergebnisse = getattr(lauf, "ergebnisse", None)
+        if isinstance(ergebnisse, list) and ergebnisse:
+            name, _ok, dauer, fertig = ergebnisse[-1]
+            if name.startswith("Gate 5"):
+                ergebnisse[-1] = (name, False, dauer, fertig)
+        return False
+    return ok
+
+
 def gate0_befehl(dateien):
     """Die Befehlszeile fuer Gate 0 - mit den vorgemerkten Dateien.
 
@@ -271,8 +321,7 @@ def gates_fahren(stufe, dateien):
     # Startet einen Editor, also in derselben Stufe wie die anderen Editor-
     # Laeufe; den Engine-Lock haelt vor_dem_commit von Gate 0 an.
     if stufe == "voll":
-        lauf.fahre("Gate 5  Ankerzustand (WP)",
-                   r"Tools\verify_anchor.cmd", shell_cmd=True)
+        anker_gate_fahren(lauf)
     else:
         lauf.ueberspringe("Gate 5  Ankerzustand (WP)",
                           "Stufe schnell - sie laeuft vor dem Push")

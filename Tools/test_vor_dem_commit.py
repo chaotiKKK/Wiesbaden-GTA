@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -361,6 +362,105 @@ class AnkerGateTest(unittest.TestCase):
                       "verify_anchor.cmd wertet die Zahl der leeren "
                       "Komponenten am Kartenursprung nicht aus - Gate 5 "
                       "kann dann einen kaputten Zustand nicht ablehnen")
+
+
+class AnkerBeweisTest(unittest.TestCase):
+    """Gate 5 verlangt eine NEUE Messung, nicht nur einen Exit-Code.
+
+    Gemessen am 27.09.2026: der Schritt meldete in einem echten Push-Lauf
+    nach 10 Sekunden "gruen", ohne ein Log und ohne Ergebnisdatei zu
+    hinterlassen. Der Exit-Code allein beweist also nicht, dass gemessen
+    wurde - und ein Gate, das auf so einen Beweis verzichtet, ist die Ampel
+    ohne Lampe, die es verhindern soll.
+    """
+
+    class LaufDoppel:
+        def __init__(self, returncode=0):
+            self.ergebnisse = []
+            self._returncode = returncode
+
+        def fahre(self, name, befehl, *, shell_cmd=False):
+            self.ergebnisse.append((name, self._returncode == 0, 0.0, None))
+            return self._returncode == 0
+
+
+        def ueberspringe(self, name, grund):
+            pass
+
+        def bericht(self):
+            return len([e for e in self.ergebnisse if e[1] is False])
+
+    def lauf_mit(self, returncode=0):
+        doppel = self.LaufDoppel(returncode)
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: doppel
+        return doppel, alt
+
+    def test_ohne_neue_datei_ist_es_rot(self):
+        doppel, alt = self.lauf_mit(0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                ziel = os.path.join(tmp, "anchor_verify.txt")
+                ok = vdc.anker_gate_fahren(doppel, ziel=ziel)
+        finally:
+            vdc.Lauf = alt
+        self.assertFalse(ok, "ohne Ergebnisdatei meldet das Gate Erfolg - "
+                             "es hat gar nicht gemessen")
+        self.assertEqual(doppel.bericht(), 1,
+                         "der Eintrag bleibt im Protokoll gruen, obwohl der "
+                         "Beweis fehlt")
+
+    def test_mit_neuer_datei_ist_es_gruen(self):
+        doppel, alt = self.lauf_mit(0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                ziel = os.path.join(tmp, "anchor_verify.txt")
+
+                def schreib(name, befehl, shell_cmd=False):
+                    doppel.ergebnisse.append((name, True, 0.0, None))
+                    with open(ziel, "w", encoding="utf-8") as f:
+                        f.write("LEERE Komponenten: 23800 insgesamt, davon 0 "
+                                "am Kartenursprung\n")
+                    return True
+
+                doppel.fahre = schreib
+                ok = vdc.anker_gate_fahren(doppel, ziel=ziel)
+        finally:
+            vdc.Lauf = alt
+        self.assertTrue(ok)
+        self.assertEqual(doppel.bericht(), 0)
+
+    def test_ein_altes_ergebnis_zaehlt_nicht(self):
+        """Liegt eine Datei von gestern da, ist das Gate trotzdem rot.
+
+        Genau der Fall, an dem ein gemuesstes Gate scheitern wuerde: die
+        Datei ist da und sieht richtig aus, nur ist sie nicht von diesem
+        Lauf.
+        """
+        doppel, alt = self.lauf_mit(0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                ziel = os.path.join(tmp, "anchor_verify.txt")
+                with open(ziel, "w", encoding="utf-8") as f:
+                    f.write("LEERE Komponenten: 20404 insgesamt, davon 20404 "
+                            "am Kartenursprung\n")
+                altzeit = time.time() - 3600.0
+                os.utime(ziel, (altzeit, altzeit))
+                # Der Lauf schreibt nichts - das alte Ergebnis bleibt liegen.
+                ok = vdc.anker_gate_fahren(doppel, ziel=ziel)
+        finally:
+            vdc.Lauf = alt
+        self.assertFalse(ok, "eine alte Messung wird als frisch verbucht")
+
+    def test_auch_ein_roter_exit_code_wird_rot_protokolliert(self):
+        doppel, alt = self.lauf_mit(3)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                ziel = os.path.join(tmp, "anchor_verify.txt")
+                ok = vdc.anker_gate_fahren(doppel, ziel=ziel)
+        finally:
+            vdc.Lauf = alt
+        self.assertFalse(ok)
 
 
 class PushBereichTest(unittest.TestCase):
