@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -692,9 +693,16 @@ class EngineLockTest(unittest.TestCase):
     def test_motor_sperre_gehoert_dem_python_lauf_und_wartet_auf_den_fremden(self):
         with tempfile.TemporaryDirectory() as tmp:
             pfad = str(Path(tmp) / "engine_run.lock")
-            # Ein fremder Lauf, der nach 4 s endet.
+            # Ein fremder Lauf, der erst 3 s NACH der ersten Abfrage endet.
+            #
+            # GEMESSEN am 28.09.2026 im Push-Gate: vorher lebte er 4 s ab dem
+            # Start. Schon die erste Abfrage startet PowerShell, und unter der
+            # Last des Gate-Laufs dauerte das laenger - beim zweiten Aufruf
+            # war der Fremde tot, der Lock verwaist und wurde OHNE Warten
+            # genommen ("warte" fehlte). Im ruhigen Arbeitsbaum gruen, im
+            # Gate rot: der Test mass die Rechnerlast, nicht das Warten.
             fremder = subprocess.Popen(
-                [sys.executable, "-c", "import time; time.sleep(4)"],
+                [sys.executable, "-c", "import time; time.sleep(120)"],
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             try:
                 Path(pfad).write_text(
@@ -703,6 +711,9 @@ class EngineLockTest(unittest.TestCase):
                 with mock.patch("sys.stdout", io.StringIO()) as aus:
                     self.assertFalse(gw.motor_sperre("unittest", warte_s=0, lock_pfad=pfad))
                 self.assertIn("BELEGT", aus.getvalue())
+                ende = threading.Timer(3.0, fremder.kill)
+                ende.start()
+                self.addCleanup(ende.cancel)
                 with mock.patch("sys.stdout", io.StringIO()) as aus:
                     gehalten = gw.motor_sperre("unittest", warte_s=60, lock_pfad=pfad,
                                                schlaf=lambda s: time.sleep(1))
