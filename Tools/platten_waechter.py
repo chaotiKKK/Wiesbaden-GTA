@@ -77,6 +77,14 @@ GESCHUETZT = "geschuetzt"
 
 # Nur diese Klasse darf --reinigen anfassen.
 NUR_LOESCHEN = (LOESCHBAR,)
+# Nur mit ausdruecklicher Zusage (--auch-ausgabe). Das sind abgeleitete
+# Kopien, aber ihr Weggang hat einen Preis, den man vorher kennen muss:
+# `Intermediate\Build` loeschen heisst, dass der naechste Build ein
+# VOLLBUILD wird (27.09.2026 am Gate-Worktree gemessen: Gate 1 stieg
+# dadurch von 104 s auf 181 s, im Hauptbaum waere es ein Full Build).
+# Deshalb ist die Voreinstellung unveraendert, und solange der Editor
+# laeuft, wird diese Klasse gar nicht erst angefasst.
+MIT_AUSGABE = (LOESCHBAR, REGENERIERBAR)
 
 # (Pfad, Klasse, Grund). `{w}` = Projektwurzel, `{home}` = Benutzer.
 #
@@ -102,7 +110,7 @@ KANDIDATEN = [
     (r"{w}\Saved\Cooked", REGENERIERBAR, "Cook-Ergebnis, jederzeit neu kochbar"),
     (r"{w}\Intermediate\Build", REGENERIERBAR,
      "Objektdateien, naechster Build wird zum Vollbuild"),
-    (r"{w}\.gate-worktree\WiesbadenReal\Intermediate", REGENERIERBAR,
+    (r"{gate}\Intermediate", REGENERIERBAR,
      "Gate-Worktree-Objektdateien, baut der naechste Gate-Lauf neu"),
 
     # --- EINGANGSDATEN: von Werkzeugen gelesen, NIEMALS Muell --------------
@@ -133,9 +141,35 @@ KANDIDATEN = [
 # verantwortungsvoll einstufen kann, gehoert nicht in eine automatische Liste.
 
 
+def _gate_worktree_ordner(wurzel=None):
+    r"""Der Projektordner im Gate-Worktree - aus gate_worktree.py, nicht geraten.
+
+    GEMESSEN am 28.09.2026: der Kandidat stand auf
+    `{w}\.gate-worktree\WiesbadenReal\Intermediate`, also INNEN im Projekt.
+    Der Gate-Worktree liegt aber neben dem Projektordner
+    (`<Sicherung>\.gate-worktree\WiesbadenReal`, gate_worktree.py:126).
+    Der Wächter maß deshalb seit jeher einen Ordner, den es nicht gibt, und
+    meldete für die Objketdateien des Push-Laufs "0,00 GiB" - während im
+    echten Verzeichnis 3 GiB lagen. Genau die Sorte stiller Falschmeldung,
+    gegen die dieses Werkzeug gebaut ist.
+    """
+    basis = os.path.normpath(wurzel or WURZEL)
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import gate_worktree
+        from pathlib import Path as _Path
+        return str(gate_worktree.gate_projekt(_Path(basis)))
+    except Exception:
+        # Ohne Repo (oder ohne das Modul) der dokumentierte Standardaufbau.
+        return os.path.join(os.path.dirname(basis), ".gate-worktree",
+                            os.path.basename(basis))
+
+
 def _muster_aufloesen(pfad, wurzel=None, home=None):
-    """Die `{w}`/`{home}`-Platzhalter eines Kandidaten aufloesen."""
-    return pfad.format(w=wurzel or WURZEL, home=home or os.path.expanduser("~"))
+    """Die `{w}`/`{home}`/`{gate}`-Platzhalter eines Kandidaten aufloesen."""
+    basis = wurzel or WURZEL
+    return pfad.format(w=basis, home=home or os.path.expanduser("~"),
+                       gate=_gate_worktree_ordner(basis))
 
 
 def platz(pfad):
@@ -388,6 +422,7 @@ def handlungsblock(prozent, grenze=GRENZE_PROZENT, wurzel=None):
 
 
 def bericht(frei, gesamt, prozent, messungen, grenze=GRENZE_PROZENT, laufzeit=0.0,
+             klassen=NUR_LOESCHEN,
             wurzel=None):
     """Der Bericht. Reihenfolge: Lage, Fresser, dann die ausdruecklichen
     Nicht-Anfass-Gruppen - die stehen mit im Bild, weil ein Besetzer sonst
@@ -418,12 +453,17 @@ def bericht(frei, gesamt, prozent, messungen, grenze=GRENZE_PROZENT, laufzeit=0.
                       % (len(abgeschnitten), laufzeit))
         zeilen.append("        ihre Zahl ist eine Untergrenze, nicht der Bestand.")
 
-    loeschbar = sum(m["bytes"] for m in messungen if m["klasse"] in NUR_LOESCHEN)
+    loeschbar = sum(m["bytes"] for m in messungen if m["klasse"] in tuple(klassen))
     if loeschbar:
+        befehl = "--reinigen --trocken"
+        if REGENERIERBAR in tuple(klassen):
+            befehl += " --auch-ausgabe"
         zeilen.append("")
         zeilen.append("Sicher loeschbar: %.1f GB  "
-                      "(python Tools/platten_waechter.py --reinigen --trocken)"
-                      % gb(loeschbar))
+                      "(python Tools/platten_waechter.py %s)" % (gb(loeschbar), befehl))
+        if REGENERIERBAR in tuple(klassen):
+            zeilen.append("    enthaelt die Ausgaben des Projekts: loeschbar, aber der "
+                          "naechste Build wird langsamer.")
     block = handlungsblock(prozent, grenze, wurzel)
     if block:
         zeilen.append(block)
@@ -463,6 +503,19 @@ def erlaubte_wurzeln():
     wurzeln = [WURZEL, os.path.expanduser("~"),
                os.environ.get("TEMP", ""), os.environ.get("TMP", "")]
     return tuple(os.path.normpath(w).lower() for w in wurzeln if w)
+
+
+def engine_lock_aktiv(wurzel=None):
+    r"""Laeuft gerade ein Editorlauf in diesem Baum?
+
+    `Saved\EngineRun.lock` ist die Sperre, die jeder Lauf beim Start setzt
+    (Tools\engine_run_lock.ps1). Solange sie liegt, wird die Ausgabe-
+    Klasse NICHT angefasst: Object-Dateien zu loeschen, waehrend der
+    Compiler oder ein laufender Editor sie benutzt, erzeugt genau die
+    halben Builds, die man hinterher nicht mehr von einem echten Fehler
+    unterscheiden kann.
+    """
+    return os.path.exists(os.path.join(wurzel or WURZEL, "Saved", "EngineRun.lock"))
 
 
 def protokoll_pfad(wurzel=None):
@@ -551,7 +604,8 @@ def loeschreport(messungen, geloescht, trocken=False):
     return "\n".join([kopf] + zeilen + ["    zusammen: %.2f GiB" % gb(summe)])
 
 
-def reinigen(messungen, trocken=False, protokoll=None, jetzt=None, wurzel=None):
+def reinigen(messungen, trocken=False, protokoll=None, jetzt=None,
+             wurzel=None, klassen=NUR_LOESCHEN):
     """Nur die Klassen aus `NUR_LOESCHEN` loeschen. Alles andere bleibt.
 
     Der Schutz ist DREIFACH (27.09.2026, war vorher doppelt):
@@ -574,9 +628,20 @@ def reinigen(messungen, trocken=False, protokoll=None, jetzt=None, wurzel=None):
     `protokoll` ist ein callable (zeilen, pfad) -> bool und ueberschreibt
     das Schreiben - so testen die Faelle "nicht schreibbar" und "trocken",
     ohne das echte Dateisystem zu verbiegen. `wurzel` verschiebt die
-    Protokolldatei mit (siehe protokoll_pfad).
+    Protokolldatei mit (siehe protokoll_pfad). `klassen` entscheidet, was
+    angefasst wird - VORGABE bleibt `NUR_LOESCHEN`, also nur Caches.
+    `MIT_AUSGABE` kommt nur ueber --auch-ausgabe, und selbst dann nicht,
+    solange `engine_lock_aktiv` wahr ist: die abgewiesenen Pfade stehen
+    dann in `abgewiesen` und sagen warum.
     """
     erlaubt = erlaubte_wurzeln()
+    klassen = tuple(klassen)
+    # Der Lock ist eine Sperre fuer die Ausgabe-Klasse, nicht fuer die
+    # Caches: die sind per Definition nichts, woran ein laufender Editor
+    # haengt. Also getrennt zurueckweisen, statt den ganzen Lauf zu kippen.
+    ausgabe_gesperrt = REGENERIERBAR in klassen and engine_lock_aktiv(wurzel)
+    if ausgabe_gesperrt:
+        klassen = tuple(k for k in klassen if k != REGENERIERBAR)
     ziel_pfad = protokoll_pfad(wurzel)
     if protokoll is not None:
         pfad_schreiben = protokoll
@@ -585,10 +650,18 @@ def reinigen(messungen, trocken=False, protokoll=None, jetzt=None, wurzel=None):
     geloescht = []
     abgewiesen = []
     ohne_protokoll = []
+    if ausgabe_gesperrt:
+        # NICHT stillschweigend ueberspringen: ein stilles Ueberspringen
+        # liest sich in der Ausgabe wie "gibt es da nichts". Der Grund
+        # steht mit dran, damit die Meldung selbst erklaert, was los ist.
+        abgewiesen.extend(
+            "%s (Editor laeuft - Ausgabe-Klasse nicht angefasst)"
+            % os.path.normpath(m["pfad"])
+            for m in messungen if m["klasse"] == REGENERIERBAR)
 
     absichten = []
     for m in messungen:
-        if m["klasse"] not in NUR_LOESCHEN:
+        if m["klasse"] not in klassen:
             continue
         ziel = os.path.normpath(m["pfad"])
         if not ziel.lower().startswith(erlaubt):
@@ -652,6 +725,10 @@ def hauptprogramm(argv=None):
                    help="die als 'cache' eingestuften Ordner loeschen")
     p.add_argument("--trocken", action="store_true",
                    help="mit --reinigen: nur zeigen, nicht loeschen")
+    p.add_argument("--auch-ausgabe", action="store_true",
+                   help="mit --reinigen: auch die regenerierbaren Ausgaben loeschen "
+                        "(Intermediate, Cooked, StagedBuilds). Kostet Zeit: der "
+                        "naechste Build wird langsamer. Nie, solange der Editor laeuft.")
     p.add_argument("--budget", type=float, default=BUDGET_SEKUNDEN,
                    help="Sekunden fuer die gesamte Messung")
     p.add_argument("--kein-cache", action="store_true",
@@ -677,18 +754,22 @@ def hauptprogramm(argv=None):
         cache_sichern({"zeit": time.time(), "laufzeit": laufzeit,
                        "messungen": messungen})
 
-    print(bericht(frei, gesamt, prozent, messungen, args.schwelle, laufzeit))
+    klassen = MIT_AUSGABE if args.auch_ausgabe else NUR_LOESCHEN
+    print(bericht(frei, gesamt, prozent, messungen, args.schwelle, laufzeit,
+                  klassen))
 
     if args.reinigen:
         geloescht, abgewiesen = reinigen(messungen, trocken=args.trocken,
-                                          wurzel=WURZEL)
+                                          wurzel=WURZEL, klassen=klassen)
         print("")
         if geloescht:
             print(("KOENNTE LOESCHEN: " if args.trocken else "GELOESCHT: ")
                   + ", ".join(geloescht))
         if abgewiesen:
-            print("abgewiesen (ausserhalb der erlaubten Wurzeln "
-                  "ODER ohne schreibbares Protokoll): " + ", ".join(abgewiesen))
+            print("abgewiesen (ausserhalb der erlaubten Wurzeln, ohne "
+                  "schreibbares Protokoll ODER weil der Editor laeuft und die "
+                  "Ausgabe-Klasse dann nicht angefasst wird): "
+                  + ", ".join(abgewiesen))
         print(loeschreport(messungen, geloescht, args.trocken))
         print("Protokoll: " + protokoll_pfad())
         # Absichtlich kein Rueckgabecode 3: wer ausdruecklich --reinigen

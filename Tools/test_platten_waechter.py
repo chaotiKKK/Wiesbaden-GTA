@@ -218,8 +218,140 @@ class ReinigenTest(unittest.TestCase):
                                                     return_value=(r"c:\projekt",)):
             geloescht, abgewiesen = pw.reinigen(
                 [self.messung(r"c:\projekt\gibt\es\nicht", pw.LOESCHBAR)], wurzel=t)
-            self.assertEqual(geloescht, [])
+        self.assertEqual(geloescht, [])
+        self.assertEqual(abgewiesen, [])
+
+
+class AusgabeKlasseTest(unittest.TestCase):
+    r"""--auch-ausgabe: loeschbar, aber nur auf Zusage und nie bei laufendem Editor.
+
+    Am 28.09.2026 von Hand geleert, weil kein Knopf dafuer existierte:
+    4,14 GiB (Gate-Worktree-Intermediate, Saved\Cooked, Saved\Logs). Der
+    Weg war richtig, die Arbeit falsch verteilt - sie gehoert ins Werkzeug,
+    mit derselben Bremse wie die Caches.
+    """
+
+    def messung(self, pfad, klasse, grund="regenerierbar"):
+        return {"pfad": pfad, "klasse": klasse, "grund": grund, "bytes": 10,
+                "dateien": 1, "vollstaendig": True}
+
+    def baue(self, t, *klassen):
+        """Legt je Klasse einen Ordner mit Inhalt an und liefert die Pfade."""
+        pfade = {}
+        for klasse in klassen:
+            ziel = os.path.join(t, klasse)
+            os.makedirs(ziel)
+            with open(os.path.join(ziel, "x"), "wb") as f:
+                f.truncate(5)
+            pfade[klasse] = ziel
+        return pfade
+
+    def test_mit_ausgabe_werden_die_objektdateien_geloescht(self):
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(os.path.normpath(t).lower(),)):
+            pfade = self.baue(t, pw.LOESCHBAR, pw.REGENERIERBAR)
+            geloescht, abgewiesen = pw.reinigen(
+                [self.messung(pfade[pw.LOESCHBAR], pw.LOESCHBAR),
+                 self.messung(pfade[pw.REGENERIERBAR], pw.REGENERIERBAR)],
+                wurzel=t, klassen=pw.MIT_AUSGABE)
+            self.assertEqual(sorted(geloescht), sorted(pfade.values()))
             self.assertEqual(abgewiesen, [])
+            for pfad in pfade.values():
+                self.assertFalse(os.path.exists(pfad), pfad)
+
+    def test_ohne_die_option_bleibt_die_ausgabe_stehen(self):
+        """Die Voreinstellung darf sich nicht verschoben haben."""
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(os.path.normpath(t).lower(),)):
+            pfade = self.baue(t, pw.LOESCHBAR, pw.REGENERIERBAR, pw.EINGABE)
+            geloescht, _ = pw.reinigen(
+                [self.messung(pfade[pw.LOESCHBAR], pw.LOESCHBAR),
+                 self.messung(pfade[pw.REGENERIERBAR], pw.REGENERIERBAR),
+                 self.messung(pfade[pw.EINGABE], pw.EINGABE)], wurzel=t)
+            self.assertEqual(geloescht, [pfade[pw.LOESCHBAR]])
+            self.assertTrue(os.path.exists(pfade[pw.REGENERIERBAR]))
+            self.assertTrue(os.path.exists(pfade[pw.EINGABE]))
+
+    def test_bei_laufendem_editor_bleibt_die_ausgabe_stehen(self):
+        """Die Sperre: Object-Dateien waehrend eines Laufs loeschen ergibt
+        halbe Builds, die hinterher wie echte Fehler aussehen."""
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(os.path.normpath(t).lower(),)):
+            pfade = self.baue(t, pw.LOESCHBAR, pw.REGENERIERBAR)
+            os.makedirs(os.path.join(t, "Saved"))
+            with open(os.path.join(t, "Saved", "EngineRun.lock"), "w") as f:
+                f.write("PID 1")
+            geloescht, abgewiesen = pw.reinigen(
+                [self.messung(pfade[pw.LOESCHBAR], pw.LOESCHBAR),
+                 self.messung(pfade[pw.REGENERIERBAR], pw.REGENERIERBAR)],
+                wurzel=t, klassen=pw.MIT_AUSGABE)
+            # Die Caches gehen trotzdem - die haengen an keinem Lauf.
+            self.assertEqual(geloescht, [pfade[pw.LOESCHBAR]])
+            self.assertTrue(os.path.exists(pfade[pw.REGENERIERBAR]),
+                            "die Ausgabe-Klasse wurde trotz Lock geloescht")
+            # Und sie wird als abgewiesen gemeldet, nicht stillschweigend
+            # uebersprungen - ein stilles Ueberspringen sieht aus wie "nichts
+            # zu loeschen".
+            self.assertTrue(
+                any(os.path.normpath(pfade[pw.REGENERIERBAR]) in p
+                    for p in abgewiesen),
+                "die gesperrte Ausgabe-Klasse steht nicht in 'abgewiesen': %r"
+                % (abgewiesen,))
+
+    def test_mit_ausgabe_kommt_keine_eingabe_hinein(self):
+        self.assertEqual(pw.MIT_AUSGABE, (pw.LOESCHBAR, pw.REGENERIERBAR))
+        for klasse in (pw.EINGABE, pw.GESCHUETZT):
+            self.assertNotIn(klasse, pw.MIT_AUSGABE)
+        self.assertEqual(pw.NUR_LOESCHEN, (pw.LOESCHBAR,),
+                         "die Voreinstellung hat sich verschoben")
+
+    def test_der_trockenlauf_zeigt_die_ausgabe_ohne_zu_loeschen(self):
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(os.path.normpath(t).lower(),)):
+            pfade = self.baue(t, pw.REGENERIERBAR)
+            geloescht, _ = pw.reinigen(
+                [self.messung(pfade[pw.REGENERIERBAR], pw.REGENERIERBAR)],
+                trocken=True, wurzel=t, klassen=pw.MIT_AUSGABE)
+            self.assertEqual(geloescht, [pfade[pw.REGENERIERBAR]])
+            self.assertTrue(os.path.exists(pfade[pw.REGENERIERBAR]))
+
+    def test_der_gate_worktree_wird_vom_richtigen_ordner_gemessen(self):
+        """Der Kandidat muss NEBEN dem Projekt liegen, nicht darin.
+
+        Am 28.09.2026 stand er auf `{Projekt}\.gate-worktree\...` - ein
+        Ordner, den es nicht gibt. Der Wächter meldete darum "0,00 GiB"
+        fuer genau die Objketdateien, die beim Push-Lauf 3 GiB gross waren.
+        """
+        ordner = pw._gate_worktree_ordner()
+        basis = os.path.normpath(str(WURZEL))
+        self.assertFalse(os.path.normpath(ordner).lower().startswith(
+            os.path.join(basis, ".gate-worktree").lower()),
+            "der Gate-Worktree liegt nicht innerhalb des Projektordners: %s" % ordner)
+        self.assertIn(".gate-worktree", os.path.normpath(ordner))
+        # Und der Kandidat, der ihn messen soll, traegt den Pfad wirklich.
+        muster = [m for m, k, _g in pw.KANDIDATEN if "{gate}" in m]
+        self.assertEqual(len(muster), 1, muster)
+        aufgeloest = pw._muster_aufloesen(muster[0])
+        self.assertTrue(aufgeloest.endswith("Intermediate"))
+        self.assertIn(os.path.normpath(ordner), os.path.normpath(aufgeloest))
+        # Kein LOESCHBARER Kandidat darf auf einen Pfad INNERHALB des
+        # Projekts zeigen, den es nicht gibt. Die geschuetzten Eintraege
+        # (etwa der Worktree eines anderen Threads) bleiben unberuehrt -
+        # sie richten sich nach fremder Benennung, nicht nach dem Layout.
+        falsch = "{w}" + chr(92) + ".gate-worktree"
+        for muster, klasse, _grund in pw.KANDIDATEN:
+            if klasse in (pw.LOESCHBAR, pw.REGENERIERBAR):
+                self.assertNotIn(falsch, muster, muster)
+
+    def test_der_bericht_nennt_die_option_bei_ausgabe(self):
+        messungen = [self.messung(r"c:\projekt\Intermediate\Build", pw.REGENERIERBAR)]
+        messungen[0]["bytes"] = 5 * 2 ** 30
+        mit = pw.bericht(100, 1000, 10.0, messungen, 20.0, 1.0, pw.MIT_AUSGABE)
+        ohne = pw.bericht(100, 1000, 10.0, messungen, 20.0, 1.0)
+        self.assertIn("--auch-ausgabe", mit)
+        self.assertNotIn("--auch-ausgabe", ohne)
+        # Ohne die Option wird die Ausgabe nicht als loeschbar angeboten.
+        self.assertNotIn("Sicher loeschbar", ohne)
 
 
 class BerichtTest(unittest.TestCase):

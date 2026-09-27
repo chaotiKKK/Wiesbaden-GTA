@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -46,6 +47,10 @@ except ImportError:
     HAT_PIL = False
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import beleg  # noqa: E402  (Pfad oben gesetzt, liefert TOLERANZ_S)
+
+TOLERANZ_S = beleg.TOLERANZ_S
 
 WURZEL = Path(__file__).resolve().parent.parent
 GATE = WURZEL / "Tools" / "verify_cuttable.py"
@@ -178,8 +183,50 @@ def bild_mit_cutter_glut(diag, oben):
     im.save(os.path.join(diag, "schnitt_00_vorher.png"))
 
 
+# Wann dieser Testlauf angefangen hat. Ein Beleg, der VOR diesem Zeitpunkt
+# geschrieben wurde, gehoert zu einem anderen Lauf - und genau daran ist der
+# fuenfte Fehlschlag vom 27.09.2026 gehaengen.
+LAUF_START = time.time()
+
+# Drei Zeilen, ohne die ein Lauf nicht abgeschlossen ist. Genau so
+# unterscheidet der echte Lauf einen Abbruch vom Erfolg - und genau so
+# unterscheidet der Test danach echte von halben Belegen.
+LAUF_ENDE_MARKER = ("Log file open", "Log file closed",
+                    "WbCutShots: fertig - getrennt")
+LAUF_ENDE_ZEILEN = os.linesep.join(LAUF_ENDE_MARKER)
+
+
+def belege_fuer_diesen_lauf(jetzt=None, log=None, diag=None):
+    """Sind Log und Bilder da - und stammen sie aus DIESEM Lauf?
+
+    Das Alter ist der Punkt, nicht das Vorhandensein. Am 27.09.2026 lagen
+    beim Push die Bilder eines fremden Gate-Laufs im Worktree: Der Selbsttest
+    lief, urteilte den Lauf eines anderen Threads und meldete das als
+    "der echte Lauf wurde abgewiesen". Ein Beleg ist nur dann ein Beleg fuer
+    diesen Lauf, wenn er nach dem Start geschrieben wurde - dieselbe Regel
+    wie in Tools\beleg.py, mit derselben Toleranz.
+    """
+    jetzt = jetzt if jetzt is not None else time.time()
+    grenze = jetzt - TOLERANZ_S
+    logpfad = Path(log) if log else LOG
+    bilderordner = Path(diag) if diag else DIAG
+    pfade = [logpfad] + [bilderordner / b for b in BILDER]
+    if not all(p.exists() and p.stat().st_mtime >= grenze for p in pfade):
+        return False
+    # ZUSAETZLICH Vollstaendigkeit, uebernommen von integration/gates-gesamt
+    # (dort beleg_vollstaendig): frische Bilder genuegen nicht. Ein
+    # Schnittlauf, der nach zwei Bildern abbrach, hinterlaesst genau so
+    # frische Dateien - und der Log sagt in einem einzigen Blick, ob er zu
+    # Ende kam. Ohne diese Zeile wuerde ein halber Lauf als Beleg gelten.
+    try:
+        text = logpfad.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return all(marker in text for marker in LAUF_ENDE_MARKER)
+
+
 def beleg_vorhanden():
-    return LOG.exists() and all((DIAG / b).exists() for b in BILDER)
+    return belege_fuer_diesen_lauf()
 
 
 def gate(logpfad, diag):
@@ -195,9 +242,10 @@ def gate(logpfad, diag):
 @unittest.skipUnless(HAT_PIL, "Pillow fehlt - ohne die Bibliothek lassen sich "
                                "die PNGs nicht messen")
 @unittest.skipUnless(beleg_vorhanden(),
-                     "keine Belege in Saved/Diagnose bzw. kein Lauf-Log - "
-                     "im Commit-Worktree normal, dort fahrt Gate 4 den Lauf "
-                     "erst danach")
+                     "keine Belege aus DIESEM Lauf in Saved/Diagnose bzw. kein "
+                     "Lauf-Log - im Commit-Worktree normal (dort fahrt Gate 4 "
+                     "erst danach) und nach einem fremden Lauf richtig: die "
+                     "Belege eines anderen Laufs werden nicht bewertet")
 class CuttableGateFaelltTest(unittest.TestCase):
     """Jeder Fehlerfall muss das Gate zu ROT bringen - und der echte Lauf bleibt gruen."""
 
@@ -276,6 +324,85 @@ class CuttableGateFaelltTest(unittest.TestCase):
     def test_10_glut_oben_im_vergleichsbild_bleibt_rot(self):
         # Gegenprobe: der Beschnitt darf die Pruefung nicht entwaffnen.
         self.pruefe_fall(None, lambda d: bild_mit_cutter_glut(d, True), True)
+
+
+@unittest.skipUnless(HAT_PIL, "Pillow fehlt - ohne die Bibliothek lassen sich "
+                              "die PNGs nicht messen")
+class BelegeAusDiesemLaufTest(unittest.TestCase):
+    """Nur Belege aus diesem Lauf gelten - sonst gar keine.
+
+    Am 27.09.2026 hat genau das gefehlt: Der Selbsttest fand die Bilder
+    eines fremden Gate-Laufs im Worktree, lief, und meldete den Lauf eines
+    anderen Threads als "abgewiesen". Ein Beleg, der vor dem Testlauf
+    geschrieben wurde, ist ein Beleg fuer jemand anderen.
+    """
+
+    def setUp(self):
+        self.schnipsel = tempfile.mkdtemp(prefix="wb_belegalter_")
+        self.addCleanup(shutil.rmtree, self.schnipsel, ignore_errors=True)
+        self.log = os.path.join(self.schnipsel, "lauf.log")
+        self.diag = self.schnipsel
+        with open(self.log, "w", encoding="utf-8") as f:
+            f.write(LAUF_ENDE_ZEILEN)
+        for bild in BILDER:
+            with open(os.path.join(self.schnipsel, bild), "wb") as f:
+                f.write(b"x")
+        now = time.time()
+        self.alt = now - 3600.0
+
+    def test_fuenf_aktuelle_belege_zaehlen(self):
+        self.assertTrue(belege_fuer_diesen_lauf(jetzt=time.time(),
+                                                 log=self.log, diag=self.diag))
+
+    def test_ein_alter_beleg_wirkt_wie_kein_beleg(self):
+        alt = time.time() - 3600
+        for bild in BILDER[:1]:
+            os.utime(os.path.join(self.diag, bild), (alt, alt))
+        self.assertFalse(belege_fuer_diesen_lauf(jetzt=time.time(),
+                                                  log=self.log, diag=self.diag),
+                         "ein altes Bild wurde als Beleg dieses Laufs akzeptiert")
+
+    def test_ein_altes_log_wirkt_wie_kein_log(self):
+        os.utime(self.log, (self.alt, self.alt))
+        self.assertFalse(belege_fuer_diesen_lauf(jetzt=time.time(),
+                                                  log=self.log, diag=self.diag))
+
+    def test_ein_fehlendes_bild_wirkt_wie_kein_beleg(self):
+        os.remove(os.path.join(self.diag, BILDER[2]))
+        self.assertFalse(belege_fuer_diesen_lauf(jetzt=time.time(),
+                                                  log=self.log, diag=self.diag))
+
+    def test_ein_halber_lauf_wirkt_wie_kein_beleg(self):
+        """Frische Dateien, aber der Lauf kam nicht zu Ende.
+
+        Der Befund kam vom selben Tag (integration/gates-gesamt): die
+        Python-Suiten finden im wiederverwendeten Worktree die Reste eines
+        frueheren, teilweise gelaufenen Schnittlaufs und halten sie fuer
+        einen gueltigen Beleg - die Dateien existieren, mehr wird nicht
+        gefragt.
+        """
+        with open(self.log, "w", encoding="utf-8") as f:
+            f.write(os.linesep.join(["Log file open",
+                                      "WbCutShots: Bild schnitt_01_nah gespeichert."]))
+        self.assertFalse(belege_fuer_diesen_lauf(jetzt=time.time(),
+                                                  log=self.log, diag=self.diag),
+                         "ein halber Lauf wurde als Beleg akzeptiert")
+
+    def test_ein_vollstaendiger_lauf_wirkt_wie_ein_beleg(self):
+        with open(self.log, "w", encoding="utf-8") as f:
+            f.write(LAUF_ENDE_ZEILEN)
+        self.assertTrue(belege_fuer_diesen_lauf(jetzt=time.time(),
+                                                 log=self.log, diag=self.diag))
+
+    def test_die_toleranz_ist_die_aus_beleg_py(self):
+        self.assertEqual(TOLERANZ_S, beleg.TOLERANZ_S)
+        # Gerade noch innerhalb: ein Beleg, der TOLERANZ_S alt ist, zaehlt
+        # noch - das Dateisystem rundet sekundengenau.
+        grenze = time.time() - TOLERANZ_S / 2.0
+        for bild in BILDER:
+            os.utime(os.path.join(self.diag, bild), (grenze, grenze))
+        self.assertTrue(belege_fuer_diesen_lauf(jetzt=time.time(),
+                                                 log=self.log, diag=self.diag))
 
 
 @unittest.skipUnless(HAT_PIL, "Pillow fehlt - ohne die Bibliothek lassen sich "
