@@ -21,6 +21,13 @@ WARUM ZWEI STUFEN - und das ist eine gemessene Entscheidung, keine Meinung:
     Gate 4  Plasmacutter-Bild   1 min  (startet den Unreal-Editor)
     Gate 5  Ankerzustand (WP)   3 min  (startet den Unreal-Editor)
 
+    Plattenplatz                0 s   (HINWEIS, kein Gate: Tools/platten_waechter.py.
+                                         Im gesunden Fall ein Syscall, unter 20 Prozent
+                                         freiem Plattenplatz die vollstaendige Messung.
+                                         Er sperrt NIE einen Commit - eine volle Platte
+                                         ist kein Fehler am Commit, und ein Hook, der
+                                         Commits verweigert, wird umgangen.)
+
 Ein Hook, der vor JEDEM Commit eine Viertelstunde braucht, wird binnen eines
 Tages mit --no-verify umgangen; dann prueft er gar nichts mehr. Darum:
 
@@ -604,6 +611,43 @@ def gate0_befehl(dateien):
     return befehl
 
 
+def platten_hinweis(grenze=None):
+    """Plattenplatz melden - als HINWEIS, niemals als Gate.
+
+    WARUM KEIN GATE: Eine volle Platte ist kein Fehler am Commit. Ein Hook,
+    der Commits verweigert, weil der Rechner voll ist, wird binnen eines Tages
+    mit --no-verify umgangen - und dann prueft er gar nichts mehr. Der
+    Waechter meldet, damit niemand erst am abgebrochenen Cook davon erfaehrt.
+
+    DARUM AUCH NICHT UEBER DEN `Lauf`: die Gate-Buchhaltung zaehlt Gates, und
+    ein Hinweis, der sich als Gate eintraegt, erzaehlt einem das Falsche -
+    mitten in der Zusammenfassung, wo niemand nachfragt.
+
+    IM GESUNDEN FALL KOSTET DAS NICHTS: `shutil.disk_usage` ist ein Syscall.
+    Erst unter der Grenze wird ueberhaupt gemessen (und das Ergebnis 30
+    Minuten gecacht), weil die grossen Cache-Ordner zweistellige Sekunden
+    brauchen - ein Hook, der das vor JEDEM Commit tut, wird abgeschaltet.
+    """
+    # DER IMPORT LIEGT IM try. GEMESSEN am 27.09.2026: er stand ausserhalb
+    # und damit ausserhalb des Schutzes. Das Push-Gate faehrt in einem
+    # eigenen Worktree aus `git worktree add` - dort existieren nur
+    # COMMITTEte Dateien. Ein neues, noch nicht committetes
+    # Tools/platten_waechter.py fehlt dort, der Import scheitert, und der
+    # Commit-Hook stirbt an einem Werkzeug, das nur melden sollte.
+    start = time.time()
+    try:
+        import platten_waechter
+        text = platten_waechter.warnung(grenze=grenze) if grenze \
+            else platten_waechter.warnung()
+    except Exception as e:  # ein Waechter darf den Commit nie verhindern
+        text = "Pruefung nicht ausgefuehrt (%s)" % e
+    dauer = time.time() - start
+    print("  ... Plattenplatz (Hinweis, kein Gate)  %.0f s" % dauer, flush=True)
+    if text:
+        for zeile in str(text).splitlines():
+            print("      %s" % zeile[:200], flush=True)
+
+
 def gates_fahren(stufe, dateien, thread=None):
     lauf = Lauf()
     print("Gates vor dem Commit (Stufe: %s)" % stufe)
@@ -621,6 +665,10 @@ def gates_fahren(stufe, dateien, thread=None):
     if besitz_gate(dateien, lauf, thread=thread):
         lauf.bericht()
         return 1
+
+    # Plattenplatz: HINWEIS, kein Gate - er sperrt nie einen Commit. Sitzt vor
+    # dem Engine-Lock, weil er nichts startet und nichts beansprucht.
+    platten_hinweis()
 
     # Die volle Stufe startet Editoren und beendet sie (Gate 2+3) - der
     # Engine-Lock muss sie ab Gate 0 umschliessen, nicht erst ab dem Aufruf

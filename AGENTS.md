@@ -4699,3 +4699,50 @@ seit dem 27.09.2026.
   Besitz_gate ermittelte den Namen selbst, landete beim Branchnamen und wies
   den Thread ab, dem die Arbeit gehoerte. Beides decken jetzt Tests in
   `Tools/test_vor_dem_commit.py` (86 Tests in der Datei, 324 in der Suite).
+
+## Plattenplatz: der Waechter meldet, er loescht nicht von allein (27.09.2026)
+
+C: stand an diesem Tag bei **93 Prozent belegt (70 GB frei von 953)**. Der
+Grund war nicht das Projekt, sondern der Cache:
+
+    AppData\Local\UnrealEngine\Common\Zen\Data            152,6 GB
+    AppData\Local\UnrealEngine\Common\DerivedDataCache     97,1 GB
+
+Beides sind **Derivate** - sie entstehen beim Bauen und Cooken neu. Zen raeumt
+erst nach **14 Tagen Zugriffsalter** auf (`--gc-cache-duration-seconds
+1209600` in `[Zen.AutoLaunch]`), also ist der Cache **zeit-, nicht
+groessenbasiert** begrenzt und waechst unbegrenzt, bis ihn jemand wegraeumt.
+Nach dem Loeschen: 344 GB frei (64 Prozent).
+
+`Tools/platten_waechter.py` (+ `.cmd` fuer die Windows-Aufgabenplanung) meldet
+das kuenftig von selbst: unter 20 Prozent freiem Plattenplatz die groessten
+Fresser, jeder Pfad mit Grund, und die ausdruecklich **nicht** anfassbaren
+Gruppen im selben Bild. Im Commit-Gate laeuft er als **Hinweis, nicht als
+Gate** (0 s im gesunden Fall, `vor_dem_commit.py::platten_hinweis`).
+
+Drei Entscheidungen, die nicht selbstlaeufig sind:
+
+* **ALT ist nicht UNBENUTZT.** `WiesbadenReal\Saved\_aaa_source` (627 MB,
+  Ordner vom 03.09.) wurde am selben Tag fast geloescht - es sind die
+  CC0-Saetze von ambientCG, aus denen `aaa_import_materials.py` importiert und
+  auf die `roof_variation.py` direkt zugreift. Sie sind wieder da (alle 11
+  Saetze aus `Tools/aaa_materials.json` nachgeladen, 662 MB), aber die Lehre
+  ist die KLASSE: `cache` (loeschbar) / `ausgabe` (regenerierbar) /
+  `eingabe` (Werkzeug liest sie) / `geschuetzt`. Nur `cache` wird bei
+  `--reinigen` angefasst, zusaetzlich geprueft gegen die erlaubten Wurzeln.
+  `%TEMP%` steht **nicht** in der Liste: der Ordner enthaelt neben
+  Installerresten die Arbeitsdaten laufender Werkzeuge - ein ganzer Ordner
+  laesst sich nicht verantwortungsvoll einstufen.
+* **Eine halbe Messung ist keine Zahl.** Jedes Ergebnis traegt
+  `vollstaendig`; bei Budget-Ueberschreitung steht "abgeschnitten" in der
+  Zeile, und unvollstaendige Messungen werden **nicht gecacht** - sonst erbt
+  der naechste Aufruf eine zu kleine Summe und gibt sie als Bestand aus.
+* **Der Hinweis sperrt nie einen Commit.** Eine volle Platte ist kein Fehler
+  am Commit; ein Hook, der Commits verweigert, wird mit `--no-verify`
+  umgangen. Er geht darum auch nicht durch die Gate-Buchhaltung `Lauf`: die
+  Doppel in `test_vor_dem_commit.py` kennt nur echte Gates, und
+  `test_die_schnelle_stufe_haelt_nur_die_pipeline_gates` verlangt dort
+  weiterhin genau `Gate 0`.
+
+Belege: `Saved/Diagnose/plattenbericht.txt`, `Saved/Diagnose/plattenbericht.json`
+(30-Minuten-Cache), 43 Tests in `Tools/test_platten_waechter.py`.
