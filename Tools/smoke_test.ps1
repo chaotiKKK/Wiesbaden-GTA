@@ -176,6 +176,139 @@ function Measure-LoadFactor([int]$Iter, [int]$Samples, [double]$RefMs, [double]$
     return $factor
 }
 
+# -- AUSWERTUNG --------------------------------------------------------------
+# Die Pruefungen liegen in Funktionen, nicht im Rumpf. Grund ist nicht
+# Schoenheit: Test-Frisch beweist nur die AKTUALITAET eines Belegs, nicht
+# dessen VOLLSTAENDIGKEIT. Ob der Rauchtest auf eine frueh Gestorbene Sitzung
+# noch rot wird, entscheidet sich in genau diesem Code - und der war bisher
+# nur mit einem startenden Editor erreichbar. Als Funktionen laesst er sich
+# mit abgeschnittenen Belegen fuettern (Tools/test_rauchtest_beleg.py).
+function Lese-Beleg([string]$Datei, $Start, [string]$Was) {
+    if (Test-Frisch $Datei $Start) { return (Get-Content $Datei -Raw) }
+    Add-Check ("Beleg:" + $Was) $false `
+        ("{0} ist kein Beleg dieses Laufs (fehlt, oder unveraendert seit dem " +
+         "vorigen Lauf stehen geblieben). Die Zahlen waeren die des vorigen " +
+         "Laufs - deshalb wird hier nichts ausgewertet.") `
+        -f (Split-Path $Datei -Leaf)
+    return ""
+}
+
+function Pruefe-Helilog([string]$heli) {
+    # Teleport: Distanz > 100 m (Sitzung 2, am Fahrzeug vor WbHeli)
+    $m = [regex]::Match($heli, 'WbTeleport \d+ ausgefuehrt:.*Distanz ([\d.]+) cm')
+    if ($m.Success) {
+        $dist = [double]$m.Groups[1].Value
+        Add-Check "Teleport" ($dist -gt 10000) ("Distanz {0:N0} cm (erwartet > 10000)" -f $dist)
+    } else { Add-Check "Teleport" $false "keine WbTeleport-Zeile im Log" }
+
+    # Reset: vorher gekippt (|Roll|>30), nachher aufrecht (~0/0)
+    $m = [regex]::Match($heli, 'WbResetVehicle ausgefuehrt: Nick/Roll vorher \(([-\d.]+)/([-\d.]+)\) -> nachher \(([-\d.]+)/([-\d.]+)\)')
+    if ($m.Success) {
+        $vp = [double]$m.Groups[1].Value; $vr = [double]$m.Groups[2].Value
+        $np = [double]$m.Groups[3].Value; $nr = [double]$m.Groups[4].Value
+        $ok = ([math]::Abs($vr) -gt 30) -and ([math]::Abs($np) -lt 1) -and ([math]::Abs($nr) -lt 1)
+        Add-Check "ResetVehicle" $ok ("vorher {0}/{1} -> nachher {2}/{3}" -f $vp,$vr,$np,$nr)
+    } else { Add-Check "ResetVehicle" $false "keine WbResetVehicle-Zeile im Log" }
+
+    # HeliFly: Steigflug - Hoehe > 8 m zu UND Vario zeitweise > +1
+    $flug = [regex]::Matches($heli, 'WbDev Flug t=\d+: Hoehe (\d+) m, Vario ([+-][\d.]+) m/s, Fahrt (\d+) km/h')
+    if ($flug.Count -ge 3) {
+        $hoehen = @(); $varios = @()
+        foreach ($f in $flug) { $hoehen += [double]$f.Groups[1].Value; $varios += [double]$f.Groups[2].Value }
+        $stieg = ($hoehen | Measure-Object -Maximum).Maximum - $hoehen[0]
+        $maxVario = ($varios | Measure-Object -Maximum).Maximum
+        $ok = ($stieg -gt 8) -and ($maxVario -gt 1.0)
+        Add-Check "HeliFly" $ok ("Hoehengewinn {0:N0} m, max Vario {1:N1} m/s ({2} Messpunkte)" -f $stieg,$maxVario,$flug.Count)
+    } else { Add-Check "HeliFly" $false ("nur {0} Flug-Messpunkte im Log (die Sitzung starb vorher?)" -f $flug.Count) }
+
+    # HeliYaw: Gierrate zeitweise > 10 Grad/s
+    $gier = [regex]::Matches($heli, 'WbDev Gierprobe t=\d+: Kurs \d+ Grad \(Gierrate ([-\d.]+) Grad/s\)')
+    if ($gier.Count -ge 2) {
+        $rates = @(); foreach ($g in $gier) { $rates += [math]::Abs([double]$g.Groups[1].Value) }
+        $maxRate = ($rates | Measure-Object -Maximum).Maximum
+        Add-Check "HeliYaw" ($maxRate -gt 10) ("max Gierrate {0:N1} Grad/s (>10, {1} Messpunkte)" -f $maxRate,$gier.Count)
+    } else { Add-Check "HeliYaw" $false ("nur {0} Gierprobe-Messpunkte im Log (die Sitzung starb vorher?)" -f $gier.Count) }
+}
+
+function Pruefe-Fahrlog([string]$car) {
+    # Fahren: WbDrive faehrt den Standard-Kaefer ueber die echte Fahrphysik
+    # (Test-Harness, ohne Tastatur) -> Tempo baut auf UND der Lenk-Sweep aendert
+    # den Kurs. Beweist Laengsdynamik + Lenkung des ausgelieferten Fahrzeugs.
+    # Die Fahrt-Zeile traegt seit dem Drehzahl-Flare (a4f276b) auch die Drehzahl;
+    # ohne das optionale Feld fand die Pruefung 0 Messpunkte.
+    $fahrt = [regex]::Matches($car, 'WbDev Fahrt t=\d+: Tempo (\d+) km/h,(?: Drehzahl \d+ U/min,)? Kursaenderung ([+-]\d+) Grad, Gang (\d+)')
+    if ($fahrt.Count -ge 3) {
+        $maxTempo = 0; $maxKurs = 0; $maxGear = 0
+        foreach ($f in $fahrt) {
+            $t = [int]$f.Groups[1].Value; if ($t -gt $maxTempo) { $maxTempo = $t }
+            $k = [math]::Abs([int]$f.Groups[2].Value); if ($k -gt $maxKurs) { $maxKurs = $k }
+            $g = [int]$f.Groups[3].Value; if ($g -gt $maxGear) { $maxGear = $g }
+        }
+        $ok = ($maxTempo -gt 20) -and ($maxKurs -gt 15)
+        Add-Check "Fahren" $ok ("max Tempo {0} km/h (>20), Kursaenderung {1} Grad (>15), Gang {2}, {3} Messpunkte" -f $maxTempo,$maxKurs,$maxGear,$fahrt.Count)
+    } else { Add-Check "Fahren" $false ("nur {0} Fahrt-Messpunkte (WbDrive lief nicht? die Sitzung starb vorher?)" -f $fahrt.Count) }
+
+    # Perf-Regression: Spiel-Strang-Zeit + Last-Inventar aus dem 8-s-Diagnose-
+    # block (feuert in der Fahrzeug-Sitzung). Zwei Signale mit verschiedener
+    # Natur: die DETERMINISTISCHEN Zaehler (Komponenten/Instanzen) sind die
+    # harte, last-unabhaengige Primaer-Schranke; die FRAME-ZEIT wird
+    # last-normiert (Basis x gemessener Lastfaktor, gedeckelt + absolutes Dach).
+    # Fehlt der Block ganz, ebenfalls Fehler - koennte eine Verschlechterung
+    # verdecken, und genau das ist der Fall, wenn die Sitzung vorher stirbt.
+    $mSpiel = [regex]::Match($car, 'Straenge im Mittel: Spiel ([\d.]+) ms')
+    $mInv   = [regex]::Match($car, 'Last-Inventar \(Spiel-Strang\): (\d+) Primitive-Komponenten .*? (\d+) Instanz-Komponenten mit (\d+) Instanzen')
+    if ($mSpiel.Success -and $mInv.Success) {
+        $spielMs = [double]$mSpiel.Groups[1].Value
+        $primComps = [int]$mInv.Groups[1].Value
+        $instances = [int]$mInv.Groups[3].Value
+
+        $okComps = $primComps -le $MaxPrimComponents
+        $okInst  = $instances -le $MaxInstances
+
+        $loadFactor = Measure-LoadFactor $CalibIter $CalibSamples $CalibRefMs $MaxLoadFactor
+        $effMaxSpiel = [Math]::Min($MaxSpielMs * $loadFactor, $AbsoluteMaxSpielMs)
+        $okSpiel = $spielMs -le $effMaxSpiel
+
+        $ok = $okSpiel -and $okComps -and $okInst
+        Add-Check "Perf-Regression" $ok ("Spiel {0:N0} ms (<= {1:N0} = {2}x{3:N1}, Dach {4:N0}), {5:N0} Komponenten (<= {6:N0}), {7:N0} Instanzen (<= {8:N0})" -f `
+            $spielMs, $effMaxSpiel, $MaxSpielMs, $loadFactor, $AbsoluteMaxSpielMs, `
+            $primComps, $MaxPrimComponents, $instances, $MaxInstances)
+    } else {
+        Add-Check "Perf-Regression" $false "kein 8-s-Diagnoseblock (Straenge/Last-Inventar) im Log - Perf nicht pruefbar"
+    }
+}
+
+function Pruefe-Health($health, [string]$healthErr) {
+    # Materialien: kein Mesh-Abschnitt ohne Material - aus dem WbHealth.json-
+    # Report-Feld (perf.meshSectionsWithoutMaterial), NICHT aus der Material-
+    # Bilanz-Prosa gegreppt.
+    if ($null -ne $health -and $null -ne $health.perf) {
+        $noMat = [int]$health.perf.meshSectionsWithoutMaterial
+        $total = [int]$health.perf.meshSectionsTotal
+        $matDetail = if ($noMat -eq 0) { "alle {0} Abschnitte mit Material" -f $total } `
+            else { "{0} von {1} OHNE Material (Default-Schachbrett)" -f $noMat, $total }
+        Add-Check "Materialien" ($noMat -eq 0) $matDetail
+    } else {
+        Add-Check "Materialien" $false ("Material aus WbHealth.json nicht lesbar: {0}" -f $healthErr)
+    }
+
+    # Gesundheits-Gate: die evidenz-gewichteten Warnungen aus WbHealth.json als
+    # EIGENE Pruefungen (maschinenlesbar, kein Prosa-grep). Gesund -> eine
+    # gruene Zeile; ungesund -> je Warnung eine eigene rote Pruefung, benannt
+    # nach ihrer Kategorie. So ist auf einen Blick sichtbar, WELCHE Dimension
+    # kippt, statt eine Sammel-Zeile.
+    if ($null -eq $health) {
+        Add-Check "Health-Gate" $false ("WbHealth.json fehlt/unparsebar: {0}" -f $healthErr)
+    } elseif ($health.healthy) {
+        Add-Check "Health-Gate" $true "healthy: true (keine Warnungen)"
+    } else {
+        foreach ($w in @($health.warnings)) {
+            $cat = ($w -split ':', 2)[0].Trim()
+            Add-Check ("Health:" + $cat) $false $w
+        }
+    }
+}
+
 # Eine Sitzung fahren: bis GENUG Belege (WaitPattern >= MinCount) im Log stehen,
 # dann beenden. ExtraArgs sind zusaetzliche Kommandozeilen-Schalter.
 function Invoke-Session([string[]]$ExtraArgs, [string]$ExecCmds, [string]$LogFile,
@@ -250,22 +383,8 @@ Invoke-Session @() "WbHealth 30" $HealthLog "WbDev: WbHealth:" 1 180
 # liegengebliebener Log von gestern bekaeme hier sonst die Messpunkte
 # untergeschoben, und der Warte-Abbruch weiter oben haette den frischen
 # Editor nach vier Sekunden gekillt, ohne je gemessen zu haben.
-$car  = ""
-$heli = ""
-foreach ($sitzung in @(@($CarLog, "Sitzung 1 (Fahrzeug)"),
-                       @($HeliLog, "Sitzung 2 (Heli)"))) {
-    $datei = $sitzung[0]; $was = $sitzung[1]
-    if (Test-Frisch $datei $BelegStart[$datei]) {
-        $text = Get-Content $datei -Raw
-        if ($datei -eq $CarLog) { $car = $text } else { $heli = $text }
-    } else {
-        Add-Check "Beleg:$was" $false `
-            ("{0} ist kein Beleg dieses Laufs (fehlt, oder unveraendert seit dem " +
-             "vorigen Lauf stehen geblieben). Die Zahlen darunter waeren die des " +
-             "vorigen Laufs - deshalb wird hier nichts ausgewertet.") `
-            -f (Split-Path $datei -Leaf)
-    }
-}
+$car  = Lese-Beleg $CarLog  $BelegStart[$CarLog]  "Sitzung 1 (Fahrzeug)"
+$heli = Lese-Beleg $HeliLog $BelegStart[$HeliLog] "Sitzung 2 (Heli)"
 # Umgekehrt heisst "gruen" jetzt auch: die Belege wurden als die dieses Laufs
 # nachgewiesen. Ohne diese Zeile ist nicht unterscheidbar, ob die Pruefungen
 # gemessen haben oder eine liegengebliebene Datei gelesen haben.
@@ -294,122 +413,11 @@ if (Test-Frisch $HealthJson $BelegStart[$HealthJson]) {
     $healthErr = "keine WbHealth.json geschrieben (WbHealth nicht ausgeloest?)"
 }
 
-# -- Teleport: Distanz > 100 m (Sitzung 2, am Fahrzeug vor WbHeli) ---------
-$m = [regex]::Match($heli, 'WbTeleport \d+ ausgefuehrt:.*Distanz ([\d.]+) cm')
-if ($m.Success) {
-    $dist = [double]$m.Groups[1].Value
-    Add-Check "Teleport" ($dist -gt 10000) ("Distanz {0:N0} cm (erwartet > 10000)" -f $dist)
-} else { Add-Check "Teleport" $false "keine WbTeleport-Zeile im Log" }
-
-# -- Reset: vorher gekippt (|Roll|>30), nachher aufrecht (~0/0) -------------
-$m = [regex]::Match($heli, 'WbResetVehicle ausgefuehrt: Nick/Roll vorher \(([-\d.]+)/([-\d.]+)\) -> nachher \(([-\d.]+)/([-\d.]+)\)')
-if ($m.Success) {
-    $vp = [double]$m.Groups[1].Value; $vr = [double]$m.Groups[2].Value
-    $np = [double]$m.Groups[3].Value; $nr = [double]$m.Groups[4].Value
-    $ok = ([math]::Abs($vr) -gt 30) -and ([math]::Abs($np) -lt 1) -and ([math]::Abs($nr) -lt 1)
-    Add-Check "ResetVehicle" $ok ("vorher {0}/{1} -> nachher {2}/{3}" -f $vp,$vr,$np,$nr)
-} else { Add-Check "ResetVehicle" $false "keine WbResetVehicle-Zeile im Log" }
-
-# -- Fahren: WbDrive faehrt den Standard-Kaefer ueber die echte Fahrphysik
-#    (Test-Harness, ohne Tastatur) -> Tempo baut auf UND der Lenk-Sweep aendert
-#    den Kurs. Beweist Laengsdynamik + Lenkung des Fahrzeugs, das ausgeliefert
-#    wird (nicht der belly-gebugte ChaosCar). --------------------------------
-# Die Fahrt-Zeile traegt seit dem Drehzahl-Flare (a4f276b) auch die Drehzahl;
-# ohne das optionale Feld fand die Pruefung 0 Messpunkte.
-$fahrt = [regex]::Matches($car, 'WbDev Fahrt t=\d+: Tempo (\d+) km/h,(?: Drehzahl \d+ U/min,)? Kursaenderung ([+-]\d+) Grad, Gang (\d+)')
-if ($fahrt.Count -ge 3) {
-    $maxTempo = 0; $maxKurs = 0; $maxGear = 0
-    foreach ($f in $fahrt) {
-        $t = [int]$f.Groups[1].Value; if ($t -gt $maxTempo) { $maxTempo = $t }
-        $k = [math]::Abs([int]$f.Groups[2].Value); if ($k -gt $maxKurs) { $maxKurs = $k }
-        $g = [int]$f.Groups[3].Value; if ($g -gt $maxGear) { $maxGear = $g }
-    }
-    $ok = ($maxTempo -gt 20) -and ($maxKurs -gt 15)
-    Add-Check "Fahren" $ok ("max Tempo {0} km/h (>20), Kursaenderung {1} Grad (>15), Gang {2}, {3} Messpunkte" -f $maxTempo,$maxKurs,$maxGear,$fahrt.Count)
-} else { Add-Check "Fahren" $false ("nur {0} Fahrt-Messpunkte (WbDrive lief nicht?)" -f $fahrt.Count) }
-
-# -- Materialien: kein Mesh-Abschnitt ohne Material - aus dem WbHealth.json-
-#    Report-Feld (perf.meshSectionsWithoutMaterial), NICHT mehr aus der Material-
-#    Bilanz-Prosa gegreppt. -------------------------------------------------
-if ($null -ne $health -and $null -ne $health.perf) {
-    $noMat = [int]$health.perf.meshSectionsWithoutMaterial
-    $total = [int]$health.perf.meshSectionsTotal
-    $matDetail = if ($noMat -eq 0) { "alle {0} Abschnitte mit Material" -f $total } `
-        else { "{0} von {1} OHNE Material (Default-Schachbrett)" -f $noMat, $total }
-    Add-Check "Materialien" ($noMat -eq 0) $matDetail
-} else {
-    Add-Check "Materialien" $false ("Material aus WbHealth.json nicht lesbar: {0}" -f $healthErr)
-}
-
-# -- Perf-Regression: Spiel-Strang-Zeit + Last-Inventar aus dem 8-s-Diagnose-
-#    block (feuert in der Fahrzeug-Sitzung). Zwei Signale mit verschiedener Natur:
-#    die DETERMINISTISCHEN Zaehler (Komponenten/Instanzen) sind die harte, last-
-#    unabhaengige Primaer-Schranke; die FRAME-ZEIT wird last-normiert (Basis x
-#    gemessener Lastfaktor, gedeckelt + absolutes Dach), damit Maschinenlast sie
-#    nicht faelschlich reisst - ohne eine echte Regression zu verdecken. Fehlt der
-#    Block ganz, ebenfalls Fehler (koennte eine Verschlechterung verdecken). -----
-$mSpiel = [regex]::Match($car, 'Straenge im Mittel: Spiel ([\d.]+) ms')
-$mInv   = [regex]::Match($car, 'Last-Inventar \(Spiel-Strang\): (\d+) Primitive-Komponenten .*? (\d+) Instanz-Komponenten mit (\d+) Instanzen')
-if ($mSpiel.Success -and $mInv.Success) {
-    $spielMs = [double]$mSpiel.Groups[1].Value
-    $primComps = [int]$mInv.Groups[1].Value
-    $instances = [int]$mInv.Groups[3].Value
-
-    # DETERMINISTISCH (primaer, last-UNABHAENGIG): Komponenten + Instanzen sind
-    # bit-identisch je Lauf; eine echte Streaming-Regression reisst sie sofort.
-    $okComps = $primComps -le $MaxPrimComponents
-    $okInst  = $instances -le $MaxInstances
-
-    # FRAME-ZEIT (last-normiert): Basis-Schranke mit dem gemessenen Lastfaktor
-    # hochskalieren, aber ein absolutes Dach behalten - so relaxt die Schranke
-    # unter Maschinenlast, ohne eine astronomische Frame-Zeit durchzulassen.
-    $loadFactor = Measure-LoadFactor $CalibIter $CalibSamples $CalibRefMs $MaxLoadFactor
-    $effMaxSpiel = [Math]::Min($MaxSpielMs * $loadFactor, $AbsoluteMaxSpielMs)
-    $okSpiel = $spielMs -le $effMaxSpiel
-
-    $ok = $okSpiel -and $okComps -and $okInst
-    Add-Check "Perf-Regression" $ok ("Spiel {0:N0} ms (<= {1:N0} = {2}x{3:N1}, Dach {4:N0}), {5:N0} Komponenten (<= {6:N0}), {7:N0} Instanzen (<= {8:N0})" -f `
-        $spielMs, $effMaxSpiel, $MaxSpielMs, $loadFactor, $AbsoluteMaxSpielMs, `
-        $primComps, $MaxPrimComponents, $instances, $MaxInstances)
-} else {
-    Add-Check "Perf-Regression" $false "kein 8-s-Diagnoseblock (Straenge/Last-Inventar) im Log - Perf nicht pruefbar"
-}
-
-# -- HeliFly: Steigflug - Hoehe > 8 m zu UND Vario zeitweise > +1 ----------
-$flug = [regex]::Matches($heli, 'WbDev Flug t=\d+: Hoehe (\d+) m, Vario ([+-][\d.]+) m/s, Fahrt (\d+) km/h')
-if ($flug.Count -ge 3) {
-    $hoehen = @(); $varios = @()
-    foreach ($f in $flug) { $hoehen += [double]$f.Groups[1].Value; $varios += [double]$f.Groups[2].Value }
-    $stieg = ($hoehen | Measure-Object -Maximum).Maximum - $hoehen[0]
-    $maxVario = ($varios | Measure-Object -Maximum).Maximum
-    $ok = ($stieg -gt 8) -and ($maxVario -gt 1.0)
-    Add-Check "HeliFly" $ok ("Hoehengewinn {0:N0} m, max Vario {1:N1} m/s ({2} Messpunkte)" -f $stieg,$maxVario,$flug.Count)
-} else { Add-Check "HeliFly" $false ("nur {0} Flug-Messpunkte im Log" -f $flug.Count) }
-
-# -- HeliYaw: Gierrate zeitweise > 10 Grad/s --------------------------------
-$gier = [regex]::Matches($heli, 'WbDev Gierprobe t=\d+: Kurs \d+ Grad \(Gierrate ([-\d.]+) Grad/s\)')
-if ($gier.Count -ge 2) {
-    $rates = @(); foreach ($g in $gier) { $rates += [math]::Abs([double]$g.Groups[1].Value) }
-    $maxRate = ($rates | Measure-Object -Maximum).Maximum
-    Add-Check "HeliYaw" ($maxRate -gt 10) ("max Gierrate {0:N1} Grad/s (>10, {1} Messpunkte)" -f $maxRate,$gier.Count)
-} else { Add-Check "HeliYaw" $false ("nur {0} Gierprobe-Messpunkte im Log" -f $gier.Count) }
-
-# -- Gesundheits-Gate: die evidenz-gewichteten Warnungen aus WbHealth.json als
-#    EIGENE Pruefungen (maschinenlesbar, kein Prosa-grep). Gesund -> eine gruene
-#    Zeile; ungesund -> je Warnung eine eigene rote Pruefung, benannt nach ihrer
-#    Kategorie (ampel-kopplung, verkehr, fussgaenger, gebaeude-kollision, perf,
-#    material, streaming). So ist auf einen Blick sichtbar, WELCHE Dimension
-#    kippt, statt eine Sammel-Zeile. --------------------------------------------
-if ($null -eq $health) {
-    Add-Check "Health-Gate" $false ("WbHealth.json fehlt/unparsebar: {0}" -f $healthErr)
-} elseif ($health.healthy) {
-    Add-Check "Health-Gate" $true "healthy: true (keine Warnungen)"
-} else {
-    foreach ($w in @($health.warnings)) {
-        $cat = ($w -split ':', 2)[0].Trim()
-        Add-Check ("Health:" + $cat) $false $w
-    }
-}
+# Die Pruefungen selbst liegen in Pruefe-Helilog/Pruefe-Fahrlog/Pruefe-Health
+# weiter oben - dort koennen sie mit abgeschnittenen Belegen gefuettert werden.
+Pruefe-Helilog $heli
+Pruefe-Fahrlog $car
+Pruefe-Health $health $healthErr
 
 # -- Bericht ---------------------------------------------------------------
 Write-Host ""
