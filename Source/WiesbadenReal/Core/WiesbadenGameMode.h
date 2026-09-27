@@ -14,6 +14,7 @@
 class UWiesbadenCitySubsystem;
 class AWiesbadenStoreMerchant;
 class AWiesbadenPlatterParking;
+class AWiesbadenCuttable;
 struct FWiesbadenRoadClearance;
 struct FWiesbadenBuildingClearance;
 
@@ -472,6 +473,8 @@ private:
 	 * es nicht gab.
 	 */
 	bool PadProbeBedingtErreicht = false;
+	/** Steht die Figur wieder am Auto (Ende des Rueckwegs vor dem X-Schritt)? */
+	bool PadProbeAmAuto = false;
 	/** Strecke der letzten Laufphase in cm (L3-Probe). */
 	float PadProbeLaufStrecke = 0.0f;
 	/** Strecke mit L3 gedrueckt in cm (L3-Probe). */
@@ -494,6 +497,35 @@ private:
 
 	/** Ein Schritt des Gamepad-Pruef-Laufs (Tick). */
 	void TickPadProbe(float DeltaSeconds);
+
+	/**
+	 * Bildprobe des Plasmacutters (-WbCutShots, mit -WbZuFuss): stellt ein
+	 * Trenn-Stueck in der Strasse auf, trennt es und legt je Blickwinkel ein
+	 * Bild ab - die Glutkante ist das ganze Bild nur fuer Sekunden da, das
+	 * Log kann sie nicht zeigen.
+	 *
+	 * Bilder: Saved\Diagnose\schnitt_00_vorher.png (ungeklafft, als
+	 * Vergleich) und schnitt_01_nah / _02_schraeg / _03_weit.
+	 */
+	bool bCutShots = false;
+	float CutShotsTime = 0.0f;
+	int32 CutShotsStep = 0;
+	float CutShotsStepTime = 0.0f;
+	/** Das aufgestellte Trenn-Stueck der Bildprobe. */
+	TWeakObjectPtr<AWiesbadenCuttable> CutShotsObjekt;
+
+	// Freie Kamera der Bildprobe, als ViewTarget gesetzt. Sie haengt an
+	// keinem Pawn, dessen Tick die Drehung ueberschreibt - siehe
+	// KameraAuf in TickCutShots.
+	TWeakObjectPtr<AActor> CutShotsKamera;
+	TWeakObjectPtr<class UCameraComponent> CutShotsLinse;
+	/** Weltmittelpunkt des Trenn-Stuecks (Blickziel aller drei Winkel). */
+	FVector CutShotsMitte = FVector::ZeroVector;
+	/** Schon getrennt? */
+	bool bCutShotsGeschnitten = false;
+
+	/** Ein Schritt der Plasmacutter-Bildprobe (Tick). */
+	void TickCutShots(float DeltaSeconds);
 
 	/** Spielzeit seit BeginPlay in Sekunden. */
 	float ElapsedSeconds = 0.0f;

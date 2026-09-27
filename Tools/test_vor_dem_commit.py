@@ -364,6 +364,93 @@ class AnkerGateTest(unittest.TestCase):
                       "kann dann einen kaputten Zustand nicht ablehnen")
 
 
+class SchnittbildGateTest(unittest.TestCase):
+    """Gate 4 (Plasmacutter-Bildfolge) - es laeuft bei jedem Push, ohne Filter.
+
+    Zwei Dinge sind hier zu verteidigen, und beide sind schon einmal
+    stillschweigend kaputtgegangen:
+
+    1. DASS ES LAEUFT. Es gab zuerst eine Musterliste der Plasmacutter-
+       Dateien als Vorbedingung. Im Commit-Worktree ist der Commit schon
+       committed - eine Liste, die aus dem Push-Bereich gebaut wird, ist
+       dort leer, und "leer" wurde als "nichts zu tun" gelesen. Das Gate
+       waere bei jedem Push erscheinungslos entfallen.
+    2. DASS ES DAS RICHTIGE FAEHRT. Ein Schritt, dessen Befehl niemand
+       nachschaegt, kann alles fahren - auch gar nichts.
+    """
+
+    class LaufDoppel:
+        def __init__(self):
+            self.gefahren = []
+            self.befehle = {}
+            self.uebersprungen = []
+
+        def fahre(self, name, befehl, *, shell_cmd=False):
+            self.gefahren.append(name)
+            self.befehle[name] = befehl
+            return True
+
+        def ueberspringe(self, name, grund):
+            self.uebersprungen.append(name)
+
+        def bericht(self):
+            return 0
+
+    def zuordnung(self, stufe, dateien):
+        doppel = self.LaufDoppel()
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: doppel
+        import gate_worktree
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+                vdc.gates_fahren(stufe, dateien)
+        finally:
+            vdc.Lauf = alt
+        return doppel
+
+    @staticmethod
+    def gate4(namen):
+        return [n for n in namen if "Gate 4" in n]
+
+    def test_es_faehrt_in_der_vollen_stufe(self):
+        d = self.zuordnung("voll", ["Source/WiesbadenReal/World/WiesbadenCuttable.cpp"])
+        self.assertTrue(self.gate4(d.gefahren),
+                        "Gate 4 laeuft in der vollen Stufe nicht")
+
+    def test_es_faehrt_auch_ohne_plasmacutter_datei(self):
+        """Der Kern: KEIN Dateifilter. Ein Push mit nur Werkzeugen darf das
+        Gate nicht ausloesen - das ist genau die Luecke, die es schliessen soll."""
+        d = self.zuordnung("voll", ["Tools/Doku/x.md", "Config/DefaultEngine.ini"])
+        self.assertTrue(self.gate4(d.gefahren),
+                        "das Gate haengt an einer Dateiliste - genau die "
+                        "stille Luecke, die es vermeiden soll")
+
+    def test_es_faehrt_auch_bei_leerer_dateiliste(self):
+        """Leer heisst im Worktree 'unbestimmbar', nicht 'nichts zu tun'."""
+        d = self.zuordnung("voll", [])
+        self.assertTrue(self.gate4(d.gefahren),
+                        "eine leere Dateiliste schaltet das Gate ab - im "
+                        "Commit-Worktree ist genau das der Normalfall")
+
+    def test_es_laeuft_in_der_schnellen_stufe_nicht(self):
+        d = self.zuordnung("schnell", ["Source/X.cpp"])
+        self.assertFalse(self.gate4(d.gefahren),
+                         "die Bildfolge startet einen Editor und gehoert "
+                         "nicht vor jeden Commit")
+        self.assertTrue(self.gate4(d.uebersprungen),
+                        "sie muss als uebersprungen sichtbar sein, nicht "
+                        "ersatzlos wegfallen")
+
+    def test_es_befiehlt_sein_eigenes_gate(self):
+        d = self.zuordnung("voll", ["Source/X.cpp"])
+        # Der Name des Schritts steht im Schluessel, der BEFehl ist der Wert -
+        # nach "Gate 4" im Befehl zu suchen findet nichts.
+        befehle = [str(b) for name, b in d.befehle.items() if "Gate 4" in name]
+        self.assertTrue(befehle, "kein Befehl fuer Gate 4 aufgezeichnet")
+        for befehl in befehle:
+            self.assertIn("verify_cuttable.cmd", befehl,
+                          "Gate 4 faehrt etwas anderes als das Bild-Gate: %s"
+                          % befehl)
 class AnkerBeweisTest(unittest.TestCase):
     """Gate 5 verlangt eine NEUE Messung, nicht nur einen Exit-Code.
 

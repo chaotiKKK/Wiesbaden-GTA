@@ -17,6 +17,7 @@ WARUM ZWEI STUFEN - und das ist eine gemessene Entscheidung, keine Meinung:
     Python-Suiten              31 s   (gemessen 21.09.2026, 172 Tests)
     Gate 2  Unit-Tests          Minuten (startet den Unreal-Editor)
     Gate 3  Rauchtest           Minuten (mehrere Editor-Sitzungen)
+    Gate 4  Plasmacutter-Bild   1 min  (startet den Unreal-Editor)
     Gate 5  Ankerzustand (WP)   3 min  (startet den Unreal-Editor)
 
 Ein Hook, der vor JEDEM Commit eine Viertelstunde braucht, wird binnen eines
@@ -29,6 +30,26 @@ Tages mit --no-verify umgangen; dann prueft er gar nichts mehr. Darum:
 * **voll** laeuft vor dem PUSH. Dort ist die Wartezeit vertretbar, und nichts
   verlaesst den Rechner ungeprueft. Die Blockade wandert damit vom
   Paketieren an die Stelle, an der sie noch billig ist.
+
+GATE 4 (PLASMACUTTER-BILDFOLGE) ist die juengste Stufe und liegt ebenfalls
+nur auf **voll**. Sie stellt ein Trenn-Stueck auf, schneidet es, fotografiert
+die gluehende Kante aus drei Blickwinkeln und misst die Pixel selbst - ein
+Bild ist ein Beleg, eine gruene Behauptung im Log nicht. Zwei Entscheidungen
+daran:
+
+* **IMMER, ohne Dateifilter.** Es gab zuerst eine Musterliste der
+  Plasmacutter-Dateien als Vorbedingung. Im Commit-Worktree ist der Commit
+  schon committed, eine aus dem Push-Bereich gebaute Liste ist dort LEER -
+  und leer wurde als "nichts zu tun" gelesen. Das Gate waere bei jedem Push
+  erscheinungslos entfallen. Was das Bild zerstoert, ist ohnehin nicht immer
+  eine Plasmacutter-Datei: Licht, Material, Post-Process, Kamera.
+* **IM WORKTREE LAEUFT ES OHNE DIE IMPORTIERTEN MESHES.** Content/ wird
+  verlinkt, aber `waehle_stadtinhalt` nimmt aus den unversionierten Dateien
+  nur die Stadtkarten - die Schnittstuecke aus Blender fehlen dort, der
+  Cuttable faellt auf Wuerfel zurueck. Das Gate haengt nicht daran
+  (gemessen: 5.4 / 13.5 / 2.8 % Glueh-Anteil mit Wuerfeln gegen 16 / 18 / 4 %
+  mit den gebauten Meshes, Grenze ist 1 %), es belegt dort also das
+  VERHALTEN, nicht die Mesh-Qualitaet.
 
 DIE PYTHON-SUITEN LIEGEN AUF DER VOLLEN STUFE, und zwar aus zwei Gruenden:
 
@@ -64,7 +85,6 @@ TOOLS = os.path.join(WURZEL, "Tools")
 # Endungen, die einen Kompilierlauf noetig machen. Alles andere kann den
 # Compiler nicht kaputt machen und soll ihn darum nicht kosten.
 CPP_ENDUNGEN = (".cpp", ".h", ".cs", ".inl")
-
 
 def saubere_umgebung():
     """Umgebung OHNE die GIT_*-Variablen des laufenden Hooks.
@@ -303,6 +323,27 @@ def gates_fahren(stufe, dateien):
     else:
         lauf.ueberspringe("Gate 2+3  Tests und Rauchtest",
                           "Stufe schnell - sie laufen vor dem Push")
+
+    # Gate 4: der Plasmacutter als BEWEIS, nicht als Zahlenbehauptung. Die
+    # Unit-Tests koennen nur sagen, dass die Rechnung stimmt; hier steht
+    # die gluehende Kante im Bild, und das Gate misst die Pixel selbst.
+    #
+    # IMMER in der vollen Stufe, OHNE Dateifilter. Es gab zuerst eine
+    # Musterliste der Plasmacutter-Dateien - und damit zwei Fehlerquellen:
+    # eine vergessene Datei laesst das Gate stillschweigend ausfallen, und
+    # das, was das Bild zerstoert, ist nicht immer eine Plasmacutter-Datei
+    # (Licht, Material, Post-Process, Kamera). Der Filter sparte 50 s und
+    # kostete genau das, wofuer das Gate da ist.
+    #
+    # Der Lauf startet einen Editor, also gehoert er hinter Gate 2+3 und
+    # in dieselbe Stufe - den Engine-Lock haelt vor_dem_commit von Gate 0 an,
+    # der Lauf muss ihn nicht selbst beanspruchen.
+    if stufe == "voll":
+        lauf.fahre("Gate 4  Plasmacutter-Bildfolge",
+                   r"Tools\verify_cuttable.cmd", shell_cmd=True)
+    else:
+        lauf.ueberspringe("Gate 4  Plasmacutter-Bildfolge",
+                          "Stufe schnell - sie laeuft vor dem Push")
 
     # Gate 5: der gespeicherte ANKERZUSTAND der gebackenen Karte. Die
     # Verankerung ist die Voraussetzung dafuer, dass eine leere Komponente
