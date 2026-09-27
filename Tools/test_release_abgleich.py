@@ -56,10 +56,18 @@ TITEL = {1: "Eins", 2: "Zwei"}
 
 
 class Attrappe:
-    """Eine gh-Attrappe: sie kennt die Releases, die der Test gebaut hat."""
+    """Eine gh-Attrappe: sie kennt die Releases, die der Test gebaut hat.
+
+    ZWO Repos, weil das Gate beide liest: das private (ohne `--repo`) und das
+    oeffentliche Schaufenster (`--repo chaotiKKK/wiesbaden-real-meilensteine`).
+    Ohne diesen Unterschied wuerde jeder Test am oeffentlichen Repo scheitern,
+    das der Test gar nicht kennt.
+    """
+
+    OEFF = "chaotiKKK/wiesbaden-real-meilensteine"
 
     def __init__(self, releases, fehler=None):
-        self.releases = releases
+        self.repos = {"privat": dict(releases), self.OEFF: dict(releases)}
         self.fehler = fehler
         self.aufrufe = []
 
@@ -67,11 +75,16 @@ class Attrappe:
         self.aufrufe.append(args)
         if self.fehler is not None:
             return self.fehler
+        if "--repo" in args:
+            name = args[args.index("--repo") + 1]
+        else:
+            name = "privat"
+        ziel = self.repos[name]
         if args[:2] == ("release", "list"):
-            return 0, json.dumps([{"tagName": t} for t in self.releases]), ""
+            return 0, json.dumps([{"tagName": t} for t in ziel]), ""
         if args[:2] == ("release", "view"):
             tag = args[2]
-            daten = self.releases.get(tag)
+            daten = ziel.get(tag)
             if daten is None:
                 return 1, "", "release not found"
             return 0, json.dumps(daten), ""
@@ -89,11 +102,13 @@ class AbgleichTest(unittest.TestCase):
         for name in ("01-eins.jpg", "02-zwei.jpg"):
             (self.bilder / name).write_bytes(b"x")
 
-        self.alt = (ra.SEITE_ARBEIT, ra.BILDER_ARBEIT, ra.GH_LAUF,
+        self.alt = (ra.SEITE_ARBEIT, ra.BILDER_ARBEIT, ra.GH_LAUF, ra.HTTP_LAUF,
                     ra.rba.TAGS, ra.rta.SEITEN_TITEL, ra.seite_aus_ref,
                     ra.ref_hat_datei)
         ra.SEITE_ARBEIT = self.seite
         ra.BILDER_ARBEIT = self.bilder
+        # Kein echter Abruf im Test: HTTP 200 gilt als "oeffentlich".
+        ra.HTTP_LAUF = lambda url: (200, "123")
         ra.rba.TAGS = dict(TAGS)
         ra.rta.SEITEN_TITEL = dict(TITEL)
         # Die Seite aus dem Ref ist im Test dieselbe wie im Arbeitsbaum, nur
@@ -103,10 +118,12 @@ class AbgleichTest(unittest.TestCase):
         self.ref_seite = SEITE
         self.attrappe = None
         self.raus = ""
+        self._oeffentlich = None
 
     def tearDown(self):
-        (ra.SEITE_ARBEIT, ra.BILDER_ARBEIT, ra.GH_LAUF, ra.rba.TAGS,
-         ra.rta.SEITEN_TITEL, ra.seite_aus_ref, ra.ref_hat_datei) = self.alt
+        (ra.SEITE_ARBEIT, ra.BILDER_ARBEIT, ra.GH_LAUF, ra.HTTP_LAUF,
+         ra.rba.TAGS, ra.rta.SEITEN_TITEL, ra.seite_aus_ref,
+         ra.ref_hat_datei) = self.alt
 
     # -- Bausteine ---------------------------------------------------------
 
@@ -128,9 +145,15 @@ class AbgleichTest(unittest.TestCase):
                     "## 1. Eins", "# Eins")
         return raus
 
+    def oeffentlich_veraendern(self, aenderung):
+        """Ruft die Aenderung auf den oeffentlichen Releases auf."""
+        self._oeffentlich = aenderung
+
     def laufen(self, argv=None, releases=None, fehler=None):
         self.attrappe = Attrappe(releases if releases is not None else {},
                                  fehler=fehler)
+        if self._oeffentlich is not None:
+            self._oeffentlich(self.attrappe.repos[Attrappe.OEFF])
         ra.GH_LAUF = self.attrappe
         puffer = io.StringIO()
         with contextlib.redirect_stdout(puffer):
@@ -308,7 +331,107 @@ class AbgleichTest(unittest.TestCase):
         self.assertEqual(code, 0, self.raus)
         self.assertIn("auftragsgemaess", self.raus)
 
-    # -- 6. Der Hinweis, kein Fehler ---------------------------------------
+    # -- 6. Oeffentlichkeit: Bilder ohne GitHub-Konto ----------------------
+
+    def test_ein_link_ins_private_repo_ist_rot(self):
+        """Der Fehler, den der Textvergleich allein NICHT sieht: der Text
+        kann bytegleich dem Erzeuger entsprechen und trotzdem ins private
+        Repo zeigen."""
+        rel = self.releases()
+        for tag in rel:
+            rel[tag]["body"] = (rel[tag]["body"] + "\n\nFoto: "
+                                "[das Turmbild](https://github.com/chaotiKKK/"
+                                "Wiesbaden-GTA/blob/main/x.jpg)\n")
+        code = self.laufen(releases=rel)
+        self.assertEqual(code, 1, self.raus)
+        self.assertIn("verlinkt ins private Repo", self.raus)
+
+    def test_ein_bildlink_außerhalb_des_schaufensters_ist_rot(self):
+        rel = self.releases()
+        for tag in rel:
+            rel[tag]["body"] = (rel[tag]["body"] + "\n\n![x](https://example.org/a.jpg)\n")
+        code = self.laufen(releases=rel)
+        self.assertEqual(code, 1, self.raus)
+        self.assertIn("zeigt nicht ins oeffentliche Schaufenster", self.raus)
+
+    def test_ein_totes_oeffentliches_bild_ist_rot(self):
+        """Der Text ist richtig, das Bild liegt aber nicht im Schaufenster -
+        das faellt nur, wenn man es wirklich abruft."""
+        ra.HTTP_LAUF = lambda url: (404, None)
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 1, self.raus)
+        self.assertIn("ohne Konto nicht abrufbar (HTTP 404)", self.raus)
+
+    def test_ein_netzfehler_beim_abruf_ist_nicht_messbar(self):
+        def kaputt(url):
+            raise ra.NichtMessbar("Timeout")
+
+        ra.HTTP_LAUF = kaputt
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 3, self.raus)
+        self.assertIn("nicht abfragbar", self.raus)
+
+    def test_der_abruf_erfolgt_ohne_anmeldung_und_oeffentlich(self):
+        """Der Aufruf darf keine Anmeldedaten mitschicken - sonst wuerde
+        200 beweisen, dass der Link mit Konto geht, und nicht das, was
+        geprueft werden soll. Und jeder abgerufene Weg muss im oeffentlichen
+        Repo liegen."""
+        gesehen = []
+
+        def merker(url):
+            gesehen.append(url)
+            return 200, "1"
+
+        ra.HTTP_LAUF = merker
+        self.laufen(releases=self.releases())
+        self.assertTrue(gesehen, "es wurde gar nichts abgerufen")
+        erlaubt = ("https://raw.githubusercontent.com/chaotiKKK/wiesbaden-real-meilensteine/",
+                   "https://github.com/chaotiKKK/wiesbaden-real-meilensteine/releases/download/")
+        for url in gesehen:
+            self.assertNotIn("Wiesbaden-GTA", url)
+            self.assertTrue(url.startswith(erlaubt), "falsche Basis: %s" % url)
+
+    # -- 6b. Der oeffentliche Spiegel --------------------------------------
+
+    def test_ein_fehlendes_oeffentliches_release_ist_rot(self):
+        """Ohne das Spiegel-Release gibt es fuer Menschen ohne Konto keinen
+        Download-Weg - die Bildlinks im Text sind dann die einzigen, und die
+        zeigen keine Datei zum Speichern."""
+        self.oeffentlich_veraendern(
+            lambda ziel: ziel.pop(TAGS[1], None))
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 1, self.raus)
+        self.assertIn("kein oeffentliches Release", self.raus)
+
+    def test_ein_bild_fehlt_im_oeffentlichen_release_ist_rot(self):
+        def leeren(ziel):
+            ziel[TAGS[1]]["assets"] = []
+
+        self.oeffentlich_veraendern(leeren)
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 1, self.raus)
+        self.assertIn("Bild fehlt im oeffentlichen Release: 01-eins.jpg", self.raus)
+
+    def test_ein_toter_oeffentlicher_download_ist_rot(self):
+        """Nur die Download-Wege sind tot, die Bildlinks sind gesund: der Fall,
+        den ein reiner Textvergleich nie sieht."""
+        def teilweise(url):
+            return (404, None) if "/releases/download/" in url else (200, "1")
+
+        ra.HTTP_LAUF = teilweise
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 1, self.raus)
+        self.assertIn("oeffentlicher Download nicht erreichbar (HTTP 404)", self.raus)
+
+    def test_der_spiegel_wird_im_oeffentlichen_repo_gelesen(self):
+        self.laufen(releases=self.releases())
+        mit_repo = [a for a in self.attrappe.aufrufe if "--repo" in a]
+        self.assertTrue(mit_repo, "das oeffentliche Repo wurde nie gelesen")
+        for args in mit_repo:
+            self.assertEqual(args[args.index("--repo") + 1],
+                             Attrappe.OEFF)
+
+    # -- 7. Der Hinweis, kein Fehler ---------------------------------------
 
     def test_ein_neues_bild_im_zweig_ist_ein_hinweis_kein_fehler(self):
         """Der Arbeitszweig ist juenger als die veroeffentlichte Seite - das
