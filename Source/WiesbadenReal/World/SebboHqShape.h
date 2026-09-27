@@ -18,6 +18,14 @@ enum class EHqMaterial : uint8
 	Metal    UMETA(DisplayName = "Metall"),
 	/** Markierungen auf dem Landeplatz. */
 	Marking  UMETA(DisplayName = "Markierung"),
+	/** Deckenleuchten der Innenraeume (Laternenglas, emittierend). */
+	Lamp     UMETA(DisplayName = "Leuchte"),
+	/** Mobiliarholz: Schreibtische, Regale, Tuerfluegel. */
+	Wood     UMETA(DisplayName = "Holz"),
+	/** Polsteraeum: Sessel, Baenke, Sofa. */
+	Fabric   UMETA(DisplayName = "Polster"),
+	/** Bepflanzung der Kuebel (Blattwerk der Stadtbaeume). */
+	Plant    UMETA(DisplayName = "Pflanze"),
 	MAX      UMETA(Hidden)
 };
 
@@ -276,6 +284,30 @@ namespace SebboHq
 	 * nicht mehr mit, sie kennt nur seine Oberkante fuer Krone und Mast.
 	 */
 	WIESBADENREAL_API void BuildVerticalCore(
+		const FSebboHqDimensions& Dimensions, TArray<FHqPart>& OutParts);
+
+	/**
+	 * Innenausbau aller Geschosse: Beleuchtung, Tueren, Moeblierung.
+	 *
+	 * JEDES Geschoss bekommt dasselbe Programm (Buerohaus mit Lobby vor den
+	 * Kern-Tueren, Schreibtischwinkel zur Platter Strasse, Sitzungstisch zum
+	 * +Y-Fenster, Regal und Sofa zum -Y-Fenster). Ein gleichfoermiges
+	 * Stockwerk liest sich an der Glasfassade als Absicht; Zufalls-Moeblierung
+	 * sieht nach Fehlern aus.
+	 *
+	 * GRENZEN (Vertrag mit den Proben): der Kern bleibt HEILIG - Treppenweg
+	 * (Lauf/Podest) und Aufzugsschacht bekommen nichts Kollidierendes, die
+	 * Figurprobe laeuft dort. Moebel stehen ausschliesslich im Ring zwischen
+	 * Kernwand (450) und Fassade. Leuchten, Tuerfluegel und Klinken sind reine
+	 * Deko OHNE Kollision (wie der Handlauf: Steckenbleiben zaehlt als
+	 * Fehlschlag), Moebel duerfen kollidieren - man laeuft daran vorbei.
+	 *
+	 * Die Schacht-Oeffnung der -X-Wand bekommt bewusst KEINEN Fluegel: dort
+	 * stehen bereits die funktionierenden Schiebetueren des Aufzugs
+	 * (LandingLeft/Right). Gebaut wird nur die Fluchttuer zum Treppenhaus,
+	 * offen gegen die Bueroseite der Wand.
+	 */
+	WIESBADENREAL_API void BuildInnenausbau(
 		const FSebboHqDimensions& Dimensions, TArray<FHqPart>& OutParts);
 
 	/**
