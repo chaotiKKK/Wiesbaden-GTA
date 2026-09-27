@@ -74,6 +74,21 @@ AWiesbadenLegacyHelicopter::AWiesbadenLegacyHelicopter()
 	if (TailFinMesh) { TailFinMesh->SetVisibility(false); }
 	if (TailRotorBlade) { TailRotorBlade->SetVisibility(false); }
 
+	// KEIN Ka-52-Cockpit. Die Basisklasse haengt ihre Kabine (SM_Ka52Cockpit,
+	// in Ka-52-Modellkoordinaten) an FuselageMesh - und erbt damit dessen
+	// Massstab. Hier ist das der Faktor 14,5 des alten 100,7-cm-Modells: die
+	// 2,6-m-Kabine wurde zu einem 38 x 45 x 22 m grossen schwarzen Kasten, der
+	// 12 bis 33 m ueber dem Garagenhof Platter Str. 144 hing (gemessen am
+	// 27.09.2026 mit einer Spaltensonde: WiesbadenLegacyHelicopter_0.
+	// CockpitMesh, Z 12201..14362). Das alte Modell hat keinen Innenraum, in
+	// den diese Kabine passte - nur das Mesh zu verstecken genuegt nicht, die
+	// Kameraumschaltung der Basisklasse fasst die Kabine wieder an.
+	if (CockpitMesh)
+	{
+		CockpitMesh->SetStaticMesh(nullptr);
+		CockpitMesh->SetVisibility(false);
+	}
+
 	// -- Koaxiales Rotorpaar --------------------------------------------------
 	// Die Naben sitzen auf den gemessenen Masthoehen des alten Modells, nicht
 	// auf denen des Ka-52 (495 / 376,5 cm) - sonst schwebten die Scheiben

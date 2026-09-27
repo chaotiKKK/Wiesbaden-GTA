@@ -904,6 +904,34 @@ void URoadFurnitureGenerator::PlaceSigns(
 	}
 }
 
+bool URoadFurnitureGenerator::WantsDelineators(const FRoadSegment& Segment)
+{
+	// Ausserorts heisst hier: kein Gehweg UND schneller als Tempo 50. Beides
+	// zusammen, weil keins allein genuegt - Wohnstrassen ohne erfassten
+	// Gehweg sind langsam, und Stadtstrassen mit 50 haben Gehwege.
+	return FOSMTagParser::IsDrivable(Segment.HighwayType)
+		&& Segment.SidewalkType == EOSMSidewalkType::None
+		&& Segment.MaxSpeedKmh > 50.0;
+}
+
+int32 URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(
+	const FRoadNetwork& Network, FRoadFurnitureLayout& Layout)
+{
+	TMap<int32, const FRoadSegment*> NachId;
+	NachId.Reserve(Network.Segments.Num());
+	for (const FRoadSegment& Segment : Network.Segments)
+	{
+		NachId.Add(Segment.SegmentId, &Segment);
+	}
+	const int32 Vorher = Layout.Delineators.Num();
+	Layout.Delineators.RemoveAllSwap([&NachId](const FDelineatorInstance& Pfosten)
+	{
+		const FRoadSegment* const* Segment = NachId.Find(Pfosten.SegmentId);
+		return Segment && !WantsDelineators(**Segment);
+	});
+	return Vorher - Layout.Delineators.Num();
+}
+
 void URoadFurnitureGenerator::PlaceDelineators(
 	const FRoadNetwork& Network,
 	const IHeightSampler* HeightSampler,
@@ -912,7 +940,16 @@ void URoadFurnitureGenerator::PlaceDelineators(
 {
 	for (const FRoadSegment& Segment : Network.Segments)
 	{
-		if (!FOSMTagParser::IsDrivable(Segment.HighwayType) || Segment.Centerline.Num() < 2)
+		if (!WantsDelineators(Segment))
+		{
+			continue;
+		}
+		// Die an den Kreuzungen GEKUERZTE Linie: die volle Mittellinie laeuft
+		// bis in den Knoten, und die Pfostenreihe stand dann in der Fahrbahn
+		// der einmuendenden Strasse.
+		const TArray<FVector>& Linie = Segment.TrimmedCenterline.Num() >= 2
+			? Segment.TrimmedCenterline : Segment.Centerline;
+		if (Linie.Num() < 2)
 		{
 			continue;
 		}
@@ -921,7 +958,7 @@ void URoadFurnitureGenerator::PlaceDelineators(
 
 		TArray<FVector> Positions;
 		TArray<FVector> Directions;
-		WalkCenterline(Segment.Centerline, Settings.DelineatorSpacingCm, Positions, Directions);
+		WalkCenterline(Linie, Settings.DelineatorSpacingCm, Positions, Directions);
 
 		for (int32 i = 0; i < Positions.Num(); ++i)
 		{

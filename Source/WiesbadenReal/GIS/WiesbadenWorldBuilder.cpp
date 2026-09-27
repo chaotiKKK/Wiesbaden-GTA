@@ -2216,6 +2216,18 @@ void AWiesbadenWorldBuilder::BeginPlay()
 
 	if (LayoutCount > 0)
 	{
+		// Leitpfosten nach der AKTUELLEN Regel (nur ausserorts): aeltere Bakes
+		// tragen noch die Pfosten der alten Regel, die jede Stadtstrasse
+		// beidseitig bestueckte. Dieselbe Regel wie im Bake, kein Einzelfall.
+		const int32 OhnePfosten =
+			URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(RoadNetwork, FurnitureLayout);
+		if (OhnePfosten > 0)
+		{
+			UE_LOG(LogWbCore, Log,
+				TEXT("Leitpfosten: %d nach der Ausserorts-Regel entfernt (Stadtstrasse oder Tempo <= 50), %d bleiben."),
+				OhnePfosten, FurnitureLayout.Delineators.Num());
+		}
+
 		UE_LOG(LogWbCore, Log,
 			TEXT("Ausstattung wird aus dem gespeicherten Layout aufgebaut: ")
 			TEXT("%d Schilder, %d Leitpfosten, %d Markierungen, %d Laternen."),

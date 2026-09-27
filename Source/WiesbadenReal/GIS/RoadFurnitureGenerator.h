@@ -508,6 +508,29 @@ public:
 	static int32 RemoveFurnitureOnCarriageway(
 		const FRoadNetwork& Network, FRoadFurnitureLayout& Layout);
 
+	/**
+	 * Bekommt dieses Segment Leitpfosten?
+	 *
+	 * Leitpfosten stehen in Deutschland AUSSERORTS: an Strassen ohne Gehweg,
+	 * auf denen schneller als 50 km/h gefahren wird. Bis 27.09.2026 bekam JEDE
+	 * befahrbare Strasse beidseitig Pfosten (187.077 in Alkis31) - auch
+	 * Wohnstrassen mit Gehweg, und weil die Reihe stur der Mittellinie folgte,
+	 * standen Pfosten in Einmuendungen quer in der Fahrbahn der Nebenstrasse
+	 * (Platter Str./Rembrandtstr., Video des Nutzers).
+	 */
+	static bool WantsDelineators(const FRoadSegment& Segment);
+
+	/**
+	 * Wendet WantsDelineators auf ein GESPEICHERTES Layout an: aeltere Bakes
+	 * tragen die Pfosten der alten Regel im Layout, gebaut wird daraus erst
+	 * zur Laufzeit. Pfosten, deren Segment im Netz fehlt, bleiben (ohne
+	 * Segment laesst sich die Regel nicht pruefen).
+	 *
+	 * @return Anzahl der entfernten Leitpfosten.
+	 */
+	static int32 RemoveDelineatorsAgainstRule(
+		const FRoadNetwork& Network, FRoadFurnitureLayout& Layout);
+
 private:
 	/** Uebernimmt die highway=street_lamp-Knoten als Laternenstandorte. */
 	void PlaceStreetLamps(

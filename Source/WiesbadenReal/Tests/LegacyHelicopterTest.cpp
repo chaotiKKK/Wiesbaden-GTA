@@ -69,6 +69,15 @@ bool FLegacyHelicopterModelTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("Rumpfnetz"), Body->GetName(), FString(TEXT("SM_HeliBody")));
 
+	// Die Ka-52-Kabine der Basisklasse haengt am Rumpf und erbt dessen
+	// Massstab (hier 14,5): am 27.09.2026 hing sie als 38-m-Kasten ueber dem
+	// Garagenhof. Das alte Modell traegt KEINE Kabine.
+	if (UStaticMeshComponent* Kabine = CDO->GetCockpitMesh())
+	{
+		TestNull(TEXT("Keine Ka-52-Kabine am alten Modell"), Kabine->GetStaticMesh());
+		TestFalse(TEXT("Kabinenkomponente unsichtbar"), Kabine->IsVisible());
+	}
+
 	UStaticMeshComponent* Upper = CDO->GetUpperRotorMesh();
 	UStaticMeshComponent* Lower = CDO->GetLowerRotorMesh();
 	TestNotNull(TEXT("oberer Rotor vorhanden"), Upper);
