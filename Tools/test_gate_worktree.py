@@ -233,6 +233,43 @@ class BelegRaeumungTest(WegwerfRepo):
         (wurzel / "Saved" / "Logs" / "alt" / "x.log").write_text("alt", encoding="utf-8")
         return log, bild, json_
 
+    def test_die_zeitmarke_liegt_dort_wo_der_selbsttest_sie_sucht(self):
+        """Die beiden Dateien teilen sich nur den Konstanten-Namen. Ob die Marke
+        wirklich dort landet und von dort gelesen wird, kann niemand aus dem
+        Namen ableiten - ohne diesen Test waere ein stilles Scheitern moeglich
+        (die Suites wuerden dann eben immer ueberspringen)."""
+        with mock.patch("sys.stdout", io.StringIO()):
+            wt = gw.vorbereiten(self.projekt, self.eins)
+        marke = wt / gw.BELEG_MARKE
+        self.assertTrue(marke.exists(), "vorbereiten() setzt keine Zeitmarke: %s" % marke)
+        try:
+            beginn = float(marke.read_text(encoding="utf-8").strip())
+        except ValueError:
+            self.fail("die Zeitmarke ist keine lesbare Zahl: %r" % marke.read_text(encoding="utf-8"))
+        self.assertLess(abs(time.time() - beginn), 300,
+                        "die Zeitmarke ist nicht 'jetzt' - %r" % beginn)
+
+    def test_die_zeitmarke_ueberlebt_das_raeumen_und_wird_erneut_gesetzt(self):
+        """Sie liegt in Saved/ und NICHT in einem Belegordner - sonst loeschte
+        der naechste Lauf sie weg und der Selbsttest faelle stillschweigend auf
+        den Handbetriebs-Fall zurueck."""
+        with mock.patch("sys.stdout", io.StringIO()):
+            wt = gw.vorbereiten(self.projekt, self.eins)
+        self.lege_belege(wt)
+        self.lege_belege(self.projekt)          # Ablauf von 1 Stunde
+        (wt / gw.BELEG_MARKE).write_text("%.3f" % (time.time() - 3600), encoding="utf-8")
+        (self.projekt / "neu.txt").write_text("zwei", encoding="utf-8")
+        self.git(self.projekt, "add", "neu.txt")
+        self.git(self.projekt, "commit", "-qm", "zwei")
+        zwei = self.git(self.projekt, "rev-parse", "HEAD")
+        with mock.patch("sys.stdout", io.StringIO()):
+            gw.vorbereiten(self.projekt, zwei)
+        beginn = float((wt / gw.BELEG_MARKE).read_text(encoding="utf-8"))
+        self.assertLess(abs(time.time() - beginn), 300,
+                        "die Zeitmarke wurde nicht erneuert - die Belege des "
+                        "neuen Laufs erschienen dann VOR ihrem Startzeitpunkt "
+                        "und der Selbsttest ueberspringt")
+
     def test_die_belege_des_vorigen_laufs_sind_weg(self):
         with mock.patch("sys.stdout", io.StringIO()):
             wt = gw.vorbereiten(self.projekt, self.eins)

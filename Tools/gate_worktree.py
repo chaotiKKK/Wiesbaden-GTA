@@ -51,6 +51,12 @@ STADT_WURZELN = ("Content/", "Data/Raw/")
 # zurueckstellt - der Worktree sammelt sie also ueber beliebig viele
 # Push-Laeufe an.
 BELEGORDNER = ("Saved/Logs", "Saved/Diagnose")
+# Zeitmarke "dieser Push-Lauf hat angefangen", in Sekunden seit 1970. Sie
+# liegt in Saved/ selbst und NICHT in einem Belegordner - belege_raeumen()
+# wuerde sie sonst gleich wieder mitloeschen. Damit koennen die Python-Suiten
+# einen Beleg nicht nur auf Vollstaendigkeit, sondern auf AKTUALITAET
+# pruefen (Tools/test_verify_cuttable_gate.py).
+BELEG_MARKE = "Saved/.gate_lauf_beginn"
 
 
 def saubere_umgebung():
@@ -309,6 +315,12 @@ def vorbereiten(projekt, sha):
     # VOR den Gates: die Belege eines anderen Commits duerfen keinen als
     # eigene gelten. Siehe belege_raeumen().
     weggeraeumt = belege_raeumen(wt, projekt)
+    # Die Zeitmarke kommt NACH dem Raeumen, sonst loescht der naechste Lauf
+    # sie wieder weg. Sie ist der Anker fuer "aus diesem Lauf" - siehe
+    # BELEG_MARKE.
+    marke = wt / BELEG_MARKE
+    marke.parent.mkdir(parents=True, exist_ok=True)
+    marke.write_text("%.3f" % time.time(), encoding="utf-8")
     rest = [z for z in git(wt, "status", "--porcelain").splitlines()
             if not fnmatch.fnmatch(z[3:], STADTKARTEN)]
     if rest:
