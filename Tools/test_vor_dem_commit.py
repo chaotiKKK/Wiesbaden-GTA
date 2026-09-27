@@ -10,10 +10,12 @@ C++ im Spiel ist.
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -192,11 +194,19 @@ class StufenZuordnungTest(unittest.TestCase):
     """
 
     class LaufDoppel:
+        # Gate B meldet sich ueber fahre_gate (Zusammenfuehrung 27.09.2026).
+        def fahre_gate(self, name, ok, dauer, meldung):
+            return ok
+
         def __init__(self):
             self.gefahren = []
             self.uebersprungen = []
 
-        def fahre(self, name, befehl, *, shell_cmd=False):
+        # notiz kommt seit dem 27.09. dazu: der Schritt Python-Suiten
+        # meldet, wie viele Tests uebersprungen wurden. Wer diese Signatur
+        # verkuerzt, bekommt in 9 Tests einen TypeError statt einer Aussage.
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
             self.gefahren.append(name)
             return True
 
@@ -230,12 +240,83 @@ class StufenZuordnungTest(unittest.TestCase):
     def suiten(namen):
         return [n for n in namen if "Python" in n]
 
+    @staticmethod
+    def waechter(namen):
+        return [n for n in namen if "ch" in n and "Suiten" in n]
+
     def test_schnell_faehrt_die_suiten_nicht(self):
         d = self.zuordnung("schnell", ["Tools/x.py"])
         self.assertFalse(self.suiten(d.gefahren),
                          "die Python-Suiten laufen wieder vor jedem Commit")
-        self.assertTrue(self.suiten(d.uebersprungen),
-                        "die Python-Suiten fehlen ganz, statt uebersprungen zu werden")
+        # Sie werden seit dem 27.09.2026 nicht mehr als "uebersprungen"
+        # gemeldet, sondern gar nicht mehr erwaehnt: der Schritt hiess
+        # vorher "Python-Suiten" und hiess jetzt "Wächter-Suiten" - beide
+        # enthalten "Suiten", und der alte Eintrag waere eine Behauptung
+        # ueber einen Schritt, den es in der schnellen Stufe nicht gibt.
+        # GEMESSEN: dieser Test schlug deshalb rot, als die Zuweisung
+        # auf "Wächter-Suiten" umgestellt wurde.
+        self.assertFalse(self.suiten(d.uebersprungen),
+                         "die Python-Suiten stehen als uebersprungen drin, "
+                         "obwohl dieser Schritt in der schnellen Stufe gar "
+                         "nicht vorkommt")
+
+    def test_schnell_faehrt_aber_die_waechter_suiten(self):
+        """GEMESSEN am 27.09.2026: die AUSNAHME von oben.
+
+        Die beiden Waechter-Suiten laufen vor jedem Commit. Sie sind der
+        Nachweis, dass der Waechter selbst noch funktioniert - er hat im
+        September 1,2 GB eines fremden Pushes geloescht, und ein Waechter,
+        den nur der Push prueft, ist einen Tag zu spaet.
+        """
+        d = self.zuordnung("schnell", ["Tools/x.py"])
+        self.assertTrue(self.waechter(d.gefahren),
+                        "die Wächter-Suiten laufen nicht vor jedem Commit")
+        self.assertFalse(self.waechter(d.uebersprungen),
+                         "die Wächter-Suiten fehlen ganz")
+
+    def test_die_waechter_suiten_fahren_ihre_eigenen_dateien(self):
+        """Nur die beiden Wächter-Suiten - nicht aus Versehen die ganze
+        Sammlung (222 s wuerden jeden Commit aufhalten)."""
+        befehle = {}
+
+        class Doppel:
+            # Gate B meldet sich ueber fahre_gate (Zusammenfuehrung 27.09.2026).
+            def fahre_gate(self, name, ok, dauer, meldung):
+                return ok
+
+            def __init__(self):
+                self.ergebnisse = []
+                self.notizen = []
+                self.notiz_zeilen = []
+
+            def fahre(self, name, befehl, **kwargs):
+                befehle[name] = befehl
+                return True
+
+            def ueberspringe(self, name, grund):
+                pass
+
+            def bericht(self):
+                return 0
+
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: Doppel()
+        import gate_worktree
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+                vdc.gates_fahren("schnell", ["Tools/x.py"])
+        finally:
+            vdc.Lauf = alt
+        schritt = [n for n in befehle if "ch" in n and "Suiten" in n]
+        self.assertTrue(schritt, "der Wächter-Schritt lief gar nicht")
+        befehl = befehle[schritt[0]]
+        self.assertIn("test_worktree_*.py", befehl,
+                      "es werden nicht die Wächter-Suiten gefahren")
+        self.assertIn("-v", befehl,
+                      "ohne -v gibt es keine Testnamen fuer den Bericht")
+        # Die ganze Sammlung darf NICHT mitlaufen: 222 s je Commit.
+        self.assertNotIn("test_*.py", [z for z in befehl if z != "test_worktree_*.py"],
+                         "die ganze Sammlung laeuft mit - 222 s je Commit")
 
     def test_voll_faehrt_die_suiten(self):
         d = self.zuordnung("voll", ["Tools/x.py"])
@@ -244,13 +325,19 @@ class StufenZuordnungTest(unittest.TestCase):
         self.assertFalse(self.suiten(d.uebersprungen))
 
     def test_die_schnelle_stufe_haelt_nur_die_pipeline_gates(self):
-        """Gate 0 immer, Gate 1 nur bei C++ - und sonst nichts."""
+        """Gate 0 immer, Gate 1 nur bei C++ - und die Wächter-Suiten.
+
+        Der Name sagt "nur die Pipeline-Gates" und meint das seit dem
+        27.09.2026 nicht mehr ganz woertlich: die Wächter-Suiten kamen
+        dazu. Der Test folgt der Wirklichkeit und sagt es im Namen.
+        """
         ohne = self.zuordnung("schnell", ["Tools/x.py"])
-        self.assertEqual(ohne.gefahren, ["Gate 0  Engine-Pfade"])
+        self.assertEqual(ohne.gefahren, ["Gate 0  Engine-Pfade", "Wächter-Suiten"])
 
         mit = self.zuordnung("schnell", ["Source/X.cpp"])
-        self.assertEqual(len(mit.gefahren), 2)
+        self.assertEqual(len(mit.gefahren), 3)
         self.assertIn("Gate 0  Engine-Pfade", mit.gefahren)
+        self.assertIn("Wächter-Suiten", mit.gefahren)
         self.assertTrue(any("Gate 1" in n for n in mit.gefahren))
 
     def test_die_volle_stufe_laesst_nichts_aus(self):
@@ -293,7 +380,8 @@ class SchnittbildGateTest(unittest.TestCase):
             self.befehle = {}
             self.uebersprungen = []
 
-        def fahre(self, name, befehl, *, shell_cmd=False):
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
             self.gefahren.append(name)
             self.befehle[name] = befehl
             return True
@@ -389,7 +477,11 @@ class AnkerGateTest(unittest.TestCase):
             self.befehle = {}
             self.uebersprungen = []
 
-        def fahre(self, name, befehl, *, shell_cmd=False):
+        # notiz kommt seit dem 27.09. dazu: der Schritt Python-Suiten
+        # meldet, wie viele Tests uebersprungen wurden. Wer diese Signatur
+        # verkuerzt, bekommt in 9 Tests einen TypeError statt einer Aussage.
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
             self.gefahren.append(name)
             self.befehle[name] = befehl
             return True
@@ -470,6 +562,505 @@ class AnkerGateTest(unittest.TestCase):
                       "verify_anchor.cmd wertet die Zahl der leeren "
                       "Komponenten am Kartenursprung nicht aus - Gate 5 "
                       "kann dann einen kaputten Zustand nicht ablehnen")
+
+
+class AnkerBeweisTest(unittest.TestCase):
+    """Gate 5 verlangt eine NEUE Messung, nicht nur einen Exit-Code.
+
+    Gemessen am 27.09.2026: der Schritt meldete in einem echten Push-Lauf
+    nach 10 Sekunden "gruen", ohne ein Log und ohne Ergebnisdatei zu
+    hinterlassen. Der Exit-Code allein beweist also nicht, dass gemessen
+    wurde - und ein Gate, das auf so einen Beweis verzichtet, ist die Ampel
+    ohne Lampe, die es verhindern soll.
+    """
+
+    class LaufDoppel:
+        # Gate B meldet sich ueber fahre_gate (Zusammenfuehrung 27.09.2026).
+        def fahre_gate(self, name, ok, dauer, meldung):
+            return ok
+
+        def __init__(self, returncode=0):
+            self.ergebnisse = []
+            self._returncode = returncode
+
+        # notiz kommt seit dem 27.09. dazu: der Schritt Python-Suiten
+        # meldet, wie viele Tests uebersprungen wurden. Wer diese Signatur
+        # verkuerzt, bekommt in 9 Tests einen TypeError statt einer Aussage.
+        def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
+            self.ergebnisse.append((name, self._returncode == 0, 0.0, None))
+            return self._returncode == 0
+
+
+        def ueberspringe(self, name, grund):
+            pass
+
+        def bericht(self):
+            return len([e for e in self.ergebnisse if e[1] is False])
+
+    def lauf_mit(self, returncode=0):
+        doppel = self.LaufDoppel(returncode)
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: doppel
+        return doppel, alt
+
+    def test_ohne_neue_datei_ist_es_rot(self):
+        doppel, alt = self.lauf_mit(0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                ziel = os.path.join(tmp, "anchor_verify.txt")
+                ok = vdc.anker_gate_fahren(doppel, ziel=ziel)
+        finally:
+            vdc.Lauf = alt
+        self.assertFalse(ok, "ohne Ergebnisdatei meldet das Gate Erfolg - "
+                             "es hat gar nicht gemessen")
+        self.assertEqual(doppel.bericht(), 1,
+                         "der Eintrag bleibt im Protokoll gruen, obwohl der "
+                         "Beweis fehlt")
+
+    def test_mit_neuer_datei_ist_es_gruen(self):
+        doppel, alt = self.lauf_mit(0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                ziel = os.path.join(tmp, "anchor_verify.txt")
+
+                def schreib(name, befehl, shell_cmd=False):
+                    doppel.ergebnisse.append((name, True, 0.0, None))
+                    with open(ziel, "w", encoding="utf-8") as f:
+                        f.write("LEERE Komponenten: 23800 insgesamt, davon 0 "
+                                "am Kartenursprung\n")
+                    return True
+
+                doppel.fahre = schreib
+                ok = vdc.anker_gate_fahren(doppel, ziel=ziel)
+        finally:
+            vdc.Lauf = alt
+        self.assertTrue(ok)
+        self.assertEqual(doppel.bericht(), 0)
+
+    def test_ein_altes_ergebnis_zaehlt_nicht(self):
+        """Liegt eine Datei von gestern da, ist das Gate trotzdem rot.
+
+        Genau der Fall, an dem ein gemuesstes Gate scheitern wuerde: die
+        Datei ist da und sieht richtig aus, nur ist sie nicht von diesem
+        Lauf.
+        """
+        doppel, alt = self.lauf_mit(0)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                ziel = os.path.join(tmp, "anchor_verify.txt")
+                with open(ziel, "w", encoding="utf-8") as f:
+                    f.write("LEERE Komponenten: 20404 insgesamt, davon 20404 "
+                            "am Kartenursprung\n")
+                altzeit = time.time() - 3600.0
+                os.utime(ziel, (altzeit, altzeit))
+                # Der Lauf schreibt nichts - das alte Ergebnis bleibt liegen.
+                ok = vdc.anker_gate_fahren(doppel, ziel=ziel)
+        finally:
+            vdc.Lauf = alt
+        self.assertFalse(ok, "eine alte Messung wird als frisch verbucht")
+
+    def test_auch_ein_roter_exit_code_wird_rot_protokolliert(self):
+        doppel, alt = self.lauf_mit(3)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                ziel = os.path.join(tmp, "anchor_verify.txt")
+                ok = vdc.anker_gate_fahren(doppel, ziel=ziel)
+        finally:
+            vdc.Lauf = alt
+        self.assertFalse(ok)
+
+
+class UebersprungeneTest(unittest.TestCase):
+    """Der Schritt Python-Suiten muss sagen, wie viele Tests gar nichts pruefen.
+
+    GEMESSEN am 27.09.2026: der Push meldete sechs Gates gruen, und sechs
+    Tests darin waren UEBERSPRUNGEN - `test_verify_cuttable_gate` braucht
+    Belege, die Gate 4 erst danach erzeugt. unittest gibt dafuer nichts
+    heraus: Exit 0 heisst "kein Test ist fehlgeschlagen", nicht "jeder Test
+    lief". Ohne die Zahl sieht ein Lauf aus, in dem alles geprueft wurde,
+    obwohl sechs Pruefungen gar nicht stattfanden.
+    """
+
+    class Fertig:
+        def __init__(self, stderr="", returncode=0):
+            self.stderr = stderr
+            self.stdout = ""
+            self.returncode = returncode
+
+    def lesen(self, stderr, returncode=0):
+        return vdc.uebersprungen_aus(self.Fertig(stderr, returncode))
+
+    def test_die_echte_unittest_zusammenfassung_wird_gelesen(self):
+        z = self.lesen("-" * 70 + "\nRan 313 tests in 108.479s\n\nOK (skipped=13)\n")
+        self.assertEqual((13, 313), z)
+
+    def test_ohne_uebersprungene_ist_es_null(self):
+        z = self.lesen("Ran 313 tests in 108.479s\n\nOK\n")
+        self.assertEqual((0, 313), z, "fehlendes 'skipped=' heisst null uebersprungen, nicht 'unbekannt'")
+
+    def test_auch_bei_fehlern_wird_gezaehlt(self):
+        z = self.lesen("Ran 313 tests in 108.479s\n\nFAILED (failures=2, skipped=13)\n", 1)
+        self.assertEqual((13, 313), z)
+
+    def test_ohne_zusammenfassung_ist_es_unbekannt(self):
+        """Nicht lesbar heisst UNBEKANNT, nicht null.
+
+        Eine nicht gelesene Zahl als Null zu melden waere genau die Ampel
+        ohne Lampe, gegen die diese Gates gebaut sind - der ganze Thread.
+        """
+        for stderr in ("", "python: command not found", "Ran 1 test in 0.001s"):
+            if stderr.endswith("Ran 1 test in 0.001s"):
+                continue
+            self.assertIsNone(self.lesen(stderr),
+                              "%r wurde als Zahl gelesen" % stderr)
+
+    def test_die_notiz_sagt_es_laut(self):
+        z = self.Fertig("Ran 313 tests in 108s\n\nOK (skipped=13)\n")
+        text = vdc.suiten_notiz(z)
+        self.assertIn("13 von 313", text)
+        self.assertIn("UEBERSPRUNGEN", text)
+
+    def test_die_notiz_behauptet_nicht_die_null(self):
+        text = vdc.suiten_notiz(self.Fertig("Python: Datei nicht gefunden"))
+        self.assertIn("nicht lesbar", text)
+        self.assertNotIn("0 von", text)
+
+    def test_alle_tests_gelaufen_das_sagt_sie_auch(self):
+        text = vdc.suiten_notiz(self.Fertig("Ran 313 tests in 108s\n\nOK\n"))
+        self.assertIn("alle 313", text)
+
+    def test_uebersprungen_machen_den_schritt_nicht_rot(self):
+        """Sie sollen SICHTBAR sein, nicht den Push blockieren - der Entwurf
+        sieht sie ausdruecklich vor (keine Belege im Commit-Worktree)."""
+        fertig = self.Fertig("Ran 313 tests in 1s\n\nOK (skipped=13)\n")
+        doppel = []
+
+        class Doppel:
+            # Gate B meldet sich ueber fahre_gate (Zusammenfuehrung 27.09.2026).
+            def fahre_gate(self, name, ok, dauer, meldung):
+                return ok
+
+            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
+                doppel.append(notiz(fertig))
+                return True
+        Doppel().fahre("Python-Suiten", ["x"], notiz=vdc.suiten_notiz)
+        self.assertIn("13 von 313", doppel[0])
+
+    def test_der_schritt_der_suiten_bekommt_die_notiz(self):
+        """Die VERDRAHTUNG, nicht nur die Funktion.
+
+        Ohne `notiz=suiten_notiz` am Aufruf rechnet die Hilfsfunktion
+        vollstaendig richtig - und der Lauf schweigt trotzdem. Genau das waere
+        wieder eine Ampel ohne Lampe, nur eine andere. Dieser Test faehrt die
+        volle Stufe mit einem Doppel und fragt den Schritt selbst.
+        """
+        bekommen = {}
+
+        class Doppel:
+            # Gate B meldet sich ueber fahre_gate (Zusammenfuehrung 27.09.2026).
+            def fahre_gate(self, name, ok, dauer, meldung):
+                return ok
+
+            def __init__(self):
+                self.ergebnisse = []
+                self.notizen = []
+
+            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
+                self.ergebnisse.append((name, True, 0.0, None))
+                bekommen[name] = notiz
+                return True
+
+            def ueberspringe(self, name, grund):
+                pass
+
+            def bericht(self):
+                return 0
+
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: Doppel()
+        import gate_worktree
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+                vdc.gates_fahren("voll", ["Tools/x.py"])
+        finally:
+            vdc.Lauf = alt
+
+        schritt = [n for n in bekommen if "Python" in n]
+        self.assertTrue(schritt, "der Schritt Python-Suiten lief gar nicht")
+        notiz = bekommen[schritt[0]]
+        self.assertIsNotNone(notiz,
+                             "der Schritt Python-Suiten meldet seine "
+                             "Uebersprungenen nicht - der Lauf schweigt")
+        self.assertIn("1 von 5 Tests UEBERSPRUNGEN",
+                      notiz(self.Fertig("Ran 5 tests in 1s\n\nOK (skipped=1)\n")))
+
+    def test_der_bericht_zeigt_die_zahl(self):
+        """Nicht nur neben dem Schritt, sondern auch in der Schlusszeile -
+        dort wird gelesen, wenn der Push laeuft."""
+        aus = io.StringIO()
+        doppel = type("Doppel", (), {})()
+        doppel.ergebnisse = [("Gate 0", True, 1.0, None)]
+        doppel.notizen = [("Python-Suiten", "6 von 313 Tests UEBERSPRUNGEN")]
+        with mock.patch("sys.stdout", aus):
+            rot = vdc.Lauf.bericht(doppel)
+        self.assertEqual(0, rot, "uebersprungene Tests duerfen den Push nicht blockieren")
+        self.assertIn("6 von 313", aus.getvalue(),
+                      "die Schlusszeile verschweigt die uebersprungenen Tests")
+
+
+class SkipNamenTest(unittest.TestCase):
+    """WELCHE Tests fehlten - nicht nur wie viele.
+
+    GEMESSEN am 27.09.2026: zur selben Zahl 14 gab es zwei voellig
+    verschiedene Gruende. Im Commit-Worktree waren es 11 Belege
+    (`test_verify_cuttable_gate`), im Gate-Worktree 4 Push-Logs
+    (`test_worktree_zeitstrahl`, weil dort kein `.planning` lag). Wer nur
+    "14" liest, kann nicht entscheiden, ob das normal ist.
+    """
+
+    VERBOS = ("test_bericht_vorhanden (test_ka52_rotorachse.Ka52RotorachseTest.test_bericht_vorhanden) ... skipped 'Messbericht fehlt: rotorachse_fbx.txt'\n"
+              "test_ohne_messbericht (test_ka52_rotorachse.Ka52RotorachseTest.test_ohne_messbericht) ... skipped 'ohne Messbericht nicht pruefbar'\n"
+              "test_ein_lauf (test_x.Lauftest.test_ein_lauf) ... ok\n"
+              "Ran 3 tests in 1.0s\n\nOK (skipped=2)\n")
+
+    class Fertig:
+        def __init__(self, stderr="", returncode=0):
+            self.stderr = stderr
+            self.stdout = ""
+            self.returncode = returncode
+
+    def test_name_und_grund_werden_gelesen(self):
+        namen = vdc.uebersprungene_namen(self.Fertig(self.VERBOS))
+        self.assertEqual(len(namen), 2)
+        kurz, voll, grund = namen[0]
+        self.assertEqual(kurz, "test_bericht_vorhanden")
+        self.assertEqual(voll, "test_ka52_rotorachse.Ka52RotorachseTest.test_bericht_vorhanden")
+        self.assertEqual(grund, "Messbericht fehlt: rotorachse_fbx.txt")
+
+    def test_ohne_verbose_kommen_keine_namen(self):
+        # Das ist der Grund fuer das `-v`: ohne es steht nur `OK (skipped=2)`.
+        self.assertEqual(vdc.uebersprungene_namen(
+            self.Fertig("Ran 3 tests in 1.0s\n\nOK (skipped=2)\n")), [])
+
+    def test_erfolgreiche_tests_werden_nicht_gezaehlt(self):
+        # Ein 'ok' ist kein Skip - wer alle Zeilen mit 'test_' nimmt,
+        # zaehlt die ganze Suite als uebersprungen.
+        nur_ok = "test_a (m.T.test_a) ... ok\ntest_b (m.T.test_b) ... ok\n"
+        self.assertEqual(vdc.uebersprungene_namen(self.Fertig(nur_ok)), [])
+
+    def test_abgeschnittener_grund_wird_als_solcher_gesagt(self):
+        # GEMESSEN: unittest schreibt den Grund als String-Literal; bricht
+        # das Log mitten darin ab, ist er nicht lesbar. Das darf nicht wie
+        # ein leerer Grund aussehen.
+        kaputt = "test_a (m.T.test_a) ... skipped 'Messbericht fehlt: /langer/Pfad"
+        namen = vdc.uebersprungene_namen(self.Fertig(kaputt))
+        self.assertEqual(len(namen), 1, "der Test wurde nicht erkannt")
+        self.assertIn("nicht lesbar", namen[0][2],
+                      "ein abgeschnittener Grund wurde als leerer Grund gemeldet")
+
+    def test_der_bericht_nennt_die_testnamen(self):
+        zeilen = vdc.suiten_notiz_zeilen(self.Fertig(self.VERBOS))
+        text = "\n".join(zeilen)
+        self.assertIn("test_bericht_vorhanden", text)
+        self.assertIn("Messbericht fehlt", text, "der Grund fehlt - der ist der eigentliche Inhalt")
+        # Die Zahl steht in `notizen`, die Namen hier. GEMESSEN am
+        # 27.09.2026: mit der Zahl auch hier stand dieselbe Zeile zweimal
+        # im Bericht. Sie darf deshalb nicht auf beiden Wegen kommen.
+        self.assertNotIn("2 von 3", text, "die Kopfzeile gehoert in `notizen`")
+        self.assertIn("2 von 3", vdc.suiten_notiz(self.Fertig(self.VERBOS)))
+
+    def test_fehlende_namen_werden_als_fehlend_gesagt(self):
+        # Ohne `-v`: die Zahl ist da, die Namen nicht. Das muss BENANNT
+        # werden - die Zeile darf nicht einfach fehlen, sonst liest sich
+        # "2 uebersprungen" wie eine vollstaendige Meldung.
+        zeilen = vdc.suiten_notiz_zeilen(
+            self.Fertig("Ran 3 tests in 1.0s\n\nOK (skipped=2)\n"))
+        text = "\n".join(zeilen)
+        self.assertIn("unbekannt", text)
+        self.assertIn("-v", text, "der Hinweis auf die Ursache fehlt")
+
+    def test_tests_mit_docstring_werden_auch_gefunden(self):
+        # GEMESSEN am 27.09.2026: unittest druckt bei einem Test mit
+        # Docstring DESSEN erste Zeile statt des Namens. Ohne diesen Fall
+        # fand die Liste 12 von 14 - die Zahl passte nicht zur Liste.
+        roh = ("Der Fund vom 27.09.2026 als Test: ein HALBER Lauf ist kein Beleg. ... skipped 'keine Belege in Saved/Diagnose'\n"
+               "test_a (m.T.test_a) ... skipped 'Pillow fehlt'\n"
+               "Ran 5 tests in 1.0s\n\nOK (skipped=2)\n")
+        namen = vdc.uebersprungene_namen(self.Fertig(roh))
+        self.assertEqual(len(namen), 2, "ein Docstring-Test wurde nicht erkannt")
+        self.assertIn("HALBER Lauf", namen[0][0])
+        self.assertIn("keine Belege", namen[0][2])
+
+    def test_weniger_namen_als_gemeldet_ist_ein_befund(self):
+        # Die Zahl sagt 5, gefunden werden 2. Das ist eine Luecke in der
+        # Liste und wird gesagt - nicht mit "und 3 weitere" geglaettet,
+        # denn die drei sind nicht ausgewaehlt, sondern nicht gesehen.
+        text = "\n".join(vdc.suiten_notiz_zeilen(self.Fertig(
+            "test_a (m.T.test_a) ... skipped 'x'\nRan 9 tests in 1.0s\n\nOK (skipped=5)\n")))
+        self.assertIn("unvollstaendig", text)
+        self.assertIn("gefunden", text)
+
+    def test_mehr_namen_als_gemeldet_ist_auch_ein_befund(self):
+        text = "\n".join(vdc.suiten_notiz_zeilen(self.Fertig(
+            "test_a (m.T.test_a) ... skipped 'x'\ntest_b (m.T.test_b) ... skipped 'y'\n"
+            "Ran 9 tests in 1.0s\n\nOK (skipped=1)\n")))
+        self.assertIn("ACHSUNG", text)
+
+    def test_keine_skips_erzeugen_keine_zeilen(self):
+        self.assertEqual(vdc.suiten_notiz_zeilen(
+            self.Fertig("Ran 3 tests in 1.0s\n\nOK\n")), [])
+
+    def test_ohne_zusammenfassung_erzeugen_keine_zeilen(self):
+        self.assertEqual(vdc.suiten_notiz_zeilen(self.Fertig("command not found")), [])
+
+    def test_lange_gruende_werden_gekuerzt_nicht_verschluckt(self):
+        # GEMESSEN: der ka52-Grund ist 240 Zeichen (ein Blender-Aufruf).
+        lang = "verweis_messbericht_fehlt " * 20
+        zeilen = vdc.skip_zeilen([("test_x", "m.T.test_x", lang)])
+        self.assertIn("...", zeilen[0], "der Grund wurde gekuerzt ohne sichtbares Ende")
+        self.assertLessEqual(len(zeilen[0]), 130, "die Zeile ist unlesbar lang geworden")
+        self.assertIn("verweis_messbericht_fehlt", zeilen[0])
+
+    def test_viele_namen_werden_gezaehlt_nicht_alle_gedruckt(self):
+        namen = [("test_%d" % i, "m.T.test_%d" % i, "grund %d" % i) for i in range(14)]
+        zeilen = vdc.skip_zeilen(namen)
+        self.assertIn("und 8 weitere", "\n".join(zeilen),
+                      "14 Namen alle zu drucken waere die lange Ampel ohne Lampe")
+
+    def test_der_lauf_bekommt_die_mehrzeilige_notiz(self):
+        """Die VERDRAHTUNG. Sonst rechnet alles richtig und der Bericht
+        schweigt - dieselbe Luecke, nur eine Ebene tiefer."""
+        bekommen = {}
+
+        class Doppel:
+            # Gate B meldet sich ueber fahre_gate (Zusammenfuehrung 27.09.2026).
+            def fahre_gate(self, name, ok, dauer, meldung):
+                return ok
+
+            def __init__(self):
+                self.ergebnisse = []
+                self.notizen = []
+                self.notiz_zeilen = []
+
+            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
+                bekommen[name] = notiz_zeilen
+                return True
+
+            def ueberspringe(self, name, grund):
+                pass
+
+            def bericht(self):
+                return 0
+
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: Doppel()
+        import gate_worktree
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+                vdc.gates_fahren("voll", ["Tools/x.py"])
+        finally:
+            vdc.Lauf = alt
+
+        schritt = [n for n in bekommen if "Python" in n]
+        self.assertTrue(schritt, "der Schritt Python-Suiten lief gar nicht")
+        self.assertIsNotNone(bekommen[schritt[0]],
+                             "die Namensnotiz ist nicht verdrahtet - der "
+                             "Bericht schweigt")
+
+    def test_discover_bekommt_das_verbose(self):
+        """`-v` fehlt, kommen keine Namen an. Auch das ist Verdrahtung."""
+        aufgerufen = {}
+
+        class Doppel:
+            # Gate B meldet sich ueber fahre_gate (Zusammenfuehrung 27.09.2026).
+            def fahre_gate(self, name, ok, dauer, meldung):
+                return ok
+
+            def __init__(self):
+                self.ergebnisse = []
+
+            def fahre(self, name, befehl, **kwargs):
+                aufgerufen[name] = befehl
+                return True
+
+            def ueberspringe(self, name, grund):
+                pass
+
+            def bericht(self):
+                return 0
+
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: Doppel()
+        import gate_worktree
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+                vdc.gates_fahren("voll", ["Tools/x.py"])
+        finally:
+            vdc.Lauf = alt
+
+        befehl = aufgerufen[[n for n in aufgerufen if "Python" in n][0]]
+        self.assertIn("-v", befehl,
+                      "unittest laeuft ohne -v - es gibt keine Testnamen, "
+                      "die man nennen koennte")
+
+    def test_der_bericht_druckt_die_namen(self):
+        doppel = type("Doppel", (), {})()
+        doppel.ergebnisse = [("Gate 0", True, 1.0, None)]
+        doppel.notizen = [("Python-Suiten", "2 von 3 Tests UEBERSPRUNGEN")]
+        doppel.notiz_zeilen = [("Python-Suiten", ["      WELCHE:", "      test_a: grund"])]
+        aus = io.StringIO()
+        with mock.patch("sys.stdout", aus):
+            vdc.Lauf.bericht(doppel)
+        self.assertIn("test_a: grund", aus.getvalue(),
+                      "die Namen stehen in der Notiz, aber nicht im Bericht")
+
+
+class GegenprobeSkipNamenTest(unittest.TestCase):
+    """DER BEWEIS, DASS DIE NAMEN-TESTS NICHT BLIND SIND."""
+
+    VERBOS = SkipNamenTest.VERBOS
+
+    class Fertig:
+        def __init__(self, stderr):
+            self.stderr = stderr
+            self.stdout = ""
+            self.returncode = 0
+
+    def test_ohne_die_auswertung_waere_der_bericht_stumm(self):
+        # a) so wie es GINGE, wenn niemand die Namen auswertet: die Zahl
+        # steht da, die Zeile sagt alles, was sie weiss - und niemand
+        # erfahrt, dass 2 Tests gar nichts geprueft haben.
+        nur_zahl = vdc.suiten_notiz(self.Fertig(self.VERBOS))
+        self.assertIn("2 von 3", nur_zahl)
+        self.assertNotIn("test_bericht_vorhanden", nur_zahl)
+        # b) mit der Auswertung: die Namen stehen drin.
+        zeilen = "\n".join(vdc.suiten_notiz_zeilen(self.Fertig(self.VERBOS)))
+        self.assertIn("test_bericht_vorhanden", zeilen)
+
+    def test_ein_regex_nur_auf_testnamen_verpasst_die_zaehlung_nicht(self):
+        # Die Gegenprobe zur Docstring-Messung: der alte Regex fand 1 von 2,
+        # die Zahl sagte 2. Genau diese Diskrepanz war der Befund.
+        roh = ("Der Fund vom 27.09.2026 als Test: ein HALBER Lauf ist kein Beleg. ... skipped 'keine Belege'\n"
+               "test_a (m.T.test_a) ... skipped 'Pillow fehlt'\n"
+               "Ran 5 tests in 1.0s\n\nOK (skipped=2)\n")
+        alt = re.compile(r"^(?P<kurz>test_\w+)\s+\([^)]+\)\s+\.\.\.\s+skipped\s+'(?P<grund>.*)'\s*$")
+        nur_alt = [z for z in roh.splitlines() if alt.match(z.strip())]
+        self.assertEqual(len(nur_alt), 1, "Gegenprobe: der alte Regex verpasst den Docstring-Test")
+        self.assertEqual(len(vdc.uebersprungene_namen(self.Fertig(roh))), 2,
+                         "der neue Parser muss beide Zeilen finden")
+
+    def test_ein_regex_zu_eng_faellt_auf(self):
+        # GEMESSEN, warum das noetig ist: unittest schreibt den Grund in
+        # einfachen Anfuehrungszeichen und der kann Apostrophe enthalten.
+        mit_apostroph = ("test_a (m.T.test_a) ... skipped 'Pillow fehlt - "
+                         "irgendwer's Datei'\nRan 2 tests in 1.0s\n\nOK (skipped=1)\n")
+        namen = vdc.uebersprungene_namen(self.Fertig(mit_apostroph))
+        self.assertEqual(len(namen), 1, "der Test mit Apostroph im Grund fiel durch")
+        self.assertIn("irgendwer", namen[0][2])
 
 
 class PushBereichTest(unittest.TestCase):
@@ -874,7 +1465,8 @@ class _BesitzLaufDoppel:
             self.zeilen.append(meldung)
         return ok
 
-    def fahre(self, name, befehl, *, shell_cmd=False):
+    def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+              notiz_zeilen=None):
         self.gefahren.append(name)
         return True
 

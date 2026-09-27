@@ -10,11 +10,21 @@ eine Log-Pruefung allein nicht gesehen haette:
   * Bild ohne gluehende Kante unter dem richtigen Namen: das Log ist
     einwandfrei, nur die PNG ist die falsche.
 
-WARUM ER IM PUSH-GATE MEISTENS UEBERSPRINGT: Saved\ ist nicht versioniert.
-Im Commit-Worktree liegen beim Start der Python-Suiten keine Bilder - die
-erzeugt Gate 4 erst danach. Ohne Belege kann der Test nichts bauen, also
-ueberspringt er (skip) statt zu scheitern. Wer das Gate selbst pruefen
-will, fahrt es im Arbeitsbaum, wo die Belege liegen:
+WARUM ER IM PUSH-GATE UEBERSPRINGT: Saved\ ist nicht versioniert, und die
+Python-Suiten fahren VOR Gate 4 - sie koennen dessen Beleg gar nicht sehen.
+Der Test verlangt deshalb nicht nur, dass der Log vollstaendig ist (Anfang
+und Ende), sondern dass er und die vier Bilder NACH der Zeitmarke des
+Push-Laufs geschrieben wurden. Er laeuft also gegen die Belege des geplanten
+Commits oder gar nicht.
+
+Das ist keine Feinheit. GEMESSEN am 27.09.2026: `Saved/` steht in .gitignore,
+der Gate-Worktree wird wiederverwendet, und `git clean -fd` OHNE -x laesst
+ignorierte Dateien stehen. Ein vollstaendiger Log vom VORRIGEN Push erfuellt
+alle drei Vollstaendigkeitsbedingungen und wurde als eigener Beleg gelesen -
+sechs Tests, die einen anderen Commit pruefen und dabei gruen melden.
+
+Wer das Gate selbst pruefen will, fährt es im Arbeitsbaum, wo die Belege
+liegen (dort gibt es keine Zeitmarke, und der eigene Lauf gilt als Beleg):
 
     python -m unittest Tools.test_verify_cuttable_gate -v
 
@@ -29,8 +39,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 try:
     import PIL  # noqa: F401
@@ -39,11 +51,14 @@ except ImportError:
     HAT_PIL = False
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gate_worktree  # noqa: E402
 
 WURZEL = Path(__file__).resolve().parent.parent
 GATE = WURZEL / "Tools" / "verify_cuttable.py"
 DIAG = WURZEL / "Saved" / "Diagnose"
 LOG = WURZEL / "Saved" / "Logs" / "wb_cut_schnitt.log"
+MARKE = WURZEL / gate_worktree.BELEG_MARKE
+BELEG_NAME = gate_worktree.BELEG_MARKE
 BILDER = ("schnitt_00_vorher.png", "schnitt_01_nah.png",
           "schnitt_02_schraeg.png", "schnitt_03_weit.png")
 
@@ -99,8 +114,92 @@ def bild_mit_cutter_glut(diag, oben):
     im.save(os.path.join(diag, "schnitt_00_vorher.png"))
 
 
+def im_gate_worktree():
+    """Liegt DIESER Projektordner an der Stelle, an der das Gate laeuft?
+
+    Nur noetig, wenn die Zeitmarke fehlt - dann steht kein Startzeitpunkt zum
+    Vergleich bereit. Die Marke wird von vorbereiten() in jedem Lauf gesetzt,
+    der normale Push braucht diese Frage also nie.
+
+    `gate_projekt()` ist bewusst der Vergleichspunkt: es ist der Ort, an dem
+    der Push sein Gate fahren laesst, unabhaengig davon, woher der Aufruf kam
+    (WB_GATE_WORKTREE oder der Stammordner neben dem Hauptbaum).
+    """
+    try:
+        return gate_worktree.gate_projekt(WURZEL).resolve() == WURZEL.resolve()
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        # Unklarheit heisst hier: der Arbeitsbaum-Fall. Wer sich nicht sicher
+        # ist, verliert lieber die Belege des eigenen Laufs als die eines
+        # fremden.
+        return False
+
+
+def beleg_vollstaendig():
+    """Passt der Log zu den Bildern, ist er fertig - und ist er von HEUTE?
+
+    GEMESSEN am 27.09.2026, beim ersten Push dieses Branches: die Python-
+    Suiten laufen VOR Gate 4. Sie fanden die Reste eines frueheren, TEILWEISE
+    gelaufenen Schnittlaufs im Gate-Worktree und hielten sie fuer einen
+    gültigen Beleg - die Dateien existierten, mehr wurde nicht gefragt. Die
+    Tests bauten daraus ihre Faelle und meldeten Falsches (2 Fehler).
+
+    Ein Log zaehlt nur, wenn er ANFANG und ENDE hat. Genau so unterscheidet
+    der echte Lauf einen Abbruch von einem Lauf, und genau daran liess sich
+    der Fehler festmachen.
+
+    Vollstaendigkeit genuegte aber nicht - das ist der naechste Befund auf
+    derselben Linie: der Worktree wird WIEDERVERWENDET, und "git clean -fd"
+    OHNE -x laesst ignorierte Dateien stehen, `Saved/` steht in .gitignore.
+    Ein vollstaendiger Log vom VORRIGEN Push erfuellt alle drei Bedingungen
+    oben und wurde trotzdem als eigener Beleg gelesen. Ein Beleg aus einem
+    anderen Commit wird nicht als falsch markiert, sondern als eigener - die
+    schlimmere Halfte: gruen, ohne gemessen zu haben.
+
+    Deshalb der zweite Nachweis: Gate 4 setzt die Zeitmarke BELEG_MARKE, und
+    Beleg und Bilder muessen danach geschrieben worden sein. Eine Sekunde
+    Toleranz, weil die Dateisysteme die Zeitstempel runden.
+
+    OHNE Zeitmarke wird nach dem Herkunftsort unterschieden, nicht stillschwei-
+    gend nach dem alten Verfahren entschieden:
+
+    * im Gate-Worktree: ueberspringen. Eine Marke fehlt dort nur, wenn
+      jemand am vorbereiten() vorbeigelaufen ist - dann ist die Aktualitaet
+      eben nicht beweisbar, und ein Beleg ohne Beweis ist kein Beleg.
+    * im Arbeitsbaum: der Fall, den dieser Test eigentlich meint. Hier fährt
+      man Gate 4 von Hand, im eigenen Lauf, und es gibt nichts zu vergleichen.
+    """
+    if not LOG.exists() or not all((DIAG / b).exists() for b in BILDER):
+        return False
+    try:
+        text = LOG.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    if not ("Log file open" in text
+            and "Log file closed" in text
+            and "WbCutShots: fertig - getrennt" in text):
+        return False
+
+    try:
+        beginn = float(MARKE.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        # Keine Marke. Im Worktree ist das ein Grund zu ueberspringen, im
+        # Arbeitsbaum der normale Handbetrieb - siehe Docstring.
+        return not im_gate_worktree()
+
+    grenze = beginn - 1.0
+    try:
+        if LOG.stat().st_mtime < grenze:
+            return False
+        for bild in BILDER:
+            if (DIAG / bild).stat().st_mtime < grenze:
+                return False
+    except OSError:
+        return False
+    return True
+
+
 def beleg_vorhanden():
-    return LOG.exists() and all((DIAG / b).exists() for b in BILDER)
+    return beleg_vollstaendig()
 
 
 def gate(logpfad, diag):
@@ -116,9 +215,9 @@ def gate(logpfad, diag):
 @unittest.skipUnless(HAT_PIL, "Pillow fehlt - ohne die Bibliothek lassen sich "
                                "die PNGs nicht messen")
 @unittest.skipUnless(beleg_vorhanden(),
-                     "keine Belege in Saved/Diagnose bzw. kein Lauf-Log - "
-                     "im Commit-Worktree normal, dort fahrt Gate 4 den Lauf "
-                     "erst danach")
+                     "keine vollstaendigen Belege in Saved/Diagnose bzw. kein "
+                     "abgeschlossener Lauf-Log - im Commit-Worktree normal, dort "
+                     "faehrt Gate 4 den Lauf erst danach")
 class CuttableGateFaelltTest(unittest.TestCase):
     """Jeder Fehlerfall muss das Gate zu ROT bringen - und der echte Lauf bleibt gruen."""
 
@@ -126,8 +225,46 @@ class CuttableGateFaelltTest(unittest.TestCase):
         self.quelle = str(WURZEL / "Saved" / "Diagnose")
         with io.open(str(LOG), "r", encoding="utf-8", errors="replace") as fh:
             self.log = fh.read()
+        # Der Beleg muss zu DEN BILDERN passen, die gleich kopiert werden.
+        # Sonst baut der Test seine Faelle aus einem Log, der zu einem
+        # anderen Lauf gehoert - und meldet damit etwas Falsches.
+        self.assertIn("WbCutShots: fertig - getrennt", self.log,
+                      "der Log ist kein vollstaendiger Lauf")
         self.schnipsel = tempfile.mkdtemp(prefix="wb_cuttest_")
         self.addCleanup(shutil.rmtree, self.schnipsel, ignore_errors=True)
+
+    def test_der_beleg_muss_vollstaendig_sein(self):
+        """Der Fund vom 27.09.2026 als Test: ein HALBER Lauf ist kein Beleg.
+
+        Genau daran scheiterte der erste Push dieses Branches - die Suiten
+        liefen vor Gate 4 und fanden die Reste eines abgebrochenen Laufs.
+        """
+        self.assertTrue(beleg_vollstaendig(),
+                        "der Beleg wurde als vollstaendig angenommen, ist es aber nicht")
+        text = LOG.read_text(encoding="utf-8", errors="replace")
+        for merkmal in ("Log file open", "Log file closed",
+                        "WbCutShots: fertig - getrennt"):
+            self.assertIn(merkmal, text, merkmal)
+
+    def test_ein_abgebrochener_log_ist_kein_beleg(self):
+        """Ein Log ohne Ende darf NICHT als Beleg durchgehen."""
+        alt = LOG.read_text(encoding="utf-8", errors="replace")
+        try:
+            LOG.write_text(alt.replace("WbCutShots: fertig - getrennt", "abgebrochen"),
+                           encoding="utf-8")
+            self.assertFalse(beleg_vollstaendig(),
+                             "ein abgebrochener Lauf gilt als Beleg")
+        finally:
+            LOG.write_text(alt, encoding="utf-8")
+        self.assertTrue(beleg_vollstaendig(), "der Test hat den Log nicht wiederhergestellt")
+
+    def test_fehlende_bilder_sind_kein_beleg(self):
+        alt = (DIAG / BILDER[0]).read_bytes()
+        try:
+            (DIAG / BILDER[0]).unlink()
+            self.assertFalse(beleg_vorhanden(), "fehlendes Bild gilt als Beleg")
+        finally:
+            (DIAG / BILDER[0]).write_bytes(alt)
 
     def baue_fall(self, ersetzung, bildaktion):
         diag = tempfile.mkdtemp(dir=self.schnipsel)
@@ -197,6 +334,109 @@ class CuttableGateFaelltTest(unittest.TestCase):
     def test_10_glut_oben_im_vergleichsbild_bleibt_rot(self):
         # Gegenprobe: der Beschnitt darf die Pruefung nicht entwaffnen.
         self.pruefe_fall(None, lambda d: bild_mit_cutter_glut(d, True), True)
+
+class SkipBedingungTest(unittest.TestCase):
+    """Wann dieser Selbsttest laeuft und wann er ueberspringt.
+
+    Die Bedingung entscheidet, ob sechs Tests ueberhaupt etwas pruefen. Sie
+    wird bei @skipUnless einmal beim Import ausgewertet - also gerade NICHT
+    je Test, weshalb hier die Funktion selbst geprueft wird.
+    """
+
+    VOLLSTAEENDIG = ("Log file open, 09/27/26 10:00:00\n"
+                    "WbCutShots: fertig - getrennt 1\n"
+                    "Log file closed, 09/27/26 10:00:42\n")
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="wb_beleg_"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.diag = self.tmp / "Diagnose"
+        self.diag.mkdir()
+        for b in BILDER:
+            (self.diag / b).write_bytes(b"\x89PNG\r\n\x1a\n")
+        self.log = self.tmp / "Logs" / "wb_cut_schnitt.log"
+        self.log.parent.mkdir()
+        self.log.write_text(self.VOLLSTAEENDIG, encoding="utf-8")
+        self.marke = self.tmp / BELEG_NAME
+        self.patches = [
+            mock.patch.object(sys.modules[__name__], "LOG", self.log),
+            mock.patch.object(sys.modules[__name__], "DIAG", self.diag),
+            mock.patch.object(sys.modules[__name__], "MARKE", self.marke),
+        ]
+        for p in self.patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in self.patches])
+
+    def setze_marke(self, sekunden):
+        self.marke.parent.mkdir(parents=True, exist_ok=True)
+        self.marke.write_text("%.3f" % sekunden, encoding="utf-8")
+
+    def im_worktree(self, ja):
+        return mock.patch(__name__ + ".im_gate_worktree", return_value=ja)
+
+    def test_der_geplante_lauf_zaehlt(self):
+        """Marke von eben, Log und Bilder danach geschrieben: das ist der
+        Lauf, den der Push plant - genau dagegen sollen die Tests laufen."""
+        self.setze_marke(time.time() - 30)
+        self.assertTrue(beleg_vollstaendig(),
+                        "Belege aus dem geplanten Lauf gelten nicht als Beleg")
+
+    def test_ein_vollstaendiger_log_vom_vorigen_push_zaehlt_nicht(self):
+        """Der Kernfall, zweite Etappe. Alles ist vorhanden, der Log hat Anfang
+        und Ende, die Bilder sind da - nur ist alles vom vorigen Lauf. Genau
+        daran scheitert eine Vollstaendigkeitspruefung."""
+        alt = time.time() - 3600
+        self.setze_marke(alt + 1800)
+        for p in (self.log,) + tuple(self.diag / b for b in BILDER):
+            os.utime(p, (alt, alt))
+        self.assertFalse(beleg_vollstaendig(),
+                         "ein vollstaendiger Beleg vom VORRIGEN Push gilt als "
+                         "Beleg des geplanten - der Push prueft dann einen "
+                         "anderen Commit")
+
+    def test_ein_altes_bild_allein_genuegt_nicht(self):
+        """Der Log ist frisch, eines der vier Bilder ist alt: dann hat der Lauf
+        die Folge nicht vollstaendig erzeugt."""
+        self.setze_marke(time.time() - 30)
+        alt = time.time() - 3600
+        os.utime(self.diag / BILDER[2], (alt, alt))
+        self.assertFalse(beleg_vollstaendig(),
+                         "ein altes Bild unter richtigen Namen gilt als frisch")
+
+    def test_ohne_marke_ueberspringt_es_im_worktree(self):
+        """Ohne Zeitmarke ist die Aktualitaet nicht beweisbar - und im
+        Gate-Worktree heisst das ueberspringen, nicht auf die alte Pruefung
+        zurueckfallen."""
+        alt = time.time() - 3600
+        for p in (self.log,) + tuple(self.diag / b for b in BILDER):
+            os.utime(p, (alt, alt))
+        with self.im_worktree(True):
+            self.assertFalse(beleg_vollstaendig(),
+                             "ohne Zeitmarke faellt der Worktree auf die alte "
+                             "Vollstaendigkeitspruefung zurueck")
+
+    def test_ohne_marke_gilt_im_arbeitsbaum_der_eigene_lauf(self):
+        """Im Arbeitsbaum fährt man Gate 4 von Hand. Es gibt nichts zu
+        vergleichen, und der eigene Lauf ist der Beleg - sonst waere die
+        Bedienungsanleitung im Docstring wertlos."""
+        with self.im_worktree(False):
+            self.assertTrue(beleg_vollstaendig(),
+                            "im Arbeitsbaum muss der eigene Lauf als Beleg gelten")
+
+    def test_eine_kaputte_marke_ueberspringt_im_worktree(self):
+        self.marke.parent.mkdir(parents=True, exist_ok=True)
+        self.marke.write_text("kein Datum", encoding="utf-8")
+        with self.im_worktree(True):
+            self.assertFalse(beleg_vollstaendig(),
+                             "eine unlesbare Zeitmarke gilt als gueltiger Startzeitpunkt")
+
+    def test_ein_abgebrochener_lauf_zaehlt_nicht(self):
+        """Die alte Bedingung bleibt: Anfang und Ende muessen da sein."""
+        self.setze_marke(time.time() - 30)
+        self.log.write_text("Log file open, 09/27/26 10:00:00\n"
+                            "WbCutShots: abgebrochen - getrennt\n", encoding="utf-8")
+        self.assertFalse(beleg_vollstaendig(),
+                         "ein abgebrochener Lauf gilt als vollstaendiger Beleg")
 
 
 if __name__ == "__main__":

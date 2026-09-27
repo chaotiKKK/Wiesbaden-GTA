@@ -58,13 +58,30 @@ def gates_aus_vor_dem_commit(quelltext):
     Ein Gate ist jeder Aufruf `lauf.fahre(...)`/`lauf.fahre_gate(...)` mit
     einem Gate-Namen als erstem Argument. Liegt er im Rumpf eines
     `if stufe == "voll":`, laeuft er nur vor dem Push; sonst in beiden Stufen.
+
+    Gelesen wird ab `gates_fahren`, und Aufrufe von Hilfsfunktionen DIESER
+    Datei werden verfolgt - mit der Stufe der Aufrufstelle. Gate 5 steht
+    seit der Zusammenfuehrung der Gate-Branches (27.09.2026) in
+    `anker_gate_fahren`; die Stufe haengt am Aufruf in `gates_fahren`, nicht
+    an der Hilfsfunktion, die selbst keine Bedingung traegt. Die alte Lesart
+    (ganzes Modul) hielt Gate 5 darum fuer ein Gate vor dem Commit.
     """
     baum = ast.parse(quelltext)
     schnell, nur_voll = set(), set()
+    funktionen = {k.name: k for k in baum.body if isinstance(k, ast.FunctionDef)}
+    im_stapel = set()
 
     def besuche(knoten, unter_voll):
+        if (isinstance(knoten, ast.Call) and isinstance(knoten.func, ast.Name)
+                and knoten.func.id in funktionen and knoten.func.id not in im_stapel):
+            im_stapel.add(knoten.func.id)
+            for kind in funktionen[knoten.func.id].body:
+                besuche(kind, unter_voll)
+            im_stapel.discard(knoten.func.id)
         if isinstance(knoten, ast.If):
             voll = ist_voll_bedingung(knoten.test)
+            # Die Bedingung selbst kann ein Gate fahren: `if besitz_gate(...)`.
+            besuche(knoten.test, unter_voll)
             for kind in knoten.body:
                 besuche(kind, unter_voll or voll)
             for kind in knoten.orelse:
@@ -81,7 +98,11 @@ def gates_aus_vor_dem_commit(quelltext):
         for kind in ast.iter_child_nodes(knoten):
             besuche(kind, unter_voll)
 
-    besuche(baum, False)
+    if "gates_fahren" in funktionen:
+        im_stapel.add("gates_fahren")
+        besuche(funktionen["gates_fahren"], False)
+    else:
+        besuche(baum, False)
     return schnell, nur_voll - schnell
 
 

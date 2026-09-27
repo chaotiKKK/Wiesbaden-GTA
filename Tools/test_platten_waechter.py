@@ -434,7 +434,8 @@ class GateAnbindungTest(unittest.TestCase):
                 self.gefahren = []
                 self.uebersprungen = []
 
-            def fahre(self, name, befehl, *, shell_cmd=False):
+            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
                 print("  ... %s" % name, flush=True)
                 self.gefahren.append(name)
                 return True
@@ -466,7 +467,9 @@ class GateAnbindungTest(unittest.TestCase):
     def test_er_zaehlt_sich_nicht_als_gate(self):
         """Er darf weder die Gate-Zahl verfalschen noch die Stufenzuordnung
         verschieben - die Doppel in test_vor_dem_commit.py kennt nur echte
-        Gates, und Gate 0 muss dort der EINZIGE gefahrene Eintrag bleiben."""
+        Gates. In der schnellen Stufe fahren nur Gate 0 und die Waechter-
+        Suiten (seit der Zusammenfuehrung der Gate-Branches am 27.09.2026) -
+        der Platten-Hinweis darf dort nicht als weiterer Eintrag auftauchen."""
         import vor_dem_commit as vdc
 
         class Doppel:
@@ -474,7 +477,8 @@ class GateAnbindungTest(unittest.TestCase):
                 self.gefahren = []
                 self.uebersprungen = []
 
-            def fahre(self, name, befehl, *, shell_cmd=False):
+            def fahre(self, name, befehl, *, shell_cmd=False, notiz=None,
+                      notiz_zeilen=None):
                 self.gefahren.append(name)
                 return True
 
@@ -496,7 +500,7 @@ class GateAnbindungTest(unittest.TestCase):
         finally:
             vdc.Lauf = alt
             vdc.besitz_gate = alt_besitz
-        self.assertEqual(doppel.gefahren, ["Gate 0  Engine-Pfade"])
+        self.assertEqual(doppel.gefahren, ["Gate 0  Engine-Pfade", "Wächter-Suiten"])
 
     def test_gesunde_platte_meldet_nur_den_hinweis(self):
         import vor_dem_commit as vdc

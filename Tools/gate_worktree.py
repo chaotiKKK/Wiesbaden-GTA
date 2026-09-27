@@ -43,6 +43,7 @@ wieder fremde Arbeit im Gate.
 """
 import fnmatch
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -53,6 +54,17 @@ NULL_SHA = "0" * 40
 STADTKARTEN = "Content/Maps/WiesbadenCity_*.umap"
 # Unter diesen Wurzeln werden ignorierte Verzeichnisse verlinkt.
 STADT_WURZELN = ("Content/", "Data/Raw/")
+# Ordner, deren INHALT Belege sind. Sie sind nicht versioniert und ueberleben
+# genau das "git clean -fd" OHNE -x, mit dem vorbereiten() den Worktree
+# zurueckstellt - der Worktree sammelt sie also ueber beliebig viele
+# Push-Laeufe an.
+BELEGORDNER = ("Saved/Logs", "Saved/Diagnose")
+# Zeitmarke "dieser Push-Lauf hat angefangen", in Sekunden seit 1970. Sie
+# liegt in Saved/ selbst und NICHT in einem Belegordner - belege_raeumen()
+# wuerde sie sonst gleich wieder mitloeschen. Damit koennen die Python-Suiten
+# einen Beleg nicht nur auf Vollstaendigkeit, sondern auf AKTUALITAET
+# pruefen (Tools/test_verify_cuttable_gate.py).
+BELEG_MARKE = "Saved/.gate_lauf_beginn"
 
 
 def saubere_umgebung():
@@ -266,6 +278,75 @@ def motor_sperre(name, warte_s=None, lock_pfad=None, schlaf=time.sleep, uhr=time
         schlaf(15.0)
 
 
+def belege_raeumen(wt, haupt):
+    """Leert die Belegordner des Gate-Worktrees - die Reste haben keinen Besitzer.
+
+    GEMESSEN am 27.09.2026: `git clean -fd` OHNE `-x` laesst ignorierte Dateien
+    stehen (an einem Wegwerf-Repo mit derselben Konfiguration nachgemessen), und
+    `Saved/` steht in .gitignore. Der Worktree wird zudem WIEDERVERWENDET, nur
+    auf den neuen Commit gestellt. Damit lagen beim Start der Python-Suiten die
+    Belege des VORRIGEN Push-Laufs im Baum - und die Suites lesen sie, weil sie
+    vor Gate 4 laufen:
+
+      * `test_verify_cuttable_gate` sollte laut eigenem Docstring im
+        Commit-Worktree ueberspringen (es gibt dort keine Bilder). Es tat das
+        aber nicht, sondern FUHR gegen die vollstaendigen Belege des vorigen
+        Laufs und meldete sie als eigenen Beleg.
+      * Dasselbe galt fuer `smoke_car.log`, `smoke_heli.log` und
+        `WbHealth.json` - see Tools/smoke_test.ps1, wo genau darum jetzt
+        Remove-Beleg und Test-Frisch stehen.
+
+    Ein Beleg aus einem anderen Commit hat fuer diesen Commit keinen Wert. Er
+    wird aber nicht als falsch markiert, sondern als eigener - das ist die
+    schlimmere Halfte: ein gruenes Gate, das nichts gemessen hat.
+
+    Zwei Sicherheitsguertel, weil dies die erste Stelle ist, die AUSSERHALB von
+    git etwas loescht:
+
+    * `Saved/` wird nie verlinkt (STADT_WURZELN = Content/, Data/Raw/). Ein
+      Verzeichniswechsel (junction) an dieser Stelle zeigte auf fremde Daten -
+      und `EchterWorktreeTest` dokumentiert, dass ein rekursives Loeschen
+      DURCH eine Verbindung den Hauptordner leert. Im Ernstfall die 26 GB
+      gebackene Stadt.
+    * Ist der "Worktree" ausnahmsweise der Hauptordner selbst, wird gar nicht
+      geloescht, sondern abgebrochen.
+    """
+    wt = Path(wt)
+    haupt = Path(haupt)
+    if wt.resolve() == haupt.resolve():
+        raise RuntimeError(
+            "Der Gate-Worktree IST der Hauptordner (%s) - die Belege des "
+            "Arbeitsbaums werden nicht geloescht." % wt)
+    entfernt, blockiert = 0, []
+    for rel in BELEGORDNER:
+        ordner = wt / rel
+        if os.path.isjunction(ordner) or os.path.islink(ordner):
+            raise RuntimeError(
+                "%s ist eine Verknuepfung - dort wird nicht geloescht. Eine "
+                "Verbindung zeigt auf fremde Daten, und ein Loeschen durch sie "
+                "leert den Ordner, auf den sie zeigt." % ordner)
+        if not ordner.is_dir():
+            continue
+        for eintrag in ordner.iterdir():
+            try:
+                if eintrag.is_dir() and not os.path.islink(eintrag):
+                    shutil.rmtree(eintrag)
+                else:
+                    eintrag.unlink()
+                entfernt += 1
+            except OSError as fehler:
+                # Ein haengender Editor haelt seinen Log offen. Genau der Fall,
+                # an dem die Belege liegen bleiben - weiterlaufen hiesse, sie
+                # fuer die eigenen zu halten.
+                blockiert.append("%s (%s)" % (eintrag.name, fehler.strerror or fehler))
+    if blockiert:
+        raise RuntimeError(
+            "Belege des vorigen Laufs nicht entfernbar: %s. Der Lauf wuerde "
+            "sie als eigene lesen - erst den haengenden Prozess beenden, dann "
+            "erneut." % "; ".join(blockiert[:5]))
+    return entfernt
+
+
 def vorbereiten(projekt, sha):
     """Worktree auf genau diesen Commit bringen; Rueckgabe: sein Projektordner."""
     projekt = Path(projekt)
@@ -285,12 +366,23 @@ def vorbereiten(projekt, sha):
         raise RuntimeError("Gate-Worktree steht auf %s statt %s" % (kopf, sha))
     verzeichnisse, dateien = stadtinhalt(projekt)
     neu = verlinken(projekt, wt, verzeichnisse, dateien)
+    # VOR den Gates: die Belege eines anderen Commits duerfen keinen als
+    # eigene gelten. Siehe belege_raeumen().
+    weggeraeumt = belege_raeumen(wt, projekt)
+    # Die Zeitmarke kommt NACH dem Raeumen, sonst loescht der naechste Lauf
+    # sie wieder weg. Sie ist der Anker fuer "aus diesem Lauf" - siehe
+    # BELEG_MARKE.
+    marke = wt / BELEG_MARKE
+    marke.parent.mkdir(parents=True, exist_ok=True)
+    marke.write_text("%.3f" % time.time(), encoding="utf-8")
     rest = [z for z in git(wt, "status", "--porcelain").splitlines()
             if not fnmatch.fnmatch(z[3:], STADTKARTEN)]
     if rest:
         raise RuntimeError("Gate-Worktree nicht sauber: %s" % "; ".join(rest[:5]))
-    print("Gate-Worktree %s auf %s (%d Stadtinhalte verlinkt, %d neu)."
-          % (wt, sha[:10], len(verzeichnisse) + len(dateien), neu), flush=True)
+    print("Gate-Worktree %s auf %s (%d Stadtinhalte verlinkt, %d neu, "
+          "%d Beleg(e) des vorigen Laufs entfernt)."
+          % (wt, sha[:10], len(verzeichnisse) + len(dateien), neu, weggeraeumt),
+          flush=True)
     return wt
 
 

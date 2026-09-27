@@ -160,8 +160,9 @@ class WorktreeOrtTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "nt", "Verzeichnis-Verbindungen gibt es nur unter Windows")
-class EchterWorktreeTest(unittest.TestCase):
-    """Ein Wegwerf-Repo: Worktree anlegen, Stadt verlinken, weiterruecken."""
+class WegwerfRepo(unittest.TestCase):
+    """Ein Wegwerf-Repo mit gebackener Stadt - die Grundlage fuer alles,
+    was gate_worktree() wirklich auf der Platte macht."""
 
     def git(self, cwd, *args):
         return subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True,
@@ -174,7 +175,11 @@ class EchterWorktreeTest(unittest.TestCase):
         self.git(self.projekt, "init", "-q")
         self.git(self.projekt, "config", "user.email", "t@t")
         self.git(self.projekt, "config", "user.name", "t")
-        (self.projekt / ".gitignore").write_text("Content/Generated/\n", encoding="utf-8")
+        # WICHTIG: Saved/ muss IGNORIERT sein, sonst raeumt "git clean -fd"
+        # die Belege von selbst weg und der Test waere blind - er gruente dann
+        # auch ohne das eigentliche Raeumen. Genau diese Zeile ist im echten
+        # Projekt die Ursache (siehe BelegRaeumungTest).
+        (self.projekt / ".gitignore").write_text("Content/Generated/\nSaved/\n", encoding="utf-8")
         (self.projekt / "Content" / "Maps" / "Alt.umap").write_text("v", encoding="utf-8")
         (self.projekt / "code.txt").write_text("eins", encoding="utf-8")
         self.git(self.projekt, "add", "-A")
@@ -199,6 +204,10 @@ class EchterWorktreeTest(unittest.TestCase):
         if os.path.isjunction(verbindung):
             os.rmdir(verbindung)
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+class EchterWorktreeTest(WegwerfRepo):
+    """Ein Wegwerf-Repo: Worktree anlegen, Stadt verlinken, weiterruecken."""
 
     def test_nur_der_commit_und_die_stadt(self):
         with mock.patch("sys.stdout", io.StringIO()):
@@ -233,6 +242,171 @@ class EchterWorktreeTest(unittest.TestCase):
         self.assertTrue(os.path.isjunction(wt / "Content" / "Generated"))
         karte = wt / "Content" / "Maps" / "WiesbadenCity_Alkis22.umap"
         self.assertTrue(os.path.samefile(karte, self.projekt / "Content" / "Maps" / "WiesbadenCity_Alkis22.umap"))
+
+
+class BelegRaeumungTest(WegwerfRepo):
+    """Belege eines anderen Commits duerfen im Worktree keinen eigenen vortaeuschen.
+
+    `git clean -fd` OHNE `-x` laesst ignorierte Dateien stehen (nachgemessen),
+    `Saved/` steht in .gitignore, und der Worktree wird wiederverwendet. Also
+    lagen beim Start der Python-Suiten - sie fahren VOR Gate 4 - die Belege des
+    VORRIGEN Push-Laufs im Baum. Das hiess: `test_verify_cuttable_gate`
+    uebersprang nicht, wie sein eigener Docstring vorsieht, sondern fuhr gegen
+    die vollstaendigen Belege des vorigen Laufs.
+
+    Geprueft wird beides: dass die Belege verschwinden, und dass dabei weder der
+    Hauptordner noch eine Verknuepfung leerlaufen. Der zweite Teil ist kein
+    Formalismus - `EchterWorktreeTest` dokumentiert, dass ein rekursives
+    Loeschen durch eine Verbindung den Hauptordner leert, im Ernstfall die
+    26 GB gebackene Stadt.
+    """
+
+    def test_der_putz_allein_laesst_die_belege_liegen(self):
+        """Die URSACHE festnageln, sonst prueft der Rest ins Leere.
+
+        GEMESSEN: "git clean -fd" OHNE -x laesst ignorierte Dateien stehen.
+        Deshalb lag beim Start der Python-Suiten der Beleg des vorigen
+        Push-Laufs im Worktree. Wird diese Zeile hier entfernt, gruennt
+        der Folgetest aus dem falschen Grund - dann naemt "git clean" die
+        Arbeit namlich selbst weg.
+        """
+        with mock.patch("sys.stdout", io.StringIO()):
+            wt = gw.vorbereiten(self.projekt, self.eins)
+        log, _, _ = self.lege_belege(wt)
+        (self.projekt / "neu.txt").write_text("zwei", encoding="utf-8")
+        self.git(self.projekt, "add", "neu.txt")
+        self.git(self.projekt, "commit", "-qm", "zwei")
+        zwei = self.git(self.projekt, "rev-parse", "HEAD")
+        with mock.patch("sys.stdout", io.StringIO()):
+            # vorbereiten() inklusive seines Putzes - nur OHNE belege_raeumen.
+            with mock.patch.object(gw, "belege_raeumen", return_value=0):
+                gw.vorbereiten(self.projekt, zwei)
+        self.assertTrue(log.exists(),
+                        "der Beleg verschwindet schon beim git clean - dann "
+                        "traegt die Fixture die Ursache nicht (Saved/ ist nicht "
+                        "ignoriert) und der Raeumungs-Test prueft ins Leere")
+
+    def lege_belege(self, wurzel):
+        (wurzel / "Saved" / "Logs").mkdir(parents=True, exist_ok=True)
+        (wurzel / "Saved" / "Diagnose").mkdir(parents=True, exist_ok=True)
+        log = wurzel / "Saved" / "Logs" / "wb_cut_schnitt.log"
+        bild = wurzel / "Saved" / "Diagnose" / "schnitt_00_vorher.png"
+        json_ = wurzel / "Saved" / "Logs" / "WbHealth.json"
+        for p in (log, bild, json_):
+            p.write_text("vom vorigen Push", encoding="utf-8")
+        # Auch ein Unterordner: Autosave-artige Unterstrukturen sind Normalfall.
+        (wurzel / "Saved" / "Logs" / "alt").mkdir(exist_ok=True)
+        (wurzel / "Saved" / "Logs" / "alt" / "x.log").write_text("alt", encoding="utf-8")
+        return log, bild, json_
+
+    def test_die_zeitmarke_liegt_dort_wo_der_selbsttest_sie_sucht(self):
+        """Die beiden Dateien teilen sich nur den Konstanten-Namen. Ob die Marke
+        wirklich dort landet und von dort gelesen wird, kann niemand aus dem
+        Namen ableiten - ohne diesen Test waere ein stilles Scheitern moeglich
+        (die Suites wuerden dann eben immer ueberspringen)."""
+        with mock.patch("sys.stdout", io.StringIO()):
+            wt = gw.vorbereiten(self.projekt, self.eins)
+        marke = wt / gw.BELEG_MARKE
+        self.assertTrue(marke.exists(), "vorbereiten() setzt keine Zeitmarke: %s" % marke)
+        try:
+            beginn = float(marke.read_text(encoding="utf-8").strip())
+        except ValueError:
+            self.fail("die Zeitmarke ist keine lesbare Zahl: %r" % marke.read_text(encoding="utf-8"))
+        self.assertLess(abs(time.time() - beginn), 300,
+                        "die Zeitmarke ist nicht 'jetzt' - %r" % beginn)
+
+    def test_die_zeitmarke_ueberlebt_das_raeumen_und_wird_erneut_gesetzt(self):
+        """Sie liegt in Saved/ und NICHT in einem Belegordner - sonst loeschte
+        der naechste Lauf sie weg und der Selbsttest faelle stillschweigend auf
+        den Handbetriebs-Fall zurueck."""
+        with mock.patch("sys.stdout", io.StringIO()):
+            wt = gw.vorbereiten(self.projekt, self.eins)
+        self.lege_belege(wt)
+        self.lege_belege(self.projekt)          # Ablauf von 1 Stunde
+        (wt / gw.BELEG_MARKE).write_text("%.3f" % (time.time() - 3600), encoding="utf-8")
+        (self.projekt / "neu.txt").write_text("zwei", encoding="utf-8")
+        self.git(self.projekt, "add", "neu.txt")
+        self.git(self.projekt, "commit", "-qm", "zwei")
+        zwei = self.git(self.projekt, "rev-parse", "HEAD")
+        with mock.patch("sys.stdout", io.StringIO()):
+            gw.vorbereiten(self.projekt, zwei)
+        beginn = float((wt / gw.BELEG_MARKE).read_text(encoding="utf-8"))
+        self.assertLess(abs(time.time() - beginn), 300,
+                        "die Zeitmarke wurde nicht erneuert - die Belege des "
+                        "neuen Laufs erschienen dann VOR ihrem Startzeitpunkt "
+                        "und der Selbsttest ueberspringt")
+
+    def test_die_belege_des_vorigen_laufs_sind_weg(self):
+        with mock.patch("sys.stdout", io.StringIO()):
+            wt = gw.vorbereiten(self.projekt, self.eins)
+        log, bild, json_ = self.lege_belege(wt)
+        (self.projekt / "neu.txt").write_text("zwei", encoding="utf-8")
+        self.git(self.projekt, "add", "neu.txt")
+        self.git(self.projekt, "commit", "-qm", "zwei")
+        zwei = self.git(self.projekt, "rev-parse", "HEAD")
+        with mock.patch("sys.stdout", io.StringIO()):
+            gw.vorbereiten(self.projekt, zwei)
+        for p in (log, bild, json_):
+            self.assertFalse(p.exists(), "der Beleg vom vorigen Lauf liegt noch da: %s" % p)
+        self.assertFalse((wt / "Saved" / "Logs" / "alt").exists(),
+                         "ein Unterordner mit Belegen blieb stehen")
+
+    def test_die_ordner_selber_bleiben_stehen(self):
+        """Nur der INHALT wird geraeumt - die Werkzeuge legen ihre Ordner
+        nicht ueberall selbst an."""
+        with mock.patch("sys.stdout", io.StringIO()):
+            wt = gw.vorbereiten(self.projekt, self.eins)
+        self.lege_belege(wt)
+        with mock.patch("sys.stdout", io.StringIO()):
+            gw.belege_raeumen(wt, self.projekt)
+        self.assertTrue((wt / "Saved" / "Logs").is_dir())
+        self.assertTrue((wt / "Saved" / "Diagnose").is_dir())
+
+    def test_der_hauptordner_bleibt_unberuehrt(self):
+        """Das eigentliche Risiko: Saved/ des Arbeitsbaums ist der Beleg des
+        Nutzers, und er liegt an DERSELBEN Stelle wie im Worktree."""
+        with mock.patch("sys.stdout", io.StringIO()):
+            wt = gw.vorbereiten(self.projekt, self.eins)
+        haupt_log, haupt_bild, _ = self.lege_belege(self.projekt)
+        self.lege_belege(wt)
+        with mock.patch("sys.stdout", io.StringIO()):
+            gw.belege_raeumen(wt, self.projekt)
+        for p in (haupt_log, haupt_bild):
+            self.assertTrue(p.exists(), "der Beleg des HAUPTORDNERS wurde mitgeraeumt: %s" % p)
+        # Auch die gebackene Stadt im Hauptordner - der Grund fuer die Verlinkung.
+        self.assertTrue((self.projekt / "Content" / "Generated" / "Chunk.uasset").exists())
+
+    def test_ist_der_worktree_der_hauptordner_wird_nichts_geloescht(self):
+        """WB_GATE_WORKTREE koennte auf den Hauptbaum zeigen. Dann waere das
+        Raeumen genau das Loeschen der Belege des Nutzers."""
+        haupt_log, haupt_bild, _ = self.lege_belege(self.projekt)
+        with self.assertRaises(RuntimeError) as gefangen:
+            gw.belege_raeumen(self.projekt, self.projekt)
+        self.assertIn("Hauptordner", str(gefangen.exception))
+        for p in (haupt_log, haupt_bild):
+            self.assertTrue(p.exists(), "trotz Abbruch geloescht: %s" % p)
+
+    def test_eine_verknuepfung_wird_nicht_verfolgt(self):
+        """Saved/ wird nie verlinkt - aber diese Loeschung ist die erste, die
+        ausserhalb von git etwas entfernt."""
+        with mock.patch("sys.stdout", io.StringIO()):
+            wt = gw.vorbereiten(self.projekt, self.eins)
+        self.lege_belege(self.projekt)          # die echten Daten des Hauptordners
+        verbindung = wt / "Saved" / "Logs"
+        verbindung.parent.mkdir(parents=True, exist_ok=True)
+        fertig = subprocess.run(["cmd", "/c", "mklink", "/J", str(verbindung),
+                                 str(self.projekt / "Saved" / "Logs")],
+                                capture_output=True, text=True,
+                                encoding="utf-8", errors="replace")
+        if fertig.returncode != 0:
+            self.skipTest("Junction nicht anlegbar: %s" % fertig.stdout.strip())
+        with self.assertRaises(RuntimeError) as gefangen:
+            gw.belege_raeumen(wt, self.projekt)
+        self.assertIn("Verknuepfung", str(gefangen.exception))
+        self.assertTrue((self.projekt / "Saved" / "Logs" / "wb_cut_schnitt.log").exists(),
+                        "die Loeschung ist DER Verknuepfung gefolgt und hat den "
+                        "Hauptordner geleert")
+        os.rmdir(verbindung)                    # nur den Verweis loesen, nicht das Ziel
 
 
 class HookWegTest(unittest.TestCase):
