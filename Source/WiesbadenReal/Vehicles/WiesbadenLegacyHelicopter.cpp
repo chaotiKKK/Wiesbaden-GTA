@@ -2,35 +2,41 @@
 
 #include "Vehicles/WiesbadenLegacyHelicopter.h"
 
+#include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
 
 AWiesbadenLegacyHelicopter::AWiesbadenLegacyHelicopter()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	// NICHT selbst uebernehmen. Die Basisklasse steht auf Player0 - der zweite
+	// Hubschrauber risse den Spieler sonst beim Aufstellen aus dem Auto, und
+	// man faende sich ohne Zutun in der Luft wieder. Eingestiegen wird mit F.
+	AutoPossessPlayer = EAutoReceiveInput::Disabled;
 
-	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
-	RootComponent = Root;
-
-	// Dieselben Netze und Materialien wie der Spielerheli VOR dem Ka-52-Neubau.
+	// Dieselben Netze wie der Spielerheli VOR dem Ka-52-Neubau.
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> BodyAsset(
 		TEXT("/Game/Assets/Landmarks/HeliBody/StaticMeshes/SM_HeliBody.SM_HeliBody"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> UpperAsset(
 		TEXT("/Game/Assets/Landmarks/HeliRotorUpper/StaticMeshes/SM_HeliRotorUpper.SM_HeliRotorUpper"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> LowerAsset(
 		TEXT("/Game/Assets/Landmarks/HeliRotorLower/StaticMeshes/SM_HeliRotorLower.SM_HeliRotorLower"));
+
+	// Lackierung: eigenes Material, damit die beiden Maschinen im Bild
+	// auseinanderzuhalten sind (siehe M_WbHeliCivil).
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> PaintAsset(
-		TEXT("/Game/Materials/City/M_WbHelicopter.M_WbHelicopter"));
+		TEXT("/Game/Materials/City/M_WbHeliCivil.M_WbHeliCivil"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> RotorAsset(
-		TEXT("/Game/Assets/Landmarks/M_HeliRotorBase.M_HeliRotorBase"));
+		TEXT("/Game/Materials/City/M_WbHeliRotor.M_WbHeliRotor"));
 
 	// Massstab des ALTEN Modells: es ist im Original nur 100,7 cm lang
-	// (Rumpflaenge 14,2 m des echten Ka-52 -> Faktor 14,5).
+	// (Rumpflaenge 14,6 m -> Faktor 14,5).
 	constexpr float ModelBodyLengthCm = 100.7f;
 	constexpr float TargetBodyLengthCm = 1460.0f;
 	const float ModelScale = TargetBodyLengthCm / ModelBodyLengthCm;
 
+	// Gierdrehung, die Modell-+Y auf Welt-+X legt (Nase nach vorn).
 	const FRotator ModelYaw(0.0f, -90.0f, 0.0f);
 	constexpr float UpperRotorHeightCm = 345.0f;
 	constexpr float LowerRotorHeightCm = 300.0f;
@@ -45,80 +51,115 @@ AWiesbadenLegacyHelicopter::AWiesbadenLegacyHelicopter()
 	const FVector RotorSelfHub =
 		ModelYaw.RotateVector(FVector(RotorHubInModelCm.X, RotorHubInModelCm.Y, 0.0f)) * ModelScale;
 
-	FuselageMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LegacyFuselage"));
-	FuselageMesh->SetupAttachment(Root);
-	if (BodyAsset.Succeeded())
+	// -- Rumpf ---------------------------------------------------------------
+	// Der Modell-Ursprung liegt an der Rumpfunterseite (gemessene Bounds
+	// z 0..17,1 cm) - dieselbe Konvention wie beim Ka-52 (Ursprung auf der
+	// Kufenebene). Deshalb bleibt der Hoehenversatz null, und das Aufstellen
+	// rechnet fuer beide Maschinen gleich.
+	if (FuselageMesh && BodyAsset.Succeeded())
 	{
 		FuselageMesh->SetStaticMesh(BodyAsset.Object);
 		FuselageMesh->SetRelativeRotation(ModelYaw);
 		FuselageMesh->SetRelativeScale3D(FVector(ModelScale));
-		// Sichtbar solide: das Standstueck soll nicht durchschreitbar sein.
-		FuselageMesh->SetCollisionProfileName(TEXT("BlockAll"));
-		if (PaintAsset.Succeeded()) { FuselageMesh->SetMaterial(0, PaintAsset.Object); }
+		FuselageMesh->SetRelativeLocation(FVector::ZeroVector);
+		if (PaintAsset.Succeeded())
+		{
+			FuselageMesh->SetMaterial(0, PaintAsset.Object);
+		}
 	}
 
-	UpperRotorHub = CreateDefaultSubobject<USceneComponent>(TEXT("LegacyUpperRotorHub"));
-	UpperRotorHub->SetupAttachment(Root);
-	UpperRotorHub->SetRelativeLocation(FVector(MastOffset.X, MastOffset.Y, UpperRotorHeightCm));
+	// Heckausleger, Flosse und Heckrotor sind Bauteile der WUERFEL-Notloesung
+	// der Basisklasse. Das alte Modell traegt sein Heck im Rumpfnetz - und ein
+	// Koaxialheli hat ohnehin keinen Heckrotor.
+	if (TailBoomMesh) { TailBoomMesh->SetVisibility(false); }
+	if (TailFinMesh) { TailFinMesh->SetVisibility(false); }
+	if (TailRotorBlade) { TailRotorBlade->SetVisibility(false); }
 
-	UpperRotorMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LegacyUpperRotor"));
-	UpperRotorMesh->SetupAttachment(UpperRotorHub);
-	if (UpperAsset.Succeeded())
+	// Die Ka-52-Kabine haengt an FuselageMesh und erbte dessen Faktor 14,5 und
+	// Gier -90 - ein 38-m-Kasten ueber dem Garagenhof (27.09.2026). Beides
+	// zurueckgenommen sitzt sie im Actor-Raum wie beim Ka-52 (Massstab 1,
+	// Gier +90), also um das gemeinsame Cockpit-Auge.
+	if (CockpitMesh)
 	{
-		UpperRotorMesh->SetStaticMesh(UpperAsset.Object);
-		UpperRotorMesh->SetRelativeRotation(ModelYaw);
-		UpperRotorMesh->SetRelativeScale3D(FVector(ModelScale));
+		CockpitMesh->SetRelativeScale3D(FVector(1.0f / ModelScale));
+		CockpitMesh->SetRelativeRotation(FRotator(0.0f, 180.0f, 0.0f));
+		// Die schmale Nase dieses Modells umschliesst die 1,6 m breite Kabine
+		// nicht - von aussen ragten Seitenwaende und Hebel heraus. Darum nur
+		// fuer den eigenen Piloten und nur in der Cockpit-Ansicht (Tick), in
+		// der der Rumpf ohnehin ausgeblendet ist.
+		CockpitMesh->SetOnlyOwnerSee(true);
+		CockpitMesh->SetVisibility(false);
+	}
+
+	// -- Koaxiales Rotorpaar --------------------------------------------------
+	// Die Naben sitzen auf den gemessenen Masthoehen des alten Modells, nicht
+	// auf denen des Ka-52 (495 / 376,5 cm) - sonst schwebten die Scheiben
+	// anderthalb Meter ueber dem Rumpf.
+	if (MainRotorHub)
+	{
+		MainRotorHub->SetRelativeLocation(
+			FVector(MastOffset.X, MastOffset.Y, UpperRotorHeightCm));
+	}
+	if (MainRotorBlade && UpperAsset.Succeeded())
+	{
+		MainRotorBlade->SetStaticMesh(UpperAsset.Object);
+		MainRotorBlade->SetRelativeRotation(ModelYaw);
+		MainRotorBlade->SetRelativeScale3D(FVector(ModelScale));
 		// Der Rotor traegt seinen eigenen Ursprung: um den Nabenversatz
 		// zurueckgeschoben (GEDREHT abgezogen, in denselben Achsen wie die
-		// Geometrie) kreist die Scheibe genau ueber dem Mast.
-		UpperRotorMesh->SetRelativeLocation(-RotorSelfHub);
-		UpperRotorMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		if (RotorAsset.Succeeded()) { UpperRotorMesh->SetMaterial(0, RotorAsset.Object); }
+		// Geometrie) kreist die Scheibe genau ueber dem Mast. KEIN z-Ausgleich
+		// wie beim Ka-52 - dessen Rotormesh liegt in Gebaeudehoehe, dieses hier
+		// hat seinen Ursprung schon in der Rotorebene.
+		MainRotorBlade->SetRelativeLocation(-RotorSelfHub);
+		if (RotorAsset.Succeeded())
+		{
+			MainRotorBlade->SetMaterial(0, RotorAsset.Object);
+		}
 	}
 
-	LowerRotorHub = CreateDefaultSubobject<USceneComponent>(TEXT("LegacyLowerRotorHub"));
-	LowerRotorHub->SetupAttachment(Root);
-	LowerRotorHub->SetRelativeLocation(FVector(MastOffset.X, MastOffset.Y, LowerRotorHeightCm));
-
-	LowerRotorMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LegacyLowerRotor"));
-	LowerRotorMesh->SetupAttachment(LowerRotorHub);
-	if (LowerAsset.Succeeded())
+	if (LowerRotorHub)
 	{
-		LowerRotorMesh->SetStaticMesh(LowerAsset.Object);
-		LowerRotorMesh->SetRelativeRotation(ModelYaw);
-		LowerRotorMesh->SetRelativeScale3D(FVector(ModelScale));
-		LowerRotorMesh->SetRelativeLocation(-RotorSelfHub);
-		LowerRotorMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		if (RotorAsset.Succeeded()) { LowerRotorMesh->SetMaterial(0, RotorAsset.Object); }
+		LowerRotorHub->SetRelativeLocation(
+			FVector(MastOffset.X, MastOffset.Y, LowerRotorHeightCm));
+	}
+	if (LowerRotorBlade && LowerAsset.Succeeded())
+	{
+		LowerRotorBlade->SetStaticMesh(LowerAsset.Object);
+		LowerRotorBlade->SetRelativeRotation(ModelYaw);
+		LowerRotorBlade->SetRelativeScale3D(FVector(ModelScale));
+		LowerRotorBlade->SetRelativeLocation(-RotorSelfHub);
+		if (RotorAsset.Succeeded())
+		{
+			LowerRotorBlade->SetMaterial(0, RotorAsset.Object);
+		}
 	}
 
-#if WITH_EDITOR
-	// Ohne die Netze bleibt nur ein leerer Actor - im Log sagen, warum.
-	UE_LOG(LogTemp, Log, TEXT("Alter Heli als Standstueck: Rumpf=%d oberer Rotor=%d unterer Rotor=%d."),
-		BodyAsset.Succeeded() ? 1 : 0, UpperAsset.Succeeded() ? 1 : 0, LowerAsset.Succeeded() ? 1 : 0);
-#endif
+	// -- Rotor-Blur-Scheiben auf DIESE Rotorkreise ---------------------------
+	// Die Basisklasse skaliert sie auf die Ka-52-Kreise (15,6 / 16,0 m). Das
+	// alte Modell hat kleinere Rotoren; stehen bliebe eine Scheibe, die weit
+	// ueber die Blattspitzen hinausragt. Der Massstab kommt aus der Geometrie
+	// (Zylinder-Durchmesser 100 cm), nicht aus einer zweiten Zahl.
+	auto ScheibeAnpassen = [ModelScale](UStaticMeshComponent* Blur, const UStaticMesh* Rotor)
+	{
+		if (!Blur || !Rotor)
+		{
+			return;
+		}
+		const FVector Size = Rotor->GetBoundingBox().GetSize();
+		const float DurchmesserM =
+			FMath::Max(Size.X, Size.Y) * ModelScale * 0.01f;
+		Blur->SetRelativeScale3D(FVector(DurchmesserM, DurchmesserM, 0.02f));
+	};
+	ScheibeAnpassen(UpperRotorBlur, UpperAsset.Succeeded() ? UpperAsset.Object : nullptr);
+	ScheibeAnpassen(LowerRotorBlur, LowerAsset.Succeeded() ? LowerAsset.Object : nullptr);
 }
 
-double AWiesbadenLegacyHelicopter::GetNoseToTailCm() const
+void AWiesbadenLegacyHelicopter::Tick(float DeltaSeconds)
 {
-	if (!FuselageMesh || !FuselageMesh->GetStaticMesh())
+	// Vor Super::Tick, damit die Kabinenmeldung dort den neuen Stand sieht.
+	if (CockpitMesh)
 	{
-		return 0.0;
+		CockpitMesh->SetVisibility(GetCameraMode() == EWiesbadenVehicleCameraMode::Cockpit);
 	}
-	const FBox Box = FuselageMesh->GetStaticMesh()->GetBoundingBox();
-	// Das Modell ist 1,007 m lang und wird auf 14,6 m skaliert; die Laengsachse
-	// liegt im Modell auf X (deshalb die Gierdrehung fuer die Blickrichtung).
-	const double Scale = FuselageMesh->GetRelativeScale3D().X;
-	return FMath::Max(Box.GetSize().X, Box.GetSize().Y) * Scale;
-}
-
-double AWiesbadenLegacyHelicopter::GetUpperRotorDiameterCm() const
-{
-	if (!UpperRotorMesh || !UpperRotorMesh->GetStaticMesh())
-	{
-		return 0.0;
-	}
-	const FVector Size = UpperRotorMesh->GetStaticMesh()->GetBoundingBox().GetSize();
-	const double Scale = UpperRotorMesh->GetRelativeScale3D().X;
-	return FMath::Max(Size.X, Size.Y) * Scale;
+	Super::Tick(DeltaSeconds);
 }

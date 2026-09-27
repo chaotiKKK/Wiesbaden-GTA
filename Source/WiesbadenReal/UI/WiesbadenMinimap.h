@@ -291,10 +291,47 @@ struct WIESBADENREAL_API FWiesbadenMinimap
 	 *
 	 * Ein exakter Name (case-insensitive) hat Vorrang; sonst die erste Strasse,
 	 * deren Name den Query-Text enthaelt. False, wenn nichts passt (OutWorldXY
-	 * bleibt dann unveraendert). Fuer das Straßennamen-Suchfeld der Weltkarte.
+	 * bleibt dann unveraendert). Fuer das Strassennamen-Suchfeld der Weltkarte.
 	 */
 	static bool FindStreetCenter(
 		const FRoadNetwork& Network, const FString& Query, FVector2D& OutWorldXY);
+
+	/**
+	 * Wo man HIN will: ein Punkt auf der Fahrbahn und die Richtung, in der sie
+	 * dort laeuft.
+	 *
+	 * Anders als FindStreetCenter, das den Schwerpunkt ALLER Mittellinien
+	 * dieser Strasse mittelt und damit zum ZENTREREN der Karne taugt: Fuer
+	 * einen Sprung auf die Strasse muss der Punkt auf der Fahrbahn liegen. Bei
+	 * einem Bogen oder einer Strasse aus fuenf Segmente liegt der Schwerpunkt
+	 * mitten in der Wiese nebenan. Gesucht ist darum der Mittelpunkt des
+	 * LAENGSTEN Segments, und die Richtung kommt aus dessen Mittellinie.
+	 *
+	 * @param Name       die Strasse (exakter Name hat Vorrang, sonst Teiltreffer)
+	 * @param OutWorldXY der Zielpunkt in Welt-XY (cm)
+	 * @param OutYawDeg  Fahrtrichtung in Grad, 0 = nach Osten (+X)
+	 * @param OutZCm     die Hoehe des Punktes aus der Mittellinie (cm) - die
+	 *                   Strasse traegt ihre eigene Hoehe mit, ein Strahl waere
+	 *                   nur eine zweite Meinung
+	 */
+	static bool FindStreetWarpTarget(
+		const FRoadNetwork& Network, const FString& Name,
+		FVector2D& OutWorldXY, float& OutYawDeg, double& OutZCm);
+
+	/**
+	 * Vorschlaege fuer das Suchfeld, in Anzeigereihenfolge.
+	 *
+	 * Ohne Vorschlagsliste muss man den Namen exakt kennen - und weiss
+	 * niemand, wie "Rhein-Main-Str." in den Daten heisst. Die Reihenfolge
+	 * lautet: exakter Name, dann Namen, die mit dem Getippten BEGINnen, dann
+	 * solche, die es nur enthalten; innerhalb einer Stufe alphabetisch. Jeder
+	 * Name steht genau einmal, auch wenn ihn hundert Segmente tragen.
+	 *
+	 * @param MaxHoechst  so viele Namen kommen hoechstens zurueck
+	 */
+	static void FindStreetSuggestions(
+		const FRoadNetwork& Network, const FString& Query,
+		TArray<FString>& OutNames, int32 MaxHoechst = 6);
 
 	/** True fuer Strassentypen, die auf der Karte hervorgehoben werden. */
 	static bool IsMajorRoad(EOSMHighwayType Type);

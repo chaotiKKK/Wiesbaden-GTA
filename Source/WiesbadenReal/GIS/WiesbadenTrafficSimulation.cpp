@@ -5,6 +5,9 @@
 #include "WiesbadenReal.h"
 
 #include "GIS/WiesbadenTrafficLights.h"
+#include "Algo/Reverse.h"
+#include "Vehicles/WiesbadenCar.h"
+#include "Vehicles/WiesbadenTrafficCars.h"
 #include "Misc/FileHelper.h"
 
 namespace
@@ -53,6 +56,9 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 	VehiclesByLaneCache.Reset();
 	SpawnAccumulator = 0.0;
 	TotalSpawned = 0;
+	SpawnAttempts = 0;
+	LifetimeSpawnsSkippedInView = 0;
+	LifetimeDeadEndWaits = 0;
 	TotalRemoved = 0;
 	LifetimeVehiclesHeldAtRed = 0;
 	LifetimeLaneChanges = 0;
@@ -69,13 +75,22 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 	TotalDistanceCm = 0.0;
 	Report = FWiesbadenTrafficReport();
 
-	// Befahrbare Spawn-Spuren (keine Busspuren).
+	// Befahrbare Spawn-Spuren (keine Busspuren) - nur im Durchgangsnetz, nicht
+	// auf Parkplatzgassen und Zufahrten (IsThroughTrafficClass). Kennt das
+	// Netz nichts anderes (Testnetze), bleibt es bei allen Spuren.
+	TArray<int32> ServiceLaneIds;
 	for (const FRoadLane& Lane : Network->Lanes)
 	{
 		if (Lane.IsValid() && !Lane.bIsBusLane)
 		{
-			SpawnLaneIds.Add(Lane.LaneId);
+			const bool bThrough = !Network->Segments.IsValidIndex(Lane.SegmentId)
+				|| IsThroughTrafficClass(Network->Segments[Lane.SegmentId].HighwayType);
+			(bThrough ? SpawnLaneIds : ServiceLaneIds).Add(Lane.LaneId);
 		}
+	}
+	if (SpawnLaneIds.Num() == 0)
+	{
+		SpawnLaneIds = MoveTemp(ServiceLaneIds);
 	}
 
 	// Nachbarspuren fuer das Ueberholen.
@@ -145,10 +160,79 @@ void FWiesbadenTrafficSimulation::Initialize(const FRoadNetwork& InNetwork,
 		}
 	}
 
+	// Sackgassen erkennen (siehe DeadEndLanes). Eine Wendeschleife ist keine
+	// echte Fortsetzung. Rueckwaerts durchrechnen: eine Spur, deren echte
+	// Fortsetzungen ALLE in Sackgassen fuehren, ist selbst eine.
+	DeadEndLanes.Reset();
+	{
+		auto EchteZiele = [this](int32 Lane, TArray<int32>& Out)
+		{
+			Out.Reset();
+			if (const TArray<int32>* Nach = LaneSuccessorIndices.Find(Lane))
+			{
+				for (const int32 C : *Nach)
+				{
+					const FLaneConnection& Con = Network->Connections[C];
+					if (!(Con.bAddedTurnaround && Con.TurnType == ETurnType::UTurn))
+					{
+						Out.Add(Con.ToLaneId);
+					}
+				}
+			}
+		};
+		TArray<int32> Ziele;
+		for (const FRoadLane& Lane : Network->Lanes)
+		{
+			if (Lane.IsValid())
+			{
+				EchteZiele(Lane.LaneId, Ziele);
+				if (Ziele.Num() == 0) { DeadEndLanes.Add(Lane.LaneId); }
+			}
+		}
+		for (int32 Runde = 0; Runde < 8; ++Runde)
+		{
+			int32 Neu = 0;
+			for (const FRoadLane& Lane : Network->Lanes)
+			{
+				if (!Lane.IsValid() || DeadEndLanes.Contains(Lane.LaneId))
+				{
+					continue;
+				}
+				EchteZiele(Lane.LaneId, Ziele);
+				bool bAlleSackgasse = Ziele.Num() > 0;
+				for (const int32 Z : Ziele) { bAlleSackgasse &= DeadEndLanes.Contains(Z); }
+				if (bAlleSackgasse) { DeadEndLanes.Add(Lane.LaneId); ++Neu; }
+			}
+			if (Neu == 0) { break; }
+		}
+		// Nicht in Sackgassen einsetzen - und auch nicht auf den Spuren, die
+		// man NUR ueber eine Wendeschleife erreicht (Rueckspur einer Hofzufahrt,
+		// Gegenspur im Wendehammer): dort tauchten Autos sonst mitten in der
+		// Zufahrt auf. Rueckfall: Netz nur aus solchen Spuren.
+		TMap<int32, int32> Zulaeufe;
+		TSet<int32> UeberWende;
+		for (const FLaneConnection& Con : Network->Connections)
+		{
+			if (Con.bRestricted) { continue; }
+			++Zulaeufe.FindOrAdd(Con.ToLaneId);
+			if (Con.bAddedTurnaround && Con.TurnType == ETurnType::UTurn) { UeberWende.Add(Con.ToLaneId); }
+		}
+		TArray<int32> Offen;
+		for (const int32 L : SpawnLaneIds)
+		{
+			const bool bNurUeberWende = UeberWende.Contains(L) && Zulaeufe.FindRef(L) <= 1;
+			if (!DeadEndLanes.Contains(L) && !bNurUeberWende) { Offen.Add(L); }
+		}
+		if (Offen.Num() > 0 && Settings.bAvoidDeadEnds) { SpawnLaneIds = MoveTemp(Offen); }
+	}
+
 	// Welche Wege durch eine Kreuzung liegen einander im Weg? Einmal hier -
 	// das Netz aendert sich nicht mehr, und je Tick waeren es Zehntausende
 	// Strecken-Schnitte.
 	BuildConnectionConflicts();
+
+	// Wo an jeder Zufahrt gewartet wird, ohne im Weg eines anderen zu stehen.
+	BuildStopLines();
 }
 
 void FWiesbadenTrafficSimulation::PlaceTrafficVehicles(
@@ -237,6 +321,10 @@ void FWiesbadenTrafficSimulation::Reset()
 	VehiclesByLaneCache.Reset();
 	SpawnAccumulator = 0.0;
 	TotalSpawned = 0;
+	SpawnAttempts = 0;
+	LifetimeSpawnsSkippedInView = 0;
+	DeadEndLanes.Reset();
+	LifetimeDeadEndWaits = 0;
 	TotalRemoved = 0;
 	LifetimeVehiclesHeldAtRed = 0;
 	LifetimeVehiclesApproachingSignal = 0;
@@ -425,27 +513,58 @@ int32 FWiesbadenTrafficSimulation::PickSuccessorConnection(const FTrafficVehicle
 		Network->Connections[(*Successors)[0]].IntersectionNodeId);
 	const uint32 Roll = Hash2(static_cast<uint32>(Vehicle.VehicleId), NodeId);
 
+	// In Parkplatzgassen und Zufahrten biegt der Verkehr nur, wenn es keine
+	// andere Fortsetzung gibt (IsThroughTrafficClass) - und wer doch in einer
+	// steckt, nimmt den ersten Ausgang ins Durchgangsnetz statt Runden zu
+	// drehen.
+	// Erst Sackgassen meiden, dann Service-Wege - jeweils nur, wenn danach
+	// noch eine Fortsetzung bleibt.
+	TArray<int32, TInlineAllocator<8>> Offen;
+	for (const int32 ConnectionIndex : *Successors)
+	{
+		if (!Settings.bAvoidDeadEnds || !DeadEndLanes.Contains(Network->Connections[ConnectionIndex].ToLaneId))
+		{
+			Offen.Add(ConnectionIndex);
+		}
+	}
+	if (Offen.Num() == 0)
+	{
+		Offen.Append(*Successors);
+	}
+	TArray<int32, TInlineAllocator<8>> Choices;
+	for (const int32 ConnectionIndex : Offen)
+	{
+		if (IsThroughTrafficClass(GetSuccessorClass(ConnectionIndex)))
+		{
+			Choices.Add(ConnectionIndex);
+		}
+	}
+	if (Choices.Num() == 0)
+	{
+		Choices.Append(Offen);
+	}
+
 	// Gewichtete Wahl: Hauptstrassen werden bevorzugt.
 	//
 	// Der Hash bleibt die Quelle des Zufalls, damit die Wahl deterministisch
 	// und ueber Laeufe reproduzierbar ist - ein Fahrzeug an derselben
 	// Kreuzung entscheidet sich immer gleich.
 	double TotalWeight = 0.0;
-	for (const int32 ConnectionIndex : *Successors)
+	for (const int32 ConnectionIndex : Choices)
 	{
 		TotalWeight += GetSuccessorWeight(ConnectionIndex);
 	}
 
 	if (TotalWeight <= KINDA_SMALL_NUMBER)
 	{
-		const int32 Pick = static_cast<int32>(Roll % static_cast<uint32>(Successors->Num()));
-		return (*Successors)[Pick];
+		const int32 Pick = static_cast<int32>(Roll % static_cast<uint32>(Choices.Num()));
+		return Choices[Pick];
 	}
 
 	// Hash auf [0, TotalWeight) abbilden und das Rad drehen.
 	const double Target = (static_cast<double>(Roll % 100000u) / 100000.0) * TotalWeight;
 	double Running = 0.0;
-	for (const int32 ConnectionIndex : *Successors)
+	for (const int32 ConnectionIndex : Choices)
 	{
 		Running += GetSuccessorWeight(ConnectionIndex);
 		if (Target < Running)
@@ -454,7 +573,41 @@ int32 FWiesbadenTrafficSimulation::PickSuccessorConnection(const FTrafficVehicle
 		}
 	}
 
-	return (*Successors)[Successors->Num() - 1];
+	return Choices.Last();
+}
+
+EOSMHighwayType FWiesbadenTrafficSimulation::GetSuccessorClass(int32 ConnectionIndex) const
+{
+	if (!Network || !Network->Connections.IsValidIndex(ConnectionIndex))
+	{
+		return EOSMHighwayType::None;
+	}
+	const int32 ToLaneId = Network->Connections[ConnectionIndex].ToLaneId;
+	if (!Network->Lanes.IsValidIndex(ToLaneId)
+		|| !Network->Segments.IsValidIndex(Network->Lanes[ToLaneId].SegmentId))
+	{
+		return EOSMHighwayType::None;
+	}
+	return Network->Segments[Network->Lanes[ToLaneId].SegmentId].HighwayType;
+}
+
+void FWiesbadenTrafficSimulation::CountVehiclesOnServiceRoads(int32& OutOnService, int32& OutTotal) const
+{
+	OutOnService = 0;
+	OutTotal = Vehicles.Num();
+	if (!Network)
+	{
+		return;
+	}
+	for (const FTrafficVehicle& Vehicle : Vehicles)
+	{
+		if (Network->Lanes.IsValidIndex(Vehicle.LaneId)
+			&& Network->Segments.IsValidIndex(Network->Lanes[Vehicle.LaneId].SegmentId)
+			&& Network->Segments[Network->Lanes[Vehicle.LaneId].SegmentId].HighwayType == EOSMHighwayType::Service)
+		{
+			++OutOnService;
+		}
+	}
 }
 
 double FWiesbadenTrafficSimulation::GetSuccessorWeight(int32 ConnectionIndex) const
@@ -519,6 +672,8 @@ bool FWiesbadenTrafficSimulation::AdvanceEdge(FTrafficVehicle& Vehicle)
 			return false; // Sackgasse -> Aufrufer entfernt.
 		}
 		Vehicle.DistanceCm -= Network->Lanes[Vehicle.LaneId].LengthCm;
+		Vehicle.bPrevOnLane = true;
+		Vehicle.PrevEdgeIndex = Vehicle.LaneId;
 		Vehicle.ConnectionIndex = Pick;
 		Vehicle.bOnLane = false;
 		return true;
@@ -532,6 +687,8 @@ bool FWiesbadenTrafficSimulation::AdvanceEdge(FTrafficVehicle& Vehicle)
 	{
 		return false;
 	}
+	Vehicle.bPrevOnLane = false;
+	Vehicle.PrevEdgeIndex = Vehicle.ConnectionIndex;
 	Vehicle.LaneId = Connection.ToLaneId;
 	Vehicle.bOnLane = true;
 	Vehicle.DesiredSpeedCmS = ComputeDesiredSpeed(Vehicle);
@@ -700,55 +857,396 @@ void FWiesbadenTrafficSimulation::UpdateBodyPose(FTrafficVehicle& Vehicle, doubl
 		Vehicle.BodyLocation = Vehicle.Location;
 		Vehicle.BodyYawRad = static_cast<float>(FMath::Atan2(Forward.Y, Forward.X));
 		Vehicle.SteerAngleRad = 0.0f;
+		Vehicle.BodySpeedCmS = Vehicle.SpeedCmS;
+		Vehicle.PrevSollSpeedCmS = Vehicle.SpeedCmS;
 		Vehicle.bBodyInitialized = true;
 		return;
 	}
 
-	const double Lookahead = Settings.LookaheadBaseCm
-		+ FMath::Max(Vehicle.SpeedCmS, 0.0) * Settings.LookaheadSeconds;
-	const FVector Target = GetPathPointAhead(Vehicle, Lookahead);
-
-	FVector2D BodyXY(Vehicle.BodyLocation.X, Vehicle.BodyLocation.Y);
-	StepBicycleModel(
-		FVector2D(Target.X, Target.Y),
-		Vehicle.SpeedCmS,
-		Settings.WheelbaseCm,
-		FMath::DegreesToRadians(Settings.MaxSteerAngleDeg),
-		FMath::DegreesToRadians(Settings.MaxSteerRateDegS),
-		Dt,
-		BodyXY,
-		Vehicle.BodyYawRad,
-		Vehicle.SteerAngleRad);
-
-	// Sicherheitsnetz gegen davonlaufenden Fehler.
-	//
-	// Die Verfolgung holt seitlichen Versatz von allein ein - auch den eines
-	// Spurwechsels, und genau daraus entsteht das erwuenschte allmaehliche
-	// Herueberziehen. Reisst der Abstand aber auf (Bahnwechsel, kaputtes
-	// Netz), landet das Auto im Gruenen. Dann wird der Ueberschuss WEICH
-	// abgebaut: ein harter Schnitt auf die Grenze saehe aus wie ein Teleport.
-	const FVector2D PathXY(Vehicle.Location.X, Vehicle.Location.Y);
-	const double Deviation = FVector2D::Distance(BodyXY, PathXY);
-
-	// Die Grenze haengt am TEMPO. Im Stand bewegt das Einspurmodell die
-	// Karosserie gar nicht mehr (Step = Tempo * Dt) - wer mit Versatz zum
-	// Stehen kommt, bliebe fuer immer neben seiner Spur stehen. Genau daraus
-	// entstanden die ineinander steckenden Kolonnen im Stau.
-	const double MaxDeviation = BodyDeviationLimitCm(
-		Settings, Vehicle.SpeedCmS, Vehicle.LaneChangeCooldown > 0.0f);
-	if (Deviation > MaxDeviation)
+	const bool bOnPath = Settings.bPhysicsBodies && Settings.bSmoothDriving && Settings.bBodyOnPath;
+	if (bOnPath)
 	{
-		const double Excess = Deviation - MaxDeviation;
-		const double Recover = Excess * FMath::Min(1.0, 3.0 * Dt);
-		BodyXY += (PathXY - BodyXY).GetSafeNormal() * Recover;
+		StepBodyOnPath(Vehicle, Dt);
+		Vehicle.LastRecoverCm = 0.0f;
 	}
+	else
+	{
+		const double Lookahead = Settings.LookaheadBaseCm
+			+ FMath::Max(Vehicle.SpeedCmS, 0.0) * Settings.LookaheadSeconds;
+		FVector Target = GetPathPointAhead(Vehicle, Lookahead);
+		if (Vehicle.LaneShiftStartCm != 0.0f)
+		{
+			// Waehrend des weichen Spurwechsels liegt der Zielpunkt auf dem S-Bogen
+			// (mit dem Querversatz, der dort gelten wird), nicht schon auf der neuen Spur.
+			const double Later = Vehicle.LaneShiftElapsed + Lookahead / FMath::Max(Vehicle.SpeedCmS, 100.0);
+			const double Shift = LaneShiftOffsetCm(Vehicle.LaneShiftStartCm, Later, Settings.LaneChangeSeconds);
+			const FVector Beyond = GetPathPointAhead(Vehicle, Lookahead + 100.0);
+			const FVector2D Fwd = FVector2D(Beyond.X - Target.X, Beyond.Y - Target.Y).GetSafeNormal();
+			Target.X += -Fwd.Y * Shift;
+			Target.Y += Fwd.X * Shift;
+		}
 
-	Vehicle.BodyLocation.X = BodyXY.X;
-	Vehicle.BodyLocation.Y = BodyXY.Y;
+		FVector2D BodyXY(Vehicle.BodyLocation.X, Vehicle.BodyLocation.Y);
+		if (Settings.bPhysicsBodies)
+		{
+			// Die Fahrphysik des Spielerautos, ein Fahrer am Steuer.
+			StepPhysicsBody(Vehicle, Target, Dt);
+			BodyXY = FVector2D(Vehicle.BodyLocation.X, Vehicle.BodyLocation.Y);
+		}
+		else
+		{
+			StepBicycleModel(
+				FVector2D(Target.X, Target.Y),
+				Vehicle.SpeedCmS,
+				Settings.WheelbaseCm,
+				FMath::DegreesToRadians(Settings.MaxSteerAngleDeg),
+				FMath::DegreesToRadians(Settings.MaxSteerRateDegS),
+				Dt,
+				BodyXY,
+				Vehicle.BodyYawRad,
+				Vehicle.SteerAngleRad);
+			Vehicle.BodySpeedCmS = Vehicle.SpeedCmS;
+		}
+
+		// Sicherheitsnetz gegen davonlaufenden Fehler.
+		//
+		// Die Verfolgung holt seitlichen Versatz von allein ein - auch den eines
+		// Spurwechsels, und genau daraus entsteht das erwuenschte allmaehliche
+		// Herueberziehen. Reisst der Abstand aber auf (Bahnwechsel, kaputtes
+		// Netz), landet das Auto im Gruenen. Dann wird der Ueberschuss WEICH
+		// abgebaut: ein harter Schnitt auf die Grenze saehe aus wie ein Teleport.
+		const FVector2D PathXY(Vehicle.Location.X, Vehicle.Location.Y);
+		const double Deviation = FVector2D::Distance(BodyXY, PathXY);
+
+		// Die Grenze haengt am TEMPO. Im Stand bewegt das Einspurmodell die
+		// Karosserie gar nicht mehr (Step = Tempo * Dt) - wer mit Versatz zum
+		// Stehen kommt, bliebe fuer immer neben seiner Spur stehen. Genau daraus
+		// entstanden die ineinander steckenden Kolonnen im Stau.
+		const double MaxDeviation = BodyDeviationLimitCm(
+			Settings, Vehicle.SpeedCmS, Vehicle.LaneChangeCooldown > 0.0f);
+		if (Deviation > MaxDeviation)
+		{
+			const double Excess = Deviation - MaxDeviation;
+			const double Recover = Excess * FMath::Min(1.0, 3.0 * Dt);
+			BodyXY += (PathXY - BodyXY).GetSafeNormal() * Recover;
+			Vehicle.LastRecoverCm = static_cast<float>(Recover);
+		}
+		else
+		{
+			Vehicle.LastRecoverCm = 0.0f;
+		}
+
+		Vehicle.BodyLocation.X = BodyXY.X;
+		Vehicle.BodyLocation.Y = BodyXY.Y;
+	}
 
 	// Die Hoehe kommt weiter aus der Bahn: die Strasse steigt und faellt, und
 	// ein mitintegriertes Z wuerde durch den Belag sinken.
 	Vehicle.BodyLocation.Z = Vehicle.Location.Z;
+
+	// Die Raeder rollen mit dem Tempo der Karosserie.
+	const TArray<FWbTrafficCarType>& CarTypes = WiesbadenTrafficCars::Types();
+	const FWbTrafficCarType& CarType = CarTypes[FMath::Clamp(Vehicle.TypeIndex, 0, CarTypes.Num() - 1)];
+	Vehicle.WheelSpinRad = static_cast<float>(FMath::Fmod(
+		static_cast<double>(Vehicle.WheelSpinRad) + Vehicle.BodySpeedCmS * Dt / FMath::Max(CarType.WheelRadiusCm, 1.0),
+		2.0 * PI));
+
+	// Steigung unter dem Fahrzeug: Fahrbahnhoehe an Vorder- und Hinterachse.
+	// Frueher stand jedes Auto am Hang waagerecht - bei 100 m Hoehenunterschied
+	// in der Stadt stach die Front in den Berg oder schwebte das Heck.
+	const double HalfBase = 0.5 * CarType.WheelbaseCm;
+	const double FrontZ = GetPathPointAhead(Vehicle, HalfBase).Z;
+	double RearZ = 2.0 * Vehicle.Location.Z - FrontZ;
+	if (Vehicle.DistanceCm >= HalfBase)
+	{
+		const TArray<FVector>* Path = nullptr;
+		if (Vehicle.bOnLane && Network->Lanes.IsValidIndex(Vehicle.LaneId))
+		{
+			Path = &Network->Lanes[Vehicle.LaneId].Centerline;
+		}
+		else if (!Vehicle.bOnLane && Network->Connections.IsValidIndex(Vehicle.ConnectionIndex))
+		{
+			Path = &Network->Connections[Vehicle.ConnectionIndex].ConnectionPath;
+		}
+		if (Path)
+		{
+			FVector RearLocation, RearForward;
+			SamplePolyline(*Path, Vehicle.DistanceCm - HalfBase, RearLocation, RearForward);
+			RearZ = RearLocation.Z;
+		}
+	}
+	const double TargetSlope = FMath::RadiansToDegrees(FMath::Atan2(FrontZ - RearZ, 2.0 * HalfBase));
+	const double SlopeAlpha = 1.0 - FMath::Exp(-6.0 * Dt);
+	Vehicle.SlopePitchDeg = static_cast<float>(FMath::Lerp(static_cast<double>(Vehicle.SlopePitchDeg),
+		FMath::Clamp(TargetSlope, -20.0, 20.0), SlopeAlpha));
+	Vehicle.PrevSollSpeedCmS = Vehicle.SpeedCmS;
+}
+
+void FWiesbadenTrafficSimulation::SamplePathAt(const FTrafficVehicle& Vehicle, double OffsetCm,
+	FVector& OutLocation, FVector& OutForward) const
+{
+	OutLocation = Vehicle.Location;
+	OutForward = Vehicle.Forward.GetSafeNormal2D();
+	if (!Network)
+	{
+		return;
+	}
+	const auto PathOf = [this](bool bLane, int32 Index) -> const TArray<FVector>*
+	{
+		if (bLane && Network->Lanes.IsValidIndex(Index))
+		{
+			return &Network->Lanes[Index].Centerline;
+		}
+		if (!bLane && Network->Connections.IsValidIndex(Index))
+		{
+			return &Network->Connections[Index].ConnectionPath;
+		}
+		return nullptr;
+	};
+	const auto LengthOf = [this](bool bLane, int32 Index)
+	{
+		return bLane ? (Network->Lanes.IsValidIndex(Index) ? Network->Lanes[Index].LengthCm : 0.0)
+			: ConnectionLengthCm.FindRef(Index);
+	};
+	const TArray<FVector>* Path = PathOf(Vehicle.bOnLane, Vehicle.bOnLane ? Vehicle.LaneId : Vehicle.ConnectionIndex);
+	if (!Path || Path->Num() < 2)
+	{
+		return;
+	}
+	const double Length = GetEdgeLengthCm(Vehicle);
+	const double At = Vehicle.DistanceCm + OffsetCm;
+	if (At >= 0.0 && At <= Length)
+	{
+		SamplePolyline(*Path, At, OutLocation, OutForward);
+	}
+	else if (At > Length)
+	{
+		// Davor: auf der Folgebahn (wie GetPathPointAhead), sonst gerade weiter.
+		bool bNextLane = false;
+		int32 Next = INDEX_NONE;
+		const TArray<FVector>* NextPath = PeekNextEdge(Vehicle, bNextLane, Next) ? PathOf(bNextLane, Next) : nullptr;
+		const double Rest = At - Length;
+		if (NextPath && NextPath->Num() >= 2 && Rest <= LengthOf(bNextLane, Next))
+		{
+			SamplePolyline(*NextPath, Rest, OutLocation, OutForward);
+		}
+		else
+		{
+			SamplePolyline(*Path, FMath::Max(0.0, Length - 10.0), OutLocation, OutForward);
+			OutForward = OutForward.GetSafeNormal2D();
+			OutLocation += OutForward * (Rest + 10.0);
+		}
+	}
+	else
+	{
+		// Dahinter: auf der zuletzt verlassenen Bahn, sonst gerade zurueck.
+		const TArray<FVector>* PrevPath = PathOf(Vehicle.bPrevOnLane, Vehicle.PrevEdgeIndex);
+		const double PrevLength = LengthOf(Vehicle.bPrevOnLane, Vehicle.PrevEdgeIndex);
+		if (PrevPath && PrevPath->Num() >= 2 && PrevLength + At >= 0.0)
+		{
+			SamplePolyline(*PrevPath, PrevLength + At, OutLocation, OutForward);
+		}
+		else
+		{
+			SamplePolyline(*Path, FMath::Min(10.0, Length), OutLocation, OutForward);
+			OutForward = OutForward.GetSafeNormal2D();
+			OutLocation += OutForward * (At - FMath::Min(10.0, Length));
+		}
+	}
+	OutForward = OutForward.GetSafeNormal2D();
+	if (OutForward.IsNearlyZero())
+	{
+		OutForward = Vehicle.Forward.GetSafeNormal2D();
+	}
+	// Querversatz des weichen Spurwechsels - zu dem Zeitpunkt, an dem das
+	// Fahrzeug an dieser Stelle ist.
+	if (Vehicle.LaneShiftStartCm != 0.0f)
+	{
+		const double When = Vehicle.LaneShiftElapsed + OffsetCm / FMath::Max(Vehicle.SpeedCmS, 100.0);
+		const double Shift = LaneShiftOffsetCm(Vehicle.LaneShiftStartCm, FMath::Max(When, 0.0), Settings.LaneChangeSeconds);
+		OutLocation.X += -OutForward.Y * Shift;
+		OutLocation.Y += OutForward.X * Shift;
+	}
+}
+
+void FWiesbadenTrafficSimulation::StepBodyOnPath(FTrafficVehicle& Vehicle, double Dt) const
+{
+	const TArray<FWbTrafficCarType>& CarTypes = WiesbadenTrafficCars::Types();
+	const FWbTrafficCarType& Type = CarTypes[FMath::Clamp(Vehicle.TypeIndex, 0, CarTypes.Num() - 1)];
+	FWiesbadenVehiclePhysics& P = Vehicle.Physics;
+	if (!Vehicle.bPhysicsInitialized)
+	{
+		P = Type.MakePhysics();
+		P.SpeedMetersPerS = static_cast<float>(Vehicle.BodySpeedCmS / 100.0);
+		for (int32 Gear = 1; Gear <= P.Powertrain.ForwardGearRatios.Num(); ++Gear)
+		{
+			P.Gear = Gear;
+			const double Rpm = P.SpeedMetersPerS / FMath::Max(P.WheelRadiusM, 0.1f)
+				* P.Powertrain.ForwardGearRatios[Gear - 1] * P.Powertrain.FinalDriveRatio * 60.0 / (2.0 * PI);
+			if (Rpm < P.ShiftUpRpm)
+			{
+				break;
+			}
+		}
+		Vehicle.bPhysicsInitialized = true;
+	}
+
+	// Achsen auf der Fahrlinie, an der jetzigen Stelle der Karosserie.
+	const double HalfBase = 0.5 * Type.WheelbaseCm;
+	const auto AxlePose = [&](double Lag, FVector& OutCenter, double& OutYaw, double& OutSteer)
+	{
+		FVector Rear, RearFwd, Front, FrontFwd;
+		SamplePathAt(Vehicle, -Lag - HalfBase, Rear, RearFwd);
+		SamplePathAt(Vehicle, -Lag + HalfBase, Front, FrontFwd);
+		OutCenter = 0.5 * (Rear + Front);
+		const FVector2D Axis(Front.X - Rear.X, Front.Y - Rear.Y);
+		OutYaw = Axis.IsNearlyZero() ? FMath::Atan2(FrontFwd.Y, FrontFwd.X) : FMath::Atan2(Axis.Y, Axis.X);
+		// Die Vorderraeder zeigen entlang der Bahn an der Vorderachse.
+		OutSteer = FMath::DegreesToRadians(FMath::FindDeltaAngleDegrees(
+			FMath::RadiansToDegrees(OutYaw), FMath::RadiansToDegrees(FMath::Atan2(FrontFwd.Y, FrontFwd.X))));
+	};
+	FVector Center;
+	double Yaw = 0.0, Steer = 0.0;
+	AxlePose(Vehicle.BodyLagCm, Center, Yaw, Steer);
+
+	// Fahrer laengs: Gas und Bremse wie bisher (ComputeDriverInput), nur liegt
+	// die Sollposition jetzt BodyLagCm voraus auf derselben Linie.
+	const float Mass = FMath::Max(P.Powertrain.MassKg, 1.0f);
+	const float UsableSteerDeg = FWiesbadenVehiclePhysics::ComputeUsableSteerAngleDeg(
+		P.MaxSteerAngleDeg, P.SpeedMetersPerS, P.SteerFalloffSpeedMetersPerS);
+	FWbTrafficDriverView View;
+	View.BodyXY = FVector2D::ZeroVector;
+	View.BodyYawRad = 0.0;
+	View.BodySpeedCmS = P.SpeedMetersPerS * 100.0;
+	View.PursuitTargetXY = FVector2D(1000.0, 0.0);
+	View.SollXY = FVector2D(Vehicle.BodyLagCm, 0.0);
+	View.SollSpeedCmS = Vehicle.SpeedCmS;
+	View.PrevSollSpeedCmS = Vehicle.PrevSollSpeedCmS;
+	View.Dt = Dt;
+	View.UsableSteerRad = FMath::DegreesToRadians(UsableSteerDeg);
+	View.WheelbaseCm = Type.WheelbaseCm;
+	View.FullBrakeCmS2 = P.BrakeForceN / Mass * 100.0;
+	const int32 GearIndex = FMath::Clamp(P.Gear, 1, FMath::Max(P.Powertrain.ForwardGearRatios.Num(), 1)) - 1;
+	const double GearRatio = P.Powertrain.ForwardGearRatios.IsValidIndex(GearIndex) ? P.Powertrain.ForwardGearRatios[GearIndex] : 1.0;
+	View.FullThrottleCmS2 = FMath::Max(100.0,
+		P.Powertrain.MaxTorqueNm * GearRatio * P.Powertrain.FinalDriveRatio / FMath::Max(P.WheelRadiusM, 0.1f) / Mass * 100.0);
+	FWiesbadenVehiclePhysicsInput Input = WiesbadenTrafficCars::ComputeDriverInput(View);
+	Input.Steering = static_cast<float>(FMath::Clamp(Steer / FMath::Max(View.UsableSteerRad, 0.01), -1.0, 1.0));
+
+	const int32 Steps = FMath::Clamp(FMath::CeilToInt(static_cast<float>(Dt * 60.0)), 1, 6);
+	const float H = static_cast<float>(Dt / Steps);
+	FWiesbadenVehiclePhysicsOutput Out;
+	for (int32 Step = 0; Step < Steps; ++Step)
+	{
+		P.Tick(Input, H, Out);
+	}
+	P.Fuel.FuelLiters = P.Fuel.TankCapacityLiters;
+	const double BodySpeed = FMath::Max(0.0, static_cast<double>(Out.ForwardSpeedMetersPerS) * 100.0);
+
+	// Nachlauf entlang der Bahn: waechst, wenn die Sollposition schneller ist.
+	// Begrenzt - mehr wird unsichtbar mitgezogen, sonst rutschten Kolonnen
+	// ineinander, deren Karosserien verschieden weit zurueckliegen.
+	Vehicle.BodyLagCm = static_cast<float>(FMath::Clamp(
+		Vehicle.BodyLagCm + (Vehicle.SpeedCmS - BodySpeed) * Dt, -30.0, FMath::Max(Settings.MaxBodyLagCm, 0.0)));
+	AxlePose(Vehicle.BodyLagCm, Center, Yaw, Steer);
+
+	Vehicle.BodyLocation.X = Center.X;
+	Vehicle.BodyLocation.Y = Center.Y;
+	Vehicle.BodyYawRad = static_cast<float>(FMath::UnwindRadians(Yaw));
+	Vehicle.BodySpeedCmS = BodySpeed;
+	const double MaxSteer = FMath::DegreesToRadians(FMath::Max(static_cast<double>(P.MaxSteerAngleDeg), 1.0));
+	Vehicle.SteerAngleRad = static_cast<float>(FMath::Clamp(Steer, -MaxSteer, MaxSteer));
+
+	// Nicken aus der Laengs-, Wanken aus der Querbeschleunigung (Tempo^2 mal Kruemmung).
+	const double V = BodySpeed / 100.0;
+	const double LatAccel = V * V * FMath::Tan(FMath::Clamp(Steer, -MaxSteer, MaxSteer)) / FMath::Max(Type.WheelbaseCm / 100.0, 0.5);
+	const AWiesbadenCar* Car = GetDefault<AWiesbadenCar>();
+	AWiesbadenCar::ComputeBodyTilt(
+		Out.ForwardAccelerationMetersPerS2, static_cast<float>(LatAccel),
+		Car->BodyPitchPerMeterPerS2, Car->BodyRollPerMeterPerS2, Car->BodyMaxPitchDeg, Car->BodyMaxRollDeg,
+		Car->BodyTiltResponse, static_cast<float>(Dt), Vehicle.BodyPitchDeg, Vehicle.BodyRollDeg);
+}
+
+void FWiesbadenTrafficSimulation::StepPhysicsBody(FTrafficVehicle& Vehicle, const FVector& Target, double Dt) const
+{
+	const TArray<FWbTrafficCarType>& CarTypes = WiesbadenTrafficCars::Types();
+	const FWbTrafficCarType& Type = CarTypes[FMath::Clamp(Vehicle.TypeIndex, 0, CarTypes.Num() - 1)];
+	FWiesbadenVehiclePhysics& P = Vehicle.Physics;
+	if (!Vehicle.bPhysicsInitialized)
+	{
+		// Eingesetzt wird in Fahrt: Tempo der Bahn, der Gang, in dem die
+		// Drehzahl unter der Hochschaltgrenze liegt.
+		P = Type.MakePhysics();
+		P.SpeedMetersPerS = static_cast<float>(Vehicle.BodySpeedCmS / 100.0);
+		for (int32 Gear = 1; Gear <= P.Powertrain.ForwardGearRatios.Num(); ++Gear)
+		{
+			P.Gear = Gear;
+			const double Rpm = P.SpeedMetersPerS / FMath::Max(P.WheelRadiusM, 0.1f)
+				* P.Powertrain.ForwardGearRatios[Gear - 1] * P.Powertrain.FinalDriveRatio * 60.0 / (2.0 * PI);
+			if (Rpm < P.ShiftUpRpm)
+			{
+				break;
+			}
+		}
+		Vehicle.bPhysicsInitialized = true;
+	}
+
+	const float Mass = FMath::Max(P.Powertrain.MassKg, 1.0f);
+	const float Speed = P.SpeedMetersPerS;
+	const float UsableSteerDeg = FWiesbadenVehiclePhysics::ComputeUsableSteerAngleDeg(
+		P.MaxSteerAngleDeg, Speed, P.SteerFalloffSpeedMetersPerS);
+
+	FWbTrafficDriverView View;
+	View.BodyXY = FVector2D(Vehicle.BodyLocation.X, Vehicle.BodyLocation.Y);
+	View.BodyYawRad = Vehicle.BodyYawRad;
+	View.BodySpeedCmS = Speed * 100.0;
+	View.PursuitTargetXY = FVector2D(Target.X, Target.Y);
+	View.SollXY = FVector2D(Vehicle.Location.X, Vehicle.Location.Y);
+	View.SollSpeedCmS = Vehicle.SpeedCmS;
+	View.PrevSollSpeedCmS = Vehicle.PrevSollSpeedCmS;
+	View.Dt = Dt;
+	View.UsableSteerRad = FMath::DegreesToRadians(UsableSteerDeg);
+	View.WheelbaseCm = Type.WheelbaseCm;
+	View.FullBrakeCmS2 = P.BrakeForceN / Mass * 100.0;
+	// Zugkraft im eingelegten Gang bei Nennmoment - reicht als Mass fuer das Pedal.
+	const int32 GearIndex = FMath::Clamp(P.Gear, 1, FMath::Max(P.Powertrain.ForwardGearRatios.Num(), 1)) - 1;
+	const double GearRatio = P.Powertrain.ForwardGearRatios.IsValidIndex(GearIndex) ? P.Powertrain.ForwardGearRatios[GearIndex] : 1.0;
+	View.FullThrottleCmS2 = FMath::Max(100.0,
+		P.Powertrain.MaxTorqueNm * GearRatio * P.Powertrain.FinalDriveRatio / FMath::Max(P.WheelRadiusM, 0.1f) / Mass * 100.0);
+	const FWiesbadenVehiclePhysicsInput Input = WiesbadenTrafficCars::ComputeDriverInput(View);
+
+	// Die Physik ist fuer Bildtakte gebaut - einen Ruckler (0,1 s) in Teilschritte zerlegen.
+	const int32 Steps = FMath::Clamp(FMath::CeilToInt(static_cast<float>(Dt * 60.0)), 1, 6);
+	const float H = static_cast<float>(Dt / Steps);
+	FVector2D XY = View.BodyXY;
+	double Yaw = Vehicle.BodyYawRad;
+	FWiesbadenVehiclePhysicsOutput Out;
+	for (int32 Step = 0; Step < Steps; ++Step)
+	{
+		P.Tick(Input, H, Out);
+		Yaw += Out.YawRateRadPerS * H;
+		// Wie AWiesbadenCar: entlang der Fahrzeugachse plus Querschlupf nach rechts.
+		const FVector2D Forward(FMath::Cos(Yaw), FMath::Sin(Yaw));
+		const FVector2D Right(-FMath::Sin(Yaw), FMath::Cos(Yaw));
+		XY += (Forward * Out.ForwardSpeedMetersPerS + Right * Out.LateralVelocityMetersPerS) * (100.0 * H);
+	}
+	// Der Verkehr tankt nie.
+	P.Fuel.FuelLiters = P.Fuel.TankCapacityLiters;
+
+	Vehicle.BodyLocation.X = XY.X;
+	Vehicle.BodyLocation.Y = XY.Y;
+	Vehicle.BodyYawRad = static_cast<float>(FMath::UnwindRadians(Yaw));
+	Vehicle.BodySpeedCmS = Out.ForwardSpeedMetersPerS * 100.0;
+	Vehicle.SteerAngleRad = static_cast<float>(P.SteerAngleNorm * FMath::DegreesToRadians(
+		FWiesbadenVehiclePhysics::ComputeUsableSteerAngleDeg(P.MaxSteerAngleDeg, P.SpeedMetersPerS, P.SteerFalloffSpeedMetersPerS)));
+
+	// Gewichtsverlagerung wie beim Spielerauto: Nicken aus der Laengs-, Wanken
+	// aus der Querbeschleunigung.
+	const AWiesbadenCar* Car = GetDefault<AWiesbadenCar>();
+	AWiesbadenCar::ComputeBodyTilt(
+		Out.ForwardAccelerationMetersPerS2, Out.ForwardSpeedMetersPerS * Out.YawRateRadPerS,
+		Car->BodyPitchPerMeterPerS2, Car->BodyRollPerMeterPerS2, Car->BodyMaxPitchDeg, Car->BodyMaxRollDeg,
+		Car->BodyTiltResponse, static_cast<float>(Dt), Vehicle.BodyPitchDeg, Vehicle.BodyRollDeg);
 }
 
 void FWiesbadenTrafficSimulation::SamplePolyline(const TArray<FVector>& Polyline, double DistanceCm,
@@ -808,6 +1306,11 @@ void FWiesbadenTrafficSimulation::CollectStalledVehicles(
 		FStalledVehicle Entry;
 		Entry.VehicleId = Vehicle.VehicleId;
 		Entry.LaneId = Vehicle.LaneId;
+		if (Network->Lanes.IsValidIndex(Vehicle.LaneId)
+			&& Network->Segments.IsValidIndex(Network->Lanes[Vehicle.LaneId].SegmentId))
+		{
+			Entry.HighwayType = Network->Segments[Network->Lanes[Vehicle.LaneId].SegmentId].HighwayType;
+		}
 		Entry.Location = Vehicle.Location;
 		Entry.SpeedCmS = Vehicle.SpeedCmS;
 		Entry.DesiredSpeedCmS = Vehicle.DesiredSpeedCmS;
@@ -986,6 +1489,41 @@ void FWiesbadenTrafficSimulation::SetObserverLocation(const FVector& InLocation)
 		LastSpawnSearchLocation = InLocation;
 		bNearbyLanesValid = true;
 	}
+}
+
+void FWiesbadenTrafficSimulation::SetObserverView(const FVector& InLocation, const FVector& InViewDirection, float HorizontalFovDeg)
+{
+	SetObserverLocation(InLocation);
+	ViewDirection = InViewDirection.GetSafeNormal();
+	if (ViewDirection.IsNearlyZero())
+	{
+		ViewDirection = FVector::ForwardVector;
+	}
+	const double HalfCone = FMath::Clamp(0.5 * HorizontalFovDeg + Settings.ViewConeMarginDeg, 1.0, 179.0);
+	ViewCosHalfCone = FMath::Cos(FMath::DegreesToRadians(HalfCone));
+	bHasView = true;
+}
+
+bool FWiesbadenTrafficSimulation::IsPointInView(const FVector& Point, const FVector& ViewLocation,
+	const FVector& InViewDirection, double CosHalfCone, double DrawDistanceCm, double AlwaysVisibleCm)
+{
+	const FVector ToPoint = Point - ViewLocation;
+	const double Distance = ToPoint.Size();
+	if (Distance <= AlwaysVisibleCm)
+	{
+		return true;
+	}
+	if (Distance > DrawDistanceCm)
+	{
+		return false;   // so weit zeichnet der Verkehr nicht
+	}
+	return FVector::DotProduct(ToPoint / Distance, InViewDirection) >= CosHalfCone;
+}
+
+bool FWiesbadenTrafficSimulation::IsVisibleToObserver(const FVector& Point) const
+{
+	return bHasView && IsPointInView(Point, ObserverLocation, ViewDirection, ViewCosHalfCone,
+		Settings.DrawDistanceMeters * 100.0, Settings.AlwaysVisibleMeters * 100.0);
 }
 
 void FWiesbadenTrafficSimulation::SetPlayerObstacle(const FVector& Location, double HalfLengthCm)
@@ -1187,6 +1725,56 @@ bool FWiesbadenTrafficSimulation::FindPathCrossing(
 	return false;
 }
 
+bool FWiesbadenTrafficSimulation::FindPathProximity(const FLaneConnection& A, const FLaneConnection& B,
+	double MinDistanceCm, double& OutClearOnA, double& OutClearOnB)
+{
+	OutClearOnA = 0.0;
+	OutClearOnB = 0.0;
+	if (A.FromLaneId == B.FromLaneId || A.ConnectionPath.Num() < 2 || B.ConnectionPath.Num() < 2)
+	{
+		return false;
+	}
+	// Beide Wege in 50-cm-Schritten abtasten (mit Bogenlaenge).
+	const auto Samples = [](const TArray<FVector>& Path, TArray<FVector2D>& OutPoints, TArray<double>& OutAlong)
+	{
+		double Along = 0.0;
+		for (int32 i = 1; i < Path.Num(); ++i)
+		{
+			const double Len = FVector::Dist2D(Path[i - 1], Path[i]);
+			const int32 N = FMath::Max(1, FMath::CeilToInt(static_cast<float>(Len / 50.0)));
+			for (int32 k = 0; k < N; ++k)
+			{
+				const double T = static_cast<double>(k) / N;
+				const FVector P = FMath::Lerp(Path[i - 1], Path[i], T);
+				OutPoints.Add(FVector2D(P.X, P.Y));
+				OutAlong.Add(Along + T * Len);
+			}
+			Along += Len;
+		}
+		OutPoints.Add(FVector2D(Path.Last().X, Path.Last().Y));
+		OutAlong.Add(Along);
+	};
+	TArray<FVector2D> PA, PB;
+	TArray<double> SA, SB;
+	Samples(A.ConnectionPath, PA, SA);
+	Samples(B.ConnectionPath, PB, SB);
+	const double Min2 = MinDistanceCm * MinDistanceCm;
+	bool bClose = false;
+	for (int32 i = 0; i < PA.Num(); ++i)
+	{
+		for (int32 k = 0; k < PB.Num(); ++k)
+		{
+			if (FVector2D::DistSquared(PA[i], PB[k]) < Min2)
+			{
+				bClose = true;
+				OutClearOnA = FMath::Max(OutClearOnA, SA[i]);
+				OutClearOnB = FMath::Max(OutClearOnB, SB[k]);
+			}
+		}
+	}
+	return bClose;
+}
+
 bool FWiesbadenTrafficSimulation::DoConnectionsConflictForGroup(
 	const FLaneConnection& A, const FLaneConnection& B, bool bSameTargetLaneBlocks)
 {
@@ -1278,9 +1866,36 @@ void FWiesbadenTrafficSimulation::BuildConnectionConflicts()
 	}
 
 	int32 ConflictPairs = 0;
+	int32 ProximityPairs = 0;
+	const double StartSeconds = FPlatformTime::Seconds();
+	// Zwei Autos nebeneinander brauchen eine volle Breite des breitesten Typs.
+	double SideBySideCm = 0.0;
+	for (const FWbTrafficCarType& Type : WiesbadenTrafficCars::Types())
+	{
+		SideBySideCm = FMath::Max(SideBySideCm, Type.BodyWidthCm);
+	}
+	MultiArmConnections.Reset();
 	for (const TPair<int64, TArray<int32>>& Node : ConnectionsByNode)
 	{
 		const TArray<int32>& Indices = Node.Value;
+		{
+			TSet<int32> Arms;
+			for (const int32 C : Indices)
+			{
+				const FLaneConnection& Conn = Network->Connections[C];
+				for (const int32 L : { Conn.FromLaneId, Conn.ToLaneId })
+				{
+					if (Network->Lanes.IsValidIndex(L))
+					{
+						Arms.Add(Network->Lanes[L].SegmentId);
+					}
+				}
+			}
+			if (Arms.Num() >= 3)
+			{
+				MultiArmConnections.Append(Indices);
+			}
+		}
 		for (int32 a = 0; a < Indices.Num(); ++a)
 		{
 			for (int32 b = a + 1; b < Indices.Num(); ++b)
@@ -1292,7 +1907,14 @@ void FWiesbadenTrafficSimulation::BuildConnectionConflicts()
 				if (!FindConnectionConflict(Network->Connections[IndexA],
 					Network->Connections[IndexB], ClearOnA, ClearOnB))
 				{
-					continue;
+					// Auch zu eng NEBENEINANDER ist ein Konflikt (zwei Autos
+					// passen dort nicht), nicht nur ein Schnittpunkt.
+					if (!Settings.bSmoothDriving || !FindPathProximity(Network->Connections[IndexA],
+						Network->Connections[IndexB], SideBySideCm, ClearOnA, ClearOnB))
+					{
+						continue;
+					}
+					++ProximityPairs;
 				}
 
 				// Gemerkt wird jeweils, ab welcher Bogenlaenge der ANDERE aus
@@ -1305,8 +1927,9 @@ void FWiesbadenTrafficSimulation::BuildConnectionConflicts()
 	}
 
 	UE_LOG(LogWbTraffic, Log,
-		TEXT("Verkehr: %d Verbindungen an %d Knoten, %d kreuzende Paare vorgemerkt."),
-		Network->Connections.Num(), ConnectionsByNode.Num(), ConflictPairs);
+		TEXT("Verkehr: %d Verbindungen an %d Knoten, %d kreuzende Paare vorgemerkt (davon %d zu eng nebeneinander, unter %.0f cm); %.0f ms."),
+		Network->Connections.Num(), ConnectionsByNode.Num(), ConflictPairs, ProximityPairs, SideBySideCm,
+		(FPlatformTime::Seconds() - StartSeconds) * 1000.0);
 }
 
 double FWiesbadenTrafficSimulation::ApproachSpeedForBlockedJunctionCmS(
@@ -1325,6 +1948,212 @@ double FWiesbadenTrafficSimulation::ApproachSpeedForBlockedJunctionCmS(
 
 	// NUR begrenzen, nie beschleunigen: wer ohnehin langsamer faehrt, bleibt es.
 	return FMath::Min(FMath::Max(CurrentSpeedCmS, 0.0), Moeglich);
+}
+
+double FWiesbadenTrafficSimulation::ComputeStopSetbackCm(const TArray<FVector>& Approach, double LengthCm,
+	const TArray<FStopObstacle>& Obstacles, double BaseCm, double MaxCm, double StepCm,
+	double HalfLengthCm, double HalfWidthCm, double ObstacleHalfWidthCm, bool& bOutResolved)
+{
+	bOutResolved = true;
+	if (Approach.Num() < 2 || LengthCm <= 0.0 || Obstacles.Num() == 0)
+	{
+		return BaseCm;
+	}
+	const double Reach = FMath::Sqrt(HalfLengthCm * HalfLengthCm + HalfWidthCm * HalfWidthCm);
+	const double Step = FMath::Max(StepCm, 10.0);
+	const double Limit = FMath::Min(MaxCm, LengthCm);
+	for (double Setback = BaseCm; Setback <= Limit + 1.0; Setback += Step)
+	{
+		FVector Center, Forward;
+		SamplePolyline(Approach, LengthCm - FMath::Min(Setback, LengthCm), Center, Forward);
+		bool bClear = true;
+		for (const FStopObstacle& O : Obstacles)
+		{
+			const FVector Mid = 0.5 * (O.From + O.To);
+			const double HalfPiece = 0.5 * FVector::Dist2D(O.From, O.To);
+			// Grobfilter: nur Wegstuecke in Reichweite pruefen.
+			if (FVector::Dist2D(Center, Mid) > Reach + HalfPiece + ObstacleHalfWidthCm)
+			{
+				continue;
+			}
+			const FVector PieceDir = HalfPiece > 1.0 ? (O.To - O.From).GetSafeNormal2D() : Forward;
+			if (AreBoxesOverlapping(Center, Forward, HalfLengthCm, HalfWidthCm,
+				Mid, PieceDir, HalfPiece, ObstacleHalfWidthCm))
+			{
+				bClear = false;
+				break;
+			}
+		}
+		if (bClear)
+		{
+			return Setback;
+		}
+	}
+	bOutResolved = false;
+	return BaseCm;
+}
+
+double FWiesbadenTrafficSimulation::GetStopDistanceCm(int32 LaneId) const
+{
+	const double Base = FMath::Max(Settings.MinGapCm * 0.5, 100.0);
+	return LaneStopDistanceCm.IsValidIndex(LaneId) ? FMath::Max(LaneStopDistanceCm[LaneId], Base) : Base;
+}
+
+void FWiesbadenTrafficSimulation::BuildStopLines()
+{
+	LaneStopDistanceCm.Reset();
+	if (!Network || !Settings.bGeometricStopLines)
+	{
+		return;
+	}
+	const double StartSeconds = FPlatformTime::Seconds();
+	const double Base = FMath::Max(Settings.MinGapCm * 0.5, 100.0);
+	constexpr double ZoneCm = 1500.0;   // so weit reicht der Blick um den Knoten
+	constexpr double StepCm = 50.0;
+
+	// Das groesste Verkehrsauto bestimmt, wo gewartet wird (der T6).
+	double HalfLength = 0.0, HalfWidth = 0.0;
+	for (const FWbTrafficCarType& Type : WiesbadenTrafficCars::Types())
+	{
+		HalfLength = FMath::Max(HalfLength, Type.HalfLengthCm());
+		HalfWidth = FMath::Max(HalfWidth, 0.5 * Type.BodyWidthCm);
+	}
+
+	LaneStopDistanceCm.Init(Base, Network->Lanes.Num());
+
+	// Wegstuecke einer Polylinie zwischen zwei Bogenlaengen (ganze Stuecke,
+	// sobald sie den Bereich beruehren).
+	const auto AddPieces = [](const TArray<FVector>& Line, double From, double To, TArray<FStopObstacle>& Out)
+	{
+		double Along = 0.0;
+		for (int32 i = 0; i + 1 < Line.Num(); ++i)
+		{
+			const double Len = FVector::Dist2D(Line[i], Line[i + 1]);
+			if (Along + Len >= From && Along <= To)
+			{
+				Out.Add({ Line[i], Line[i + 1] });
+			}
+			Along += Len;
+		}
+	};
+
+	TMap<int64, TArray<int32>> ConnectionsByNode;
+	for (int32 i = 0; i < Network->Connections.Num(); ++i)
+	{
+		ConnectionsByNode.FindOrAdd(Network->Connections[i].IntersectionNodeId).Add(i);
+	}
+
+	int32 Moved = 0, Unresolved = 0, Approaches = 0;
+	double MovedSum = 0.0, MovedMax = 0.0;
+	for (const TPair<int64, TArray<int32>>& Node : ConnectionsByNode)
+	{
+		TArray<int32> InLanes, OutLanes;
+		for (const int32 C : Node.Value)
+		{
+			const FLaneConnection& Conn = Network->Connections[C];
+			if (Network->Lanes.IsValidIndex(Conn.FromLaneId))
+			{
+				InLanes.AddUnique(Conn.FromLaneId);
+			}
+			if (Network->Lanes.IsValidIndex(Conn.ToLaneId))
+			{
+				OutLanes.AddUnique(Conn.ToLaneId);
+			}
+		}
+		// Nur wo Zufahrten verschiedener Strassen zusammentreffen.
+		TSet<int32> Segments;
+		for (const int32 L : InLanes)
+		{
+			Segments.Add(Network->Lanes[L].SegmentId);
+		}
+		if (Segments.Num() < 2)
+		{
+			continue;
+		}
+		// Echte Kreuzung (mindestens drei Arme)? Nur dort haelt die Haltelinie
+		// auch zur eigenen Zielspur Abstand - an einer Stossstelle ist die
+		// eigene Zielspur schlicht die Fortsetzung geradeaus.
+		TSet<int32> Arms = Segments;
+		for (const int32 L : OutLanes)
+		{
+			Arms.Add(Network->Lanes[L].SegmentId);
+		}
+		const bool bClearOwnExits = Settings.bStrictJunctionClearance && Arms.Num() >= 3;
+
+		// Zwei Durchgaenge: im ersten zaehlen nur Wege und Ausfahrten; im
+		// zweiten auch die Wartebereiche der Nachbar-Zufahrten - bis zu DEREN
+		// Haltelinie, nicht bis zu ihrem Spurende (dort wartet niemand mehr).
+		for (int32 Pass = 0; Pass < 2; ++Pass)
+		{
+			for (const int32 L : InLanes)
+			{
+				const FRoadLane& Lane = Network->Lanes[L];
+				TArray<int32> Reachable;
+				for (const int32 C : Node.Value)
+				{
+					if (Network->Connections[C].FromLaneId == L)
+					{
+						Reachable.AddUnique(Network->Connections[C].ToLaneId);
+					}
+				}
+				TArray<FStopObstacle> Obstacles;
+				for (const int32 C : Node.Value)
+				{
+					const FLaneConnection& Conn = Network->Connections[C];
+					if (Conn.FromLaneId != L)
+					{
+						AddPieces(Conn.ConnectionPath, 0.0, TNumericLimits<double>::Max(), Obstacles);
+					}
+				}
+				for (const int32 Out : OutLanes)
+				{
+					const FRoadLane& OutLane = Network->Lanes[Out];
+					// Auch die EIGENE Zielspur: dort steht der Rueckstau, und ein
+					// Wartender an der Ecke steckte sonst in dessen Heck.
+					if (OutLane.SegmentId != Lane.SegmentId
+						&& (bClearOwnExits || !Reachable.Contains(Out)))
+					{
+						AddPieces(OutLane.Centerline, 0.0, ZoneCm, Obstacles);
+					}
+				}
+				if (Pass > 0)
+				{
+					for (const int32 Other : InLanes)
+					{
+						const FRoadLane& OtherLane = Network->Lanes[Other];
+						if (OtherLane.SegmentId == Lane.SegmentId)
+						{
+							continue;
+						}
+						// Bis zur Front des dort Wartenden.
+						const double Front = OtherLane.LengthCm - LaneStopDistanceCm[Other] + HalfLength;
+						AddPieces(OtherLane.Centerline, OtherLane.LengthCm - ZoneCm, Front, Obstacles);
+					}
+				}
+				bool bResolved = true;
+				LaneStopDistanceCm[L] = ComputeStopSetbackCm(Lane.Centerline, Lane.LengthCm, Obstacles,
+					Base, ZoneCm, StepCm, HalfLength, HalfWidth, HalfWidth, bResolved);
+				if (Pass == 1)
+				{
+					++Approaches;
+					Unresolved += bResolved ? 0 : 1;
+					const double Shift = LaneStopDistanceCm[L] - Base;
+					if (Shift > 1.0)
+					{
+						++Moved;
+						MovedSum += Shift;
+						MovedMax = FMath::Max(MovedMax, Shift);
+					}
+				}
+			}
+		}
+	}
+
+	UE_LOG(LogWbTraffic, Log,
+		TEXT("Haltelinien: %d von %d Zufahrten zurueckversetzt (Mittel %.0f cm, groesste %.0f cm), ")
+		TEXT("%d ohne freie Stelle bis %.0f m (bleiben bei %.0f cm); %.0f ms."),
+		Moved, Approaches, Moved > 0 ? MovedSum / Moved : 0.0, MovedMax,
+		Unresolved, ZoneCm / 100.0, Base, (FPlatformTime::Seconds() - StartSeconds) * 1000.0);
 }
 
 void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
@@ -1380,10 +2209,11 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 		/** An der Haltelinie - nur diese belegen den Weg fuer sich. */
 		bool bAtLine = false;
 
+		/** Haltelinie der Zufahrt (Abstand vor dem Spurende). */
+		double StopCm = 0.0;
+
 		int32 VehicleId = INDEX_NONE;
 	};
-
-	const double StopDistance = FMath::Max(Settings.MinGapCm * 0.5, 100.0);
 
 	// Komfortable Verzoegerung fuer das Anfahren einer belegten Kreuzung -
 	// dieselbe Groessenordnung wie bei der Ruecksicht auf den Spieler. Deutlich
@@ -1411,6 +2241,7 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 		const double Bremsweg = (Vehicle.SpeedCmS * Vehicle.SpeedCmS)
 			/ (2.0 * FMath::Max(ComfortDeceleration, 1.0));
 		const double BisZurLinie = LaneLength - Vehicle.DistanceCm;
+		const double StopDistance = GetStopDistanceCm(Vehicle.LaneId);
 		if (BisZurLinie > StopDistance + Bremsweg)
 		{
 			continue;
@@ -1428,6 +2259,7 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 		Candidate.ConnectionIndex = Next;
 		Candidate.DistanceToLineCm = BisZurLinie;
 		Candidate.bAtLine = (BisZurLinie <= StopDistance);
+		Candidate.StopCm = StopDistance;
 		Candidate.VehicleId = Vehicle.VehicleId;
 		Candidates.Add(Candidate);
 	}
@@ -1450,6 +2282,7 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 	// Blockierfreihaltung: wer keinen Platz hinter der Kreuzung hat, darf nicht
 	// hinein.
 	TMap<int32, double> RearmostOnLane;
+	TMap<int32, double> RearmostStopOnLane;
 	for (const FTrafficVehicle& Vehicle : Vehicles)
 	{
 		if (!Vehicle.bOnLane || Vehicle.LaneId == INDEX_NONE)
@@ -1459,6 +2292,14 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 		double& Rearmost = RearmostOnLane.FindOrAdd(
 			Vehicle.LaneId, TNumericLimits<double>::Max());
 		Rearmost = FMath::Min(Rearmost, Vehicle.DistanceCm);
+		// Wo haelt es fruehestens, wenn es jetzt behaglich bremst? Wer zuegig
+		// wegfaehrt, macht den Platz hinter der Kreuzung frei, bevor der
+		// Naechste dort ankommt - ihn wie einen Stehenden zu zaehlen, hielt
+		// Fahrzeuge vor Kreuzungen fest, hinter denen gar niemand wartete.
+		double& Reach = RearmostStopOnLane.FindOrAdd(
+			Vehicle.LaneId, TNumericLimits<double>::Max());
+		Reach = FMath::Min(Reach, Vehicle.DistanceCm
+			+ Vehicle.SpeedCmS * Vehicle.SpeedCmS / (2.0 * ComfortDeceleration));
 	}
 
 	// Vorfahrt: Gewicht der Strassenklasse, aus der eine Verbindung kommt.
@@ -1529,9 +2370,18 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 			&& Network->Connections.IsValidIndex(Candidate.ConnectionIndex))
 		{
 			const int32 ToLane = Network->Connections[Candidate.ConnectionIndex].ToLaneId;
-			if (const double* RearmostAhead = RearmostOnLane.Find(ToLane))
+			// Streng nur an echten Kreuzungen: an den Stossstellen zerteilter
+			// Strassen sind die Folgespuren oft kuerzer als der verlangte
+			// Platz (Albrecht-Duerer-Strasse: 8,9 m) - dort durfte nur noch
+			// einer hinein, sobald irgendwer auf der Spur war.
+			const bool bStrict = Settings.bStrictJunctionClearance
+				&& MultiArmConnections.Contains(Candidate.ConnectionIndex);
+			if (const double* RearmostAhead = (bStrict ? RearmostStopOnLane : RearmostOnLane).Find(ToLane))
 			{
-				if (*RearmostAhead < FMath::Max(Settings.JunctionExitSpaceCm, 0.0))
+				const double Platz = bStrict
+					? FMath::Max(Settings.JunctionExitSpaceCm, Settings.MinGapCm + Settings.VehicleHalfLengthCm)
+					: FMath::Max(Settings.JunctionExitSpaceCm, 0.0);
+				if (*RearmostAhead < Platz)
 				{
 					bBlocked = true;
 					++LastBlockedNoRoomAhead;
@@ -1563,6 +2413,22 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 				{
 					bBlocked = true;
 					++LastBlockedConflictBusy;
+					break;
+				}
+				// LINKSABBIEGER LASSEN DEN GEGENVERKEHR DURCH (StVO 9 Abs. 3).
+				// Bedingt vertraegliche Linksabbieger (gemischte Spur) haben mit
+				// dem Geradeausverkehr ihrer Achse zugleich Gruen - das
+				// Signalprogramm trennt sie nicht mehr, also wartet hier der
+				// Linksabbieger, bis niemand mehr entgegenkommt. Ein STEHENDER
+				// Gegenverkehr kommt nicht (TimeToLineSeconds) - kein Dauersperren.
+				if (TrafficLights && Settings.JunctionYieldSeconds > 0.0
+					&& TrafficLights->IsPermissiveLeft(Candidate.ConnectionIndex)
+					&& Network->Connections.IsValidIndex(Conflict.OtherConnection)
+					&& !FWiesbadenTrafficLightSystem::IsLeftTurn(Network->Connections[Conflict.OtherConnection].TurnType)
+					&& TimeToLineSeconds(Conflict.OtherConnection) < Settings.JunctionYieldSeconds)
+				{
+					bBlocked = true;
+					++LastBlockedYielding;
 					break;
 				}
 
@@ -1599,7 +2465,7 @@ void FWiesbadenTrafficSimulation::ApplyJunctionConflicts()
 			}
 			Wartender.SpeedCmS = ApproachSpeedForBlockedJunctionCmS(
 				Wartender.SpeedCmS, Candidate.DistanceToLineCm,
-				StopDistance, ComfortDeceleration);
+				Candidate.StopCm, ComfortDeceleration);
 			++LastVehiclesHeldAtJunction;
 			continue;
 		}
@@ -1626,6 +2492,14 @@ bool FWiesbadenTrafficSimulation::AreVehiclesOverlapping(
 	const FVector& LocationB, const FVector& ForwardB,
 	double HalfLengthCm, double HalfWidthCm)
 {
+	return AreBoxesOverlapping(LocationA, ForwardA, HalfLengthCm, HalfWidthCm,
+		LocationB, ForwardB, HalfLengthCm, HalfWidthCm);
+}
+
+bool FWiesbadenTrafficSimulation::AreBoxesOverlapping(
+	const FVector& CenterA, const FVector& ForwardA, double HalfLengthA, double HalfWidthA,
+	const FVector& CenterB, const FVector& ForwardB, double HalfLengthB, double HalfWidthB)
+{
 	const FVector2D FwdA = FVector2D(ForwardA.X, ForwardA.Y).GetSafeNormal();
 	const FVector2D FwdB = FVector2D(ForwardB.X, ForwardB.Y).GetSafeNormal();
 	if (FwdA.IsNearlyZero() || FwdB.IsNearlyZero())
@@ -1635,10 +2509,12 @@ bool FWiesbadenTrafficSimulation::AreVehiclesOverlapping(
 
 	const FVector2D RightA(FwdA.Y, -FwdA.X);
 	const FVector2D RightB(FwdB.Y, -FwdB.X);
-	const FVector2D Delta(LocationB.X - LocationA.X, LocationB.Y - LocationA.Y);
+	const FVector2D Delta(CenterB.X - CenterA.X, CenterB.Y - CenterA.Y);
 
-	const double HalfL = FMath::Max(HalfLengthCm, 0.0);
-	const double HalfW = FMath::Max(HalfWidthCm, 0.0);
+	const double HalfLA = FMath::Max(HalfLengthA, 0.0);
+	const double HalfWA = FMath::Max(HalfWidthA, 0.0);
+	const double HalfLB = FMath::Max(HalfLengthB, 0.0);
+	const double HalfWB = FMath::Max(HalfWidthB, 0.0);
 
 	// Separating Axis Theorem: findet sich EINE Achse, auf der sich die
 	// Projektionen nicht ueberschneiden, stehen die beiden frei.
@@ -1646,16 +2522,33 @@ bool FWiesbadenTrafficSimulation::AreVehiclesOverlapping(
 	for (const FVector2D& Axis : Axes)
 	{
 		const double Distance = FMath::Abs(FVector2D::DotProduct(Delta, Axis));
-		const double ReachA = HalfL * FMath::Abs(FVector2D::DotProduct(FwdA, Axis))
-			+ HalfW * FMath::Abs(FVector2D::DotProduct(RightA, Axis));
-		const double ReachB = HalfL * FMath::Abs(FVector2D::DotProduct(FwdB, Axis))
-			+ HalfW * FMath::Abs(FVector2D::DotProduct(RightB, Axis));
+		const double ReachA = HalfLA * FMath::Abs(FVector2D::DotProduct(FwdA, Axis))
+			+ HalfWA * FMath::Abs(FVector2D::DotProduct(RightA, Axis));
+		const double ReachB = HalfLB * FMath::Abs(FVector2D::DotProduct(FwdB, Axis))
+			+ HalfWB * FMath::Abs(FVector2D::DotProduct(RightB, Axis));
 		if (Distance >= ReachA + ReachB)
 		{
 			return false;
 		}
 	}
 	return true;
+}
+
+void FWiesbadenTrafficSimulation::GetVehicleFootprint(const FTrafficVehicle& Vehicle, bool bBody,
+	FVector& OutCenter, FVector& OutForward, double& OutHalfLengthCm, double& OutHalfWidthCm)
+{
+	const bool bUseBody = bBody && Vehicle.bBodyInitialized;
+	const FVector Origin = bUseBody ? Vehicle.BodyLocation : Vehicle.Location;
+	OutForward = bUseBody
+		? FVector(FMath::Cos(Vehicle.BodyYawRad), FMath::Sin(Vehicle.BodyYawRad), 0.0)
+		: Vehicle.Forward.GetSafeNormal2D();
+	const TArray<FWbTrafficCarType>& Types = WiesbadenTrafficCars::Types();
+	const FWbTrafficCarType& Type = Types[FMath::Clamp(Vehicle.TypeIndex, 0, Types.Num() - 1)];
+	// Der Mesh-Ursprung (= Sollposition bzw. Karosserie der Physik) liegt in
+	// der Radstandmitte, nicht in der Mitte der Karosserie.
+	OutCenter = Origin + OutForward * (0.5 * (Type.FrontCm - Type.RearCm));
+	OutHalfLengthCm = Type.HalfLengthCm();
+	OutHalfWidthCm = 0.5 * Type.BodyWidthCm;
 }
 
 void FWiesbadenTrafficSimulation::CountVehicleOverlaps(FOverlapReport& Out) const
@@ -1675,33 +2568,101 @@ void FWiesbadenTrafficSimulation::CountVehicleOverlaps(FOverlapReport& Out) cons
 			// mit Lenkeinschlag und Wendekreis nach - und genau die steht im
 			// Bild. Frueher mass diese Diagnose die Bahn und haette ein
 			// ausschwingendes Nachlaufmodell nie gesehen.
-			const FVector PosA = A.bBodyInitialized ? A.BodyLocation : A.Location;
-			const FVector PosB = B.bBodyInitialized ? B.BodyLocation : B.Location;
-			const FVector DirA = A.bBodyInitialized
-				? FVector(FMath::Cos(A.BodyYawRad), FMath::Sin(A.BodyYawRad), 0.0) : A.Forward;
-			const FVector DirB = B.bBodyInitialized
-				? FVector(FMath::Cos(B.BodyYawRad), FMath::Sin(B.BodyYawRad), 0.0) : B.Forward;
+			// Mit den ECHTEN Massen des Typs: ein T6 ist 4,90 m lang, die
+			// Einheitsbox (VehicleHalfLengthCm) war ein Kaefer.
+			FVector CA, FA, CB, FB;
+			double LA, WA, LB, WB;
+			GetVehicleFootprint(A, /*bBody=*/true, CA, FA, LA, WA);
+			GetVehicleFootprint(B, /*bBody=*/true, CB, FB, LB, WB);
 
 			// Grobfilter zuerst: der genaue Test lohnt nur in Reichweite.
-			const double Dx = PosB.X - PosA.X;
-			const double Dy = PosB.Y - PosA.Y;
-			if ((Dx * Dx + Dy * Dy) > FMath::Square(2.0 * Settings.VehicleHalfLengthCm))
+			if (FVector::DistSquared2D(CA, CB) > FMath::Square(LA + LB))
 			{
 				continue;
 			}
 
-			if (!AreVehiclesOverlapping(PosA, DirA, PosB, DirB,
-				Settings.VehicleHalfLengthCm, Settings.VehicleHalfWidthCm))
+			if (!AreBoxesOverlapping(CA, FA, LA, WA, CB, FB, LB, WB))
 			{
 				continue;
+			}
+
+			// Mit der Einheitsbox an der Karosserie waere das Paar frei gewesen?
+			{
+				const FVector PosA = A.bBodyInitialized ? A.BodyLocation : A.Location;
+				const FVector PosB = B.bBodyInitialized ? B.BodyLocation : B.Location;
+				if (!AreVehiclesOverlapping(PosA, FA, PosB, FB,
+					Settings.VehicleHalfLengthCm, Settings.VehicleHalfWidthCm))
+				{
+					++Out.OnlyRealSize;
+				}
 			}
 
 			// Liegen schon die SOLLPOSITIONEN ineinander? Das trennt "Spur zu
 			// schmal" von "Karosserie schwingt zu weit aus".
-			if (!AreVehiclesOverlapping(A.Location, A.Forward, B.Location, B.Forward,
-				Settings.VehicleHalfLengthCm, Settings.VehicleHalfWidthCm))
 			{
-				++Out.OnlyBodies;
+				FVector SA, SFA, SB, SFB;
+				double SLA, SWA, SLB, SWB;
+				GetVehicleFootprint(A, /*bBody=*/false, SA, SFA, SLA, SWA);
+				GetVehicleFootprint(B, /*bBody=*/false, SB, SFB, SLB, SWB);
+				if (!AreBoxesOverlapping(SA, SFA, SLA, SWA, SB, SFB, SLB, SWB))
+				{
+					++Out.OnlyBodies;
+				}
+			}
+
+			// Verschiedene Ebenen (Bruecke ueber Strasse)?
+			const double LevelGap = FMath::Abs((A.bBodyInitialized ? A.BodyLocation.Z : A.Location.Z)
+				- (B.bBodyInitialized ? B.BodyLocation.Z : B.Location.Z));
+			if (LevelGap > 250.0)
+			{
+				++Out.DifferentLevels;
+			}
+
+			// An der Kreuzung? Auf einer Verbindung oder nahe Spuranfang/-ende.
+			auto NearJunction = [this](const FTrafficVehicle& V)
+			{
+				if (!V.bOnLane)
+				{
+					return true;
+				}
+				const double Len = GetEdgeLengthCm(V);
+				return V.DistanceCm < JunctionZoneCm || Len - V.DistanceCm < JunctionZoneCm;
+			};
+			if (NearJunction(A) || NearJunction(B))
+			{
+				++Out.AtJunction;
+			}
+
+			// Die ersten Paare im Einzelnen: ohne die Zustaende beider
+			// Fahrzeuge bleibt jede Ursache eine Vermutung.
+			if (Out.Samples.Num() < 4)
+			{
+				auto Describe = [this](const FTrafficVehicle& V)
+				{
+					const TArray<FWbTrafficCarType>& Types = WiesbadenTrafficCars::Types();
+					const TCHAR* TypeName = Types[FMath::Clamp(V.TypeIndex, 0, Types.Num() - 1)].Name;
+					FString Bahn;
+					if (V.bOnLane)
+					{
+						Bahn = FString::Printf(TEXT("Spur %d"), V.LaneId);
+					}
+					else
+					{
+						const int32 Node = Network && Network->Connections.IsValidIndex(V.ConnectionIndex)
+							? Network->Connections[V.ConnectionIndex].IntersectionNodeId : INDEX_NONE;
+						Bahn = FString::Printf(TEXT("Verb %d@Knoten %d"), V.ConnectionIndex, Node);
+					}
+					const double SollYaw = FMath::RadiansToDegrees(FMath::Atan2(V.Forward.Y, V.Forward.X));
+					const double BodyYaw = FMath::RadiansToDegrees(V.BodyYawRad);
+					return FString::Printf(
+						TEXT("#%d %s %s bei %.0f/%.0f cm, Soll %.0f km/h, Karosserie %.0f km/h, Versatz %.0f cm, Gier-Abweichung %.0f Grad"),
+						V.VehicleId, TypeName, *Bahn, V.DistanceCm, GetEdgeLengthCm(V),
+						V.SpeedCmS * 0.036, V.BodySpeedCmS * 0.036,
+						V.bBodyInitialized ? FVector::Dist2D(V.BodyLocation, V.Location) : 0.0,
+						FMath::Abs(FMath::FindDeltaAngleDegrees(SollYaw, BodyYaw)));
+				};
+				Out.Samples.Add(FString::Printf(TEXT("%s  <->  %s  | Soll-Abstand %.0f cm, Karosserie-Abstand %.0f cm, Hoehenunterschied %.0f cm"),
+					*Describe(A), *Describe(B), FVector::Dist2D(A.Location, B.Location), FVector::Dist2D(CA, CB), LevelGap));
 			}
 
 			// Beteiligte Spurbreiten und Seitenversatz mitschreiben - ohne sie
@@ -1791,6 +2752,176 @@ void FWiesbadenTrafficSimulation::CountVehicleOverlaps(FOverlapReport& Out) cons
 	}
 
 	Out.VehiclesInvolved = Involved.Num();
+}
+
+bool FWiesbadenTrafficSimulation::ComputeImpact(const FVector2D& ContactCm, const FVector2D& NormalIntoTraffic,
+	const FVector2D& PlayerVelocityCmS, double PlayerMassKg,
+	const FVector2D& TrafficCenterCm, const FVector2D& TrafficVelocityCmS,
+	double TrafficMassKg, double TrafficYawInertiaKgM2, double Restitution, FImpactResult& Out)
+{
+	Out = FImpactResult();
+	const FVector2D N = NormalIntoTraffic.GetSafeNormal();
+	if (N.IsNearlyZero() || PlayerMassKg <= 0.0 || TrafficMassKg <= 0.0)
+	{
+		return false;
+	}
+	// Annaeherung entlang der Stossnormalen - nur wer aufeinander zu faehrt, stoesst.
+	const double Closing = FVector2D::DotProduct(PlayerVelocityCmS - TrafficVelocityCmS, N);
+	if (Closing <= 0.0)
+	{
+		return false;
+	}
+	const FVector2D R = ContactCm - TrafficCenterCm;
+	const double RxN = R.X * N.Y - R.Y * N.X;
+	const double InertiaKgCm2 = FMath::Max(TrafficYawInertiaKgM2, 1.0) * 10000.0;
+	const double InvMass = 1.0 / PlayerMassKg + 1.0 / TrafficMassKg + RxN * RxN / InertiaKgCm2;
+	const double J = (1.0 + FMath::Clamp(Restitution, 0.0, 1.0)) * Closing / InvMass;
+	Out.ImpulseKgCmS = J;
+	Out.PlayerDeltaVCmS = -N * (J / PlayerMassKg);
+	Out.TrafficDeltaVCmS = N * (J / TrafficMassKg);
+	Out.TrafficDeltaYawRateRadS = RxN * J / InertiaKgCm2;
+	return true;
+}
+
+void FWiesbadenTrafficSimulation::StepKnock(FTrafficVehicle& Vehicle, const FWiesbadenTrafficSettings& InSettings, double Dt)
+{
+	if (!Vehicle.bKnocked || Dt <= 0.0)
+	{
+		return;
+	}
+	// Rutschen: die Reifen stehen quer, Reibung bremst gleichmaessig.
+	const double Slide = Vehicle.KnockVelCmS.Size();
+	const double SlideLoss = FMath::Max(InSettings.KnockFrictionCmS2, 1.0) * Dt;
+	Vehicle.KnockVelCmS = Slide <= SlideLoss ? FVector2D::ZeroVector : Vehicle.KnockVelCmS * ((Slide - SlideLoss) / Slide);
+	Vehicle.KnockOffsetCm += Vehicle.KnockVelCmS * Dt;
+	// Ausdrehen.
+	const double Spin = Vehicle.KnockYawRateRadS;
+	const double SpinLoss = FMath::Max(InSettings.KnockYawDampingRadS2, 0.1) * Dt;
+	Vehicle.KnockYawRateRadS = FMath::Abs(Spin) <= SpinLoss ? 0.0f : static_cast<float>(Spin - FMath::Sign(Spin) * SpinLoss);
+	Vehicle.KnockYawRad = static_cast<float>(FMath::UnwindRadians(Vehicle.KnockYawRad + Vehicle.KnockYawRateRadS * Dt));
+	// Weiter als 8 m schiebt ein Anstoss kein Auto - Sicherheitsnetz gegen Ausreisser.
+	if (Vehicle.KnockOffsetCm.Size() > 800.0)
+	{
+		Vehicle.KnockOffsetCm = Vehicle.KnockOffsetCm.GetSafeNormal() * 800.0;
+		Vehicle.KnockVelCmS = FVector2D::ZeroVector;
+	}
+
+	if (!Vehicle.KnockVelCmS.IsNearlyZero(1.0) || FMath::Abs(Vehicle.KnockYawRateRadS) > 0.01f)
+	{
+		Vehicle.KnockRestSeconds = 0.0f;
+		return;
+	}
+	Vehicle.KnockRestSeconds += static_cast<float>(Dt);
+	if (Vehicle.KnockRestSeconds < InSettings.KnockWaitSeconds)
+	{
+		return;   // erschrocken stehen bleiben
+	}
+	// Zurueck in die Spur: je Fahrstrecke, und im Stau langsam auch im Stand.
+	const double Driven = FMath::Max(Vehicle.SpeedCmS, 0.0) * Dt;
+	const double Keep = FMath::Exp(-Driven / FMath::Max(InSettings.KnockRecoverDistanceCm, 1.0) - Dt / 8.0);
+	Vehicle.KnockOffsetCm *= Keep;
+	Vehicle.KnockYawRad = static_cast<float>(Vehicle.KnockYawRad * Keep);
+	if (Vehicle.KnockOffsetCm.Size() < 3.0 && FMath::Abs(Vehicle.KnockYawRad) < 0.01f)
+	{
+		Vehicle.KnockOffsetCm = FVector2D::ZeroVector;
+		Vehicle.KnockYawRad = 0.0f;
+		Vehicle.bKnocked = false;
+	}
+}
+
+bool FWiesbadenTrafficSimulation::ApplyPlayerImpact(int32 VehicleId, const FVector& ContactPoint,
+	const FVector& NormalIntoTraffic, const FVector& PlayerVelocityCmS, double PlayerMassKg,
+	FVector& OutPlayerDeltaVCmS)
+{
+	OutPlayerDeltaVCmS = FVector::ZeroVector;
+	FTrafficVehicle* Vehicle = Vehicles.FindByPredicate([VehicleId](const FTrafficVehicle& V)
+	{
+		return V.VehicleId == VehicleId && !V.bRemoved;
+	});
+	if (!Vehicle || !Vehicle->bBodyInitialized)
+	{
+		return false;
+	}
+	const TArray<FWbTrafficCarType>& CarTypes = WiesbadenTrafficCars::Types();
+	const FWbTrafficCarType& Type = CarTypes[FMath::Clamp(Vehicle->TypeIndex, 0, CarTypes.Num() - 1)];
+	FVector Center, Forward;
+	double HalfLength = 0.0, HalfWidth = 0.0;
+	GetVehicleFootprint(*Vehicle, /*bBody=*/true, Center, Forward, HalfLength, HalfWidth);
+	const FVector2D Fwd2(Forward.X, Forward.Y);
+	const FVector2D TrafficVelocity = Fwd2 * Vehicle->BodySpeedCmS + Vehicle->KnockVelCmS;
+
+	FImpactResult Impact;
+	if (!ComputeImpact(FVector2D(ContactPoint.X, ContactPoint.Y), FVector2D(NormalIntoTraffic.X, NormalIntoTraffic.Y),
+		FVector2D(PlayerVelocityCmS.X, PlayerVelocityCmS.Y), PlayerMassKg,
+		FVector2D(Center.X, Center.Y), TrafficVelocity, Type.Powertrain.MassKg, Type.YawInertiaKgM2,
+		Settings.KnockRestitution, Impact))
+	{
+		return false;
+	}
+
+	// Die eigene Fahrt geht im Stoss auf: das Auto rutscht mit seinem Schwung
+	// weiter, die Fahrlinie haelt an (der Fahrer bremst).
+	Vehicle->KnockVelCmS = TrafficVelocity + Impact.TrafficDeltaVCmS;
+	Vehicle->KnockYawRateRadS += static_cast<float>(Impact.TrafficDeltaYawRateRadS);
+	Vehicle->KnockRestSeconds = 0.0f;
+	Vehicle->bKnocked = true;
+	Vehicle->SpeedCmS = 0.0;
+	Vehicle->BodySpeedCmS = 0.0;
+	Vehicle->Physics.SpeedMetersPerS = 0.0f;
+	++LifetimePlayerImpacts;
+	OutPlayerDeltaVCmS = FVector(Impact.PlayerDeltaVCmS.X, Impact.PlayerDeltaVCmS.Y, 0.0);
+	return true;
+}
+
+double FWiesbadenTrafficSimulation::SafeFollowSpeedCmS(double GapCm, double MinGapCm, double SpeedCmS,
+	double LeaderSpeedCmS, double DecelCmS2, double ReactionSeconds)
+{
+	const double B = FMath::Max(DecelCmS2, 1.0);
+	const double Tau = FMath::Max(ReactionSeconds, 0.0);
+	const double V = FMath::Max(SpeedCmS, 0.0);
+	const double VL = FMath::Max(LeaderSpeedCmS, 0.0);
+	const double Radicand = B * B * Tau * Tau + B * (2.0 * (GapCm - MinGapCm) - V * Tau + VL * VL / B);
+	if (Radicand <= 0.0)
+	{
+		return 0.0;
+	}
+	return FMath::Max(0.0, -B * Tau + FMath::Sqrt(Radicand));
+}
+
+double FWiesbadenTrafficSimulation::LaneShiftOffsetCm(double StartCm, double Elapsed, double Duration)
+{
+	if (Duration <= 0.0 || Elapsed >= Duration)
+	{
+		return 0.0;
+	}
+	const double T = FMath::Clamp(Elapsed / Duration, 0.0, 1.0);
+	const double S = T * T * T * (T * (6.0 * T - 15.0) + 10.0);
+	return StartCm * (1.0 - S);
+}
+
+double FWiesbadenTrafficSimulation::ProjectOntoPolylineCm(const TArray<FVector>& Line, const FVector& Point)
+{
+	double Best = TNumericLimits<double>::Max();
+	double BestAlong = 0.0;
+	double Along = 0.0;
+	const FVector2D P(Point.X, Point.Y);
+	for (int32 i = 0; i + 1 < Line.Num(); ++i)
+	{
+		const FVector2D A(Line[i].X, Line[i].Y);
+		const FVector2D B(Line[i + 1].X, Line[i + 1].Y);
+		const FVector2D AB = B - A;
+		const double Len2 = AB.SizeSquared();
+		const double Len = FMath::Sqrt(Len2);
+		const double T = Len2 > 1e-6 ? FMath::Clamp(FVector2D::DotProduct(P - A, AB) / Len2, 0.0, 1.0) : 0.0;
+		const double D = FVector2D::DistSquared(P, A + AB * T);
+		if (D < Best)
+		{
+			Best = D;
+			BestAlong = Along + T * Len;
+		}
+		Along += Len;
+	}
+	return BestAlong;
 }
 
 double FWiesbadenTrafficSimulation::RequiredLaneChangeGapCm(
@@ -1904,8 +3035,11 @@ void FWiesbadenTrafficSimulation::ApplyCrossEdgeHeadway(double Dt)
 		// Nur wer nah genug am Bahnende ist, muss ueber die Grenze schauen.
 		// Massstab ist die Mindestluecke plus der eigene Bremsweg.
 		const double ToEdgeEnd = EdgeLength - Vehicle.DistanceCm;
-		const double LookAhead = Settings.MinGapCm
-			+ Vehicle.SpeedCmS * Vehicle.SpeedCmS / (2.0 * FMath::Max(Settings.MaxDecelerationCmS2, 1.0));
+		const double LookAhead = Settings.bSmoothDriving
+			? Settings.MinGapCm + 2.0 * Vehicle.SpeedCmS * Settings.FollowReactionSeconds
+				+ Vehicle.SpeedCmS * Vehicle.SpeedCmS / (2.0 * FMath::Max(Settings.ComfortDecelerationCmS2, 1.0))
+			: Settings.MinGapCm
+				+ Vehicle.SpeedCmS * Vehicle.SpeedCmS / (2.0 * FMath::Max(Settings.MaxDecelerationCmS2, 1.0));
 		if (ToEdgeEnd > LookAhead)
 		{
 			continue;
@@ -1925,6 +3059,19 @@ void FWiesbadenTrafficSimulation::ApplyCrossEdgeHeadway(double Dt)
 				RearDistance = *Rear;
 				RearSpeed = RearmostSpeedOnConnection.FindRef(NextConnection);
 				bFound = true;
+			}
+			else if (Settings.bSmoothDriving && Network->Connections.IsValidIndex(NextConnection))
+			{
+				// Leere Verbindung (Kreuzungen sind oft nur wenige Meter lang):
+				// dahinter auf der Zielspur nachsehen - sonst sah der Folger den
+				// Stehenden erst, wenn er schon in der Kreuzung war.
+				const FLaneConnection& Next = Network->Connections[NextConnection];
+				if (const double* Beyond = RearmostOnLane.Find(Next.ToLaneId))
+				{
+					RearDistance = ConnectionLengthCm.FindRef(NextConnection) + *Beyond;
+					RearSpeed = RearmostSpeedOnLane.FindRef(Next.ToLaneId);
+					bFound = true;
+				}
 			}
 		}
 		else if (Network->Connections.IsValidIndex(Vehicle.ConnectionIndex))
@@ -1949,6 +3096,11 @@ void FWiesbadenTrafficSimulation::ApplyCrossEdgeHeadway(double Dt)
 		const double Gap = ToEdgeEnd + RearDistance;
 		const double SafeSpeed = RearSpeed + (Gap - Settings.MinGapCm) / Dt;
 		Vehicle.SpeedCmS = FMath::Min(Vehicle.SpeedCmS, FMath::Max(0.0, SafeSpeed));
+		if (Settings.bSmoothDriving)
+		{
+			Vehicle.SpeedCmS = FMath::Min(Vehicle.SpeedCmS, SafeFollowSpeedCmS(Gap, Settings.MinGapCm, Vehicle.SpeedCmS,
+				RearSpeed, Settings.ComfortDecelerationCmS2, Settings.FollowReactionSeconds));
+		}
 	}
 }
 
@@ -1990,6 +3142,31 @@ void FWiesbadenTrafficSimulation::ApplyLaneChanges(float DeltaSeconds)
 		{
 			continue;
 		}
+		// Kein Spurwechsel im (fast) stehenden Stau: dort hopsten Autos quer.
+		// Entscheidend ist der VORDERMANN - das eigene Tempo hat die
+		// Abstandsregel in diesem Tick womoeglich gerade auf 0 gesetzt, auch
+		// wenn es nur hinter einem Langsamen haengt (dann ist Ueberholen richtig).
+		if (Settings.bSmoothDriving)
+		{
+			double LeaderSpeed = TNumericLimits<double>::Max();
+			double LeaderDistance = TNumericLimits<double>::Max();
+			if (const TArray<int32>* Bucket = VehiclesByLaneCache.Find(Vehicle.LaneId))
+			{
+				for (const int32 Other : *Bucket)
+				{
+					const FTrafficVehicle& O = Vehicles[Other];
+					if (Other != VehicleIndex && O.DistanceCm > Vehicle.DistanceCm && O.DistanceCm < LeaderDistance)
+					{
+						LeaderDistance = O.DistanceCm;
+						LeaderSpeed = O.SpeedCmS;
+					}
+				}
+			}
+			if (LeaderSpeed < Settings.LaneChangeMinSpeedCmS)
+			{
+				continue;
+			}
+		}
 
 		if (!Network->Lanes.IsValidIndex(Vehicle.LaneId))
 		{
@@ -2001,6 +3178,15 @@ void FWiesbadenTrafficSimulation::ApplyLaneChanges(float DeltaSeconds)
 			continue;
 		}
 		const double Fraction = FMath::Clamp(Vehicle.DistanceCm / CurrentLength, 0.0, 1.0);
+		if (Settings.bSmoothDriving
+			&& CurrentLength - Vehicle.DistanceCm < Vehicle.SpeedCmS * Settings.LaneChangeSeconds + 1000.0)
+		{
+			continue;   // der S-Bogen passt nicht mehr vor die Kreuzung
+		}
+		// Die Sollstelle aus Spur und Bogenlaenge - nicht aus Location, die erst
+		// am Tick-Ende gesetzt wird (von Hand eingesetzte Fahrzeuge: Nullpunkt).
+		FVector HerePoint, HereForward;
+		SamplePolyline(Network->Lanes[Vehicle.LaneId].Centerline, Vehicle.DistanceCm, HerePoint, HereForward);
 
 		const double CurrentGap = ComputeGapAheadOnLane(
 			Vehicle.LaneId, Vehicle.DistanceCm, Vehicle.VehicleId);
@@ -2055,8 +3241,12 @@ void FWiesbadenTrafficSimulation::ApplyLaneChanges(float DeltaSeconds)
 			bAnyNeighbourUsable = true;
 
 			// Parallele Spuren desselben Abschnitts sind etwa gleich lang; der
-			// Laengenanteil ist deshalb die richtige Uebertragung.
-			const double NeighbourDistance = Fraction * Neighbour.LengthCm;
+			// Laengenanteil ist deshalb eine brauchbare Uebertragung. Genauer
+			// ist die Projektion der Sollposition - sie laesst das Auto beim
+			// weichen Wechsel nicht laengs springen.
+			const double NeighbourDistance = Settings.bSmoothDriving
+				? FMath::Clamp(ProjectOntoPolylineCm(Neighbour.Centerline, HerePoint), 0.0, Neighbour.LengthCm)
+				: Fraction * Neighbour.LengthCm;
 
 			double FollowerSpeedCmS = 0.0;
 			const double GapAhead = ComputeGapAheadOnLane(
@@ -2133,6 +3323,18 @@ void FWiesbadenTrafficSimulation::ApplyLaneChanges(float DeltaSeconds)
 		// beide dieselbe Luecke als frei ansehen und gleichzeitig
 		// hineinziehen. Die Luecken-Suche liest Vehicles[Index] live, deshalb
 		// genuegt das Umhaengen des Index.
+		// Querversatz zur neuen Spur - die Sollposition zieht in einem S-Bogen
+		// hinueber, statt in einem Tick 3,5 m zu springen.
+		if (Settings.bSmoothDriving && Network->Lanes.IsValidIndex(BestLane))
+		{
+			FVector NewLoc, NewFwd;
+			SamplePolyline(Network->Lanes[BestLane].Centerline, BestDistance, NewLoc, NewFwd);
+			const FVector2D Side(-NewFwd.Y, NewFwd.X);
+			const double Offset = FVector2D::DotProduct(
+				FVector2D(HerePoint.X - NewLoc.X, HerePoint.Y - NewLoc.Y), Side);
+			Vehicle.LaneShiftStartCm = static_cast<float>(FMath::Clamp(Offset, -600.0, 600.0));
+			Vehicle.LaneShiftElapsed = 0.0f;
+		}
 		if (TArray<int32>* OldBucket = VehiclesByLaneCache.Find(Vehicle.LaneId))
 		{
 			OldBucket->Remove(VehicleIndex);
@@ -2143,6 +3345,11 @@ void FWiesbadenTrafficSimulation::ApplyLaneChanges(float DeltaSeconds)
 		Vehicle.DistanceCm = BestDistance;
 		Vehicle.DesiredSpeedCmS = ComputeDesiredSpeed(Vehicle);
 		Vehicle.LaneChangeCooldown = Settings.LaneChangeCooldownSeconds;
+		++Motion.LaneChanges;
+		if (Vehicle.SpeedCmS < Vehicle.DesiredSpeedCmS / 3.0)
+		{
+			++Motion.LaneChangesSlow;
+		}
 		++Report.LaneChangesThisTick;
 		++LifetimeLaneChanges;
 	}
@@ -2294,6 +3501,13 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 				const double Gap = Leader.DistanceCm - Vehicle.DistanceCm;
 				const double SafeSpeed = Leader.SpeedCmS + (Gap - MinGap) / Dt;
 				Speed = FMath::Min(Speed, FMath::Max(0.0, SafeSpeed));
+				// Vorausschauend: rechtzeitig und fahrbar bremsen (die exakte
+				// Regel darueber bleibt die Notbremse).
+				if (Settings.bSmoothDriving)
+				{
+					Speed = FMath::Min(Speed, SafeFollowSpeedCmS(Gap, MinGap, Vehicle.SpeedCmS,
+						Leader.SpeedCmS, Settings.ComfortDecelerationCmS2, Settings.FollowReactionSeconds));
+				}
 			}
 			Vehicle.SpeedCmS = Speed;
 		}
@@ -2343,7 +3557,6 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 			bAnySignalizedConnectionEverRed = true;
 		}
 
-		const double StopDistance = FMath::Max(Settings.MinGapCm * 0.5, 100.0);
 		for (FTrafficVehicle& Vehicle : Vehicles)
 		{
 			// Fahrzeug quert gerade den Knoten (auf einer Verbindung) oder hat keine
@@ -2355,10 +3568,30 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 				Vehicle.bWasHeldAtRed = false;
 				continue;
 			}
+			// Haltelinie dieser Zufahrt (aus der Knotengeometrie, BuildStopLines).
+			const double StopDistance = GetStopDistanceCm(Vehicle.LaneId);
 			const double LaneLength = Network->Lanes[Vehicle.LaneId].LengthCm;
 			if (LaneLength <= 0.0 || Vehicle.DistanceCm < LaneLength - StopDistance)
 			{
-				// Noch nicht im Anfahr-Fenster der Haltelinie.
+				// Noch nicht an der Haltelinie. Vorausschauend: zeigt die Ampel
+				// schon Rot, wird fahrbar bis zur Linie abgebremst - frueher hielt
+				// das Fahrzeug erst beim Erreichen der Linie, in EINEM Tick.
+				if (Settings.bSmoothDriving && LaneLength > 0.0)
+				{
+					const double B = FMath::Max(Settings.ComfortDecelerationCmS2, 1.0);
+					const double ToStop = (LaneLength - StopDistance) - Vehicle.DistanceCm;
+					const double V = Vehicle.SpeedCmS;
+					if (ToStop <= V * V / (2.0 * B) + V * Settings.FollowReactionSeconds + 200.0)
+					{
+						const int32 Next = PickSuccessorConnection(Vehicle);
+						if (Next != INDEX_NONE && TrafficLights->IsConnectionControlled(Next)
+							&& !TrafficLights->IsConnectionGreen(Next)
+							&& V * V / (2.0 * FMath::Max(ToStop, 1.0)) <= Settings.MaxDecelerationCmS2)
+						{
+							Vehicle.SpeedCmS = ApproachSpeedForBlockedJunctionCmS(V, ToStop, 0.0, B);
+						}
+					}
+				}
 				Vehicle.bWasApproachingSignal = false;
 				Vehicle.bWasHeldAtRed = false;
 				continue;
@@ -2372,8 +3605,18 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 			// ampellose Knoten (das ist KEIN Kopplungsfehler).
 			const bool bApproachingSignal =
 				(NextConnection != INDEX_NONE) && TrafficLights->IsConnectionControlled(NextConnection);
-			const bool bHeldAtRed =
+			bool bHeldAtRed =
 				bApproachingSignal && !TrafficLights->IsConnectionGreen(NextConnection);
+
+			// Schon ueber die Haltelinie und in Fahrt, als es rot wurde: durchfahren
+			// (dafuer ist die Allrotzeit da). Frueher blieb es stehen, wo es war -
+			// mit der Front im Querweg, bis zur naechsten Gruenphase.
+			if (bHeldAtRed && Settings.bGeometricStopLines && !Vehicle.bWasHeldAtRed
+				&& LaneLength - Vehicle.DistanceCm < StopDistance - 100.0
+				&& Vehicle.SpeedCmS > 300.0)
+			{
+				bHeldAtRed = false;
+			}
 
 			// LIFETIME-Zaehler (speisen das Diagnose-Verdikt): DISTINKTE Ereignisse,
 			// nur die FALSE->TRUE-Flanke - sonst zaehlt ein einziges wartendes
@@ -2539,6 +3782,46 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		}
 	}
 
+	// -- 1c) Sackgasse in Sicht: anhalten statt verschwinden -------------------
+	//
+	// Am Ende einer Sackgasse wurde ein Fahrzeug frueher sofort entfernt - auch
+	// mitten im Bild. Sieht der Spieler hin, bremst es jetzt vor dem Ende und
+	// wartet dort; verschwinden darf es erst, wenn niemand mehr hinsieht.
+	if (bHasView)
+	{
+		constexpr double DeadEndDecelCmS2 = 300.0;
+		constexpr double DeadEndStopShortCm = 150.0;
+		for (FTrafficVehicle& Vehicle : Vehicles)
+		{
+			bool bNextOnLane = false;
+			int32 NextIndex = INDEX_NONE;
+			if (PeekNextEdge(Vehicle, bNextOnLane, NextIndex) || !IsVisibleToObserver(Vehicle.Location))
+			{
+				continue;
+			}
+			const double Remaining = GetEdgeLengthCm(Vehicle) - DeadEndStopShortCm - Vehicle.DistanceCm;
+			const double StopSpeed = FMath::Sqrt(2.0 * DeadEndDecelCmS2 * FMath::Max(0.0, Remaining));
+			Vehicle.SpeedCmS = FMath::Min(Vehicle.SpeedCmS, StopSpeed);
+			if (Remaining <= 30.0 && !Vehicle.bWaitingAtDeadEnd)
+			{
+				Vehicle.bWaitingAtDeadEnd = true;   // angekommen: wartet, bis niemand hinsieht
+				++LifetimeDeadEndWaits;
+			}
+		}
+	}
+
+	// -- 1g) Zusammenstoss: der Fahrer bremst, steht, faehrt langsam zurueck ---
+	for (FTrafficVehicle& Vehicle : Vehicles)
+	{
+		if (!Vehicle.bKnocked)
+		{
+			continue;
+		}
+		const bool bStillSliding = !Vehicle.KnockVelCmS.IsNearlyZero(1.0) || FMath::Abs(Vehicle.KnockYawRateRadS) > 0.01f;
+		Vehicle.SpeedCmS = (bStillSliding || Vehicle.KnockRestSeconds < Settings.KnockWaitSeconds)
+			? 0.0 : FMath::Min(Vehicle.SpeedCmS, Settings.KnockRecoverSpeedCmS);
+	}
+
 	// -- 2) Vorsprung ----------------------------------------------------------
 	double DistanceThisTick = 0.0;
 	for (FTrafficVehicle& Vehicle : Vehicles)
@@ -2598,6 +3881,19 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 				int32 NextIndex = INDEX_NONE;
 				if (!PeekNextEdge(Vehicle, bNextOnLane, NextIndex))
 				{
+					// Sackgasse: nur verschwinden, wenn es niemand sieht - sonst
+					// am Ende warten (Regel 1c hat es dort schon abgebremst).
+					if (IsVisibleToObserver(Vehicle.Location))
+					{
+						Vehicle.DistanceCm = FMath::Max(0.0, EdgeLength - 1.0);
+						Vehicle.SpeedCmS = 0.0;
+						if (!Vehicle.bWaitingAtDeadEnd)
+						{
+							++LifetimeDeadEndWaits;
+						}
+						Vehicle.bWaitingAtDeadEnd = true;
+						break;
+					}
 					Vehicle.bRemoved = true;
 					break;
 				}
@@ -2652,8 +3948,18 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 			// Draufsicht direkt neben dem Spieler stehen.
 			const double Dx = Vehicle.Location.X - ObserverLocation.X;
 			const double Dy = Vehicle.Location.Y - ObserverLocation.Y;
-			return (Dx * Dx + Dy * Dy) > DespawnRadiusCmSq;
+			// Sichtbares bleibt (nur denkbar, wenn der Radius kleiner als die Sichtweite ist).
+			return (Dx * Dx + Dy * Dy) > DespawnRadiusCmSq && !IsVisibleToObserver(Vehicle.Location);
 		});
+	}
+
+	// Wer an einer Sackgasse gewartet hat, verschwindet, sobald niemand hinsieht.
+	for (FTrafficVehicle& Vehicle : Vehicles)
+	{
+		if (Vehicle.bWaitingAtDeadEnd && !IsVisibleToObserver(Vehicle.Location))
+		{
+			Vehicle.bRemoved = true;
+		}
 	}
 
 	const int32 CountBefore = Vehicles.Num();
@@ -2707,6 +4013,7 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		}
 
 		int32 SpawnBudget = Settings.MaxVehicles; // Schutz vor Endlosschleife.
+		Report.SpawnsSkippedInView = 0;
 		while (SpawnAccumulator >= 1.0
 			&& Vehicles.Num() < FMath::Min(TargetCount, Settings.MaxVehicles)
 			&& SpawnBudget-- > 0)
@@ -2728,8 +4035,10 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 			if (bHasObserver
 				&& NearbySpawnCumulativeWeights.Num() == ActiveSpawnLanes.Num())
 			{
+				// Je VERSUCH ein neuer Ort: wird einer verworfen (in Sicht),
+				// kommt beim naechsten Mal ein anderer dran statt desselben.
 				SpawnSlot = PickWeightedIndex(NearbySpawnCumulativeWeights,
-					Hash2(static_cast<uint32>(TotalSpawned),
+					Hash2(static_cast<uint32>(SpawnAttempts++),
 						static_cast<uint32>(Settings.RandomSeed)));
 			}
 			if (SpawnSlot == INDEX_NONE)
@@ -2753,8 +4062,19 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 				continue; // Spawn wartet (deterministisch).
 			}
 
+			// Nicht vor den Augen des Spielers: ein Spuranfang, den er sehen
+			// koennte, faellt als Einsatzort aus.
+			const TArray<FVector>& SpawnLine = Network->Lanes[SpawnLaneId].Centerline;
+			if (SpawnLine.Num() > 0 && IsVisibleToObserver(SpawnLine[0]))
+			{
+				++Report.SpawnsSkippedInView;
+				++LifetimeSpawnsSkippedInView;
+				continue;
+			}
+
 			FTrafficVehicle Vehicle;
 			Vehicle.VehicleId = static_cast<int32>(TotalSpawned);
+			Vehicle.TypeIndex = WiesbadenTrafficCars::SelectType(Vehicle.VehicleId);
 			Vehicle.LaneId = SpawnLaneId;
 			Vehicle.bOnLane = true;
 			Vehicle.DistanceCm = 0.0;
@@ -2780,10 +4100,103 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 			SamplePolyline(Network->Connections[Vehicle.ConnectionIndex].ConnectionPath,
 				Vehicle.DistanceCm, Vehicle.Location, Vehicle.Forward);
 		}
+		// Weicher Spurwechsel: der Querversatz zur neuen Spur klingt ab.
+		if (Vehicle.LaneShiftStartCm != 0.0f)
+		{
+			Vehicle.LaneShiftElapsed += DeltaSeconds;
+			const double Shift = LaneShiftOffsetCm(Vehicle.LaneShiftStartCm, Vehicle.LaneShiftElapsed,
+				Settings.LaneChangeSeconds);
+			if (Shift == 0.0)
+			{
+				Vehicle.LaneShiftStartCm = 0.0f;
+			}
+			else
+			{
+				Vehicle.Location.X += -Vehicle.Forward.Y * Shift;
+				Vehicle.Location.Y += Vehicle.Forward.X * Shift;
+			}
+		}
+
+		// Soll-Verzoegerung dieses Ticks (vor UpdateBodyPose steht in
+		// PrevSollSpeedCmS noch das Tempo des Vorticks).
+		const double SollDecel = Vehicle.bBodyInitialized && DeltaSeconds > 0.0f
+			? (Vehicle.PrevSollSpeedCmS - Vehicle.SpeedCmS) / DeltaSeconds : 0.0;
 
 		// Die Karosserie faehrt der eben bestimmten Sollpose mit eigenem
 		// Lenkeinschlag hinterher.
 		UpdateBodyPose(Vehicle, DeltaSeconds);
+
+		// Zusammenstoss: Versatz und Drehung auf die Karosserie. Nur wenn sie
+		// auf der Bahn liegt - dort wird sie je Tick neu gesetzt; das frei
+		// nachlenkende Modell integriert und wuerde den Versatz aufsummieren.
+		if (Vehicle.bKnocked)
+		{
+			StepKnock(Vehicle, Settings, DeltaSeconds);
+			// Im Moment des Stillstands: was das Auto LAENGS gerutscht ist, gilt
+			// als gefahren - sonst rollte es beim Zurueckfahren scheinbar
+			// rueckwaerts an seinen alten Platz. Quer und Drehung baut der Fahrer ab.
+			if (Vehicle.KnockRestSeconds > 0.0f && Vehicle.KnockRestSeconds <= DeltaSeconds * 1.5f
+				&& Vehicle.bOnLane && Network->Lanes.IsValidIndex(Vehicle.LaneId))
+			{
+				const FVector2D Along2D = FVector2D(Vehicle.Forward.X, Vehicle.Forward.Y).GetSafeNormal();
+				const double LaneLength = Network->Lanes[Vehicle.LaneId].LengthCm;
+				const double Along = FMath::Clamp(FVector2D::DotProduct(Vehicle.KnockOffsetCm, Along2D),
+					-Vehicle.DistanceCm, FMath::Max(0.0, LaneLength - 1.0 - Vehicle.DistanceCm));
+				Vehicle.DistanceCm += Along;
+				Vehicle.KnockOffsetCm -= Along2D * Along;
+				// Die Karosserie dieses Bilds lag noch an der alten Stelle.
+				Vehicle.BodyLocation.X += Along2D.X * Along;
+				Vehicle.BodyLocation.Y += Along2D.Y * Along;
+				SamplePolyline(Network->Lanes[Vehicle.LaneId].Centerline, Vehicle.DistanceCm,
+					Vehicle.Location, Vehicle.Forward);
+			}
+			if (Settings.bPhysicsBodies && Settings.bSmoothDriving && Settings.bBodyOnPath)
+			{
+				Vehicle.BodyLocation.X += Vehicle.KnockOffsetCm.X;
+				Vehicle.BodyLocation.Y += Vehicle.KnockOffsetCm.Y;
+				Vehicle.BodyYawRad = static_cast<float>(FMath::UnwindRadians(Vehicle.BodyYawRad + Vehicle.KnockYawRad));
+			}
+		}
+
+		// Fahrbild mitschreiben.
+		{
+			const double BodySpeed = FMath::Abs(Vehicle.BodySpeedCmS);
+			const bool bDriving = BodySpeed > 300.0;
+			Motion.AllSeconds += DeltaSeconds;
+			Motion.SlideCm += Vehicle.LastRecoverCm;
+			const double PathYawDeg = FMath::RadiansToDegrees(FMath::Atan2(Vehicle.Forward.Y, Vehicle.Forward.X));
+			const double YawErr = FMath::FindDeltaAngleDegrees(PathYawDeg, FMath::RadiansToDegrees(Vehicle.BodyYawRad));
+			Motion.YawErrSqDegS += YawErr * YawErr * DeltaSeconds;
+			if (BodySpeed < 50.0 && FMath::Abs(YawErr) > 10.0)
+			{
+				Motion.StandYawBad += DeltaSeconds;
+			}
+			const FVector2D Right(-Vehicle.Forward.Y, Vehicle.Forward.X);
+			const double Offset = FVector2D::DotProduct(
+				FVector2D(Vehicle.BodyLocation.X - Vehicle.Location.X, Vehicle.BodyLocation.Y - Vehicle.Location.Y), Right);
+			Motion.OffsetSqCmS += Offset * Offset * DeltaSeconds;
+			if (SollDecel > 800.0)
+			{
+				++Motion.HardSollBrakes;
+				Motion.MaxSollDecelCmS2 = FMath::Max(Motion.MaxSollDecelCmS2, SollDecel);
+			}
+			if (bDriving)
+			{
+				Motion.DrivingSeconds += DeltaSeconds;
+				Motion.RollSqDegS += FMath::Square(Vehicle.BodyRollDeg) * DeltaSeconds;
+				Motion.PitchSqDegS += FMath::Square(Vehicle.BodyPitchDeg) * DeltaSeconds;
+				const double SteerDeg = FMath::RadiansToDegrees(Vehicle.SteerAngleRad);
+				const int8 Sign = SteerDeg > 1.0 ? 1 : (SteerDeg < -1.0 ? -1 : 0);
+				if (Sign != 0 && Vehicle.SteerSign != 0 && Sign != Vehicle.SteerSign)
+				{
+					++Motion.SteerReversals;
+				}
+				if (Sign != 0)
+				{
+					Vehicle.SteerSign = Sign;
+				}
+			}
+		}
 	}
 
 	// Steher zaehlen: Fahrzeuge unter 5 km/h, die schneller fahren wollten.
@@ -2815,6 +4228,11 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		}
 	}
 	Report.StalledVehicleCount = Stalled;
+	Report.WaitingAtDeadEnd = 0;
+	for (const FTrafficVehicle& Vehicle : Vehicles)
+	{
+		Report.WaitingAtDeadEnd += Vehicle.bWaitingAtDeadEnd ? 1 : 0;
+	}
 
 	Report.ActiveVehicleCount = Vehicles.Num();
 	Report.TotalSpawnedCount = TotalSpawned;
@@ -2824,4 +4242,373 @@ void FWiesbadenTrafficSimulation::Tick(float DeltaSeconds)
 		? (SpeedSum / Vehicles.Num()) * 3600.0 / 100000.0 : 0.0;
 	const double DrivableKm = Network->GetTotalDrivableLengthKm();
 	Report.ActiveVehiclesPerKm = DrivableKm > 0.0 ? Vehicles.Num() / DrivableKm : 0.0;
+}
+
+void FWiesbadenTrafficSimulation::StepQueueProbe(float DeltaSeconds)
+{
+	if (ProbeLaneId == INDEX_NONE || !Network || !TrafficLights
+		|| !Network->Lanes.IsValidIndex(ProbeLaneId))
+	{
+		return;
+	}
+	ProbeTime += DeltaSeconds;
+
+	// Gruen = irgendeine Fortsetzung dieser Zufahrt ist frei; dazu je
+	// Verbindung ihr eigener Zustand fuer die Logzeile.
+	const TArray<int32>* Successors = LaneSuccessorIndices.Find(ProbeLaneId);
+	bool bAnyGreen = false;
+	FString Frei;
+	if (Successors)
+	{
+		for (const int32 C : *Successors)
+		{
+			if (TrafficLights->IsConnectionControlled(C) && TrafficLights->IsConnectionGreen(C))
+			{
+				bAnyGreen = true;
+				Frei += StaticEnum<ETurnType>()->GetNameStringByValue(
+					static_cast<int64>(Network->Connections[C].TurnType)) + TEXT(" ");
+			}
+		}
+	}
+
+	// Wer steht auf der Zufahrt, wer ist vorn, wer hat sie verlassen?
+	TSet<int32> JetztAufSpur;
+	int32 Wartend = 0;
+	const FTrafficVehicle* Vorderster = nullptr;
+	for (const FTrafficVehicle& V : Vehicles)
+	{
+		if (V.bOnLane && V.LaneId == ProbeLaneId)
+		{
+			JetztAufSpur.Add(V.VehicleId);
+			Wartend += V.SpeedCmS < 139.0 ? 1 : 0;
+			if (!Vorderster || V.DistanceCm > Vorderster->DistanceCm)
+			{
+				Vorderster = &V;
+			}
+		}
+		else if (!V.bOnLane && ProbeOnLane.Contains(V.VehicleId)
+			&& Network->Connections.IsValidIndex(V.ConnectionIndex)
+			&& Network->Connections[V.ConnectionIndex].FromLaneId == ProbeLaneId)
+		{
+			++ProbeDeparted;   // hat die Haltelinie in diesem Bild ueberfahren
+		}
+	}
+	for (const int32 Id : JetztAufSpur)
+	{
+		ProbeEntered += ProbeOnLane.Contains(Id) ? 0 : 1;
+	}
+	if (FMath::FloorToInt(ProbeTime / 10.0) != FMath::FloorToInt((ProbeTime - DeltaSeconds) / 10.0))
+	{
+		UE_LOG(LogWbTraffic, Log, TEXT("Spurprobe %d nach %.0f s: %d Fahrzeuge auf der Spur, %d seit Start eingefahren, Sackgasse=%d."),
+			ProbeLaneId, ProbeTime, JetztAufSpur.Num(), ProbeEntered, DeadEndLanes.Contains(ProbeLaneId) ? 1 : 0);
+	}
+	ProbeOnLane = MoveTemp(JetztAufSpur);
+
+	if (Vorderster)
+	{
+		ProbeHeadConnection = PickSuccessorConnection(*Vorderster);
+		bProbeHeadGreenSeen |= ProbeHeadConnection != INDEX_NONE
+			&& TrafficLights->IsConnectionGreen(ProbeHeadConnection);
+	}
+
+	// Waehrend Gruen jede Sekunde: die ersten drei der Schlange.
+	if (bProbeGreen && bAnyGreen
+		&& FMath::FloorToInt(ProbeTime - ProbePhaseStart) != FMath::FloorToInt(ProbeTime - DeltaSeconds - ProbePhaseStart))
+	{
+		TArray<const FTrafficVehicle*> Reihe;
+		for (const FTrafficVehicle& V : Vehicles)
+		{
+			if (V.bOnLane && V.LaneId == ProbeLaneId) { Reihe.Add(&V); }
+		}
+		Reihe.Sort([](const FTrafficVehicle& A, const FTrafficVehicle& B) { return A.DistanceCm > B.DistanceCm; });
+		const double Linie = Network->Lanes[ProbeLaneId].LengthCm - GetStopDistanceCm(ProbeLaneId);
+		FString Zeile;
+		for (int32 i = 0; i < FMath::Min(3, Reihe.Num()); ++i)
+		{
+			const int32 C = PickSuccessorConnection(*Reihe[i]);
+			const bool bFrei = C != INDEX_NONE && TrafficLights->IsConnectionGreen(C);
+			Zeile += FString::Printf(TEXT(" | #%d %.0f km/h, %+.0f cm zur Linie, Luecke %s, Pfeil %s"),
+				i + 1, Reihe[i]->SpeedCmS * 0.036, Linie - Reihe[i]->DistanceCm,
+				i == 0 ? TEXT("-") : *FString::Printf(TEXT("%.0f"), Reihe[i - 1]->DistanceCm - Reihe[i]->DistanceCm),
+				bFrei ? TEXT("frei") : TEXT("rot"));
+		}
+		UE_LOG(LogWbTraffic, Log, TEXT("Ampelprobe Spur %d t=%.0f s%s"), ProbeLaneId,
+			ProbeTime - ProbePhaseStart, *Zeile);
+	}
+
+	// 3 s nach Gruenbeginn: warum faehrt der Vorderste (nicht)?
+	if (bProbeGreen && bAnyGreen && Vorderster && ProbeTime - ProbePhaseStart >= 3.0
+		&& ProbeTime - DeltaSeconds - ProbePhaseStart < 3.0)
+	{
+		const FRoadLane& Spur = Network->Lanes[ProbeLaneId];
+		FString Ziel = TEXT("keine Fortsetzung");
+		if (Network->Connections.IsValidIndex(ProbeHeadConnection))
+		{
+			const FLaneConnection& Weiter = Network->Connections[ProbeHeadConnection];
+			int32 AmZielAnfang = 0;
+			double Naechster = -1.0;
+			const FTrafficVehicle* ZielFz = nullptr;
+			int32 InKreuzung = 0;
+			for (const FTrafficVehicle& V : Vehicles)
+			{
+				if (V.bOnLane && V.LaneId == Weiter.ToLaneId && V.DistanceCm < 1500.0)
+				{
+					++AmZielAnfang;
+					if (Naechster < 0.0 || V.DistanceCm < Naechster)
+					{
+						Naechster = V.DistanceCm;
+						ZielFz = &V;
+					}
+				}
+				if (!V.bOnLane && Network->Connections.IsValidIndex(V.ConnectionIndex)
+					&& Network->Connections[V.ConnectionIndex].IntersectionNodeId == Weiter.IntersectionNodeId)
+				{
+					++InKreuzung;
+				}
+			}
+			Ziel = FString::Printf(TEXT("%s gruen=%d, Zielspur %d: %d Fz in den ersten 15 m (naechstes bei %.0f cm), %d Fz in der Kreuzung"),
+				*StaticEnum<ETurnType>()->GetNameStringByValue(static_cast<int64>(Weiter.TurnType)),
+				TrafficLights->IsConnectionGreen(ProbeHeadConnection) ? 1 : 0,
+				Weiter.ToLaneId, AmZielAnfang, Naechster, InKreuzung);
+			if (ZielFz)
+			{
+				const double ZielLaenge = Network->Lanes.IsValidIndex(ZielFz->LaneId)
+					? Network->Lanes[ZielFz->LaneId].LengthCm : 0.0;
+				Ziel += FString::Printf(TEXT("; dort Fz %d mit %.0f km/h (Wunsch %.0f), Spur %.0f m lang, Vordermann-Luecke bis Spurende %.0f cm"),
+					ZielFz->VehicleId, ZielFz->SpeedCmS * 0.036, ZielFz->DesiredSpeedCmS * 0.036,
+					ZielLaenge / 100.0, ZielLaenge - ZielFz->DistanceCm);
+			}
+		}
+		UE_LOG(LogWbTraffic, Log,
+			TEXT("Ampelprobe Spur %d: 3 s nach Gruen - Vorderster Fz %d %.0f km/h (Wunsch %.0f), %.0f cm vor Spurende; %s."),
+			ProbeLaneId, Vorderster->VehicleId, Vorderster->SpeedCmS * 0.036, Vorderster->DesiredSpeedCmS * 0.036,
+			Spur.LengthCm - Vorderster->DistanceCm, *Ziel);
+	}
+
+	if (bAnyGreen != bProbeGreen)
+	{
+		const double Dauer = ProbeTime - ProbePhaseStart;
+		if (bProbeGreen)
+		{
+			// Gruen endet: Bilanz dieser Phase.
+			FString Wunsch = TEXT("-");
+			if (Network->Connections.IsValidIndex(ProbeHeadConnection))
+			{
+				Wunsch = StaticEnum<ETurnType>()->GetNameStringByValue(
+					static_cast<int64>(Network->Connections[ProbeHeadConnection].TurnType));
+			}
+			UE_LOG(LogWbTraffic, Log,
+				TEXT("Ampelprobe Spur %d: Gruen %.1f s, wartend zu Beginn %d, abgeflossen %d, ")
+				TEXT("wartend danach %d, auf der Spur %d; Vorderster will %s (sein Pfeil war %s)."),
+				ProbeLaneId, Dauer, ProbeWaitingAtStart, ProbeDeparted, Wartend, ProbeOnLane.Num(),
+				*Wunsch, bProbeHeadGreenSeen ? TEXT("gruen") : TEXT("NIE gruen"));
+		}
+		else
+		{
+			UE_LOG(LogWbTraffic, Log, TEXT("Ampelprobe Spur %d: Rot %.1f s, dann Gruen fuer: %s"),
+				ProbeLaneId, Dauer, *Frei);
+			ProbeWaitingAtStart = Wartend;
+			ProbeDeparted = 0;
+			bProbeHeadGreenSeen = false;
+		}
+		bProbeGreen = bAnyGreen;
+		ProbePhaseStart = ProbeTime;
+	}
+}
+
+TArray<FVector> FWiesbadenTrafficSimulation::BuildTurnaroundPath(const FVector& E, const FVector& Dir, const FVector& S,
+	const FRoadTurningPlate* Plate)
+{
+	// Kolbenkopf-Schleife: ein Kreis HINTER dem Spurende, der durch E geht und
+	// (bei zweispurigen Strassen) durch den Start S der Gegenrichtung - derselbe
+	// Kreis, den der Generator pflastert (WiesbadenTurnaround::LoopCircle).
+	const FVector2D D = FVector2D(Dir.X, Dir.Y).GetSafeNormal();
+	const FVector2D E2(E.X, E.Y);
+	const double W = FVector2D::DotProduct(FVector2D(S.X, S.Y) - E2, FVector2D(D.Y, -D.X));
+	FVector2D C;
+	double R;
+	WiesbadenTurnaround::LoopCircle(E, Dir, S, C, R);
+
+	auto Winkel = [&C](const FVector2D& P) { return FMath::Atan2(P.Y - C.Y, P.X - C.X); };
+	auto Positiv = [](double A) { A = FMath::Fmod(A, 2.0 * UE_DOUBLE_PI); return A < 0.0 ? A + 2.0 * UE_DOUBLE_PI : A; };
+	const double A0 = Winkel(E2);
+	const double A1 = FMath::Abs(W) < 50.0 ? A0 : Winkel(FVector2D(S.X, S.Y));
+	const double AFern = FMath::Atan2(D.Y, D.X);   // der Punkt C + D*R liegt am weitesten hinten
+
+	// Richtung so waehlen, dass der Bogen ueber den fernen Punkt laeuft.
+	double Bogen = Positiv(A1 - A0);
+	if (Bogen < 1e-3) { Bogen = 2.0 * UE_DOUBLE_PI; }
+	double Vorzeichen = 1.0;
+	if (Positiv(AFern - A0) > Bogen)
+	{
+		Vorzeichen = -1.0;
+		Bogen = Positiv(A0 - A1);
+		if (Bogen < 1e-3) { Bogen = 2.0 * UE_DOUBLE_PI; }
+	}
+
+	TArray<FVector> Pfad;
+	const int32 Stuecke = FMath::Max(8, FMath::CeilToInt(Bogen * R / 80.0));
+	Pfad.Reserve(Stuecke + 2);
+	Pfad.Add(E);
+	for (int32 i = 1; i < Stuecke; ++i)
+	{
+		const double T = static_cast<double>(i) / Stuecke;
+		const double A = A0 + Vorzeichen * Bogen * T;
+		// Auf der Wendeplatte faehrt die Schleife auf deren Ebene; ohne Platte
+		// (aeltere Karten) zwischen den Spurenden gemittelt.
+		const FVector2D P(C.X + R * FMath::Cos(A), C.Y + R * FMath::Sin(A));
+		Pfad.Add(FVector(P.X, P.Y, Plate ? Plate->HeightAt(P) : FMath::Lerp(E.Z, S.Z, T)));
+	}
+	Pfad.Add(S);
+	return Pfad;
+}
+
+int32 FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(FRoadNetwork& Net, int32* OutReverseLanes)
+{
+	if (OutReverseLanes) { *OutReverseLanes = 0; }
+	for (const FLaneConnection& C : Net.Connections)
+	{
+		if (C.bAddedTurnaround) { return 0; }   // schon ergaenzt
+	}
+
+	const int32 AlteSpuren = Net.Lanes.Num();
+	const int32 AlteVerbindungen = Net.Connections.Num();
+	TSet<int32> HatNachfolger;
+	TMap<int32, TArray<int32>> Zulaeufe;
+	TMap<int64, TArray<int32>> AmKnoten;
+	for (int32 i = 0; i < AlteVerbindungen; ++i)
+	{
+		const FLaneConnection& C = Net.Connections[i];
+		HatNachfolger.Add(C.FromLaneId);
+		Zulaeufe.FindOrAdd(C.ToLaneId).Add(i);
+		AmKnoten.FindOrAdd(C.IntersectionNodeId).Add(i);
+	}
+	TMap<int32, TArray<int32>> JeAbschnitt;
+	for (int32 i = 0; i < AlteSpuren; ++i)
+	{
+		if (Net.Lanes[i].IsValid()) { JeAbschnitt.FindOrAdd(Net.Lanes[i].SegmentId).Add(i); }
+	}
+	TMap<int64, FVector> KnotenOrt;
+	for (const FRoadIntersection& K : Net.Intersections) { KnotenOrt.Add(K.NodeId, K.Location); }
+	TMap<int32, const FRoadTurningPlate*> PlatteJeSpur;
+	for (const FRoadTurningPlate& Platte : Net.TurningPlates) { PlatteJeSpur.Add(Platte.LaneId, &Platte); }
+
+	// Zweispurige Sackgassen wenden schon ueber eine Verbindung aus dem
+	// Generator - als Haarnadel quer ueber die Fahrbahn. Liegt dort eine
+	// Wendeplatte, fahren sie stattdessen die Schleife ueber die Platte.
+	for (int32 i = 0; i < AlteVerbindungen; ++i)
+	{
+		FLaneConnection& C = Net.Connections[i];
+		const FRoadTurningPlate* const* Platte = PlatteJeSpur.Find(C.FromLaneId);
+		if (Platte && C.TurnType == ETurnType::UTurn && Net.Lanes.IsValidIndex(C.ToLaneId)
+			&& Net.Lanes[C.ToLaneId].SegmentId == Net.Lanes[C.FromLaneId].SegmentId)
+		{
+			const FRoadLane& Von = Net.Lanes[C.FromLaneId];
+			C.ConnectionPath = BuildTurnaroundPath(Von.GetEndPoint(), Von.GetExitDirection(),
+				Net.Lanes[C.ToLaneId].GetStartPoint(), *Platte);
+		}
+	}
+
+	auto Abbiegeart = [](const FVector& Raus, const FVector& Rein)
+	{
+		const FVector2D A = FVector2D(Raus.X, Raus.Y).GetSafeNormal();
+		const FVector2D B = FVector2D(Rein.X, Rein.Y).GetSafeNormal();
+		const double Links = FVector2D::DotProduct(B, FVector2D(A.Y, -A.X));
+		if (Links > 0.35) { return ETurnType::Left; }
+		if (Links < -0.35) { return ETurnType::Right; }
+		return FVector2D::DotProduct(A, B) >= 0.0 ? ETurnType::Through : ETurnType::UTurn;
+	};
+
+	int64 KuenstlicherKnoten = -1000000000LL;
+	int32 Schleifen = 0;
+	for (int32 L = 0; L < AlteSpuren; ++L)
+	{
+		const FRoadLane Spur = Net.Lanes[L];   // Kopie: Net.Lanes waechst unten
+		if (!Spur.IsValid() || Spur.bIsBusLane || Spur.bIsBikeLane || HatNachfolger.Contains(L))
+		{
+			continue;
+		}
+		const FVector Ende = Spur.GetEndPoint();
+
+		// 1) Gegenspur desselben Abschnitts, die am Sackgassenende beginnt.
+		int32 Gegen = INDEX_NONE;
+		double Bester = 1500.0;
+		if (const TArray<int32>* Geschwister = JeAbschnitt.Find(Spur.SegmentId))
+		{
+			for (const int32 O : *Geschwister)
+			{
+				if (O != L && Net.Lanes[O].Direction != Spur.Direction && !Net.Lanes[O].bIsBusLane)
+				{
+					const double Dist = FVector::Dist2D(Net.Lanes[O].GetStartPoint(), Ende);
+					if (Dist < Bester) { Bester = Dist; Gegen = O; }
+				}
+			}
+		}
+
+		if (Gegen == INDEX_NONE)
+		{
+			// 2) Einspurig: Rueckspur nur, wenn die Sackgasse von einer Kreuzung
+			//    kommt - sonst gibt es keinen Weg zurueck ins Netz.
+			const TArray<int32>* Rein = Zulaeufe.Find(L);
+			if (!Rein || Rein->Num() == 0)
+			{
+				continue;
+			}
+			FRoadLane Rueck = Spur;
+			Rueck.LaneId = Net.Lanes.Num();
+			Algo::Reverse(Rueck.Centerline);
+			Rueck.Direction = Spur.Direction == ELaneDirection::Forward ? ELaneDirection::Backward : ELaneDirection::Forward;
+			Gegen = Net.Lanes.Add(Rueck);
+			if (OutReverseLanes) { ++*OutReverseLanes; }
+
+			// Am Anfang der Sackgasse zurueck auf die Spuren, die die Kreuzung
+			// dort verlassen (nicht in die Sackgasse selbst).
+			TSet<int32> Ziele;
+			for (const int32 CI : *Rein)
+			{
+				const int64 Knoten = Net.Connections[CI].IntersectionNodeId;
+				if (const TArray<int32>* Dort = AmKnoten.Find(Knoten))
+				{
+					for (const int32 DI : *Dort)
+					{
+						const int32 Ziel = Net.Connections[DI].ToLaneId;
+						if (Ziel != L && Net.Lanes.IsValidIndex(Ziel) && !Ziele.Contains(Ziel))
+						{
+							Ziele.Add(Ziel);
+							FLaneConnection Raus;
+							Raus.FromLaneId = Gegen;
+							Raus.ToLaneId = Ziel;
+							Raus.IntersectionNodeId = Knoten;
+							const FRoadLane& ZielSpur = Net.Lanes[Ziel];
+							Raus.TurnType = Abbiegeart(Net.Lanes[Gegen].GetExitDirection(), ZielSpur.GetEntryDirection());
+							const FVector A = Net.Lanes[Gegen].GetEndPoint();
+							const FVector B = ZielSpur.GetStartPoint();
+							FVector Mitte = (A + B) * 0.5;
+							if (const FVector* K = KnotenOrt.Find(Knoten))
+							{
+								Mitte = FMath::Lerp(Mitte, *K, 0.5);
+								Mitte.Z = (A.Z + B.Z) * 0.5;
+							}
+							Raus.ConnectionPath = { A, Mitte, B };
+							Raus.bAddedTurnaround = true;
+							Net.Connections.Add(Raus);
+						}
+					}
+				}
+			}
+		}
+
+		FLaneConnection Wende;
+		Wende.FromLaneId = L;
+		Wende.ToLaneId = Gegen;
+		Wende.IntersectionNodeId = KuenstlicherKnoten--;
+		Wende.TurnType = ETurnType::UTurn;
+		const FRoadTurningPlate* const* Platte = PlatteJeSpur.Find(L);
+		Wende.ConnectionPath = BuildTurnaroundPath(Ende, Spur.GetExitDirection(), Net.Lanes[Gegen].GetStartPoint(),
+			Platte ? *Platte : nullptr);
+		Wende.bAddedTurnaround = true;
+		Net.Connections.Add(Wende);
+		++Schleifen;
+	}
+	return Schleifen;
 }

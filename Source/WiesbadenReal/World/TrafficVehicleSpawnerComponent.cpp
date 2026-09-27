@@ -4,11 +4,11 @@
 
 #include "WiesbadenReal.h"
 
+#include "Vehicles/WiesbadenTrafficCars.h"
 #include "World/WiesbadenStreamingSource.h"
 
 #include "Components/BoxComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
-#include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Pawn.h"
@@ -16,39 +16,25 @@
 #include "Kismet/GameplayStatics.h"
 #include "UObject/ConstructorHelpers.h"
 
+namespace
+{
+	/** Teile je Typ: Karosserie + vier Raeder. */
+	constexpr int32 PartsPerType = 5;
+
+	/** Karosserie: Lackfarbe linear (0-2) + umfaerben (3), gelesen von M_WbTrafficCarLack. */
+	constexpr int32 PaintCustomDataFloats = 4;
+
+	/** Freier Instanzplatz: winzig und tief unter der Stadt. */
+	const FTransform HiddenTransform(FQuat::Identity, FVector(0.0, 0.0, -1.0e6), FVector(0.001));
+}
+
 UTrafficVehicleSpawnerComponent::UTrafficVehicleSpawnerComponent()
 {
-	// Instanzen werden von aussen (Subsystem/CityActor) aktualisiert; der
-	// Tick haelt die Positionen der letzten Platzierung bei - kein Eigen-Tick
-	// noetig, solange der Aufrufer UpdateVehicles pro Simulations-Tick ruft.
+	// Instanzen werden von aussen (Subsystem/CityActor) je Bild aktualisiert.
 	PrimaryComponentTick.bCanEverTick = false;
 
-	// Default-Palette: gaengige Fahrzeugfarben (deterministisch zugeordnet).
-	ColorPalette = {
-		FLinearColor(0.72f, 0.72f, 0.72f), // Silber
-		FLinearColor(0.85f, 0.15f, 0.15f), // Rot
-		FLinearColor(0.10f, 0.10f, 0.45f), // Dunkelblau
-		FLinearColor(0.95f, 0.95f, 0.95f), // Weiss
-		FLinearColor(0.10f, 0.10f, 0.10f), // Schwarz
-		FLinearColor(0.20f, 0.55f, 0.20f), // Gruen
-	};
-
-	// Verkehrsfahrzeug: VW Kaefer 1969 als Platzhalter, in reduzierter
-	// Aufloesung (rund 10.000 Dreiecke statt 172.000). Der Verkehr wird als
-	// InstancedStaticMesh gezeichnet - bei mehreren hundert gleichzeitig
-	// sichtbaren Fahrzeugen entscheidet die Dreieckszahl je Instanz ueber die
-	// Bildrate, waehrend der Detailgewinn aus Fahrerperspektive gering ist.
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> TrafficBeetle(
-		TEXT("/Game/Vehicles/Beetle/SM_VWBeetle1969_Traffic.SM_VWBeetle1969_Traffic"));
-
-	if (TrafficBeetle.Succeeded())
-	{
-		VehicleMesh = TrafficBeetle.Object;
-	}
-
-	// Lampenkoerper: der Engine-Wuerfel, klein skaliert. Ein eigenes Mesh
-	// dafuer waere ein Asset mehr ohne jeden Gewinn - aus Fahrerabstand ist
-	// eine Lampe ein Lichtpunkt, keine Form.
+	// Lampenkoerper: der Engine-Wuerfel, klein skaliert - aus Fahrerabstand
+	// ist eine Lampe ein Lichtpunkt, keine Form.
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> LampCube(
 		TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (LampCube.Succeeded())
@@ -56,14 +42,9 @@ UTrafficVehicleSpawnerComponent::UTrafficVehicleSpawnerComponent()
 		LampMesh = LampCube.Object;
 	}
 
-	// Lampen-Materialien: die des Kaefers, nicht selbst erzeugte.
-	//
-	// Erst ein per Python angelegtes Leuchtmaterial, dann das engine-eigene
-	// EmissiveMeshMaterial - BEIDE rendeten im Spiel-Lauf dunkel (im Bild
-	// standen schwarze Kaesten auf den Autos, mit Karomuster = Ersatzmaterial).
-	// Die Materialien des Kaefers rendern nachweislich; sie sind beleuchtet
-	// statt emissiv, sehen bei Nacht aber sauber aus, weil Himmelslicht und
-	// Strassenlaternen sie treffen.
+	// Lampen-Materialien: die des Kaefers, nicht selbst erzeugte - ein per
+	// Python angelegtes Leuchtmaterial und das engine-eigene
+	// EmissiveMeshMaterial rendeten im Spiel-Lauf dunkel (Ersatzmaterial).
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MatBrake(
 		TEXT("/Game/Vehicles/Beetle/Bremslicht.Bremslicht"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MatIndicator(
@@ -87,50 +68,86 @@ void UTrafficVehicleSpawnerComponent::BeginPlay()
 
 void UTrafficVehicleSpawnerComponent::EnsureInstancePools()
 {
-	// Bestehende Pools entsorgen (bei Neuzuweisung im Editor).
-	for (UInstancedStaticMeshComponent* Instance : VehicleInstances)
-	{
-		if (Instance && Instance->GetAttachParent())
-		{
-			Instance->DestroyComponent();
-		}
-	}
-	VehicleInstances.Reset();
-	InstanceMaterials.Reset();
-
-	if (!VehicleMesh)
+	// NUR EINMAL: frueher wurden die Gruppen je Bild zerstoert und neu angelegt.
+	if (bPoolsBuilt)
 	{
 		return;
 	}
+	bPoolsBuilt = true;
 
-	const int32 PoolCount = FMath::Max(ColorPalette.Num(), 1);
-	for (int32 i = 0; i < PoolCount; ++i)
+	const TArray<FWbTrafficCarType>& Types = WiesbadenTrafficCars::Types();
+	BodyMeshes.SetNum(Types.Num());
+	WheelMeshes.SetNum(Types.Num() * 4);
+	Pools.SetNum(Types.Num());
+	FString Loaded;
+	for (int32 T = 0; T < Types.Num(); ++T)
 	{
-		UInstancedStaticMeshComponent* Instances = NewObject<UInstancedStaticMeshComponent>(this);
-		Instances->SetupAttachment(this);
-		Instances->RegisterComponent();
-		Instances->SetStaticMesh(VehicleMesh);
-		Instances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Instances->SetCastShadow(true);
-
-		// Farbvariation: je Palette-Eintrag eine MID (falls ein Material und
-		// der Parameter existieren; sonst rendert das Basis-Material).
-		if (VehicleMaterial && ColorPalette.Num() > 0)
+		FTypePool& Pool = Pools[T];
+		BodyMeshes[T] = LoadObject<UStaticMesh>(nullptr, *WiesbadenTrafficCars::BodyMeshPath(Types[T]));
+		for (int32 W = 0; W < 4; ++W)
 		{
-			if (UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(VehicleMaterial, this))
+			WheelMeshes[T * 4 + W] = LoadObject<UStaticMesh>(nullptr, *WiesbadenTrafficCars::WheelMeshPath(Types[T], W));
+		}
+		Pool.WheelCenters.SetNum(4);
+		for (int32 Part = 0; Part < PartsPerType; ++Part)
+		{
+			UStaticMesh* Mesh = Part == 0 ? BodyMeshes[T].Get() : WheelMeshes[T * 4 + Part - 1].Get();
+			if (!Mesh)
 			{
-				MID->SetVectorParameterValue(VehicleColorParameterName, ColorPalette[i]);
-				Instances->SetMaterial(0, MID);
-				InstanceMaterials.Add(MID);
+				UE_LOG(LogWbTraffic, Warning, TEXT("Verkehrsfahrzeug %s: Teil %d fehlt (Tools/import_traffic_cars.py)."),
+					Types[T].Name, Part);
+				Pool.Parts.Add(nullptr);
+				continue;
 			}
+			if (Part > 0)
+			{
+				// Rad-Ursprung = Fahrzeugursprung: die Radmitte ist die Mitte der Bounds.
+				Pool.WheelCenters[Part - 1] = Mesh->GetBounds().Origin;
+			}
+			UInstancedStaticMeshComponent* Instances = NewObject<UInstancedStaticMeshComponent>(this);
+			Instances->SetupAttachment(this);
+			Instances->SetStaticMesh(Mesh);
+			Instances->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			Instances->SetCastShadow(true);
+			Instances->SetMobility(EComponentMobility::Movable);
+			if (Part == 0)
+			{
+				Instances->NumCustomDataFloats = PaintCustomDataFloats;
+			}
+			Instances->RegisterComponent();
+			Pool.Parts.Add(Instances);
+			PoolComponents.Add(Instances);
 		}
-		else if (VehicleMaterial)
-		{
-			Instances->SetMaterial(0, VehicleMaterial);
-		}
-
-		VehicleInstances.Add(Instances);
+		Loaded += FString::Printf(TEXT("%s%s (%s)"), Loaded.IsEmpty() ? TEXT("") : TEXT(", "), Types[T].Name,
+			BodyMeshes[T] ? TEXT("ok") : TEXT("FEHLT"));
 	}
+	UE_LOG(LogWbTraffic, Log, TEXT("Verkehrsfahrzeuge: %s - je Karosserie + 4 Raeder, Sichtweite %.0f m."),
+		*Loaded, CullRadiusMeters);
+}
+
+FTransform UTrafficVehicleSpawnerComponent::ComputeChassisTransform(const FTrafficVehicle& Vehicle)
+{
+	const bool bHasBody = Vehicle.bBodyInitialized;
+	const FVector Location = bHasBody ? Vehicle.BodyLocation : Vehicle.Location;
+	double YawDeg;
+	if (bHasBody)
+	{
+		YawDeg = FMath::RadiansToDegrees(Vehicle.BodyYawRad);
+	}
+	else
+	{
+		const FVector Forward = Vehicle.Forward.GetSafeNormal2D();
+		YawDeg = FMath::RadiansToDegrees(FMath::Atan2(Forward.Y, Forward.X));
+	}
+	return FTransform(FRotator(Vehicle.SlopePitchDeg, YawDeg, 0.0), Location);
+}
+
+FTransform UTrafficVehicleSpawnerComponent::ComputeBodyTransform(const FTrafficVehicle& Vehicle)
+{
+	// Federung: Nicken/Wanken im FAHRZEUG-Rahmen, vor das Fahrgestell gelegt -
+	// wie AWiesbadenCar an seiner BodyMesh. Die Raeder bleiben am Fahrgestell.
+	const FTransform Tilt(FRotator(Vehicle.BodyPitchDeg, 0.0, Vehicle.BodyRollDeg));
+	return Tilt * ComputeChassisTransform(Vehicle);
 }
 
 FVector UTrafficVehicleSpawnerComponent::GetObserverLocation() const
@@ -140,22 +157,19 @@ FVector UTrafficVehicleSpawnerComponent::GetObserverLocation() const
 	{
 		return FVector::ZeroVector;
 	}
-
 	if (const APlayerController* PC = World->GetFirstPlayerController())
 	{
-		if (const APawn* Pawn = PC->GetPawn())
-		{
-			return Pawn->GetActorLocation();
-		}
+		FVector ViewLocation;
+		FRotator ViewRotation;
+		PC->GetPlayerViewPoint(ViewLocation, ViewRotation);
+		return ViewLocation;
 	}
-
 	// Fallback: erste Streaming-Quelle im Level (folgt ebenfalls dem Player).
 	if (const AActor* Source = UGameplayStatics::GetActorOfClass(
 		World, AWiesbadenStreamingSource::StaticClass()))
 	{
 		return Source->GetActorLocation();
 	}
-
 	return FVector::ZeroVector;
 }
 
@@ -273,9 +287,8 @@ void UTrafficVehicleSpawnerComponent::EnsureCollisionProxies()
 	}
 
 	UE_LOG(LogWbTraffic, Log,
-		TEXT("Verkehrs-Kollision: %d Koerper angelegt (Umkreis %.0f m, Groesse %.0fx%.0fx%.0f cm)."),
-		CollisionProxies.Num(), CollisionRadiusMeters,
-		VehicleCollisionExtent.X * 2.0, VehicleCollisionExtent.Y * 2.0, VehicleCollisionExtent.Z * 2.0);
+		TEXT("Verkehrs-Kollision: %d Koerper angelegt (Umkreis %.0f m)."),
+		CollisionProxies.Num(), CollisionRadiusMeters);
 }
 
 void UTrafficVehicleSpawnerComponent::UpdateCollisionProxies(const TArray<FTrafficVehicle>& Vehicles)
@@ -296,6 +309,7 @@ void UTrafficVehicleSpawnerComponent::UpdateCollisionProxies(const TArray<FTraff
 		CollisionProxies.Num(),
 		Nearest);
 
+	ProxyVehicleIds.Init(INDEX_NONE, CollisionProxies.Num());
 	for (int32 i = 0; i < CollisionProxies.Num(); ++i)
 	{
 		UBoxComponent* Box = CollisionProxies[i];
@@ -307,12 +321,23 @@ void UTrafficVehicleSpawnerComponent::UpdateCollisionProxies(const TArray<FTraff
 		if (i < Nearest.Num())
 		{
 			const FTrafficVehicle& Vehicle = Vehicles[Nearest[i]];
+			ProxyVehicleIds[i] = Vehicle.VehicleId;
 
-			// Der Koerper sitzt auf halber Fahrzeughoehe ueber der Fahrbahn,
-			// weil die Fahrzeugposition der Radaufstandspunkt ist.
-			const FVector Center = Vehicle.Location + FVector(0.0, 0.0, VehicleCollisionExtent.Z);
-
-			Box->SetWorldLocationAndRotation(Center, Vehicle.Forward.Rotation());
+			// Kastengroesse und -lage aus der Karosserie DIESES Typs, an der
+			// sichtbaren Karosserie (nicht an der Sollbahn) - man stoesst an
+			// das Auto, das man sieht.
+			FVector Origin = FVector(0.0, 0.0, VehicleCollisionExtent.Z);
+			FVector Extent = VehicleCollisionExtent;
+			const UStaticMesh* Body = BodyMeshes.IsValidIndex(Vehicle.TypeIndex) ? BodyMeshes[Vehicle.TypeIndex].Get() : nullptr;
+			if (Body)
+			{
+				const FBoxSphereBounds B = Body->GetBounds();
+				Origin = B.Origin;
+				Extent = B.BoxExtent;
+			}
+			Box->SetBoxExtent(Extent, /*bUpdateOverlaps=*/false);
+			const FTransform Chassis = ComputeChassisTransform(Vehicle);
+			Box->SetWorldLocationAndRotation(Chassis.TransformPosition(Origin), Chassis.GetRotation());
 
 			if (Box->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
 			{
@@ -331,16 +356,22 @@ void UTrafficVehicleSpawnerComponent::UpdateCollisionProxies(const TArray<FTraff
 	ActiveCollisionProxyCount = Nearest.Num();
 }
 
+int32 UTrafficVehicleSpawnerComponent::FindVehicleIdForProxy(const UPrimitiveComponent* Component) const
+{
+	for (int32 i = 0; i < CollisionProxies.Num(); ++i)
+	{
+		if (CollisionProxies[i] == Component)
+		{
+			return ProxyVehicleIds.IsValidIndex(i) ? ProxyVehicleIds[i] : INDEX_NONE;
+		}
+	}
+	return INDEX_NONE;
+}
+
 void UTrafficVehicleSpawnerComponent::EnsureLampPools()
 {
-	// NUR EINMAL aufbauen.
-	//
-	// UpdateVehicles laeuft je Bild; ohne diese Sperre wurden die vier
-	// Komponenten JEDES BILD zerstoert und neu angelegt. Die Instanzen kamen
-	// dabei zwar an (die Zaehlung stimmte), aber das per SetMaterial gesetzte
-	// Leuchtmaterial wurde nicht wirksam - im Bild standen dunkle Kaesten auf
-	// den Autos. Die Fahrzeug-Gruppen fallen nicht auf, weil sie die
-	// Materialien des Meshes benutzen und gar kein SetMaterial brauchen.
+	// NUR EINMAL aufbauen: je Bild neu angelegt wurde das per SetMaterial
+	// gesetzte Leuchtmaterial nicht wirksam (dunkle Kaesten auf den Autos).
 	if (LampInstances.Num() == LampPoolCount && LampInstances[0] != nullptr)
 	{
 		return;
@@ -379,59 +410,42 @@ void UTrafficVehicleSpawnerComponent::EnsureLampPools()
 }
 
 void UTrafficVehicleSpawnerComponent::ComputeLampTransforms(
-	const FTransform& VehicleTransform,
-	const FVector& BoundsOrigin,
-	const FVector& BoundsExtent,
-	bool bFront,
+	const FTransform& BodyTransform,
+	const FVector& LeftLampCm,
 	FTransform& OutLeft,
 	FTransform& OutRight)
 {
-	// Alles aus den Bounds ableiten: Laengsachse X, Querachse Y, Hoehe Z.
-	// Die Einrueckungen sind Anteile, keine festen Zentimeter - ein laengeres
-	// Fahrzeug bekommt seine Lampen damit von selbst weiter aussen.
-	const double LengthSign = bFront ? 1.0 : -1.0;
-	const double AlongCm = BoundsOrigin.X + LengthSign * (BoundsExtent.X - 8.0);
-	const double SideCm = FMath::Max(BoundsExtent.Y - 16.0, 5.0);
-
-	// Lampenhoehe: knapp ueber dem unteren Rand des Fahrzeugs, nicht in der
-	// Mitte - dort saessen sie im Fenster.
-	const double UpCm = BoundsOrigin.Z - BoundsExtent.Z + BoundsExtent.Z * 0.72;
-
 	// Wuerfel ist 100 cm; eine Lampe ist rund 18 x 10 x 9 cm.
-	const FVector LampScale(0.20f, 0.12f, 0.10f);
-
-	OutLeft = FTransform(FRotator::ZeroRotator,
-		FVector(AlongCm, BoundsOrigin.Y + SideCm, UpCm), LampScale) * VehicleTransform;
-	OutRight = FTransform(FRotator::ZeroRotator,
-		FVector(AlongCm, BoundsOrigin.Y - SideCm, UpCm), LampScale) * VehicleTransform;
+	const FVector LampScale(0.18f, 0.10f, 0.09f);
+	OutLeft = FTransform(FRotator::ZeroRotator, LeftLampCm, LampScale) * BodyTransform;
+	OutRight = FTransform(FRotator::ZeroRotator, FVector(LeftLampCm.X, -LeftLampCm.Y, LeftLampCm.Z), LampScale)
+		* BodyTransform;
 }
 
-void UTrafficVehicleSpawnerComponent::UpdateLamps(
-	const TArray<FPlacedTrafficVehicle>& Placed, bool bNight)
+void UTrafficVehicleSpawnerComponent::UpdateLamps(const TArray<const FTrafficVehicle*>& Visible, bool bNight)
 {
-	if (LampInstances.Num() < 4 || !VehicleMesh)
+	if (LampInstances.Num() < 4)
 	{
 		return;
 	}
 
 	enum ELampPool { Brake = 0, Indicator = 1, Head = 2, Tail = 3 };
 
-	const FBoxSphereBounds MeshBounds = VehicleMesh->GetBounds();
-	const FVector Origin = MeshBounds.Origin;
-	const FVector Extent = MeshBounds.BoxExtent;
-
 	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	const TArray<FWbTrafficCarType>& Types = WiesbadenTrafficCars::Types();
 
 	TArray<TArray<FTransform>> ByPool;
 	ByPool.SetNum(LampInstances.Num());
 
-	for (const FPlacedTrafficVehicle& P : Placed)
+	for (const FTrafficVehicle* V : Visible)
 	{
+		const FWbTrafficCarType& Type = Types[FMath::Clamp(V->TypeIndex, 0, Types.Num() - 1)];
+		const FTransform Body = ComputeBodyTransform(*V);
 		FTransform RearLeft, RearRight, FrontLeft, FrontRight;
-		ComputeLampTransforms(P.Transform, Origin, Extent, /*bFront=*/false, RearLeft, RearRight);
-		ComputeLampTransforms(P.Transform, Origin, Extent, /*bFront=*/true, FrontLeft, FrontRight);
+		ComputeLampTransforms(Body, Type.TailLampCm, RearLeft, RearRight);
+		ComputeLampTransforms(Body, Type.HeadLampCm, FrontLeft, FrontRight);
 
-		if (P.bBraking)
+		if (V->bBraking)
 		{
 			ByPool[Brake].Add(RearLeft);
 			ByPool[Brake].Add(RearRight);
@@ -450,12 +464,11 @@ void UTrafficVehicleSpawnerComponent::UpdateLamps(
 			ByPool[Head].Add(FrontRight);
 		}
 
-		if (P.Indicator != EVehicleIndicator::None
-			&& FWiesbadenTrafficSimulation::IsIndicatorLit(P.VehicleId, Now))
+		if (V->Indicator != EVehicleIndicator::None
+			&& FWiesbadenTrafficSimulation::IsIndicatorLit(V->VehicleId, Now))
 		{
-			// Vorne UND hinten auf der blinkenden Seite - so ist die Richtung
-			// aus beiden Blickwinkeln zu erkennen.
-			const bool bLeft = (P.Indicator == EVehicleIndicator::Left);
+			// Vorne UND hinten auf der blinkenden Seite (Unreal: links = -Y).
+			const bool bLeft = (V->Indicator == EVehicleIndicator::Left);
 			ByPool[Indicator].Add(bLeft ? FrontLeft : FrontRight);
 			ByPool[Indicator].Add(bLeft ? RearLeft : RearRight);
 		}
@@ -483,67 +496,147 @@ void UTrafficVehicleSpawnerComponent::UpdateVehicles(
 	EnsureInstancePools();
 	EnsureLampPools();
 
-	// Kollisionskoerper den naechsten Fahrzeugen nachfuehren. Bewusst vor der
-	// Sichtbarkeitspruefung: auch wenn kein Instanz-Pool existiert, soll der
-	// Spieler nicht durch Fahrzeuge fahren koennen.
+	// Kollisionskoerper den naechsten Fahrzeugen nachfuehren - auch ohne
+	// Instanzgruppen soll der Spieler nicht durch Fahrzeuge fahren koennen.
 	UpdateCollisionProxies(Vehicles);
 
-	if (VehicleInstances.Num() == 0)
+	// Sichtbar: innerhalb der Sichtweite um den Blickpunkt.
+	const FVector Observer = GetObserverLocation();
+	const double CullSq = FMath::Square(static_cast<double>(CullRadiusMeters) * 100.0);
+	TArray<const FTrafficVehicle*> Visible;
+	Visible.Reserve(Vehicles.Num());
+	for (const FTrafficVehicle& V : Vehicles)
 	{
-		LastVisibleVehicleCount = 0;
-		return;
+		const FVector Where = V.bBodyInitialized ? V.BodyLocation : V.Location;
+		if (!V.bRemoved && (CullRadiusMeters <= 0.0f || FVector::DistSquared(Where, Observer) <= CullSq))
+		{
+			Visible.Add(&V);
+		}
 	}
 
-	// Dateneine Platzierung: Culling + Yaw + deterministische Farb-Zuordnung.
-	TArray<FPlacedTrafficVehicle> Placed;
-	FWiesbadenTrafficSimulation::PlaceTrafficVehicles(
-		Vehicles,
-		GetObserverLocation(),
-		static_cast<double>(CullRadiusMeters) * 100.0, // m -> cm
-		VehicleInstances.Num(),
-		Placed);
-
-	// Instanzen je Farb-Gruppe neu aufbauen (nur die sichtbaren).
-	TArray<TArray<FTransform>> TransformsByPool;
-	TransformsByPool.SetNum(VehicleInstances.Num());
-	for (const FPlacedTrafficVehicle& P : Placed)
+	// Je Typ: Plaetze der nicht mehr sichtbaren Fahrzeuge freigeben, neue
+	// Fahrzeuge auf freie (oder neue) Plaetze, dann alle Lagen auf einmal.
+	TArray<TArray<const FTrafficVehicle*>> ByType;
+	ByType.SetNum(Pools.Num());
+	for (const FTrafficVehicle* V : Visible)
 	{
-		const int32 Pool = FMath::Clamp(P.ColorIndex, 0, VehicleInstances.Num() - 1);
-		TransformsByPool[Pool].Add(P.Transform);
+		if (Pools.IsValidIndex(V->TypeIndex))
+		{
+			ByType[V->TypeIndex].Add(V);
+		}
 	}
 
-	for (int32 i = 0; i < VehicleInstances.Num(); ++i)
+	for (int32 T = 0; T < Pools.Num(); ++T)
 	{
-		UInstancedStaticMeshComponent* Instances = VehicleInstances[i];
-		if (!Instances)
+		FTypePool& Pool = Pools[T];
+		if (Pool.Parts.Num() != PartsPerType || !Pool.Parts[0])
 		{
 			continue;
 		}
-
-		Instances->ClearInstances();
-		if (TransformsByPool[i].Num() > 0)
+		TSet<int32> Present;
+		for (const FTrafficVehicle* V : ByType[T])
 		{
-			Instances->AddInstances(TransformsByPool[i], /*bWorldSpace=*/true);
+			Present.Add(V->VehicleId);
+		}
+		TArray<int32> Teleport;   // Plaetze, deren Inhalt wechselt: ohne Vorbild-Lage (keine Schliere)
+		for (int32 Slot = 0; Slot < Pool.SlotVehicle.Num(); ++Slot)
+		{
+			const int32 Id = Pool.SlotVehicle[Slot];
+			if (Id != INDEX_NONE && !Present.Contains(Id))
+			{
+				Pool.VehicleSlot.Remove(Id);
+				Pool.SlotVehicle[Slot] = INDEX_NONE;
+				Teleport.Add(Slot);
+			}
+		}
+		int32 NextFree = 0;
+		for (const FTrafficVehicle* V : ByType[T])
+		{
+			if (Pool.VehicleSlot.Contains(V->VehicleId))
+			{
+				continue;
+			}
+			while (NextFree < Pool.SlotVehicle.Num() && Pool.SlotVehicle[NextFree] != INDEX_NONE)
+			{
+				++NextFree;
+			}
+			if (NextFree == Pool.SlotVehicle.Num())
+			{
+				Pool.SlotVehicle.Add(INDEX_NONE);
+				for (UInstancedStaticMeshComponent* Part : Pool.Parts)
+				{
+					if (Part)
+					{
+						Part->AddInstance(HiddenTransform, /*bWorldSpace=*/true);
+					}
+				}
+			}
+			Pool.SlotVehicle[NextFree] = V->VehicleId;
+			Pool.VehicleSlot.Add(V->VehicleId, NextFree);
+			Teleport.AddUnique(NextFree);
+			// Lack je Fahrzeug; den Renderzustand markiert die Teleport-Lage unten.
+			const FLinearColor Paint = WiesbadenTrafficCars::PaintCustomData(
+				WiesbadenTrafficCars::SelectPaint(V->VehicleId));
+			const float PaintData[PaintCustomDataFloats] = { Paint.R, Paint.G, Paint.B, Paint.A };
+			Pool.Parts[0]->SetCustomData(NextFree, MakeArrayView(PaintData), /*bMarkRenderStateDirty=*/false);
+		}
+
+		// Lagen aller Plaetze: Karosserie + vier Raeder.
+		const int32 SlotCount = Pool.SlotVehicle.Num();
+		TArray<TArray<FTransform>> Parts;
+		Parts.SetNum(PartsPerType);
+		for (TArray<FTransform>& List : Parts)
+		{
+			List.Init(HiddenTransform, SlotCount);
+		}
+		for (const FTrafficVehicle* V : ByType[T])
+		{
+			const int32 Slot = Pool.VehicleSlot.FindChecked(V->VehicleId);
+			const FTransform Chassis = ComputeChassisTransform(*V);
+			Parts[0][Slot] = ComputeBodyTransform(*V);
+			for (int32 W = 0; W < 4; ++W)
+			{
+				const double Steer = WiesbadenTrafficCars::IsFrontWheel(W) ? V->SteerAngleRad : 0.0;
+				Parts[W + 1][Slot] = WiesbadenTrafficCars::ComputeWheelTransform(
+					Pool.WheelCenters[W], V->WheelSpinRad, Steer) * Chassis;
+			}
+		}
+		for (int32 Part = 0; Part < PartsPerType; ++Part)
+		{
+			UInstancedStaticMeshComponent* Instances = Pool.Parts[Part];
+			if (!Instances || SlotCount == 0)
+			{
+				continue;
+			}
+			Instances->BatchUpdateInstancesTransforms(0, Parts[Part], /*bWorldSpace=*/true,
+				/*bMarkRenderStateDirty=*/Teleport.Num() == 0, /*bTeleport=*/false);
+			for (int32 Index = 0; Index < Teleport.Num(); ++Index)
+			{
+				const int32 Slot = Teleport[Index];
+				Instances->UpdateInstanceTransform(Slot, Parts[Part][Slot], /*bWorldSpace=*/true,
+					/*bMarkRenderStateDirty=*/Index == Teleport.Num() - 1, /*bTeleport=*/true);
+			}
 		}
 	}
 
-	UpdateLamps(Placed, bNight);
-
-	LastVisibleVehicleCount = Placed.Num();
+	UpdateLamps(Visible, bNight);
+	LastVisibleVehicleCount = Visible.Num();
 }
 
 void UTrafficVehicleSpawnerComponent::ClearVehicles()
 {
-	for (UInstancedStaticMeshComponent* Instances : VehicleInstances)
+	for (FTypePool& Pool : Pools)
 	{
-		if (Instances)
+		for (UInstancedStaticMeshComponent* Part : Pool.Parts)
 		{
-			Instances->ClearInstances();
+			if (Part)
+			{
+				Part->ClearInstances();
+			}
 		}
+		Pool.SlotVehicle.Reset();
+		Pool.VehicleSlot.Reset();
 	}
-
-	// Ohne das blieben die Lampen als frei schwebende Lichtpunkte stehen, wo
-	// zuletzt Fahrzeuge waren - besonders auffaellig beim Levelwechsel.
 	for (UInstancedStaticMeshComponent* Instances : LampInstances)
 	{
 		if (Instances)
@@ -551,11 +644,6 @@ void UTrafficVehicleSpawnerComponent::ClearVehicles()
 			Instances->ClearInstances();
 		}
 	}
-	LastVisibleVehicleCount = 0;
-
-	// Kollisionskoerper mit abschalten. Bleiben sie aktiv, stehen unsichtbare
-	// Waende dort, wo zuletzt Fahrzeuge waren - besonders tueckisch beim
-	// Levelwechsel, weil die Ursache dann nicht mehr im Level ist.
 	for (UBoxComponent* Box : CollisionProxies)
 	{
 		if (Box)
@@ -563,5 +651,6 @@ void UTrafficVehicleSpawnerComponent::ClearVehicles()
 			Box->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		}
 	}
+	LastVisibleVehicleCount = 0;
 	ActiveCollisionProxyCount = 0;
 }

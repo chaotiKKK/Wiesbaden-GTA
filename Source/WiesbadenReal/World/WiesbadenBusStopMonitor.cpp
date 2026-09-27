@@ -10,6 +10,8 @@
 #include "Materials/MaterialInterface.h"
 #include "Engine/World.h"
 #include "CollisionQueryParams.h"
+#include "EngineUtils.h"
+#include "GIS/WiesbadenWorldBuilder.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogWbMonitor, Log, All);
 
@@ -84,10 +86,15 @@ void AWiesbadenBusStopMonitor::BeginPlay()
 	LoadLine();
 	LoadSchedule();
 
-	PoleMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-	PanelMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
-	PoleMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Props/DFI/M_WbDfiPole.M_WbDfiPole"));
-	PanelMat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Props/DFI/M_WbDfiPanel.M_WbDfiPanel"));
+	// ESWE-Haltestelle aus Blender (Tools/import_eswe_haltestelle.py).
+	ShelterMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/Props/EsweHalte/SM_WbEsweWartehalle.SM_WbEsweWartehalle"));
+	MastMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/Props/EsweHalte/SM_WbEsweHaltemast.SM_WbEsweHaltemast"));
+	DfiMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/Props/EsweHalte/SM_WbEsweDfi.SM_WbEsweDfi"));
+	if (!ShelterMesh || !MastMesh || !DfiMesh)
+	{
+		UE_LOG(LogWbMonitor, Warning, TEXT("ESWE-Haltestelle: Meshes fehlen (Halle %d, Mast %d, DFI %d) - Tools/import_eswe_haltestelle.cmd laufen lassen."),
+			ShelterMesh ? 1 : 0, MastMesh ? 1 : 0, DfiMesh ? 1 : 0);
+	}
 
 	// Dienst wie bei den Bussen aufsetzen: dieselben Wagen, dieselben Zeiten.
 	// Kommandozeile schlaegt die Eigenschaft (wie beim Bus, fuer Vergleichslaeufe).
@@ -104,7 +111,7 @@ void AWiesbadenBusStopMonitor::BeginPlay()
 		WiesbadenBusLine::BuildFleet(LineRoute->Route, Cfg, CycleSeconds, Fleet);
 	}
 
-	bReady = (LineRoute->WorldPath.Num() >= 2 && LineRoute->Route.StopArcCm.Num() >= 2 && PoleMesh && PanelMesh);
+	bReady = (LineRoute->WorldPath.Num() >= 2 && LineRoute->Route.StopArcCm.Num() >= 2 && DfiMesh && MastMesh);
 	if (bReady) { BuildMonitors(); }
 	UE_LOG(LogWbMonitor, Log,
 		TEXT("Abfahrtsmonitor Linie %s bereit=%d: %d Saeulen von %d gewuenschten, %d Halten, %d Wagen (Umlauf %.0f min)."),
@@ -127,113 +134,205 @@ void AWiesbadenBusStopMonitor::BuildMonitors()
 			*LineRef, *LineFile);
 		return;
 	}
-	TArray<int32> Indices;
-	for (const FString& Want : Wanted)
-	{
-		const int32 Found = LineRoute->File.StopNames.IndexOfByKey(Want);
-		if (Found == INDEX_NONE)
-		{
-			UE_LOG(LogWbMonitor, Warning,
-				TEXT("Abfahrtsmonitor Linie %s: Halte '%s' gibt es in %s nicht - keine Saeule."),
-				*LineRef, *Want, *LineFile);
-			continue;
-		}
-		Indices.Add(Found);
-	}
-	// ZWEI Saeulen je Halte, je Strassenseite eine Richtung: wer in die eine
-	// Richtung faehrt, wartet auf der einen Seite; die Gegenseite braucht ihre
-	// eigene Tafel (mit dem Ziel und der Durchfahrtszeit IHRER Richtung).
-	BuildMonitorsForSide(true, Indices, Wanted, SpeedCmS);
-	BuildMonitorsForSide(false, Indices, Wanted, SpeedCmS);
-	UE_LOG(LogWbMonitor, Log, TEXT("Abfahrtsmonitor Linie %s: %d Halte -> %d Saeulen (2 je Halte, beide Strassenseiten)."),
-		*LineRef, Indices.Num(), Monitors.Num());
+	// Je Fahrtrichtung eine Haltestelle, jeweils RECHTS der Fahrt: wer in die
+	// eine Richtung faehrt, wartet auf der einen Seite, die Gegenrichtung hat
+	// ihre eigene Halte (mit Ziel und Durchfahrtszeit IHRER Richtung).
+	BuildMonitorsForSide(true, Wanted, SpeedCmS);
+	BuildMonitorsForSide(false, Wanted, SpeedCmS);
+	UE_LOG(LogWbMonitor, Log, TEXT("Abfahrtsmonitor Linie %s: %d DFI-Stelen, %d eigene ESWE-Haltestellen (%s)."),
+		*LineRef, Monitors.Num(), Furniture.Num(),
+		LineRoute->Route.HasReturnLeg() ? TEXT("Gegenrichtung an ihren eigenen Halten") : TEXT("Gegenrichtung gegenueber"));
 }
 
-void AWiesbadenBusStopMonitor::BuildMonitorsForSide(bool bForward, const TArray<int32>& Indices,
-	const TArray<FString>& Wanted, double SpeedCmS)
+UStaticMeshComponent* AWiesbadenBusStopMonitor::AddPart(UStaticMesh* Mesh, const FVector& Location, const FQuat& Rot)
 {
-	const double PoleH = 225.0, PoleR = 7.0, PW = 250.0, PH = 140.0, PT = 12.0, PanelZ = 220.0;
-	// Basismasse der Engine-Formen abtasten -> korrekte Skalierung unabhaengig
-	// von deren Groesse (Cube 100, Zylinder abweichend).
-	const FVector PoleSize = PoleMesh->GetBoundingBox().GetSize();
-	const FVector PanelSize = PanelMesh->GetBoundingBox().GetSize();
+	if (!Mesh) { return nullptr; }
+	UStaticMeshComponent* C = NewObject<UStaticMeshComponent>(this);
+	C->SetStaticMesh(Mesh);
+	C->SetupAttachment(Root);
+	C->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	C->RegisterComponent();
+	C->SetWorldLocationAndRotation(Location, Rot);
+	Parts.Add(C);
+	return C;
+}
 
-	for (int32 c = 0; c < Indices.Num(); ++c)
+UTextRenderComponent* AWiesbadenBusStopMonitor::AddText(const FVector& Location, const FVector& Facing,
+	float Size, const FColor& Color, const FString& Text)
+{
+	UTextRenderComponent* T = NewObject<UTextRenderComponent>(this);
+	T->SetupAttachment(Root);
+	T->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	T->RegisterComponent();
+	T->SetTextRenderColor(Color);
+	T->SetHorizontalAlignment(EHorizTextAligment::EHTA_Center);
+	T->SetVerticalAlignment(EVerticalTextAligment::EVRTA_TextCenter);
+	T->SetWorldSize(Size);
+	// Eine Textflaeche ist von ihrer +X-Seite lesbar.
+	T->SetWorldLocationAndRotation(Location, FRotationMatrix::MakeFromXZ(Facing, FVector::UpVector).Rotator());
+	T->SetText(FText::FromString(Text));
+	Texts.Add(T);
+	return T;
+}
+
+bool AWiesbadenBusStopMonitor::JoinStop(const FVector& Base, const FVector& Dir, const FString& Line,
+	FStopFurniture& OutStop, int32& OutDfiSlot)
+{
+	for (FStopFurniture& F : Furniture)
 	{
-		const int32 Idx = Indices[c];
-		if (!LineRoute->Route.StopArcCm.IsValidIndex(Idx)) { continue; }
+		// Dieselbe Halte: nah beieinander UND dieselbe Fahrtrichtung (die
+		// Gegenrichtung steht auf der anderen Strassenseite).
+		if (FVector::Dist2D(F.Base, Base) > 1500.0 || FVector::DotProduct(F.Dir, Dir) < 0.7) { continue; }
+		if (!F.Lines.Contains(Line))
+		{
+			F.Lines.Add(Line);
+			F.Lines.Sort([](const FString& A, const FString& B) { return FCString::Atoi(*A) < FCString::Atoi(*B); });
+			const FString Joined = FString::Join(F.Lines, TEXT("   "));
+			for (UTextRenderComponent* T : F.LineTexts) { if (T) { T->SetText(FText::FromString(Joined)); } }
+		}
+		OutDfiSlot = F.DfiCount++;
+		OutStop = F;
+		return true;
+	}
+	return false;
+}
+
+void AWiesbadenBusStopMonitor::BuildMonitorsForSide(bool bForward, const TArray<FString>& Wanted, double SpeedCmS)
+{
+	const WiesbadenBusLineFile::FLineRoute& L = *LineRoute;
+	// Eigener Rueckweg: Linie, Halte und Namen der Gegenrichtungs-Relation.
+	// Ohne ihn faehrt der Bus die Hinweg-Linie rueckwaerts - dann steht die
+	// Halte der Gegenrichtung der Hinweg-Halte gegenueber (altes Verhalten).
+	const bool bOwnReturn = !bForward && L.Route.HasReturnLeg();
+	const TArray<FVector>& Path = bOwnReturn ? L.ReturnWorldPath : L.WorldPath;
+	const TArray<double>& Arc = bOwnReturn ? L.ReturnArcCm : L.ArcCm;
+	const TArray<double>& StopArc = bOwnReturn ? L.Route.ReturnStopArcCm : L.Route.StopArcCm;
+	const TArray<FString>& Names = bOwnReturn ? L.File.ReturnStopNames : L.File.StopNames;
+	// monitor_stops "*" = alle Halte: auf dem Rueckweg dann ALLE Rueckweg-Halte
+	// (deren Namen teils anders lauten als die der Hinfahrt).
+	const bool bAllStops = Wanted == L.File.StopNames;
+	const TArray<FString>& WantHere = (bOwnReturn && bAllStops) ? Names : Wanted;
+	const FString Dest = (bForward || L.File.Origin.IsEmpty()) ? Destination : L.File.Origin;
+	// Strassennetz fuer die Fahrbahnkante (gebackene Karte; sonst Vorgabe).
+	const FRoadNetwork* Net = nullptr;
+	for (TActorIterator<AWiesbadenWorldBuilder> It(GetWorld()); It; ++It)
+	{
+		if (!It->RoadNetwork.IsEmpty()) { Net = &It->RoadNetwork; break; }
+	}
+
+	for (int32 c = 0; c < WantHere.Num(); ++c)
+	{
+		const int32 Idx = Names.IndexOfByKey(WantHere[c]);
+		if (Idx == INDEX_NONE || !StopArc.IsValidIndex(Idx)) { continue; }
+		// Am Ausstieg (letzte Halte einer Richtung mit eigenem Rueckweg) steigt
+		// niemand ein - dort keine Abfahrtstafel. Die Einstiegshaltestelle am
+		// Nordfriedhof ist Halt 0 des Hinwegs und bekommt ihre eigene.
+		if (L.Route.HasReturnLeg() && Idx == StopArc.Num() - 1) { continue; }
 		FVector Pos, Tangent;
-		if (!WiesbadenRailTransport::SamplePolyline(LineRoute->WorldPath, LineRoute->ArcCm, LineRoute->Route.StopArcCm[Idx], Pos, Tangent)) { continue; }
-		const FVector Dir = Tangent.GetSafeNormal();
-		const FVector RightDir = FVector(-Dir.Y, Dir.X, 0.0).GetSafeNormal();   // Bordsteinseite (wie Bus)
-		// Bordsteinkante DIESER Richtung: die beiden Saeulen einer Halte stehen
-		// sich gegenueber, und jede nennt die Durchfahrtszeit ihrer Richtung.
-		const FVector SideDir = bForward ? RightDir : -RightDir;
-		const FVector MXY = Pos + SideDir * SidewalkOffsetCm;               // Saeule auf dem Gehweg
-		double GZ = Pos.Z;
-		ResolveGround(MXY.X, MXY.Y, GZ);
-		const FVector Fwd = -SideDir;   // Panel/Text blicken zur Strasse (zu den Wartenden)
-		const FRotator FaceRot = FRotationMatrix::MakeFromXZ(Fwd, FVector::UpVector).Rotator();
+		if (!WiesbadenRailTransport::SamplePolyline(Path, Arc, StopArc[Idx], Pos, Tangent)) { continue; }
+		FVector Dir = Tangent.GetSafeNormal2D();
+		if (!bForward && !bOwnReturn) { Dir = -Dir; }   // rueckwaerts auf der Hinweg-Linie
+		// Rechte Hand der Fahrt (Welt: Ost +X, SUED +Y - siehe Bus-Actor).
+		const FVector Side = FVector(-Dir.Y, Dir.X, 0.0).GetSafeNormal();
+		double RoadZ = Pos.Z;
+		ResolveGround(Pos.X, Pos.Y, RoadZ);
+		// Bordsteinkante aus dem Strassennetz (dieselbe, an der der Bus haelt),
+		// sonst die Vorgabe. Nie naeher als die Aussenseite des haltenden Busses.
+		double Kerb = CurbOffsetCm;
+		double NetKerb = 0.0;
+		const bool bNetKerb = Net && WiesbadenBusLineFile::RightKerbOffsetCm(*Net, Pos, Dir, NetKerb) && NetKerb > 0.0;
+		if (bNetKerb) { Kerb = FMath::Max(NetKerb + 10.0, 180.0); }
 
-		// Mast
-		if (UStaticMeshComponent* Pole = NewObject<UStaticMeshComponent>(this))
+		FStopFurniture Stop;
+		int32 DfiSlot = 0;
+		bool bShared = false;
+		// Teilt sich die Halte mit einer anderen Linie (3 und 6 ab Nordfriedhof)?
+		for (TActorIterator<AWiesbadenBusStopMonitor> It(GetWorld()); It && !bShared; ++It)
 		{
-			Pole->SetStaticMesh(PoleMesh);
-			Pole->SetupAttachment(Root);
-			Pole->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			Pole->RegisterComponent();
-			if (PoleMat) { Pole->SetMaterial(0, PoleMat); }
-			Pole->SetWorldScale3D(FVector((PoleR * 2.0) / FMath::Max(PoleSize.X, 1.0),
-				(PoleR * 2.0) / FMath::Max(PoleSize.Y, 1.0), PoleH / FMath::Max(PoleSize.Z, 1.0)));
-			Pole->SetWorldLocation(FVector(MXY.X, MXY.Y, GZ + PoleH * 0.5));
-			Parts.Add(Pole);
+			bShared = It->JoinStop(Pos + Side * Kerb, Dir, LineRef, Stop, DfiSlot);
 		}
-		// Panel (dunkel), blickt zur Strasse
-		if (UStaticMeshComponent* Panel = NewObject<UStaticMeshComponent>(this))
+		bool bHall = false;
+		if (!bShared)
 		{
-			Panel->SetStaticMesh(PanelMesh);
-			Panel->SetupAttachment(Root);
-			Panel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-			Panel->RegisterComponent();
-			if (PanelMat) { Panel->SetMaterial(0, PanelMat); }
-			Panel->SetWorldScale3D(FVector(PT / FMath::Max(PanelSize.X, 1.0),
-				PW / FMath::Max(PanelSize.Y, 1.0), PH / FMath::Max(PanelSize.Z, 1.0)));   // X=Dicke(Fwd), Y=Breite, Z=Hoehe
-			Panel->SetWorldRotation(FaceRot);
-			Panel->SetWorldLocation(FVector(MXY.X, MXY.Y, GZ + PanelZ) + Fwd * (PoleR + PT * 0.5));
-			Parts.Add(Panel);
+			// Bordsteinkante; steht dahinter Bebauung (Boden viel hoeher als die
+			// Fahrbahn), in 40-cm-Schritten zur Fahrbahn ruecken.
+			// Bekannte Kante: nicht in die Fahrbahn ruecken, nur die Halle weglassen.
+			double Curb = Kerb;
+			const double MinOff = bNetKerb ? Kerb : Kerb - 240.0;
+			for (double Off = Kerb; Off >= MinOff; Off -= 40.0)
+			{
+				double BackZ = RoadZ;
+				const FVector Back = Pos + Side * (Off + 230.0);
+				if (ResolveGround(Back.X, Back.Y, BackZ) && FMath::Abs(BackZ - RoadZ) < 80.0) { Curb = Off; bHall = true; break; }
+			}
+			double BaseZ = RoadZ + 15.0;   // Bordstein
+			const FVector BaseXY = Pos + Side * Curb;
+			double Probe = BaseZ;
+			if (ResolveGround(BaseXY.X + Side.X * 60.0, BaseXY.Y + Side.Y * 60.0, Probe) && FMath::Abs(Probe - RoadZ) < 60.0) { BaseZ = Probe; }
+			Stop.Base = FVector(BaseXY.X, BaseXY.Y, BaseZ);
+			Stop.Dir = Dir;
+			Stop.Side = Side;
+			Stop.Lines.Add(LineRef);
+			// Mesh-Achsen: X entlang der Fahrt, +Y vom Bordstein weg (rechts der
+			// Fahrt), Z hoch - nur eine Drehung um die Hochachse. (Mit -Y nach
+			// aussen waere es eine Spiegelung: MakeFromXY(Dir, -Side) kippte die
+			// Z-Achse nach unten und stellte alles kopfueber unter die Strasse.)
+			const FQuat Rot = FRotationMatrix::MakeFromXZ(Dir, FVector::UpVector).ToQuat();
+			auto At = [&Stop](double X, double Y, double Z)
+			{
+				return Stop.Base + Stop.Dir * X + Stop.Side * Y + FVector::UpVector * Z;
+			};
+			if (bHall)
+			{
+				if (UStaticMeshComponent* Hall = AddPart(ShelterMesh, At(0.0, 70.0, 0.0), Rot))
+				{
+					// Glas und Pfosten halten den Spieler auf; Boden-/Spurstrahlen
+					// (WorldStatic) gehen hindurch.
+					Hall->SetCollisionObjectType(ECC_WorldDynamic);
+					Hall->SetCollisionResponseToAllChannels(ECR_Ignore);
+					Hall->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+					Hall->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+				}
+			}
+			// Haltemast vor dem Bus (Vordertuer), Schilder zum ankommenden Bus.
+			const double MastX = 520.0, MastY = 45.0;
+			AddPart(MastMesh, At(MastX, MastY, 0.0), Rot);
+			const FString& Name = Names[Idx];
+			const float NameSize = FMath::Clamp(46.0f / (0.55f * (float)FMath::Max(Name.Len(), 1)), 2.5f, 6.5f);
+			for (const double Face : { -1.0, 1.0 })
+			{
+				const double FX = MastX - 5.5 + Face * 1.3;
+				const FVector Facing = Stop.Dir * Face;
+				AddText(At(FX, MastY, 223.5), Facing, NameSize, FColor(20, 20, 20), Name);
+				Stop.LineTexts.Add(AddText(At(FX, MastY, 205.0), Facing, 10.0f, FColor(10, 10, 10), LineRef));
+				AddText(At(FX, MastY, 239.0), Facing, 4.5f, FColor(240, 240, 240), TEXT("ESWE Verkehr"));
+			}
+			Furniture.Add(Stop);
 		}
-		// Text (bernsteingelb), oben-links auf der Panel-Front
-		UTextRenderComponent* Txt = NewObject<UTextRenderComponent>(this);
-		Txt->SetupAttachment(Root);
-		Txt->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Txt->RegisterComponent();
-		Txt->SetTextRenderColor(FColor(255, 178, 20));
-		Txt->SetHorizontalAlignment(EHorizTextAligment::EHTA_Center);
-		Txt->SetVerticalAlignment(EVerticalTextAligment::EVRTA_TextTop);
-		Txt->SetWorldSize(8.0f);
-		Txt->SetWorldRotation(FaceRot);
-		const FVector Up(0.0, 0.0, 1.0);
-		// Panel-Front, oben mittig (zentriert -> unabhaengig von der Dir-Richtung).
-		const FVector Front = FVector(MXY.X, MXY.Y, GZ + PanelZ) + Fwd * (PoleR + PT + 1.5);
-		Txt->SetWorldLocation(Front + Up * (PH * 0.5 - 12.0));
-		Texts.Add(Txt);
 
+		// DFI-Stele (je Linie eine) hinter der Halle.
+		const double DfiX = -330.0 - 150.0 * DfiSlot, DfiY = 50.0;
+		const FQuat DfiRot = FRotationMatrix::MakeFromXZ(Stop.Dir, FVector::UpVector).ToQuat();
+		const FVector DfiFoot = Stop.Base + Stop.Dir * DfiX + Stop.Side * DfiY;
+		AddPart(DfiMesh, DfiFoot, DfiRot);
 		FMonitor M;
 		M.StopIndex = Idx;
-		M.Name = LineRoute->File.StopNames.IsValidIndex(Idx) ? LineRoute->File.StopNames[Idx] : Wanted[c];
+		M.Name = Names[Idx];
 		M.bForward = bForward;
-		// Zieltext DIESER Saeule: an der Gegenseite faehrt der Bus zum anderen
-		// Endpunkt - sonst stuende auf beiden Tafeln dasselbe Ziel.
-		M.Destination = (bForward || LineRoute->File.Origin.IsEmpty()) ? Destination : LineRoute->File.Origin;
-		M.OffsetSeconds = WiesbadenBusLine::SecondsToStopOnLeg(LineRoute->Route, SpeedCmS,
-			StopDwellSeconds, TerminusDwellSeconds, Idx, bForward);
-		M.Text = Txt;
+		M.bReturnPath = bOwnReturn;
+		M.Destination = Dest;
+		M.OffsetSeconds = bOwnReturn
+			? WiesbadenBusLine::SecondsToReturnStop(L.Route, SpeedCmS, StopDwellSeconds, TerminusDwellSeconds, Idx)
+			: WiesbadenBusLine::SecondsToStopOnLeg(L.Route, SpeedCmS, StopDwellSeconds, TerminusDwellSeconds, Idx, bForward);
+		const FVector Screen = DfiFoot + FVector::UpVector * 225.0;
+		M.Text = AddText(Screen - Stop.Side * 9.0, -Stop.Side, 5.0f, FColor(255, 178, 20), M.Name);
+		M.TextBack = AddText(Screen + Stop.Side * 9.0, Stop.Side, 5.0f, FColor(255, 178, 20), M.Name);
 		Monitors.Add(M);
-		// Belegzeile je Saeule: Seite, Halte, Position und die Durchfahrtszeit der
-		// Richtung, die diese Tafel ankuendigt (die beiden Saeulen einer Halte
-		// stehen sich gegenueber und nennen verschiedene Zeiten).
-		UE_LOG(LogWbMonitor, Log, TEXT("Saeule %s an Halt %d '%s' auf (%.0f, %.0f, %.0f) - Durchfahrt Ziel %s nach %.0f s."),
-			bForward ? TEXT("Hinfahrt") : TEXT("Gegenrichtung"), Idx, *M.Name, MXY.X, MXY.Y, GZ,
+		// Belegzeile je Halte: Richtung, Ort, Ausstattung und die Durchfahrtszeit.
+		UE_LOG(LogWbMonitor, Log, TEXT("Halte %s %d '%s' auf (%.0f, %.0f, %.0f): %s - Durchfahrt Ziel %s nach %.0f s."),
+			bForward ? TEXT("Hinfahrt") : (bOwnReturn ? TEXT("Rueckweg") : TEXT("Gegenrichtung")), Idx, *M.Name,
+			DfiFoot.X, DfiFoot.Y, DfiFoot.Z,
+			bShared ? TEXT("DFI an der Halte einer anderen Linie") : (bHall ? TEXT("Halle+Mast+DFI") : TEXT("Mast+DFI (kein Platz fuer die Halle)")),
 			*M.Destination, M.OffsetSeconds);
 	}
 }
@@ -276,5 +375,6 @@ void AWiesbadenBusStopMonitor::Tick(float DeltaSeconds)
 			else { S += FString::Printf(TEXT("%s  %s   %d min\n"), *LineRef, *M.Destination, Min); }
 		}
 		M.Text->SetText(FText::FromString(S));
+		if (M.TextBack) { M.TextBack->SetText(FText::FromString(S)); }
 	}
 }

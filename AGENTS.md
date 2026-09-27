@@ -7,6 +7,8 @@ Nicht-offensichtliche Fakten, die sich nicht aus Code/Doku rekonstruieren lassen
 - **Neuer Rechner (ab 2026-09-01, Benutzer HP):** einzige Arbeitskopie unter `C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal`; verbindliche Engine ist die Launcher-Installation **5.8.2 (CL 56702186)** unter `C:\Program Files\Epic Games\UE_5.8` - alle `.cmd`/`Tools`/Doku zeigen dorthin. Die Plattenkopie `C:\freebuff\WiesbadenReal_Sicherung\UE_5.8` (5.8.1, CL 56057345) bleibt nur als Rueckfall (dann Rebuild noetig, da `Intermediate`/`Binaries` gegen 5.8.2 gebaut sind). Build HIER moeglich (VS 2022 + MSVC 14.44 + Win11-SDK 26100). Die alten `ssonn`/`aivideo`-Pfade und BEIDE Worktrees (`D:\freebuff_city_wi`, `C:\Users\ssonn\aivideo\WiesbadenReal`) existieren hier NICHT; `verify-worktree-sync.mjs` ist damit gegenstandslos.
 - **FALLE: die beiden UE-5.8-Baeme niemals mischen (Symptom 2026-09-17).** Baut man den Editor mit der Plattenkopie (`C:\freebuff\...\UE_5.8`, 5.8.1) statt mit der Launcher-Installation (5.8.2), scheitert JEDE Uebersetzungseinheit mit Typneudefinitionen in Engine-Headern: `GenericPlatform.h error C2953 "SelectIntPointerType" ... bereits definiert`, `error C2011 "FGenericPlatformTypes"`, `fatal error C1189: #error: PLATFORM_32BITS should not be defined`. Die `note: Siehe Deklaration`-Zeilen nennen dann `C:\Program Files\Epic Games\UE_5.8\...` als ERSTE Deklaration - das ist der Fingerzeig. Ursache ist NICHT der Code, nicht UBA und nicht die Toolchain: das **gemeinsame PCH liegt im Projekt-`Intermediate`** und traegt die Headerpfade der Engine, mit der es erzeugt wurde; der andere Baum parst dieselben (bytegleichen) Header ein zweites Mal. Weder `-NoUBA`, noch das Loeschen der Projekt-PCHs hilft dauerhaft - nur derselbe Baum. Praktisch: `Tools/build_gate1.cmd` ruft die installierte Engine; bei einem Baumwechsel vorher `WiesbadenReal\Intermediate\Build\...\*.pch` loeschen. PCH-Wiederverwendung ist danach stabil (inkrementeller Lauf: 0 Aktionen, `Result: Succeeded`).
 - git-Repo vorhanden (Branch `main`); `.gitignore` haelt `Content/__ExternalActors__` (26 GB gebackene Karte), `Data/Raw`, UE-Build-Ausgaben und `*.log` draussen.
+- **Speicher/Pagefile (am Rechner verifiziert 2026-09-25):** 31,0 GiB RAM (33.307.574.272 B), `AutomaticManagedPagefile=False`, feste `C:\pagefile.sys` mit 98.304 MB (96 GiB) Initial **und** Maximum. Genau das ermoeglicht den Voll-Bake im Editor (Speicherspitze ~19 GB; der Commandlet-Weg starb an 42 GiB virtuell). Merksatz dazu: eine Pagefile-Aenderung wirkt erst NACH einem Neustart - im Thread-Export steht deshalb noch "die 96-GiB-Datei laeuft noch nicht, aktuell 64-GB-Stand"; das ist ueberholt. Vor groesseren Laeufen nicht aufraeumen (kein Smaller-Memory-Tuning), die 96 GiB sind der Grund, dass der Bake ueberhaupt durchlaeuft.
+- **Vor jedem Editor-/Commandlet-Lauf die Prozessreste raeumen (Messung 14.09.2026):** `zenserver` + alle `UnrealEditor*` beenden, 3 s warten, dann starten. Back-to-back-Betrieb blaeht die Ladezeit auf ~8 min auf; aus dem sauberen Zustand war derselbe Start nach **~94 s** durch. Eine "haengende" Ladezeit ist also fast immer ein Restprozess und kein Projektproblem - und die 94 s sind die Vergleichsgroesse, mit der man einen echten Regressionsverdacht erst ausschliesst.
 - `WiesbadenReal.Build.cs` setzt **`bUseUnity = false`**: gleichnamige anonyme-Namespace-Helfer in mehreren `.cpp` (`FLatLon`, `MakeLane`, `WriteTempText`, `Dt`, `NextNoise`, `SamplesPerPush`, `BytesPerSample`) kollidieren, sobald der Unity-Build TUs zusammenfasst; neue Quelldateien verschieben die Chunk-Grenzen und decken latente Kollisionen auf. Non-Unity kompiliert sauber (Projekt IWYU-tauglich) - nicht ohne Dedup dieser Helfer wieder einschalten.
 - **Warnungen sind FEHLER** (u. a. C4458 Variablen-Shadowing bricht den Build ab). Falle: `AGameModeBase::GameState` ist ein Member (der AGameStateBase*-Actor) - eine lokale `GameState` in einer GameMode-Methode verdeckt ihn -> Build-Abbruch. Lokale anders benennen (`GS`).
 - In diesem Freebuff-Worktree (`D:\freebuff_city_wi`) ist **kein UE-Build möglich**: nur Quellen, keine Binaries/Intermediate/.sln. Code wird statisch geprüft, nicht kompiliert.
@@ -44,13 +46,15 @@ Nicht-offensichtliche Fakten, die sich nicht aus Code/Doku rekonstruieren lassen
 
 ## Verkehrs-Simulation
 
-- `GIS/WiesbadenTrafficSimulation` (`FWiesbadenTrafficSimulation`, USTRUCT, datenrein/deterministisch): Fahrzeuge folgen dem Spur-Graph von `FRoadNetwork` (Spur-Centerline -> `FLaneConnection::ConnectionPath` -> Folgespur). **LaneId == Index in `Network->Lanes`** (wie `FRoadNetwork::GetLane`) - Tests bauen Netze deshalb per Index. An Kreuzungen waehlt ein Fahrzeug deterministisch per FNV-1a-Hash(FahrzeugId, KnotenId) unter den nicht-restricted Nachfolgern; Sackgassen entfernen es. Spawn-Rate = `MaxSpawnRatePerSecond` * `TrafficDensity` (Round-Robin ueber befahrbare Spuren; blockierter Spur-Anfang < MinGap verschiebt den Spawn). Kopf-zu-Schwanz je Bahn (Sortierung absteigend nach Distanz, bei Gleichstand nach FahrzeugId - totale Ordnung fuer Determinismus). WICHTIG: `Initialize` haelt einen `const FRoadNetwork*` - die Pipeline konfiguriert nur `FWiesbadenCityData::TrafficSettings` (Dichte aus Prompt), initialisieren/ticken darf nur das `UWiesbadenCitySubsystem` beim Stadt-Spawn auf dem finalen GameInstance-Container (Move wuerde den Zeiger stale machen). Blueprint: `GetTrafficReport()`/`GetTrafficVehicles()`. Node-Port (`verify-traffic-sim.js`) und C++-Test `TrafficSimulationTest.cpp` teilen dieselben Erwartungen (2/7/10-Spawns, MinGap-Kette 300/900 cm/s, keine UE_Logs im Sim-Modul).
+- `GIS/WiesbadenTrafficSimulation` (`FWiesbadenTrafficSimulation`, USTRUCT, datenrein/deterministisch): Fahrzeuge folgen dem Spur-Graph von `FRoadNetwork` (Spur-Centerline -> `FLaneConnection::ConnectionPath` -> Folgespur). **LaneId == Index in `Network->Lanes`** (wie `FRoadNetwork::GetLane`) - Tests bauen Netze deshalb per Index. An Kreuzungen waehlt ein Fahrzeug deterministisch per FNV-1a-Hash(FahrzeugId, KnotenId) unter den nicht-restricted Nachfolgern; Sackgassen entfernen es. Spawn-Rate = `MaxSpawnRatePerSecond` * `TrafficDensity` (Round-Robin ueber befahrbare Spuren; blockierter Spur-Anfang < MinGap verschiebt den Spawn). Kopf-zu-Schwanz je Bahn (Sortierung absteigend nach Distanz, bei Gleichstand nach FahrzeugId - totale Ordnung fuer Determinismus). WICHTIG: `Initialize` haelt einen `const FRoadNetwork*` - die Pipeline konfiguriert nur `FWiesbadenCityData::TrafficSettings` (Dichte aus Prompt), initialisieren/ticken darf nur das `UWiesbadenCitySubsystem` beim Stadt-Spawn auf dem finalen GameInstance-Container (Move wuerde den Zeiger stale machen). Blueprint: `GetTrafficReport()`/`GetTrafficVehicles()`. C++-Test `TrafficSimulationTest.cpp` haelt die Erwartungen fest (den frueheren Node-Port `verify-traffic-sim.js` gibt es in diesem Repo nicht) (2/7/10-Spawns, MinGap-Kette 300/900 cm/s, keine UE_Logs im Sim-Modul).
+
+- **Grounding: es gibt KEINEN Punkt-zu-Punkt-Wegfinder (am Code geprueft 2026-09-25).** Vorhanden ist nur der Spur-Graph `FRoadNetwork::GetSuccessors`/`LaneSuccessors` (`GIS/RoadNetworkTypes.h`) fuer die Fahrzeugbewegung. `FWiesbadenTrafficSimulation::FindPathCrossing`/`FindPathProximity` sind **Konflikt-Geometrie** (Ueberschneidung zweier Fahrwege), KEIN Routing - der Name taeuscht. Kein OpenSet, kein CameFrom/Reconstruct, kein A*, kein GPS-Routing im ganzen Baum. Eine notierte "GPS-A*-Idee" ist Absicht, kein Code: jede neue Routen-Aufgabe (Bus ueber seine Halte, Polizei-Verfolgung, Lieferroute) beginnt mit einem Graphen-Aufbau plus Kostenfunktion, nicht mit dem "Einschalten" von etwas Vorhandenem.
 
 ## Flug & Audio
 
 - Heli-Rotor-Physik (`FWiesbadenRotorPhysics`): `bCoaxialRotors` = gegenlaeufiger Doppelrotor (ka-52-Stil, verdoppelter Auftrieb, kein Heckrotor, Pedal = direktes Yaw-Moment); `MaxForwardSpeedMetersPerS` + `RetreatingBladeStallStartFrac` modellieren den Blattspitzenverlust (LiftScale -> 0.45 an vmax) statt hartem Speed-Clamp. `EngineRpm = MainRotorRpm * EngineToMainRotorRatio` (0 bei Triebwerk aus) speist Audio/HUD.
 - Flugsound: `UWiesbadenHelicopterAudioComponent` spielt Assets (RotorSound/EngineSound) mit RPM-/Last-Parametern ODER den prozeduralen Fallback `FWiesbadenHelicopterAudioModel` (deterministischer xorshift-PRNG, Seed-Parameter -> Automation-/node-tests): Rotor = Rauschen durch One-Pole-Tiefpass (Cutoff steigt mit RPM+Collective) + Wop-Wop-AM mit Blattpassfrequenz, Motor = Ton RPM/60*8 Zylinder. Samples als int16-PCM in `USoundWaveProcedural::QueueAudio` (vorher `GetAvailableAudioByteCount()` gegen Pufferdrift pruefen); `USoundWaveProcedural::NumSamplesToGeneratePerCallback` ist protected - nicht setzbar. `BladeSlapDepth` (AM-Tiefe) + `RotorCutoffBaseHz` (Basis-Cutoff) erzeugen den Kampfheli-Charakter; der Heli nutzt Koaxial-Konfiguration (bCoaxialRotors=true, zweiter gegenlaeufiger Rotor, BladeCount=3).
-- **Ka-52-Modell (Neubau 2026-09-17, Import `/Game/Vehicles/Ka52`):** `AWiesbadenHelicopter` bindet die drei Meshes `Fuselage`/`Rotor_Upper`/`Rotor_Lower` ueber `ConstructorHelpers` (Pfade muessen exakt `<Paket>.<Objekt>` sein, sonst faellt der Actor still auf den Wuerfel-Rueckfall zurueck). Das Modell ist FERTIG skaliert und traegt seine Weltlage EINGEBAKEN: Rotor-Achse in Mesh-XY bei (0,0) (gemessen 2 cm), Boden bei z=0, Rumpf 0..295 cm, Naben z 495 / 376,5 cm. Deshalb gibt es keine Median-Offsets mehr: der Hub-`USceneComponent` traegt nur die Nabenhoehe (495 / 376.5), das Blatt-Mesh darunter exakt `-HubHeight` - dann rotiert die Geometrie geometrisch um die Mastachse, ohne dass ein Offset nachgefuehrt werden muss. `TailBoomMesh`/`TailFinMesh`/`TailRotorBlade` sind beim echten Mesh unsichtbar (Heck und Stummelfluegel stecken im Rumpf-Mesh). Import + Materialkette: `Tools/import_ka52.cmd` (FBX, Nanite, keine Import-Bones) und `Tools/fix_ka52_materials.cmd` (4 PBR-Texturen -> `M_Ka52PBR` -> ALLE Material-Slots der drei Meshes; der FBX-Import legt sonst leere Tripo-Restmaterialien an - der Rumpf hat 10 Slots). **FALLE (2026-09-17):** `AssetTools.create_asset` legt ein Material nur IM SPEICHER an - ohne zusaetzliches `EditorAssetLibrary.save_loaded_asset(mat)` wird `M_Ka52PBR.uasset` NIE geschrieben, waehrend die Meshes sehr wohl gespeichert werden und danach auf ein nicht existierendes Asset zeigen (grauer Rumpf, Texturen ungenutzt). Der Commandlet-Log meldete trotzdem "M_Ka52PBR verdrahtet" und Erfolg. Beleg war nur der Plattencheck (`ls Content/Vehicles/Ka52/M_Ka52PBR.uasset`). Verifikation: `Tools/verify_ka52.cmd` (Meshes/Bounds in /Game) und `Tools/verify_ka52_actor.cmd` (CDO des Actors - welche Meshes an welchen Komponenten haengen, Nabenhoehen, XY-Abstand Blatt<->Mastachse = 0; Ergebnis `Saved/Diagnose/ka52_actor.txt`, weil Python-prints im Commandlet-Log verschwinden koennen). Dauerhaft abgesichert im Automation-Test `WiesbadenReal.Vehicles.HelicopterModell` (`Tests/HelicopterModelTest.cpp`, Editor-Kontext): Mesh-Namen an den Komponenten (faengt ConstructorHelpers-Tippfehler, die still auf den Wuerfel-Rueckfall gehen), Materialname je Slot, Rumpfmasse 14,1 x 8,7 x 2,95 m, Sohle auf 0 sowie Blatt-z = -Nabenhoehe und XY-Abstand 0 zur Mastachse.
+- **Ka-52-Modell (Neubau 2026-09-17, Import `/Game/Vehicles/Ka52`):** `AWiesbadenHelicopter` bindet die drei Meshes `Fuselage`/`Rotor_Upper`/`Rotor_Lower` ueber `ConstructorHelpers` (Pfade muessen exakt `<Paket>.<Objekt>` sein, sonst faellt der Actor still auf den Wuerfel-Rueckfall zurueck). Das Modell ist FERTIG skaliert und traegt seine Weltlage EINGEBAKEN: Rotor-Achse in Mesh-XY fast bei (0,0) - der gemessene Drehpunkt der Scheiben liegt bei (-0,19;+2,59) bzw. (+4,92;-2,06) cm und wird von `ComputeRotorMountOffset` auf (0,0) gelegt (siehe Ka-52-Abschnitt am Dateiende); Boden bei z=0, Rumpf 0..295 cm, Naben z 495 / 376,5 cm. Deshalb gibt es keine Median-Offsets mehr: der Hub-`USceneComponent` traegt nur die Nabenhoehe (495 / 376.5), das Blatt-Mesh darunter exakt `-HubHeight` - dann rotiert die Geometrie geometrisch um die Mastachse, ohne dass ein Offset nachgefuehrt werden muss. `TailBoomMesh`/`TailFinMesh`/`TailRotorBlade` sind beim echten Mesh unsichtbar (Heck und Stummelfluegel stecken im Rumpf-Mesh). Import + Materialkette: `Tools/import_ka52.cmd` (FBX, Nanite, keine Import-Bones) und `Tools/fix_ka52_materials.cmd` (4 PBR-Texturen -> `M_Ka52PBR` -> ALLE Material-Slots der drei Meshes; der FBX-Import legt sonst leere Tripo-Restmaterialien an - der Rumpf hat 10 Slots). **FALLE (2026-09-17):** `AssetTools.create_asset` legt ein Material nur IM SPEICHER an - ohne zusaetzliches `EditorAssetLibrary.save_loaded_asset(mat)` wird `M_Ka52PBR.uasset` NIE geschrieben, waehrend die Meshes sehr wohl gespeichert werden und danach auf ein nicht existierendes Asset zeigen (grauer Rumpf, Texturen ungenutzt). Der Commandlet-Log meldete trotzdem "M_Ka52PBR verdrahtet" und Erfolg. Beleg war nur der Plattencheck (`ls Content/Vehicles/Ka52/M_Ka52PBR.uasset`). Verifikation: `Tools/verify_ka52.cmd` (Meshes/Bounds in /Game) und `Tools/verify_ka52_actor.cmd` (CDO des Actors - welche Meshes an welchen Komponenten haengen, Nabenhoehen, XY-Abstand Blatt<->Mastachse = 0; Ergebnis `Saved/Diagnose/ka52_actor.txt`, weil Python-prints im Commandlet-Log verschwinden koennen). Dauerhaft abgesichert im Automation-Test `WiesbadenReal.Vehicles.HelicopterModell` (`Tests/HelicopterModelTest.cpp`, Editor-Kontext): Mesh-Namen an den Komponenten (faengt ConstructorHelpers-Tippfehler, die still auf den Wuerfel-Rueckfall gehen), Materialname je Slot, Rumpfmasse 14,1 x 8,7 x 2,95 m, Sohle auf 0 sowie Blatt-z = -Nabenhoehe und XY-Abstand 0 zur Mastachse.
 
 - **`FMath::FInterpTo(x, 0, dt, Speed)` gibt bei `Speed<=0` SOFORT das Ziel (0) zurueck** (UE-Quelle). Die Heli-Ratendaempfung setzte `Speed = RateAssist*Neutral`, `Neutral=0` bei vollem Ausschlag -> Gier-/Nick-/Rollrate wurde JEDES Bild auf 0 gerissen (Giermoment war korrekt 360k N*m, nur die Rate genullt; Fehlerbild "Heli giert nicht" trotz richtiger Autoritaet). Fix: Daempfung nur bei `Neutral>epsilon`. Danach `CoaxialYawAuthority` 60000->16000 (sonst >400 Grad/s statt ~30-80).
 - Externe Steuerung: `AWiesbadenHelicopter::SetExternalControl(FWiesbadenHeliControl)`/`ClearExternalControl` ist der saubere Eingang (KI/Zwischensequenz/Replay/Test), wirkt ueber die echte Rotorphysik; `ReadInput` wendet ihn nur an, enthaelt sonst NULL Test-Code. Test-Choreografie (Gierprobe/Flugprofil) liegt in `UWiesbadenVehicleTestHarness` (UActorComponent), das die Dev-Befehle zur Laufzeit auf dem Heli anlegen - im normalen Spiel existiert es nicht.
@@ -66,7 +70,7 @@ Nicht-offensichtliche Fakten, die sich nicht aus Code/Doku rekonstruieren lassen
 - **Tastatur-Injektion (keybd_event/SendInput) erreicht das D3D-Spielfenster NICHT.** Verifikation laeuft ueber `-ExecCmds` + Log + `CopyFromScreen`-Screenshots (nur bei Fenster-Vordergrund; PrintWindow ist auf D3D schwarz). CopyFromScreen faengt bei aktiver Desktop-Nutzung leicht Fremdfenster ein.
 - **VISUELLE Verifikation headless: UEs eigener `HighResShot`, NICHT OS-Capture.** `-ExecCmds="HighResShot 1600x900"` in einer `-game`-Fenstersitzung schreibt eine voll gerenderte PNG nach `Saved/Screenshots/WindowsEditor/HighresScreenshot0000N.png` (~1.5 MB, per Read-Tool lesbar) - funktioniert, obwohl OS-Fenster-Capture (CopyFromScreen/PrintWindow) auf D3D schwarz ist. Der Shot per `-ExecCmds` feuert spaet genug und erwischt die geladene Szene. Damit sind Materialien/Beleuchtung/HUD headless pruefbar (frueher faelschlich fuer unmoeglich gehalten).
 - **`-ExecCmds` erreicht AUCH global registrierte Konsolenbefehle** (`IConsoleManager::RegisterConsoleCommand`), egal wo registriert - auch aus einem `UGameInstanceSubsystem` (z. B. `Wb.Buy`/`Wb.Store`/`Wb.Guthaben` des StoreSubsystems liefen so). Das WIDERSPRICHT nicht der Exec-Ketten-Regel oben: registrierte Konsolenbefehle sind ein eigener Pfad, NUR UFUNCTION-`exec` an Subsystemen bleibt unerreichbar. Semikolon-Fallstrick beachten (Komma-getrennt).
-- **Projekt-Screenshot `-WbShot=<sek>`** (schreibt `Saved/Diagnose/Messstelle00000.png`) rendert nur zuverlaessig, wenn per **`.cmd`-Datei** gestartet (Muster `fps_alkis10.cmd`); ein direkter PowerShell-Launch `& $ue ... > log` ergab LEEREN Log + KEINEN Shot. `-WbShowMap` (+ `-WbMapZoom=N`) erzwingt die offene Weltkarte fuer Karten-Screenshots (headless kein Tasten-Input). Alternative zu HighResShot.
+- **Projekt-Screenshot `-WbShot=<sek>`** (schreibt `Saved/Diagnose/Messstelle00000.png`) rendert nur zuverlaessig, wenn per **`.cmd`-Datei** gestartet (Muster: `Tools/run_bus_mitfahrt.cmd`; das fruehere `fps_alkis10.cmd` ist geloescht); ein direkter PowerShell-Launch `& $ue ... > log` ergab LEEREN Log + KEINEN Shot. `-WbShowMap` (+ `-WbMapZoom=N`) erzwingt die offene Weltkarte fuer Karten-Screenshots (headless kein Tasten-Input). Alternative zu HighResShot.
 - Cockpit-Innensicht: keine 3D-Innenraeume modelliert. `UWiesbadenVehicleCameraComponent::AddCockpitHiddenMesh` blendet die eigene Aussenhaut fuer den Fahrer aus (`bOwnerNoSee`, nur seine Sicht), das HUD zeichnet die Instrumententafel. Cockpit-Kamera-Versatz je Fahrzeug im Konstruktor (Default `CockpitOffset(95,0,140)` + Kamera bei `(0,0,110)` ergab Z~250 = schwebte ueber dem Wagen).
 - Rauchtest `Tools/smoke_test.cmd` (+ `.ps1`): ZWEI kurze Editorsitzungen (Helfer `Invoke-Session`), feuert Dev-Execs, wertet aus dem Log Bestanden/Durchgefallen (Exit 0/1). 7 Pruefungen: Fahren (WbDrive: Tempo>20 km/h + Kursaenderung>15 Grad am Standard-Kaefer), Materialien, Perf-Regression (Spiel-Strang-Zeit + Last-Inventar aus dem 8-s-Diagnoseblock gegen tunebare Schranken -`$MaxSpielMs`/`$MaxPrimComponents`/`$MaxInstances`-, bewusst ueber der Ist-Last, faellt nur bei Verschlechterung; nach WP-Fix enger ziehen), Teleport, ResetVehicle, HeliFly, HeliYaw. Zwei Sitzungen, weil Fahrzeug und Heli sich die Besitzung teilen (der Kaefer muss fuer WbDrive besessen bleiben, WbHeli entlaedt ihn). World-Partition-Eigenheiten: (a) beim Umherfliegen haengt das Spiel streckenweise ("Gamethread hitch waiting for resource cleanup"), also NICHT auf Demo-Ende/Fahrende warten, sondern auf GENUG Log-Messpunkte bzw. die Material-Bilanz (feuert 8 s nach dem Laden); (b) seit dem HISM-Overwrite-Fix laden zwei Sitzungen hintereinander wieder zuverlaessig.
 - **Headless-FPS ist doch aus dem Log messbar:** der 8-s-Diagnoseblock (`UWiesbadenCitySubsystem`, feuert ungated `GeometryReportDelay>=8`) loggt `Bildzeit ueber N Bilder: Mittel X ms (Y Bilder/s) ...` PLUS den Strang-Split `Straenge im Mittel: Spiel X ms, Renderer Y ms, Grafikkarte Z ms`. (Frueher gesehene "28/144 FPS" waren das ANDERE Projekt "Wiesbaden Survivors" im Hintergrund, NICHT dieses Spiel.)
@@ -377,7 +381,7 @@ Mesh-Bounds bzw. die Vertices selbst.
 
 ### Weitere Fallstricke dieser Sitzung
 
-- `build_alkis.py` startet mit `new_level()`. Ein frisches Level hat KEINE
+- `Tools/build_city.py` (frueher `build_alkis.py`) startet mit `new_level()`. Ein frisches Level hat KEINE
   Lichtakteure - die fertige Stadt rendert dann komplett schwarz. Deshalb legt
   `AWiesbadenWorldBuilder::EnsureLightingActors()` Sonne, Himmelslicht,
   Atmosphaere und Nebel jetzt selbst an (nicht raeumlich geladen, sonst
@@ -2666,6 +2670,7 @@ naechsten Lauf (auch die Default-Karte wird dann nicht geladen).
   einem nicht greifenden Override ABBRICHT: `WB_OSM_FILE` (Original + nachgeholte Wald-Relationen),
   `WB_ALKIS_FILE` (LoD2-Hoehen/Daecher), `WB_DEM_FILE` (DGM1; setzt `import_dem` mit auf True),
   `WB_USE_OSM_TREES=1`, `WB_MAX_SEGMENT_CM=220`.
+- **DGM1: die Datei im Repo ist bereits auf WGS84 umprojiziert - die Rohdaten sind es nicht.** Verifiziert 2026-09-25: `Data/Raw/DEM/wiesbaden_dgm1.asc` traegt `xllcorner 8.1041334645`, `yllcorner 49.9908818744`, `cellsize 0.000096409474` (~10,7 m), 2925x1698 Zellen. Das sind **lon/lat-Grad**, keine UTM32-Meter. `FHeightmapRaster::SampleBilinearGeo(Longitude, Latitude, ...)` in `GIS/HeightmapImporter.cpp` tastet genau in diesem Geo-Raum ab, der Welt-Sampler rechnet ueber `FRasterHeightSampler` ebenfalls lon/lat - ein unprojiziertes DGM1 (UTM32, Zone 32N) passt also nicht in dieses Raster. Die Umprojektion steckt in `Tools/fetch_dgm1_asc.py` (TIF-Tie-Points 33922, Quelle 436000/5538000 -> 456000/5556000 Wiesbaden UTM32, geschrieben wird `xllcorner` in Grad). Wer die Datei ersetzt, muss diesen Schritt wiederholen - und die ~10,7-m-Rasterung bedenken: das ist NICHT die 1-m-DGM1-Aufloesung, auch wenn der Quelldatensatz so heisst.
 - **Fertig erkennt man den Lauf NICHT am Prozess**, sondern an der neuen Zeile in
   `Saved/BuildHistory/CityBuilds.csv` (`MapPath`, `Result=ok`) und an
   `###WBSTADT### FERTIG - Karte ... liegt vor.` im `rebake_alkis16.log`; Ausgabe kommt gepuffert,
@@ -3818,3 +3823,1264 @@ Stellungen des Schalters (Vorgabe: eine Gruppe; streng: sechs) und
 zusaetzlich die Invariante, die unter BEIDEN gelten muss - sich KREUZENDE
 Wege bleiben getrennt. Ein Schalter, dessen zweite Stellung niemand testet,
 ist eine Behauptung.
+
+## MetaSound-Graph per Commandlet: Obertone, WaveShaper, Enum-Konstanten (25.09.2026)
+
+- **Bausteine fuer die Zuednpuls-Synthese (WbAudioAssetsCommandlet.cpp):** der
+  Standard-Node "Additive Synth" (`{Namespace, "Additive Synth", FName()}` -
+  Variante ist NAME_None, nicht "Audio"!) summiert Sinusoiden auf Vielfachen
+  der "Base Frequency"; "HarmonicMultipliers"/"Amplitudes" sind Float-ARRAYS,
+  leere Pan-Liste = volle Pegel auf beiden Ausgaengen ("Out Left Audio" als
+  Mono-Summe nehmen). Amplituden sind auf [0,1] begrenzt. "WaveShaper"
+  (Variante "Audio") rechnet `tanh((x+Bias)*Amount)/tanh(Amount)` - fuer
+  exakt `tanh(k*x)`: Amount=k, OutputGain=tanh(k); Typ-Pin "Type" ist ein
+  ENUM (EWaveShaperType {Sin=0, ATan=1, Tanh=2, Cubic=3, HardClip=4}).
+- **Enum-/Array-Konstanten am Node:** `UMetaSoundBuilderBase::SetNodeInputDefault`
+  (Template 4-Arg-Variante) mit `int32`- bzw. `TArray<float>`-Literal - Enums
+  sind mit ELiteralType::Integer registriert, das Integer-Literal konvertiert.
+  Die FGraph::Input()-Helfer koennen nur float; fuer alles andere
+  Default()-Helfer auf SetNodeInputDefault aufsetzen.
+- **Beweiszeilen fuer Motor-Hoerproben:** `LogWbVehicles "Motorsound: Asset
+  '...' wird verwendet."` hat Verbosity **Log** -> steht NUR in
+  `Saved/Logs/WiesbadenReal.log`, nie im stdout-Redirect `audio_drive_*.log`.
+  Nicht nach einem "fehlenden" Motorsound-Eintrag im Redirect suchen.
+- **Skripte sind umgezogen (Aufraeumung 24./25.09.):** `make_audio_assets.cmd`
+  liegt jetzt in `WiesbadenReal/Tools/` (Log dort: `Saved/Logs/make_audio_assets.log`,
+  Beweiszeile "WbAudioAssets fertig: 12/12 Pakete gespeichert"); `audio_drive.cmd`
+  und `vis_probe.cmd` sind nach `.planning/diagnose-reste-2026-09-24/`
+  archiviert, funktionieren von dort aber weiter (feste absolute Pfade).
+- **Offline-Renderer** `Tools/render_engineboxer.py` bildet den Graph 1:1 nach
+  (PINK-Noise ueber Frequenzgang, Einpol-TP b1=exp(-2*pi*fc/fs), Oberton-Stack,
+  Boxer-Modulation, tanh). Saetze: `alt|neu|oberton|dynamik|sport`,
+  `analyse` misst alle. Der Satz `dynamik` ist der aktuelle Graph;
+  `oberton` ist die menschlich freigegebene Endabnahme und darf nicht
+  ueberschrieben werden; `sport` ist eine Profil-Studie (nicht im Graph,
+  Uebertragung waere ein Konstanten-Satz).
+- **Clamp-Knoten (25.09.):** Klasse `FNodeClassName {"Clamp", "Clamp",
+  "float"}` - Namespace ist "Clamp", NICHT StandardNodes::Namespace, der
+  Aufruf im FGraph braucht ein drittes Namespace-Argument. Pins
+  `In`/`Min`/`Max` -> Ausgang `Value` (NICHT "Out"). Float-Konstanten
+  (Clamp-Grenzen) ueber SetNodeInputDefault(float).
+- **Graph-Eingabe fuer zwei Ketten (25.09.):** `Graph.Input()` legt die
+  Eingabe an UND verbindet; fuer die zweite Nutzung (z.B. Throttle oder
+  SpeedKmh in zwei Multiplikator-Ketten) einen Link()-Helfer auf
+  `ConnectGraphInputToNode` nutzen. **Reihenfolge:** Input() muss die
+  Eingabe vor der ersten Link() angelegt haben, sonst "Graph-Eingabe ...
+  (zweite Leitung) fehlgeschlagen" -> "MS_EngineBoxer nicht gebaut".
+- **make_audio_assets.cmd:** der stderr "Der Prozess kann nicht auf die
+  Datei zugreifen" erscheint auch bei erfolgreichem Lauf (exit 0) - er
+  kommt vom Log-Redirect. Einzige Belegquelle bleibt die Log-Zeile
+  "WbAudioAssets fertig: 12/12 Pakete gespeichert".
+- **InterpTo (25.09.):** Klasse `{Standard, "InterpTo", "Audio"}`, Pins
+  `Target`(float)/`Interp Time`(time)/`Value`(float), zustandsbehaftet -
+  startet bei Zielwert-Aenderung eine lineare Rampe ueber "Interp Time"
+  (Block-Rate). DAS Werkzeug fuer Parameter-Glaettung und Huellkurven
+  (z.B. 180-ms-Tor der Hupe) im Graph.
+- **Time-Pins haben keine Literale:** FMetasoundFrontendLiteral unterstuetzt
+  nur bool/int32/float/FString/UObject. Time-Eingaben ueber
+  Konvertierungs-Knoten speisen: die heissen
+  `Conversion{VonTypString}To{ZuTypString}` (Namespace StandardNodes,
+  leere Variante, Pins `In`/`Out`) mit den Data-Type-Strings
+  "Float"/"Time"/"Audio" - praktisch also **ConversionFloatToTime** und
+  **ConversionFloatToAudio**. Float-Konstante als Graph-Input -> Conversion
+  -> Time-Pin.
+- **Additive Synth:** die Einzel-Amplitudes sind auf [0,1] geklemmt, die
+  SUMME der Sinusoide aber weder normiert noch geklemmt - unnormierte
+  Referenz-Gewichte (z.B. Nebelhorn-Stack {1, 0.60, 0.32, 0.16}) sind 1:1
+  einsetzbar, die Pegelkontrolle kommt aus der spaeteren tanh-Saettigung.
+- **Regelbare Faerbung via Delta-Stab (25.09.):** die Amplitudes-Arrays
+  sind statisch - eine Oberton-Verschiebung mit einem Regler (Throttle)
+  laeuft ueber einen ZWEITEN Additive Synth: Betraege des Gewichts-Deltas
+  in Amplitudes, die VORZEICHEN als Phase 180 Grad, Ueberlagerung mit
+  dem Reglerfaktor (z.B. 2*Throttle-1) VOR der Boxer-Modulation.
+  Eichungsmuster: Faktor 0 in der Neutralstellung (halbes Gas) laesst die
+  freigegebene Referenz bit-identisch - so bleiben spaetere Aenderungen
+  zur Endabnahme rueckwaertskompatibel.
+
+## WP-Ankerpersistenz: Komponenten-Transforms sind RELATIV, der Chunk-Actor nicht (25.09.2026)
+
+BEFUND (Voll-Bake Alkis25 + Re-Bake-Versuche): Die Streaming-Verankerung der
+Stadt-Zellen hielt in KEINEM Zustand. `anchor_bounds.cmd` meldete "2010 Chunks
+verankert, Bounds ueber Ursprung 2010 -> 4", ein frischer Prozess
+(Tools/verify_anchor_state.py) sah danach wieder 2010/2010 - auf Alkis24 wie
+auf Alkis25. Zwei Ursachen, beide teuer:
+
+1. **Komponenten-Transform != Weltort.** Ein Komponenten-Transform wird
+   relativ zum Actor gespeichert. `SetWorldLocation(Anchor)` auf einem Actor,
+   der (wie per Bauplan jeder AWiesbadenCityChunk) auf (0,0,0) steht, schreibt
+   den Weltanker als relatives Delta in die Karte; beim naechsten Laden
+   addiert der Actor das Delta erneut. Nach mehreren Laeufen lagen die
+   Komponenten weit ausserhalb ihrer Zelle. FIX: der Anker liegt als
+   UPROPERTY `StreamingAnchorCm` im Actor-Paket und wird in
+   `PostRegisterAllComponents` (Actor-Hook - `OnRegister` ist
+   USceneComponent!) sowie in BeginPlay erneut angewendet. Wer Komponenten
+   positioniert, benutzt hier IMMER SetWorldLocation, nie SetRelativeLocation
+   auf einen Weltwert.
+2. **"Bounds ueber Ursprung" war kein WP-Mass im Commandlet.** Im
+   `-run=pythonscript`-Kontext sind die gebackenen StaticMesh-Assets NICHT
+   geladen; ihre Komponenten melden dann Punkt-Bounds an ihrer Komponenten-
+   Position (0,0,0) und ziehen die Actor-Box scheinbar bis zum Ursprung. Das
+   echte Mass ist mesh-unabhaengig: LEERE Komponenten (keine Sections, kein
+   Mesh, keine Instanzen) duerfen nicht nahe am Kartenursprung stehen. Nach
+   dem Fix auf Alkis25: 20.404 leere Komponenten, 0 am Ursprung.
+
+FALLSTRICKE in derselben Kette:
+- `AActor` hat KEIN `OnRegister`; `PostRegisterAllComponents()` ist der Hook
+  fuer "nach dem Laden/Stream-in".
+- `UHierarchicalInstancedStaticMeshComponent` ERBT von
+  `UStaticMeshComponent`: eine Typpruefung muss die HISM-Variante VOR der
+  StaticMesh-Variante abfragen, sonst gilt jedes HISM mit gesetztem Mesh als
+  "hat Inhalt" (der Test fiel genau daran).
+- UE 5.8 Python: `EditorActorSubsystem`/`EditorLoadingAndSavingUtils` haben
+  KEIN `save_actor` (Sonde: Tools/probe_save_api.py). `SceneComponent` hat
+  weder `get_component_location()` noch `get_world_location()` noch
+  `component_to_world`; `is_a` gibt es auf Python-Objekten nicht (nur
+  `isinstance`). Ein Diagnose-Skript darf an solchen Stellen nie den Lauf
+  abbrechen - try/except je Komponente, sonst bleibt das Ergebnisfile alt
+  und man prueft den VORLETZTEN Stand.
+- Nach dem Ankerlauf sind die Python-Actor-Referenzen tot ("ObjectInstance is
+  null") - im selben Prozess ist nichts mehr messbar, `load_level` liefert im
+  Commandlet 0 Zell-Actoren. Zaehlen VOR dem Speichern, gegenpruefen immer in
+  einem FRISCHEN Prozess.
+- Ein laufender UnrealEditor (auch aus einer fremden Session) sperrt die
+  Modul-DLL: Build endet mit LNK1104 und der Test laeuft still gegen das ALTE
+  Binary. Deshalb ruft jeder Bake-/Testwrapper ueber
+  `Tools\engine_run_lock.cmd -Modus Start` vor dem Engine-Start den Lock und
+  danach ALLE `UnrealEditor*` und `zenserver` auf, wartet mindestens 3 s, fasst
+  einen langsamen Shutdown mit einem zweiten Kill und bis zu 10 s Wartefrist
+  nach und verweigert den Start erst, wenn wirklich ein Prozess zurueckbleibt.
+  `build_release.ps1` beendet dagegen bewusst nur Editoren
+  dieses Projektordners - der Kompilier-Gate soll keine fremde Sitzung
+  zerstoeren.
+- DER GLOBALE CLEANUP IST DESHALB GESPERRT: Am 25.09.2026 hat er den
+  Editor eines bereits als rot gemeldeten Gate-Laufs abgeschossen und den
+  zweiten (gruenen) Push mitgerissen. Jeder Bake-/Test-/Gate-Lauf haelt
+  deshalb den `Engine-Lock`: `Tools\engine_run_lock.cmd -Modus Start -Name
+  <lauf>` (ersetzt in den Wrappern den cleanup-Aufruf 1:1; der Rauchtest,
+  die Health-Checks und `build_release.ps1` nehmen ihn mit `-Modus Nehmen`).
+  Datei: `%LOCALAPPDATA%\WiesbadenReal\Locks\engine_run.lock` - MASCHINENweit,
+  nicht pro Projekt, damit sich zwei Sitzungen (Hauptordner und Gate-Worktree)
+  sehen. Drei Regeln, an denen die Sperre haengt:
+  * Besitzer ist der AUFRUFENDE Prozess (die cmd.exe bzw. powershell.exe des
+    Laufs), nicht der kurzlebige PowerShell-Kindprozess, der die Datei
+    anlegt. Nur so lebt die Sperre genau so lange wie der Lauf - eine
+    Freigabe am Ende ist damit ueberfluessig.
+  * Ein Besitzer, dessen Prozess nicht mehr existiert (oder dessen
+    Startzeit zu einem recycelten PID passt), gilt als VERWAIST: die Sperre
+    wird uebernommen. Ein abgebrochener Lauf blockiert also nicht.
+  * Gehoert der Besitzer zur eigenen Prozesskette (Gate -> Rauchtest ->
+    Cleanup), ist die Sperre EIGEN und das Beenden bleibt erlaubt - ohne das
+    wuerde sich das Gate selbst sperren.
+  Bei belegtem Lock bricht der Cleanup VOR dem Kill ab (Exit 3, Meldung nennt
+  Label/PID des Besitzers). Notausgänge, beide bewusst: der Cleanup mit
+  `-SperreIgnorieren` und `engine_run_lock.cmd -Modus Freigeben -Gewalt`.
+  `build_release.ps1` nimmt den Lock schon VOR Gate 0: sein
+  `Stop-ProjectEditors` in Gate 1 ist zwar projektlokal, trifft im GEMEINSAMEN
+  Gate-Worktree (`.gate-worktree\WiesbadenReal`, ein fester Pfad fuer alle
+  Sitzungen) aber den Editor eines zweiten Gate-Laufs. Genau das hat am
+  25.09.2026 den ersten Lauf zerstoert: der zweite meldete 0 Fehler und "kein
+  Abschluss-Marker". Zwei Pushes laufen also nie gleichzeitig.
+
+---
+
+## Destillat aus dem Setup-Thread (25.09.2026)
+
+Kompaktes Merkbuch aus `C:\freebuff\WiesbadenReal_Sicherung\AGENTS.md`,
+hier als Anhang an die ausfuehrliche Projektdoku. Inhaltlich uebernommen; nur
+die Default-Karte ist auf den aktuellen Stand `Alkis30` berichtigt.
+
+### Environment (Windows 11, Git Bash shell, project root C:\freebuff\WiesbadenReal_Sicherung)
+- No system ffmpeg. Get a static binary via `pip install imageio-ffmpeg`, then `python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"`.
+- Python 3.14 at C:\Python314 with almost no packages; pip installs land in AppData\Roaming\Python\Python314 (Scripts dir not on PATH).
+- GPU is an RTX 5070 Laptop (8 GB, sm_120) but ctranslate2 4.8.2 CUDA kernels only support up to sm_90 → faster-whisper must run `device="cpu", compute_type="int8"`; do not waste time on CUDA debugging.
+- CPU: 16 logical cores. Fastest Whisper setup: 2 parallel worker processes × cpu_threads=8 → ~8× realtime with large-v3-turbo.
+- pyannote.audio installs on Python 3.14 (torch 2.14+cpu wheels exist), but its HF models (`pyannote/segmentation-3.0`, wespeaker) are license-gated → `GatedRepoError 401` without an HF token; this machine has NO HF token (no `~/.cache/huggingface/token`, no `HF_TOKEN`).
+- torchaudio/torchcodec cannot load WAVs here (no FFmpeg DLLs: RuntimeError "Could not load libtorchcodec") — read PCM WAVs with the stdlib `wave` module + numpy instead of torchaudio/soundfile.
+
+### Long-running jobs in this harness
+- run_terminal_command caps at ~600 s and `process_type: BACKGROUND` is not implemented → launch detached with `(python job.py > log 2>&1 &)` inside the command, then poll with `sleep N; tail log` in later calls.
+- Structure long jobs as resumable chunks: one output file per chunk (e.g. `parts/chunk_0004.json`), skip existing outputs on relaunch.
+- A detached `(python job.py > log 2>&1 &)` launch can die with a PyAV/DLL load error (Windows app-control policy) while the identical import works foreground — if a detached Whisper/pyannote job fails on DLL load, rerun it in the foreground rather than debugging the code.
+- read_files truncates files at ~20k estimated tokens — read big files in offset/limit windows instead.
+- For UE editor commandlets (headless builds, re-bakes): launch detached via `powershell Start-Process` with a .cmd wrapper (e.g. `anchor_bounds.cmd`), then poll log mtime / external-actor package-save counts; the script's result file only flushes at the very end, and the process can outlive the session — always poll, never assume death.
+
+### World-Partition Streaming (WP): Bounds-Diagnose & Re-Bake
+- Empty components (0-instance HISM/ISM, empty mesh) get POINT bounds at their own position (UE 5.8 `SceneComponent.cpp`); chunk actors spawn at the origin, so unanchored empties re-span the origin and inflate `GetComponentsBoundingBox` to km scale. Anchor empties at the cell's content centroid (mesh sections, else region-asset points).
+- `Streaming-Diagnose` fires after ~8 s gameplay from the subsystem tick and lands in `Saved/Logs/WiesbadenReal.log` — NOT in stdout redirects, and engine log timestamps are UTC (23:00 UTC = 01:00 local). `diag_wp.cmd` must run the current baked map at the default 2-km loading range (the old 4-km range override blurs the metric). **Map names move fast, always check before use:** `Alkis4` no longer exists (deleted 2026-09-19, together with Alkis2/3/7/8/9/10-13/15); the live default in `Config/DefaultEngine.ini` is `Alkis31` (since 26.09.2026, bc127be); `Alkis27`..`Alkis30` deleted (26.09.2026). Versioned in git: `Alkis16`, `Alkis17`, `Alkis22`, `Alkis25`, `Alkis26`, `Alkis31`; `Alkis18`..`Alkis24` exist at most as unversioned local leftovers (checked by `Tools/test_agents_verweise.py`). **A .umap on disk proves nothing — a bake is only finished when it has an `ok` line in `Saved/BuildHistory/CityBuilds.csv`.** A map that is *currently being baked* already has a full-size `.umap` (every WP map is ~13 KB, the geometry lives in `Content/__ExternalActors__/Maps/<Map>/`) and an external-actor folder that is still filling up: on 25.09.2026 at 22:06 `Alkis31` existed with a .umap and **1** package while `Alkis30` was complete with **2019** and an `ok` from 20:56. Both `GameDefaultMap` AND `EditorStartupMap` in `Config/DefaultEngine.ini` must name the same map, or the editor opens one map and the game starts another. Pick the map from `Config/DefaultEngine.ini` / `ls Content/Maps/*.umap`, confirm it in `CityBuilds.csv`, never from memory.
+- WP cell assignment is baked into the chunk external-actor packages: C++ fixes need a re-bake (`anchor_bounds.cmd` → `Tools/anchor_chunk_bounds.py`, ~2 h for ~2060 chunks; umap itself never changes). Programmatic `SetWorldLocation` does NOT dirty packages — C++ `Modify(true)` must mark the chunk package or `save_dirty_packages` saves nothing; Python prints never reach the cmd stream, verification must go to a file (result lands at `anchor_bounds_result.txt` in the repo root, not Tools/).
+- **Anchoring only survives if it is an ANCHOR property, not a component transform (fixed 2026-09-25, verified in a fresh process).** `AWiesbadenCityChunk` sits at (0,0,0) and carries world coords in its components, so `SetWorldLocation(Anchor)` stores the world anchor as a *relative* delta; the next load adds the actor origin again and the empties drift to 2x the cell. Fix: `StreamingAnchorCm` + `bHasStreamingAnchor` as serialized UPROPERTYs, applied in `PostRegisterAllComponents()`/`BeginPlay` (never `OnRegister` — that is a `USceneComponent` hook, it does not exist on the actor); `AnchorStreamingBounds()` only recomputes and stores. Proof on `Alkis30` (25.09.2026, 22:2x): **23 799 empty components, 0 at the map origin** (`Tools/verify_anchor.cmd` -> `Tools/verify_anchor_state.py` -> `Saved/Diagnose/anchor_verify.txt`; previously 20 404 / 0 on the then-default map). The empties now carry their CELL's coordinates as their relative location (e.g. `RoadMesh ... relativ (625008, -524916, 16754)` while the actor itself sits at `(0,0,0)`) - that is the anchor doing its job; UE 5.8 Python has **no** per-actor save (`EditorActorSubsystem.save_actor` and `EditorLoadingAndSavingUtils.save_actor` do not exist) — only `save_dirty_packages`/`save_current_level`, so an in-session "ok" is not evidence. Measure empty components, not `GetComponentsBoundingBox`: in `-run=pythonscript` the baked StaticMesh assets are unloaded and their components report POINT bounds at (0,0,0), which fakes a 2010/2010 origin hit. **Git Bash rewrites `/Game/...` into `C:/Program Files/Git/Game/...`**, so `WB_MAP=/Game/Maps/X cmd //c "Tools\verify_anchor.cmd"` silently measures an empty level: `load_level` returns False, the world stays `/Temp/Untitled_0`, `get_actor_descs()` returns None and the script dies with "TypeError: 'NoneType' object is not iterable" (or, in the old version, reports a worthless "WP-Actors geladen: 0 von 0"). Run `Tools\verify_anchor.cmd` WITHOUT `WB_MAP` and let `Tools/karte.py` read `Config/DefaultEngine.ini`; to force a map, change the ini or pass an already-absolute Windows path. Always check the first line of `anchor_verify.txt` says "Karte geladen: /Game/Maps/..." - anything else is a zero measurement, not a clean bill of health. `verify_anchor.cmd` (like `rebake_alkis2x.cmd`) still takes **no** engine lock - check for a running `UnrealEditor` yourself before starting it.
+- Anchor functions must sweep ALL HISM components of the owner class-wide (`GetComponentsByClass`): tracked arrays like `VariedInstances` are populated only by `SpawnVaried()` at build time, and on a loaded map `BeginPlay` skips `SpawnRegionAssets` for empty cells — so serialized variant components (`Trees_01..06`/`Bushes_01..06`) stay untracked at origin. Residual "Bounds-ueber-Ursprung" counts after a pass are NOT stale render state — verify per-component in a fresh process before assuming success.
+
+### Debugging: HuggingFace model-download race (misleading silence)
+- Two processes loading the same model concurrently race on the blob download: one finishes `model.bin`, the other hangs forever re-downloading a stale `.incomplete` blob — with NO error and NO log output.
+- Symptom: python process idle (~1 GB RAM, no CPU time), still at the "loaded" log line → blocked on download, not computing.
+- Fix: kill both, delete `~/.cache/huggingface/hub/models--*/blobs/*.incomplete`, confirm `snapshots/*/model.bin` is intact, relaunch with `HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`.
+
+### Nerobergbahn: OSM-Linien sind Punkt-für-Punkt gepaart, nicht bogenlangengleich
+- `TRACK_A`/`TRACK_B` (die OSM-Ways) sind die WAGENMITTEN: sie liegen auf 385 von
+  434 m exakt 1,00 m auseinander (= Spurweite), in der Ausweiche bis 4,15 m.
+  Daraus folgt der Querschnitt: 3 Laufschienen (Mitte + ±1,00 m), 2 Zahnstangen
+  bei ±0,50 m, Seilkanal bei 0, Schwellen 2,40 m, Bettkrone 2,60 m.
+- `BuildTracks()` dünnt je Linie Punkte unter 3 m aus — die beiden Ketten sind
+  danach bis ~3,7 m gegeneinander verschoben. Ein Vergleich bei GLEICHER
+  Bogenlänge vergleicht deshalb Punkte, die bis 3,8 m auseinanderliegen: die
+  Ausweiche erschien damit 138 m statt 35 m lang (`9`/`12`-Rasterfehler solcher
+  Art erst nach dem Zählen der Instanzen im Log auffallen). Richtig ist die
+  Zuordnung über denselben Index; die Bogenlänge der Mitte kommt von Linie A,
+  damit Fahrt und Gleis dieselbe Parametrisierung nutzen.
+- Einzelne OSM-Knoten liegen bis 34 cm neben der Spurweite. Für die gemeinsame
+  Mittelschiene muss der Abstand EXAKT eine Spurweite sein, sonst liegen dort
+  zwei Schienen 30 cm nebeneinander — der gemessene Wert wird darum auf 50 cm
+  gerundet, solange er in der Nähe liegt (nur die echte Ausweiche bleibt).
+- Trassen-Assets sind WERKZEUG: `mesh Z=0` = Schienenoberkante in Trassenmitte,
+  X entlang, Y quer; der Platzer hebt nur noch um `RailTopCm` (= `CarFloorCm`,
+  damit das Rad genau auf der Schiene läuft) und schiebt quer.
+- Die Trasse liegt im unteren Drittel 5-6 m über dem Gelände (Dammmauer):
+  flache Kameras von der Seite schauen gegen die Mauer. Querschnittsbilder
+  deshalb steil von oben (`-WbAerial`, Pitch -30..-55), sonst sieht man nichts.
+
+### Nerobergbahn-Wagen: aufgemalte Graphik (Schriftzug, Wasserstandsskala)
+- Schrift und Skala sind im Vorbild AUF die gelbe Wand gemalt: transparente PNG
+  (`Tools/make_nerobergbahn_textures.py`, Pillow) auf einer Flaeche 1 cm vor der
+  Wand, im UE-Material per Alpha maskiert und zweiseitig (`M_WbNb_Decal`) - so
+  bleibt der gelbe Kasten zwischen den Buchstaben sichtbar.
+- `MeshBuilder.quad_tex()`: die vier Ecken werden "von aussen gelesen"
+  uebergeben, die UV-Werte muessen dazu (0,0) (1,0) (1,1) (0,1) sein. Mit der
+  vertauschten Reihenfolge stand die Schrift 180 Grad verdreht - im Blender-
+  Render sofort zu sehen, im Spiel erst nach dem Import. Merksatz: Blender-UV
+  und UE-UV stimmen ueberein, ein V-Flip ist NICHT noetig.
+- Der Wagen traegt die Graphik auf beiden Seiten und ordnet die Ecken je Seite
+  anders; eine Seite allein zu pruefen reicht nicht (Ansichten
+  `vorschau_wagen_wand.png` / `_wand_gegen.png` in 1920 px).
+- Kleine aufgemalte Details sind in der Gesamtansicht nur 1-2 Pixel breit und
+  wirken dort heller/verwaschen - vor einem Farbfehler erst die Pixelwerte
+  vergleichen (blaueste Pixel der Skala 61/115/174 vs. Schrift 62/114/172).
+
+### Nerobergbahn-Wagen: Innenraum, Mitfahr-Modus, Pruefungen
+- `build_wagen()` kippt das GANZE Mesh mit `tilt_grade()` in die Steigung; eine
+  Hoehe im Mesh-System zu messen ist um `x * 19 %` falsch (bei x = 1,7 m: 32 cm
+  — genug, um „Tacho auf/unter Augenhoehe“ zu vertauschen). `Zurueckdrehen`
+  (x' = x·ca + z·sa, z' = −x·sa + z·ca) und erst dann gegen die C++-Werte
+  pruefen: Wagenboden 0,85 m, Augenhöhe der Mitfahrkamera 2,45 m (Kopfreiheit
+  2,62 m), Sitz 0,45 m, Lehne 0,85 m.
+- Kastenende ist `5,40/2 − 0,85 = 1,85 m`; der Kommentar im Builder sagte 1,95 m.
+  Pruefungen holen solche Bezugslinien aus der Geometrie (Innenboden + 2 cm),
+  nicht aus Kommentaren.
+- Der Wagen laeuft OHNE Kollision (`Car->SetCollisionEnabled(NoCollision)`) —
+  nur deshalb kann der Fahrgast im Wagen umherlaufen. Der Einsteige-Versatz ist
+  Wagenmitte + 1,75 m (Boden 85 + halbe Kapsel 90); mit 1,50 m stand er 25 cm im
+  Boden, was erst mit eingerichtetem Innenraum sichtbar wurde.
+- Bewuchs steht IM Wagen, weil `FWiesbadenRoadClearance` nur aus
+  **Strassen**segmenten gebaut wird (`WiesbadenRegionAssets.cpp`, 150 cm
+  Zuschlag) — der Bahnkorridor ist nicht enthalten. Fix = zweites Freihaltenetz
+  aus der Bahnachse + Neubake der Kacheln; kein Renderlauf-Fehler.
+
+### Nerobergbahn-Stationen: Bahnsteighalle und die Trassenmoebel
+- EIN Asset `SM_WbNbBahnsteighalle` fuer beide Stationen: Laenge entlang X,
+  Ursprung = Schienenoberkante in der Mitte ZWISCHEN den Gleisen (nicht auf
+  TrackA oder TrackB), erstes Joch ohne Balustrade = offene Einstiegsseite. Die
+  Berghalle wird um 180 Grad gedreht, damit die Oeffnung auch dort am Wagen
+  liegt. Der Actor loggt die Weltkoordinaten (`Nerobergbahn: Halle Tal/Berg auf
+  (...) cm`, Trassenlaenge A 43439 / B 43075 cm) - Posen-Dateien brauchen sie,
+  und aus der Bogenlaenge selbst gerechnet liegen sie ~2 m falsch (die
+  ausgeduennten OSM-Punkte).
+- `BuildTrackMeshes` baut Backsteinmauer, Klinkerband, Handlauf und Wimpel fuer
+  die GANZE Trasse, auch im Hallenbereich. `BedHalf` = 130 cm ist zugleich die
+  halbe Wagenbreite: die Mauer stand mitten im Gleistrog und der Handlauf auf
+  Fensterhoehe im fahrenden Wagen, die Wimpel hingen als schraege Platten in der
+  Kabine. Jetzt: keine Mauer und kein Gelaender +-7 m um beide Hallen, und das
+  Gelaender steht 45 cm weiter aussen (`RailOutCm`) auf der Mauerkrone.
+- Runtime-Geometrie der Trasse (Mauer, Gelaender, Roste, Boeschung) braucht
+  KEINEN Neubake - der Actor baut sie bei jedem Start. Ein Neubake ist nur fuer
+  die Staedte-Streuung noetig (Baeume, Laternen und Schilder stehen in Halle und
+  Wagen: `FWiesbadenRoadClearance` kennt den Bahnkorridor nicht) und fuer die
+  OSM-Gebaeude.
+- Die beiden OSM-Wege `Nerobergbahn Talstation` (145208459) und
+  `Nerobergbahn Bergstation` (396465632, building=service) erzeugt die
+  Gebaeude-Pipeline als mehrgeschossige Bloecke - an der Bergstation steht der
+  Block IM Hallengrundriss (Dach bei 192 m gegen 172,85 m Schienenoberkante).
+  Beide Namen treffen auch die Landmarkenliste; das ist nur eine Markierung.
+- Posen fuer Bahnahmen: `Saved/Diagnose/poses_bahn.txt` (Trasse) und
+  `poses_bahn_close.txt` (Nah) - **die liegen auf der Platte**. Das hier
+  urspruenglich genannte Stationsverzeichnis
+  `Saved/Diagnose/poses_nerobergbahn_stationen/berstation/halle_nah/hallen.txt`
+  gibt es **nicht mehr** (am 26.09.2026 geprueft: `Saved/Diagnose/` enthaelt
+  nur `poses_bahn*.txt` und `poses_alkis*.txt`, kein `poses_nerobergbahn_*`).
+  Wer die Hallenaufnahmen braucht, legt die Datei nach dem Format unten neu
+  an. Format: Hoehe_m, AtX_cm, AtY_cm, Yaw, Pitch, Vorwaerts_m, LookYaw,
+  LookPitch. `Yaw` ist die Richtung des Vorwaerts-Versatzes, geblickt wird mit
+  `LookYaw`; bergan ist Yaw -53, quer von rechts 217. Vorsicht: die Kamera
+  ankert Z am **Bodentrace**, nicht an der Schienenoberkante - an Daemmen steht
+  sie tiefer als gedacht, ueber Gebaeuden landet sie auf dem Dach.
+
+## Spielprobe: was ein Nutzer wirklich erreicht (26.09.2026)
+
+Der Auftrag "spiele es, wie der erste Nutzer" hat vier Fehler gefunden,
+von denen drei seit Monaten im Buch standen und keiner davon auffiel,
+weil das Log nichts Falsches sagte - es sagte gar nichts.
+
+- **Dev-Befehle mit Argument sind ueber die Konsole NICHT AUFRUFBAR** (am
+  26.09.2026 an der Engine gemessen, drei Schreibweisen an einem UFUNCTION(Exec)
+  mit `int32 Sekunden`):
+  | Schreibweise | Ergebnis |
+  |---|---|
+  | `WbHeliFly 24` | `Bad or missing property 'Sekunden'` |
+  | `WbHeliFly=24` | **keine Fehlermeldung, keine Wirkung** |
+  | `WbHeliFly Sekunden=24` | `Bad or missing property 'Sekunden'` |
+  | `WbHeliFly` (ohne alles) | `Bad or missing property 'Sekunden'` |
+
+  Ursache: `UObject::CallFunctionByNameWithArguments` sucht beim Aufruf ein
+  **Objekt-Property**, nicht einen Funktionsparameter, und erwartet
+  `Property=Wert`. Die UFUNCTION wird aber nicht gefunden, wenn ihr Parameter
+  **keinen Standardwert** hat - dann bricht der Aufruf ab, egal wie er
+  geschrieben ist. Behoben an der Wurzel: alle Exec-Deklarationen in
+  `WiesbadenPlayerController.h` haben jetzt Standardwerte, und die
+  zeitbasierten Befehle holen ihre Dauer aus der CVar **`wb.Sekunden`**
+  (Vorgabe 24 s), wenn 0 ankommt. Aufruf also: `WbHeli,WbHeliFly` - ohne
+  Argument, wie in `Tools/flight_check.cmd` dokumentiert.
+  Merksatz: **ein Exec-Befehl braucht einen Standardwert, sonst ist er von der
+  Kommandozeile aus tot - und zwar lautlos, wenn man `Name=Wert` schreibt.**
+- **`Tools\flight_check.ps1` war das Messwerkzeug und hat nie gemessen.** Mit
+  der dokumentierten Zeile `"WbHeli,WbHeliFly 24"` startete die Flugphase nie
+  (siehe oben), das Skript wartete volle 7 Minuten, meldete
+  `0 Mast-Messpunkte` - und **Exit 0**. Ein Messwerkzeug, das nichts misst und
+  Erfolg meldet, ist das Schlimmste, was ein Werkzeug tun kann. Zwei Aenderungen:
+  1. `exit 1`, wenn weniger als `MinSeconds` Mast-Messpunkte im Log stehen.
+  2. Im Fehlerfall nennt das Skript die `Bad or missing property`-Zeilen aus
+     dem Log - man sieht jetzt sofort, dass die Engine die Befehle abgewiesen
+     hat, statt sich zu wundern.
+  Reihenfolge dabei wichtig: **erst Sitzung beenden, dann Exitcode**. Ein
+  `exit 1` vor dem `Stop-Process` hat eine 7-GB-Sitzung zehn Minuten
+  weiterlaufen lassen (das war ein Fehler von mir, beim Einfuegen des
+  Exitcodes entstanden und sofort wieder behoben).
+- **`find /i` ist auf diesem Rechner NICHT das Windows-`find`.** `where find`
+  listet `C:\Program Files\Git\usr\bin\find.exe` **zuerst**, und das Git-find
+  kennt kein `/i`: es meldet `find: '/i': No such file or directory` und
+  liefert errorlevel 1. In `Tools\ka52_wait_build.cmd` war damit die ganze
+  Editor-Abfrage tot - das Skript meldete immer "Editor zu", baute also
+  **nie** und lief bei jedem offenen Editor in `EXITCODE 6` (Live Coding).
+  Umgestellt auf `findstr /b /c:` (Windows-eigen, nicht verdeckt, matcht nur
+  die Prozesszeile, weil die Zeile "Keine Aufgaben..." mit `INFORMATION:`
+  beginnt). **Vorher kam noch ein zweiter Fehler dazu: `tasklist //FI` in einer
+  .cmd wird zu `tasklist \FI` - die Doppelschrägstriche sind eine
+  Git-Bash-Konvention.** Belegt: `where find` sagt die Reihenfolge,
+  `Saved/tmp/playtest_wartet.log` sagt, was das Skript wirklich erkannt hat.
+  Nur `ka52_wait_build.cmd` war betroffen; alle anderen .cmd nutzen `findstr`.
+- **Ein zweiter Editor neben dem ersten ist ein Absturz** (steht so im
+  Projekt). Das ist keine Theorie: ein Wartelauf mit dem defekten
+  `find`-Erkennen startete, während der Editor des Menschen lief - zwei
+  `UnrealEditor.exe` nebeneinander. Der `engine_run_lock` hat den *richtigen*
+  Lauf geschuetzt (Exit 3 mit klarer Begruendung), ein **unten** in
+  `Tools/shot_pose_series.cmd` nachgezogener Lock fehlte: dieses Skript
+  startete einen sichtbaren Editor ohne jede Sperrpruefung. Bei allen
+  Engine-Wrappern nach `UnrealEditor` in `Tools/*.cmd` **fehlt der Lock in
+  ueber 20 Dateien** - das ist die naechste Baustelle, nicht heute.
+- **Ein Etikett, das nach einem Fehler aussieht, ist ein Fehler.** Die
+  Flugtelemetrie meldete nach der Achsenkorrektur
+  `Blatt-Drehpunkte 2.6/5.3 cm ab Nabe` - genau die Korrektur, beschriftet wie
+  der gerade behobene Schiefstand. Ein Nutzer haelt das fuer genau den
+  Fehler, den er abstellen lassen hat. Die Zeile nennt jetzt
+  `Achsenkorrektur 2.6/5.3 cm, Drehpunkt der Scheibe 0.0/0.0 cm neben der
+  Stange` (Messung in `WiesbadenHelicopter::SampleMast`, echte Welt-
+  Transformation des Components - **nicht** relative Drehung auf Weltlage, das
+  ergibt 2 x Korrektur, weil die Nabe mitdreht).
+
+
+### Bild-Belege statt Behauptungen (Plasmacutter, Gate 4)
+- `Tools/verify_cuttable.cmd` faehrt den Bildlauf UND misst die PNGs (Glut-Anteil, Lage, Blickwinkel aus dem Log). `-NurPruefen` prueft einen vorhandenen Lauf ohne Engine. `Tools/test_verify_cuttable_gate.py` baut acht Fehlerfaelle nach und verlangt, dass das Gate bei jedem ROT wird - **21 gruene Pruefungen allein beweisen nichts**.
+- **Der FootPawn setzt seine Actor-Rotation selbst auf `(0, Yaw, 0)` - Pitch ist dort immer 0.** Eine Kamera an seinem SpringArm kann nicht auf ein Stueck schauen, das unter ihr liegt (`SetControlRotation` hilft auch nicht, der ACharacter zieht die Drehung aus dem Controller und der Tick ueberschreibt danach). Loesung der Bildprobe: **freie Kamera als ViewTarget**.
+- Bildziel nach dem Schnitt ist `GetFallenPiece()`, NICHT die Schnittmitte - das abgefallene Stueck rutscht vom Schnittpunkt weg.
+- `Saved\` ist nicht versioniert: im Commit-Worktree fehlen beim Start der Python-Suiten die Bilder, der Selbsttest ueberspringt dort. Gate 4 laeuft ohnehin **ohne Dateifilter** - im Worktree ist der Commit schon committed, eine aus dem Push-Bereich gebaute Dateiliste ist dort LEER und wurde als "nichts zu tun" gelesen.
+- `waehle_stadtinhalt` verlinkt aus unversionierten Dateien **nur die Stadtkarten**. Die aus Blender importierten Meshes (`Content/Waffen/Cutpieces`) fehlen im Worktree, der Cuttable faellt auf Wuerfel zurueck. Das Bild-Gate haengt nicht daran (gemessen 5,4/13,5/2,8 % statt 16/18/4 % Glueh-Anteil, Grenze 1 %).
+- **Batch: `%errorlevel%` und `%VAR%` INNERHALB eines `if`-Blocks werden VOR der Ausfuehrung expandiert und sind immer leer.** Ohne `setlocal EnableDelayedExpansion` + `!VAR!` meldet jeder erfolgreiche Lauf "abgebrochen". Kosten: ein Gate, das nie gruen werden konnte.
+
+## Shell quirks (bash → PowerShell)
+- Bash expands `$_` inside double quotes — wrap the whole PowerShell call in single quotes: `powershell -NoProfile -Command 'Get-Process python | ...'`.
+- Git Bash `tail -N file1 file2` fails ("option used in invalid context"); tail one file per call.
+
+### Batch (.cmd) auf dieser Maschine
+- **Immer CRLF.** Eine mit LF geschriebene .cmd bricht mit `"." kann syntaktisch an dieser Stelle nicht verarbeitet werden` ab, sobald sie `if ( ... )`-Bloecke enthaelt. `write_file` schreibt LF — danach `sed -i 's/$/\r/'`. Pruefen: `file Tools/x.cmd | grep CRLF`.
+- **In Klammerbloecken beendet das ERSTE ungeschuetzte `)` den Block**, auch eines in einem Text. Ein `echo ... errors."` am Zeilenende reisst den ganzen Block auf. Bauform deshalb: `if ... goto :marke` statt Klammerblock (siehe `Tools/verify_anchor.cmd`).
+- **Der Exit-Code der Engine ist nicht die Messung.** `UnrealEditor-Cmd.exe -run=pythonscript` endet mit 127, wenn das Skript fehlt, mit -1, wenn es selbst abbricht — und mit einem Shutdown-Absturz (`UnrealEditor-MegascansPlugin.dll` in `dllmain_crt_process_detach`), *nachdem* das Ergebnis geschrieben ist. Massgeblich ist die Ergebnisdatei; ein gueltiges Ergebnis bei ungewoehnlichem Exit-Code wird laut gemeldet, nicht verworfen. Ohne Ergebnisdatei immer Fehler.
+- **Ein haengender Prozess blockiert ein festes Logfile exklusiv** ("Der Prozess kann nicht auf die Datei zugreifen", auch kein `mv`). Deshalb je Lauf ein eigenes Log (`verify_anchor_%STAMP%.log`) — sonst scheitert der naechste Lauf an der Umleitung und man schliesst faelschlich, die Messung sei gescheitert.
+- **Ein abgebrochener Prozess laesst sich aus einer fremden Sitzung nicht beenden** (`taskkill` meldet "Von dieser Aufgabe wird momentan keine Instanz ausgefuehrt"). Wer per `(cmd ... &)` startet und den Bash-Job killt, erbt das: zurueck bleibt ein Prozess, der CPU frisst und Dateien haelt. Den Bash-Job nicht killen, sondern den Lauf zu Ende laufen lassen.
+- **Zwei Engines gleichzeitig auf demselben Projekt sind ein Absturz**, kein Zufall: ein Commandlet startet waehrend eines laufenden Editors, dann bricht es schon VOR dem Python-Start ab (Log endet bei ~18 KB, keine Zeile "Running Python script"). Vor jedem Engine-Lauf `Get-Process -Name UnrealEditor,UnrealEditor-Cmd` pruefen.
+
+- **`rem` schuetzt NICHT vor `%~`-Parametern.** cmd expandiert Batch-Parameter auch in Kommentarzeilen und bricht mit „Die folgende Verwendung des Pfadoperators zur Ersetzung eines Batchparameters ist ungültig“ ab – der Lauf endet, BEVOR die Engine startet. Im Kommentar gehört `%%~nxf`. Gefangen in `Tools/test_verify_anchor_tool.py::test_kein_prozentparameter_im_kommentar` (es sucht ein einzelnes `%~`, nicht `%%~`).
+- **`findstr /R /„Muster“ ist ein Syntaxfehler.** findstr liest `/"` als Schalter und zerlegt das Muster in `"^`, `/Game/`, `"` (`FINDSTR: /^ wurde ignoriert`, dann `Syntaxfehler`). Richtig: `findstr /C:"/Game/"` – `/C:` nimmt den Text wörtlich und frisst die führende `/` nicht als Schalter.
+- **Zwei Engine-Lufe hintereinander ohne Pause scheitern am Zen-Start.** Der zweite Lauf stirbt nach ~20 s mit Exit -1, Log endet bei ~98 Zeilen bei „Launching executable … zenserver.exe“, ohne „Running Python script“ – sieht aus wie ein Skriptfehler aus, ist aber einer. `sleep 10..15` dazwischen genügt (00:21:31 zweimal hintereinander: beide tot; 00:22:32 einzeln: Exit 0).
+- **Auch hier gilt: das Werkzeug muss zum Werkzeug passen.** `verify_anchor.cmd [Karte]` nimmt den Kartennamen als Argument, baut `/Game/Maps/WiesbadenCity_<Name>` in der Batch-Datei (nie auf der Kommandozeile – die schreibt Git Bash um) und schreibt je Karte `Saved\Diagnosenchor_verify[_<Karte>].txt`. Vorher: `Config\DefaultEngine.ini` umschalten und das Ergebnis überschreiben – beides macht einen Kartenvergleich unmöglich. Gemessen: ein Kartenname, den es nicht gibt, endet auf **Exit 3** und nicht auf 5 – das Skript bricht mit `RuntimeError: Karte nicht geladen` ab und schreibt nichts, also greifen die Marken 4/5 gar nicht erst; die Ursache steht als Traceback im Log.
+### Tool quirks in this build
+- Preview keeps the page's JS context across preview_navigate: monkeypatched window globals (e.g. window.scrollTo) survive navigation and silently eat later interactions — `location.reload()` via preview_evaluate resets them. Top-level `let`/`const` of the page are invisible to preview_evaluate (new Function scope); reference only DOM nodes or window properties.
+- code_search is broken (vendored rg.exe missing, ENOENT) → use `find`/`grep` via run_terminal_command or read_files instead.
+- A UCLASS header without its matching .cpp breaks the module at LINK time (constructor never defined); the error can look unrelated — check for orphaned headers (e.g. dropped mid-work) before deep compile debugging.
+- File tools accept absolute paths OUTSIDE the project root (e.g. C:\Users\HP\Documents\...) despite project-root scoping.
+- Serve the player/recorder with `python _analyse/range_server.py 8791` from `Audioaufzeichnungen` (takes a port arg; binds 127.0.0.1). Plain `python -m http.server` does NOT work here: Python 3.14.7 stdlib ignores Range headers (200 full-file, no 206) → Chrome media seeks silently reset to ~0 (looks like a player/SW bug, is the server). Detached launches can die silently (empty log) — verify the listener (netstat grep "abh" on German Windows, not "LIST").
+- Replacing a registered preview whose pid is the dev server can kill that server ("dev server stopped responding while the previous preview was being released") — after a failed replace, restart the server before re-registering.
+- preview_navigate to a same-page hash does NOT reload (hashchange on the live page); use `location.reload()` via preview_evaluate for a true reload. Harness round trips between preview_evaluate calls cost ~30-70 s of wall time — never infer playback rate from probe-to-probe deltas; read time state inside one evaluate with a short Promise+setTimeout (≤1.5 s, longer times out at 10 s).
+
+### Reusable assets
+- German audio-transcription pipeline (chunked, resumable, 2× parallel workers): C:\Users\HP\Documents\Audioaufzeichnungen\_analyse\ — worker.py + assemble.py; outputs Transkript.md / transcript_full.json / Analyse.md for "Aufzeichnung (2).m4a". Speaker labels: label_speakers.py (curated time-window map, role labels incl. "Unbekannt", OVERRIDES dict for sub-second boundary fixes) → transcript_with_speakers.json + speaker-prefixed Transkript.md. Speaker stats: Mutter ~67 % of words, Gesprächspartner:in ~22 %, Leo ~6 %, Vater (Telefon) ~1 %, Unbekannt ~3 %.
+- M1 pipeline (2026-09-03): `python _analyse/archiv.py process "<Audioaufzeichnungen/<Stem>.m4a>"` runs convert→transcribe→assemble→retranscribe+splice→label→build, skip-if-done, SHA-256 check via `archiv.py check <m4a>`; artifacts `_analyse/<Stem>/`, config `<Stem>.archiv.json` beside the m4a. `speaker_mode` default `unknown` = all "Unbekannt", `builtin` = embedded curated windows, `json` = ARCHIV_SPEAKER_FILE. Scripts are parametrized via ARCHIV_* env (worker: MODEL/CPU_THREADS/CHUNK_SEC/LANGUAGE/BEAM_SIZE; label: SRC/OUT/OUT_MD/TITLE/SPEAKER_MODE/SPEAKER_FILE/OVERRIDES_FILE; build: SRC/OUT/AUDIO/TITLE; retranscribe: WAV/WINDOWS_JSON).
+- M1 regression expectations: label rebuild keeps transcript_with_speakers.json byte-identical but changes Transkript.md's Duration line (computed 2:14:51 vs old hardcoded 2:16:35) — expected, not drift. Unit tests: `python -m unittest tests.test_archiv_lib -v` from _analyse.
+- M1 edges: silent recordings → 0 segments → label/build stats prints divide by zero (now guarded); `load_config` raises on unknown keys (plan's sample test contradicted this — typo-tolerant configs are dangerous); a failed step's outputs are deleted so resume re-runs it (mtime skips alone can't detect "failed after writing"). Post-migration player depth: AUDIO `../../../<Stem>.m4a`, recorder link `../../recorder.html` — the plan's "Tiefe unverändert" was wrong.
+
+## Alkis31 ist Alkis30: der Kartenvergleich (26.09.2026)
+
+Auftrag: „Alkis31 vermessen und vergleichen“. Alkis31 ist seit 22:09:08 als `ok`
+gebacken (2019 externe Pakete) und war nie gemessen worden. Ergebnis: **inhaltlich
+dieselbe Karte** – ein weiterer Bake derselben Daten aendert nichts messbares.
+
+- **`Saved/BuildHistory/CityBuilds.csv`:** Alkis28..31 sind in ALLEN Spalten
+  zeichengleich (125024 Strassensegmente, 22227 Kreuzungen, 104459 Gebaeude,
+  52690 Schilder, 4033 Raster, 1433829 Regions-Assets, 2010 Chunks, 500 m).
+  Unterschiedlich sind nur Zeitstempel, Dauer (1075,7 s gegen 1172,9 s) und
+  MapPath. Zwischen den beiden Bakes wurde kein Quelldatenbestand geaendert –
+  die 97 s Unterschied sind Sache der Maschine, nicht der Karte.
+- **Paketvergleich ganz ohne Engine** (`find Content/__ExternalActors__/Maps/<Karte>
+  -printf '%s %P'`): 2019 Pakete je Karte, **2016 davon bytegleich gross**,
+  Gesamtdifferenz 462 567 Byte = 0,024 %. Eine 22-Paar-Stichprobe mit `cmp -l`
+  ergibt konstant 274–298 abweichende Byte, unabhaengig von der Paketgroesse
+  (2,4 kB bis 2,9 MB) – das ist genau der Kartenname plus die Actor-GUIDs.
+  Achtung: die Paarung nach Groessenrang ist bei gleich grossen Paketen
+  unzuverlaessig (zwei Zellen 25886 Byte lagen 6 Ränge auseinander, 35 %
+  „Unterschied”); richtig ist, in der Nachbarschaft nach dem Minimum zu suchen
+  (dann 377 Byte).
+- **Die drei Groessen-Ausreisser sind die zwei Riesen-Zellen:** 110 MB
+  (−441 527 B) und 1,19 GB (−21 045 B); dort stimmen 56–58 % der Byte nicht,
+  die Gesamtsumme aendert sich aber nur um 0,04 %. **Kontrollversuch Alkis29 gegen
+  Alkis30 zeigt dasselbe Bild** (56 % abweichend, +2589 B) – die Streu-Reihenfolge
+  dieser Zellen ist pro Bake anders, ihr Inhalt nicht. Wer die %-Zahl als
+  Inhaltswechsel liest, zieht den falschen Schluss.
+- **Ankermessung, beide Karten, dasselbe Werkzeug, zwei Minuten auseinander**
+  (`Toolserify_anchor.cmd Alkis31` bzw. ohne Argument): je **2010 Zell-Actors,
+  23799 leere Komponenten, 0 am Kartenursprung**, 82-zeilige Ergebnisse, die sich
+  nur im Kartennamen und in der Reihenfolge der Beispielzellen unterscheiden
+  (`Saved/Diagnose/anchor_verify.txt`, `anchor_verify_WiesbadenCity_Alkis31.txt`).
+  Die Zeile `Bounds-über-Ursprung: 2010 von 2010` bleibt in beiden ein
+  Commandlet-Artefakt (unge ladene Meshes melden Punkt-Bounds bei 0,0,0).
+- **Nebenbefund aus dem Alkis31-Spielstart** (`Saved/Logs/WiesbadenReal.log`,
+  21:20 UTC = 23:20 lokal): `GenerateStreaming for 'WiesbadenCity_Alkis31' took
+  12.0 sec`, 27 geladene Zellen am Start – und `Dennos Laden: keine Hauswand von
+  Sedanplatz 5 nach 30 s`. Der Laden fehlt also auch auf Alkis31; das ist kein
+  Karten-, sondern ein Code-Problem (`AWiesbadenDennoShop` ist ein Laufzeit-Actor
+  aus `GameMode.cpp`).
+- **Groessenbefund mit Sprengkraft:** 2 der 2019 Pakete machen **66,7 %** der
+  Nutzlast aus (1,19 GB + 110 MB von 1,96 GB). Das 1,19-GB-Paket ist der Grund,
+  warum ein Bake ~20 min dauert, warum `Content/__ExternalActors__/` nie
+  klonfest wird und warum ein Kartentest auf der Platte so lange braucht.
+
+**Empfehlung: Alkis30 bleibt die Standardkarte.** Es gibt keinen gemessenen
+Unterschied, und jede weitere Kartenumstellung verschlechtert die klonfeste Lage
+(`.umap` untracked, `__ExternalActors__` gitignored). Alkis31 kann als Reserve
+liegen bleiben – sie kostet 1,96 GB Platz und sonst nichts.
+## Ka-52: der Hubschrauber (26.09.2026)
+
+Auftrag: das angehängte Modell als spielbaren Kamow Ka-52. Gebaut sind
+Flugbeleuchtung, zwei starke Suchscheinwerfer, ein sichtbares Cockpit,
+3rd-Person- und Flugkamera, synchron gegenläufige Koaxialrotoren auf der
+Rotorstangenachse, Bordgeschütz, Xbox-Belegung und Respawn auf dem
+Helipad des Sebbotower. Belege: `Saved/Diagnose/ka52/`.
+
+### Das Modell ist ein 1-Mesh-Fuser - das Projektmodell ist der echte Ka-52
+
+Das **angehängte** GLB (`military helicopter 3d model.glb`, 1 007 915 Verts /
+1,9 Mio. Tris in EINEM Mesh) ist eine AUSSENansicht und zum Zerlegen
+unbrauchbar. Das Projektmodell `Content/Data/Raw/Ka52/ka52.glb` (6 Teile,
+Echtmaß) ist der verwendete Ka-52. Sechs Meshes sind importiert
+(`Fuselage`, `Rotor_Upper`, `Rotor_Lower`, `Nav_Red`, `Nav_Green`,
+`Strobe_White`) plus `M_Ka52PBR`.
+
+**Die Modellachsen:** Länge = **Y**, Nase = **-Y**. Belegt über echte
+Vertexdaten (`Tools/ka52_fbxlage.py`): Heckfinner (Ende 66 cm breit,
+Oberkante 295 cm) und Strobe liegen bei Modell-+Y, die Nase (189 cm breit,
+Oberkante 160 cm) bei Modell--Y. Rumpf X -438..+433, Y -580..+826, Z 0..295.
+Strobe Y +811..+829 / Z 281..299, Nav_Red X +426..+444,
+Nav_Green X -444..-426 (beide Y 41..59, Z 151..169).
+
+**ModelYaw = +90, nicht -90.** Mit -90 zeigte das Heck nach vorn, der
+Hubschrauber flog rueckwaerts (Nase bei X = -7,1 m statt +7,1 m; Beweisbild
+`flugrichtung.html`). Nebeneffekt von +90: Modell-+X (Steuerbord, rot) wird
+Welt-+Y - also rot rechts, gruen links.
+
+### Kabine und Kanone kommen aus Blender, nicht aus dem Import
+
+Das Rumpf-Asset hat **keine** Kabine: im Spiel sieht man in einen leeren
+Kasten, sobald die Kamera-Komponente den Rumpf ausblendet. Gebaut wird sie
+in `Tools/Blender/build_ka52_cockpit.py` (Boden, Schott, Seitenwaende,
+Kanzelholm, zwei Tandemsitze, zwei Pulte mit Schirmen, Zyklikbuegel,
+Kollektivhebel, Pedale, Mittkonsole) und als **zwei getrennte FBX**
+exportiert nach `Content/Vehicles/Ka52/SM_Ka52Cockpit` (am Rumpf, **nicht**
+in `AddCockpitHiddenMesh` - die Kabine muss beim Ausblenden des Rumpfes
+sichtbar bleiben) und `SM_Ka52GunTurret` (drehbarer Turm auf Modellpunkt
+360, -230, 95).
+
+Fuenf Fehler, die am 26.09. je einzeln einen Lauf gekostet haben - alle im
+Blender-Skript kommentiert und in `ka52_export_bericht.txt` belegt:
+
+1. **`bpy.ops.object.select_all(action="SELECT")` nimmt die GANZE Szene.**
+   Beim Join der Kanone war die fertige Kabine mit ausgewahlt und wurde in
+   den Pylon gejoint. Ergebnis: ein FBX mit einem Mesh `Gun_Turret`, darin
+   die Kabine. UE importierte ein einziges Asset, die Kabine fehlte im
+   Spiel, die Kanone war mit Sitzzeug gefuellt. Loesung: `nur_join()` joint
+   nur noch die eigene Collection.
+2. **Zwei Meshes in einer FBX ergeben kein `SM_`-Namenschema.** Der
+   UE-Namensgeber nimmt den Mesh-Namen, nicht den Dateinamen, und der
+   StaticMesh-Import fuehrt zusammen. `destination_name` auf einem
+   `AssetImportTask` erzwingt den Namen nur bei einer Datei je Mesh.
+   Loesung: zwei FBX, je ein Mesh.
+3. **`unit_settings.scale_length` fehlt -> alles 100x zu gross.** Blender
+   rechnet in Metern, das Skript in Zentimeter-Zahlen. Ohne
+   `scale_length = 0.01` kam die Kabine als **162 m breites** Asset an
+   (Y -50400..-23500). Mit 0.01 sind es 162 cm.
+4. **Der FBX-Export dreht die Y-Achse** - bei `axis_forward="-Y"` **und**
+   bei `"Y"`. Die Kabine stand bei Y +231..+500, also ueber dem Heck statt
+   in der Nase. Spiegel an der Y-Achse beim Export - aber um den
+   **Welt**ursprung: `ob.matrix_world.inverted() @ S @ ob.matrix_world`.
+   Ein reines `S` auf den Mesh-Daten spiegelt am **Objektursprung** (die
+   Kabine sitzt auf Y -367, dem Boden) und ergab Y -504..-235 statt
+   -231..500. Danach `bmesh.ops.recalc_face_normals`: die Spiegelung hat
+   negative Determinante und dreht die Umlaufrichtung der Dreiecke.
+5. **Eine geneigte Tafel braucht eine gemeinsame Basis.** Mit +24 Grad um X
+   schaute die Instrumententafel in die Nase, die Schirme steckten *in* der
+   Tafel und die Pilotenvorschau war ein schwarzes Rechteck. Richtig ist
+   -24 Grad (Flaeche zeigt zum Piloten, +Y) und `tafel_punkt()` fuer alles,
+   was auf der Tafel sitzt.
+
+**Gekoppelte Messkette, die den Zustand belegt statt zu behaupten**
+(`ka52_export_bericht.txt` + `import_ka52_cockpit_ergebnis.txt`):
+
+| Stufe | Cockpit X | Cockpit Y | Cockpit Z |
+|---|---|---|---|
+| Blender-Szene (Absicht) | -81..81 | **-500..-231** | 71..220 |
+| FBX nach Rueck-Lesung | -81..81 | +231..+500 | 71..220 |
+| UE-Asset | -81..81 | **-500..-231** | 71..220 |
+
+### Der Import meldet nach Datei, nicht nach stdout
+
+`Tools/import_ka52_cockpit.{py,cmd}` und `Tools/import_ka52_audio.{py,cmd}`
+schreiben **nach `Saved/Diagnose/ka52/*_ergebnis.txt`**, und der CMD wertet
+diese Datei aus. Prints aus `-run=pythonscript` erreichen weder Konsole noch
+Log (AGENTS.md) - der erste Lauf meldete "Import unvollstaendig", obwohl die
+Engine 5 s lang gearbeitet hatte. Jeder Lauf prueft ausserdem die **Masse**
+der gelandeten Assets; ein Import, der ein Mesh an (0,0,0) bringt, sieht
+sonst aus wie Erfolg.
+
+### Bordgeschoetz und Suchscheinwerfer folgen dem Blick
+
+`Gun->Aim(0,0)` stellte den Turm in Ruhelage nach vorn: man konnte den
+Horizont drehen und der Schuss ging trotzdem geradeaus. Jetzt
+`Gun->AimAt(Akteur + Blickachse * ZielDistanzCm)` (20 000 cm). Der endliche
+Abstand ist beabsichtigt - bei 2 km Zieldistanz faellt der Zielpunkt in die
+Nase und alle Winkel zwischen Muendung und Ziel liegen unter der
+Wahrnehmungsschwelle, der Turm schiene still.
+
+- **Rohrrichtung:** Das importierte Rohr zeigt in Modell-**+X**, der Heli
+  fliegt nach Modell-**-Y**. `TurretYaw` hat deshalb eine Ruhelage von
+  -90 Grad, sonst schiesst die Kanone im Stand nach Steuerbord.
+- **Muendung:** `MuzzlePoint` bei (210, 0, **18**) - das Rohr sitzt im Asset
+  auf Local-Z 18. Mit (210,0,0) stand die Muendung 18 cm daneben und der
+  Muendungsfeuer lief neben dem Lauf statt aus ihm.
+- **Suchscheinwerfer:** `SetSearchlightTarget(Weltpunkt)` rechnet im
+  Modellraum (`ModelSpace->GetRelativeRotation().UnrotateVector`) auf die
+  Nase als Bezug. Mit Handwerten (`SetSearchlightAim`, -1..1) kann der Kegel
+  Nase und Pylon nicht gleichzeitig treffen - die sitzen 2,6 m auseinander.
+
+### Koaxialrotor: "schnell gegeneinander", nicht "zwei Rotoren"
+
+`ComputeCoaxialRotorRotation()` liefert beide Rotationen aus **einer**
+Rechnung (gleicher Betrag, entgegengesetztes Vorzeichen). Zwei unabhaengige
+Ausdruecke laufen irgendwann getrennt gepflegt. Der Test
+`WiesbadenReal.Vehicles.Ka52Ausstattung` prueft Betrag, Gegen-Sinn, keinen
+Roll-/Nickanteil, Stillstand bei 0 rpm und beide Naben auf derselben
+XY-Position (< 5 cm Abstand, 100..130 cm Hoehenabstand).
+
+### Flugsounds sind synthetisiert, nicht prozedural im Tick
+
+`Tools/make_ka52_audio.py` (numpy) erzeugt vier **echte WAV-Dateien**:
+Rotorblatt-Ticken, TV3-117-Turbine, 2A42-Schuss, Fahrtwind. Der prozedurale
+Pfad (`FWiesbadenHelicopterAudioModel`) bleibt Rueckfall: eine
+Saegezahn-Approximation ohne Transienten hoert man sofort als Rechner - und
+gerade die Transienten *sind* der Hubschrauberlaut.
+
+- **Schleifen sind periodisch gebaut**, nicht gekreuzt: das Rauschen entsteht
+  im Spektralbereich (kein Fensterende = keine Naht), die Blattschlaege
+  sitzen auf einem Takt mit Hannfenster. Der Generator **misst** die Naht
+  selbst (Nahtsprung / typischer Sample-Schritt < 2) und schreibt die Zahl
+  in den Bericht.
+- **Der Rotor-Takt steht auf 30 Hz**, nicht auf 15: oben *und* unten je drei
+  Blaetter, halber Versatz, zusammen der doppelte Blattschlag. Das ist der
+  Unterschied zum normalen Hubschrauber und steht als Messwert im Bericht.
+- **Bezugsdrehzahlen 300 / 600 rpm.** Die Pitch-Teiler in
+  `UpdateAssetAudio()` sind Bezugsdrehzahlen, keine Einheiten. Mit den
+  aelteren Teilern 560 / 3800 lag der Ton bei Reiseflug (350 / 700 rpm) eine
+  Oktave zu tief.
+- **Die Schleife sitzt am Asset, nicht nur im WAV-Header** - UE liest sie
+  aus dem `USoundWave`. Der Import erprobt `looping` und `bLooping` und
+  **schlaegt fehl**, statt "unbekannt" als Erfolg zu melden.
+
+### Xbox-Belegung des Ka-52 (ReadInput / ReadDeviceInput)
+
+| Funktion | Tastatur | Xbox-Controller |
+|---|---|---|
+| Nicken (zyklisch) | W / S | Linker Stick hoch / runter |
+| Rollen (zyklisch) | A / D | Linker Stick links / rechts |
+| Gieren (Pedal) | Q / E | Rechter Stick links / rechts |
+| Kollektiv | Leertaste oder Shift hoch, Strg runter | RT hoch, LT runter |
+| Triebwerk an/aus | G | **RB** (nicht Y: Y ist projektweit Ein-/Aussteigen) |
+| Bordgeschoetz feuern | Linke Maustaste | **RT** rechts (ueber 0,35) |
+| Suchscheinwerfer | L | D-Pad hoch |
+| Landlicht | B | D-Pad runter |
+| Kamera umschalten (Follow/Orbit/Cockpit) | C | - (Maus / rechter Stick) |
+| Aussteigen | F | Y |
+
+Sticks: Totzone 0,15, Expo 0,72. Der groessere Betrag zwischen Tastatur- und
+Stickwert gewinnt - so stoert eine ruhende Eingabequelle die andere nicht.
+
+### Wiederverwendbar
+
+- **`Tools/contact_sheet.py`** - macht aus beliebigen Bildern eine
+  HTML-Uebersichtsseite mit eingebetteten Data-URLs. Messungen sind nur
+  belastbar, wenn das Bild daneben liegt; eingebettet bleibt die Seite
+  eine Datei, die man verschieben kann, ohne dass die `<img src>`
+  brechen (Saved/ ist nicht versioniert).
+
+### Stand 26.09.2026: Build gruen, Test gruen
+
+`Tools\build_gate1.cmd`: **Exit 0** (`Saved/Logs/wb_build_gate1.log`).
+`WiesbadenReal.Vehicles.Ka52Ausstattung`: **Success**, `TEST COMPLETE. EXIT
+CODE: 0` (`Saved/Logs/wb_test_ka52.log`). Die ganze Fahrzeuggruppe
+`WiesbadenReal.Vehicles`: **72 Tests gruen, 0 Fehlschlaege**.
+
+**Ein offener Editor blockiert den Build, und das ist hier der Normalfall:**
+laeuft `UnrealEditor.exe` mit aktivem Live Coding, bricht UBT mit
+"Unable to build while Live Coding is active" und `EXITCODE 6` ab - ohne
+Compilefehler im Log, was wie ein Rechnerfehler aussieht. `Tools\
+ka52_wait_build.cmd` wartet auf das Ende des Editors (prueft `cmd.exe` UND
+`LiveCodingConsole.exe`, und noch einmal nach 10 s, weil in dieser Pause
+manche den Editor wieder oeffnen) und baut danach Gate 1 plus den Test;
+Ergebnis nach `Saved/Diagnose/ka52/build_test_ergebnis.txt`.
+
+  **FALLE DABEI (26.09.2026, behoben):** das Skript benutzte `tasklist //FI` -
+  die doppelten Schraegstriche sind eine Git-Bash-Konvention und werden in
+  einer .cmd zu `\FI`. Die Abfrage lieferte daraufhin einen Fehler, `find`
+  fand nichts, und das Skript meldete "Editor zu", waehrend der Editor lief -
+  es hat in vier Laeufen nie gewartet. In einer .cmd gehoeren **einfache**
+  Schraegstriche hin; `//FI` sieht in der Bash-Zeile daneben richtig aus und
+  ist in der Batch-Datei falsch.
+
+**Noch offen**
+
+- **Rotorachse: behoben, nicht festgehalten.** Die alte Notiz "Scheibenmitte
+  Rotor_Upper (179,4; -5,6) gegen Rotor_Lower (186,1; -4,7) = 6,66 cm" war
+  **zweimal falsch**: Sie verglich die Mitten der Bounding Box, und die
+  liegen 1,80 m neben dem echten Drehpunkt. Der Drehpunkt eines Dreiblatt-
+  rotors ist der **Schwerpunkt** der Vertexmenge (drei gleiche Blaetter im
+  120-Grad-Abstand machen die Menge 3-fach-symmetrisch), und der liegt bei
+  **(-0,19; +2,59) cm** (oben) und **(+4,92; -2,06) cm** (unten) - beide fast
+  auf dem Modellursprung, aber der untere 5,4 cm daneben.
+  Korrigiert an **einer** Stelle: `AWiesbadenHelicopter::ComputeRotorMountOffset`
+  (Versatz.xy = -(ModelYaw * Drehpunkt).xy), beide Rotoren gehen durch
+  dieselbe Funktion, der Hub-Node bleibt unangetastet, der Gegenlauf und der
+  Ho henabstand von 118,5 cm kommen aus `ComputeCoaxialRotorRotation`
+  unveraendert. Die Zahlen stehen in `GetRotorDrehpunktCm(bool bUnten)` -
+  bewusst **nicht** als Konstruktor-Lokale, damit der Test dieselbe Quelle
+  liest statt einer zweiten Abschrift.
+  **DREI VERFAHREN, DIE NICHT TAUGEN** (alle drei mit Zahlen in
+  `Tools/ka52_rotorachse.py` dokumentiert): (1) Bounding-Box-Mitte, 1,80 m
+  daneben; (2) Kreisfit ueber die Blattspitzen, Streuung 1,12 m, weil das
+  Mesh keine ebene Kreisflaeche ist; (3) zusammenhaengende Teile, 4755
+  Bruchstuecke, weil das Mesh nicht verschmolzen ist. Geblieben ist die
+  3-fach-Rotationssymmetrie, mit einem Restfehler als Guete: 4,2 mm (oben)
+  und 6,3 mm (unten) gegen **375 mm** an der Kontrollstelle (Box-Mitte).
+  Ein Verfahren, das ueberall "gut" meldet, prueft nichts.
+- **Messgrundlage ist die Importquelle, NICHT das Asset** - und das ist der
+  wichtigste Satz dazu. `Content/Vehicles/Ka52/Rotor_*.uasset` traegt Nanite;
+  die klassischen LOD-Buffer haben **773 bzw. 792 Dreiecke** gegen 208 009
+  bzw. 221 119 in `Content/Data/Raw/Ka52/ka52_ue.fbx`, und die Achse dieses
+  Ersatzdatensatzes liegt **3,4 bzw. 4,9 cm** daneben. Wer den Korrekturwert
+  am Asset misst, korrigiert gegen einen Fehler. Belegt in
+  `Saved/Diagnose/ka52/rotorachse_fbx.txt` (FBX) neben `rotorachse.txt` (GLB),
+  beide mit Restfehler und Kontrollstelle.
+- **Drei Tests, weil ein Test hier nicht reicht** (Auftrag: "Achsabweichung
+  als Testbedingung"):
+  1. `WiesbadenReal.Vehicles.Ka52Ausstattung`, Abschnitt 5b: Rechnung
+     **exakt** (Versatzabweichung 0,00000 cm, Drehpunkt nach der Kette
+     (-0,00000, 0,00000) cm) und Geometrie mit der **Aufloesung des
+     Datensatzes** - hergeleitet aus dem Restfehler, nicht geraten:
+     `4 x Restfehler + 2 cm`. Die Geometrie allein taugt nicht: bei 773
+     Dreiecken ist eine 2-cm-Toleranz unter der Aufloesung des Datensatzes
+     und wuerde den Ersatzdatensatz pruefen statt des Flugmodells.
+  2. `WiesbadenReal.Vehicles.HelicopterModell`: dieselbe Pruefung an beiden
+     Rotoren, gegen dieselbe Funktion. Dieser Test behauptete vorher
+     "XY-Versatz ~0" - die alte, widerlegte Annahme. Mit der Korrektur
+     haette er bei der unteren Scheibe (5,34 cm) gefeuert; er ist auf die
+     Korrektur umgestellt.
+  3. `Tools/test_ka52_rotorachse.py` (Python, ohne Editor): haelt die im
+     Pawn eingetragenen Zahlen gegen den Messbericht und prueft, dass die
+     Korrektur beide Scheiben exakt auf (0, 0) legt und die Nabenhoehen
+     118,5 cm bleiben. Faellt, wenn jemand am Modell oder am Wert etwas
+     aendert.
+- **Zwei Kontrollstellen im Messtest, weil eine nicht reicht.** Die weite
+  (Bounding-Box-Mitte, 179 cm daneben) sättigt: dort findet ein gedrehter
+  Punkt keinen Nachbarn mehr, der Restfehler ist der Deckel (50 cm) gegen
+  3,1 cm am Drehpunkt. Sie beweist "das Verfahren unterscheidet", nicht
+  "die Lage ist aufgelöst". Dafür die **nahe** Kontrolle: Restfehler in
+  5/10/20 cm Abstand, 3,13 -> 5,11 -> 6,55 -> 15,94 cm. Waere das Feld um
+  den Drehpunkt flach, waere auch die Angabe "am Mesh gemessen (0,99;
+  -0,58) cm" wertlos.
+- **Falle fuer spaeter:** der Nanite-Ersatzdatensatz hat 1303 Vertex und
+  sieht in jeder Hinsicht plausibel aus. Ein Test, der `LODResources[0]`
+  liest und eine schoene Zahl bekommt, hat nichts gemessen - die LOD
+  wird gegen den Authored-Bounds geprueft und der Befund kommt mit ins Log
+  (`Nanite an, 1 LODs, ... 773 Dreiecke`).
+- **Falle fuer spaeter:** `TestTrue` schweigt im Erfolgsfall. Die drei
+  Belegzeilen (Kontrollstelle, Rechnung, Messwerte) kommen darum ausdruecklich
+  als `AddInfo` - sonst steht in einem gruenen Log kein einziger Wert.
+- Nicht committet: alles Ka-52 liegt uncommitted im Arbeitsbaum. Fuer den
+  Build war nur `git add` der neuen **Quell**dateien noetig (adaptive
+  Non-Unity-Build nimmt `git status` als Arbeitsmenge, untracked wird nicht
+  gebaut); `Content/Audio/Ka52/` und die Ka-52-Assets sind weiterhin
+  untracked.
+- Spielprobe im laufenden Editor steht aus: Kamerawechsel C, Cockpit mit
+  ausgeblendetem Rumpf, Nachtfahrt mit den beiden Suchscheinwerfern,
+  Schuss auf ein Zeltdach.
+- Nicht committet: alles Ka-52 liegt uncommitted im Arbeitsbaum. Fuer den
+  Build war nur `git add` der neuen **Quell**dateien noetig (adaptive
+  Non-Unity-Build nimmt `git status` als Arbeitsmenge, untracked wird nicht
+  gebaut); `Content/Audio/Ka52/` und die Ka-52-Assets sind weiterhin
+  untracked.
+- Spielprobe im laufenden Editor steht aus: Kamerawechsel C, Cockpit mit
+  ausgeblendetem Rumpf, Nachtfahrt mit den beiden Suchscheinwerfern,
+  Schuss auf ein Zeltdach.
+
+## Bildbelege: Kabine, Abzug und synthetische Eingabe (26.09.2026)
+- **Die Cockpitaugen waren RICHTIG - die Fehldiagnose kam aus zwei Rahmen.**
+  `CockpitOffset` wird im ACTORraum addiert (die Fahrzeugkamera haengt am
+  SceneRoot, der Cockpit-Socket an ihr), die Bounding Box des Kabinen-Meshes
+  ist MESSLOKAL. Man hatte (395, 34, 204) gegen (X -81..81) gestellt und
+  daraus "314 cm davor, in freier Luft" geschlossen. Im selben Rahmen:
+  Kabine Actorraum X 231..500, Y -81..81, Z 71..220, Augen 133 cm ueber dem
+  Boden, genau ueber dem zweiten Sitzkissen (X +9..+59, Y -371..-421). Der
+  Augpunkt sitzt im Pilotenplatz; `Tools/Blender/build_ka52_cockpit.py`
+  Zeile 409 rendert die Pilotenvorschau von (34, -392, 206) - dieselbe Stelle.
+  **Vor dem Vergleich immer nachrechnen, in welchem Raum die Zahl steht.**
+- **Warum trotzdem keine Kabine im Bild war: Rueckseitenverwurf.** Die Huellle
+  ist geschlossen (0 nicht-gepaarte Kanten) und NICHT einheitlich gewickelt -
+  vom Pilotenauge zeigen 166 der 342 Flaechen vom Auge weg, 130 ihm zu. Mit
+  einseitigen Materialien bleibt nur die Innenflaeche der gegenueberliegenden
+  Wand: ein flaches graues Band. Behoben in `WiesbadenHelicopter.cpp`: der
+  Konstruktor setzt `TwoSided` am UMaterial der vier Kabinen-Stoffe.
+  ACHTUNG: die vier Instanzen teilen sich EIN Elternmaterial
+  (`FBXLegacyPhongSurfaceMaterial`), das im transienten Interchange-Cache
+  `/InterchangeAssets/Materials` liegt und nicht speicherbar ist - die
+  Umstellung muss also zur Laufzeit erfolgen, ein Editor-Klick wäre nach dem
+  naechsten Import wieder weg. `Tools/ka52_kabine_zweiseitig.py` ist der
+  Versuch via Skript; es speichert die Instanzen, nicht das Elternmaterial.
+- **`ReadDeviceInput` hatte keinen Aufrufer.** Die Funktion las den Abzug und
+  meldete die Flanke, wurde aber nirgends aufgerufen: die Bordkanone war im
+  Spiel ueberhaupt nicht ausloesbar (39 s Versuch, 0 Schuesse, kein
+  "Munition leer"). Jetzt aus `Tick` aufgerufen, nachdem die Flugphysik.
+- **Neue Waffe im Test:** Ka52GeraetTest misst die Augen gegen die Asset-Box
+  und prueft die Aughoehe ueber dem Kabinenboden (90..150 cm). Faellt der
+  Import oder die Konstante auseinander, faellt der Test.
+- **Diagnose im Log:** `MeldeKabine()` meldet bei jedem Moduswechsel
+  Sichtbarkeit, OwnerNoSee, Grenzen und ob die Kabine je gezeichnet wurde
+  (`zuletztGezeichnet`). Ohne das sahen "nie gezeichnet" und "an anderer
+  Stelle" im Bild gleich aus.
+- **Kurztasten brauchen 300 ms.** UEs Eingabestapel enthaelt nur Tasten mit
+  Ereignis im laufenden Frame; ein 90-ms-Druck kann dazwischenfallen. Ein
+  Lauf blieb im Modus 0 (Follow) und lieferte ein Bild, das wie ein
+  Cockpitbild aussah. Der Aufnahmefahrer prueft den Modus jetzt im Log
+  ("Fahrzeug-Kameramodus: N") und knipst erst danach - sonst beweist das Bild
+  nichts.
+- **Gehaltener Abzug bleibt unmoeglich** (siehe unten): keybd_event KEYDOWN
+  ohne KEYUP gilt einen Frame, mouse_event geht an das Fenster unter dem
+  Zeiger, WM_LBUTTONDOWN an das Fenster direkt blieb wirkungslos. Fuer
+  Dauerfeuer braucht es eine wiederholte Tastenfolge im Spiel.
+
+## Aufnahme-Faehigkeit: was bis 26.09.2026 fehlte (Bilderserie, Konsolenweg)
+- **`-WbShotSteps=<plan>` fahren eine ganze Sitzung in einem Plan.** Schritte:
+  `modus=N` (Fahrzeugkamera 0 Folge / 1 Orbit / 2 Cockpit), `hold` (ein Bild
+  aus der aktuellen Sicht), `turm` (Hubschrauber auf den Helipad des
+  Sebbotower, neu: `WbHeliTurm`). Bilder landen als `WbSeries_000 ...`.
+  Derselbe Wortschatz funktioniert ueber `-WbShotPoseFile` (eine Zeile je
+  Schritt) - damit braucht man gar keine Kommandozeile fuer den Plan.
+- **TRENNER IST DAS PLUSZEICHEN, NICHT DAS KOMMA.** `FParse::Value` haelt den
+  Wert am ersten Komma an: aus `-WbShotSteps=modus=2,hold,hold` wurde
+  "modus=2", der Plan hatte EINEN Schritt und die Sitzung lieferte ein Bild.
+- **CVar setzen: Leerzeichen, nicht Gleichheitszeichen.** `wb.HeliKamera 2`
+  wirkt, `wb.HeliKamera=2` bleibt wirkungslos. Auf der Kommandozeile
+  wiederum darf kein Leerzeichen im Argument stehen (Start-Process zerschneidet
+  es) - dort hilft nur der Weg ueber den Ausfuehrungsplan.
+- **C++-Fallstricke, alle am 26.09.2026 gemessen:** `TAutoConsoleVariable` hat
+  kein `Set` (sondern `AsVariable()->Set(...)`); `APlayerController::ConsoleCommand`
+  nimmt in 5.8 `(FString, bool)` und liefert FString;
+  `UMaterial::CacheResourceShadersForRendering` ist PRIVAT - der oeffentliche
+  Weg fuer eine Shader-Aenderung zur Laufzeit ist `PostEditChange()`.
+- **Die Motorsperre kennt kein "Ende".** Modi: Start / Nehmen / Freigeben /
+  Status. Ein Skript, das `-Modus Ende` aufruft, haelt die Sperre und blockiert
+  den naechsten Lauf - auch den des Menschen. `Tools/ka52_wait_build.cmd` nimmt
+  die Sperre und gibt sie NIE frei; das ist nach jedem Lauf zu pruefen.
+- **Ein "ERGEBNIS: OK" vom Build-Gate beweist nichts.** Am 26.09.2026 lief der
+  Wartelauf 4 s, meldete Exit 0 und Ergebnis OK - die DLL war 28 Minuten aelter
+  als die Quellen. Massgeblich ist der Zeitstempel der
+  `Binaries/Win64/UnrealEditor-WiesbadenReal.dll`.
+- **Ein haengender Prozess war nie der Blocker - die Sperre und ein laufender
+  Editor schon.** Am 26.09.2026 11:00-11:25 liefen `Automation RunTests` UND
+  eine fensterliche `-game`-Sitzung mit 21 und 25 Bildern **neben** dem
+  haengenden `verify_anchor_state`-Prozess (PID 43820) - problemlos. Der
+  haengende Prozess blockierte weder Build noch Test. Was blockierte: die
+  Motorsperre (Label `messlauf`) und ein lebender `UnrealEditor.exe`. Vor dem
+  Warten also BEIDES pruefen, nicht nur die Prozessliste.
+- **.NET nummeriert unbenannte Regex-Gruppen VOR den benannten.** Ein Muster
+  mit `(?<t>...)`, `(?<ms>...)` und einem nackten `(\d+)` liefert
+  `$Matches[1]` = der nackte Wert, `$Matches[2]`/`[3]` = t/ms. Der Aufnahmefahrer
+  las `$Matches[3]` (leer) und schrieb `[int]$null = 0` in JEDE Belegdatei:
+  "Kameramodus 0" auf allen 21 Bildern, obwohl im Log 0/1/2 stand. Nur mit
+  BENANNTEN Gruppen (`(?<modus>\d+)`, `$Matches['modus']`).
+- **Zwei Zeitzonen in derselben Auswertung:** die Engine loggt in UTC, die
+  Windows-Dateizeiten sind lokal (im Sommer 2 h Unterschied). Ein Vergleich
+  "Logzeit <= Bildzeit" ist ohne Umrechnung immer wahr und liefert damit den
+  LETZTEN Zustand fuer jedes Bild. `[datetime]::SpecifyKind($t,'Utc').ToLocalTime()`
+  bzw. in Python `tzinfo=timezone.utc` vor `.timestamp()`.
+- **Ein haengender `UnrealEditor-Cmd.exe` sperrt mehr als den Editor-Slot.** Am
+  26.09.2026 lief PID 43820 seit dem 25.09. 22:31 (`-run=pythonscript
+  Tools/verify_anchor_state.py`, 1 Thread, 6 MB, 100 % eines Kerns, CPU-Zeit
+  waechst sekuendlich). Der Editor war zu, die Engine trotzdem nicht benutzbar:
+  der Prozess haelt das Modul-DLL offen, UBT kann nicht linken, und eine zweite
+  Engine daneben ist im Projekt als Absturz dokumentiert. Das Log endete um
+  04:11 mit "LogExit: Exiting", die Ergebnisdatei Saved/Diagnose/
+  anchor_verify.txt stammt aus 00:24 - der Lauf hat also NICHTS geliefert und
+  haelt trotzdem die Engine. **Vor dem Warten fragen: liefert der Prozess
+  ueberhaupt noch etwas, und schreibt er ueberhaupt eine Logzeile?**
+- **`-WbTime` ist die Tageszeit in STUNDEN, nicht die Laufzeit.** Der
+  Selbstabbruch heisst `-WbQuitAfter=<Sekunden>`. Ein Aufnahmefahrer ohne
+  `-WbQuitAfter` laesst die Engine belegt, wenn er stirbt.
+- **Live Coding sperrt den Build** (auch ohne sichtbaren Editor
+  `LiveCodingConsole.exe`). Bauen erst, wenn BEIDE weg sind.
+- **Ein Start mit dem Ordner statt der .uproject** laeuft scheinbar (der Editor
+  erscheint im Task-Manager), schreibt aber kein Log und haelt die Sperre. Der
+  Aufnahmefahrer prueft die Projektdatei jetzt vorher.
+- **Der Aufnahmefahrer belegt JEDES Bild mit dem Kameramodus aus dem Log**
+  (Textdatei neben dem PNG) - ein Follow-Bild mit Cockpit-Titel beweist
+  nichts, genau das ist am 26.09.2026 zweimal passiert.
+
+## Gate B (Besitz): der geteilte Arbeitsbaum gehoert nicht automatisch mir (27.09.2026)
+
+Vier Tage lang lagen fremde Dateien uncommitted im Arbeitsbaum, der Baum stand
+auf dem Wegwerf-Testbranch `wt-gatetest` eines anderen Threads, und
+`git status` sah aus wie die eigene Arbeit. `git commit` nimmt ALLES mit, was
+vorgemerkt ist - git kennt keine Threads, und `vor_dem_commit.py` kann das erst
+seit dem 27.09.2026.
+
+* **Anspruch nehmen:** `python Tools/vor_dem_commit.py --besitz-ansprechen
+  Tools/ Source/WiesbadenReal/World/SebboHq*.cpp`. Steht in `.git/wb_besitz.json`
+  (gemeinsames .git-Verzeichnis, von keinem Commit erfasst, fuer alle
+  Worktrees identisch). `--besitz-zeigen` listet, `--besitz-freigeben` gibt
+  zurueck.
+* **Fremd heisst: anderer Branch ODER anderer Thread.** Nur den Branch zu
+  vergleichen war die erste Fassung - und der erste echte Lauf meldete
+  `gruen`, weil der fremde Thread auf demselben Wegwerf-Branch sass wie ich.
+  Ein Wegwerf-Branch identifiziert niemanden. Thread-Name aus `--thread`,
+  `WB_THREAD` oder `git config wb.thread`, sonst der Branchname.
+* **Ein toter Prozess gibt den Anspruch frei** (Hinweis, kein ROT). Die erste
+  Fassung blockierte auch verwaiste Ansprueche - eine Registry, die einen
+  abgestuerzten Thread ewig festhält, endet in `--no-verify` fuer alle, und
+  dann prueft gar nichts mehr. Eine kaputte Registry ist dagegen ROT: wer sie
+  loescht, schaltet genau das Gate ab, das ihn schuetzt.
+* **Gate B laeuft VOR dem Engine-Lock und vor Gate 0**, ohne Prozess. Beim
+  Push laeuft es NICHT (dort ist der Commit schon geschrieben) - sonst
+  koennte nach einem fremden Thread niemand mehr ausliefern.
+- **Zwei Fallen beim Erweitern, beide am 27.09. gemessen:** `Lauf.bericht()`
+  griff auf das Ergebnis-Objekt eines Gates OHNE Subprozess zu und endete mit
+  Traceback statt mit einer Ablehnung (`fertig is None` abpruefen). Und
+  `--thread` wurde geparst, aber nicht an `gates_fahren()` durchgereicht -
+  Besitz_gate ermittelte den Namen selbst, landete beim Branchnamen und wies
+  den Thread ab, dem die Arbeit gehoerte. Beides decken jetzt Tests in
+  `Tools/test_vor_dem_commit.py` (86 Tests in der Datei, 324 in der Suite).
+
+## Plattenplatz: der Waechter meldet, er loescht nicht von allein (27.09.2026)
+
+C: stand an diesem Tag bei **93 Prozent belegt (70 GB frei von 953)**. Der
+Grund war nicht das Projekt, sondern der Cache:
+
+    AppData\Local\UnrealEngine\Common\Zen\Data            152,6 GB
+    AppData\Local\UnrealEngine\Common\DerivedDataCache     97,1 GB
+
+Beides sind **Derivate** - sie entstehen beim Bauen und Cooken neu. Zen raeumt
+erst nach **14 Tagen Zugriffsalter** auf (`--gc-cache-duration-seconds
+1209600` in `[Zen.AutoLaunch]`), also ist der Cache **zeit-, nicht
+groessenbasiert** begrenzt und waechst unbegrenzt, bis ihn jemand wegraeumt.
+Nach dem Loeschen: 344 GB frei (64 Prozent).
+
+`Tools/platten_waechter.py` (+ `.cmd` fuer die Windows-Aufgabenplanung) meldet
+das kuenftig von selbst: unter 20 Prozent freiem Plattenplatz die groessten
+Fresser, jeder Pfad mit Grund, und die ausdruecklich **nicht** anfassbaren
+Gruppen im selben Bild. Im Commit-Gate laeuft er als **Hinweis, nicht als
+Gate** (0 s im gesunden Fall, `vor_dem_commit.py::platten_hinweis`).
+
+Drei Entscheidungen, die nicht selbstlaeufig sind:
+
+* **ALT ist nicht UNBENUTZT.** `WiesbadenReal\Saved\_aaa_source` (627 MB,
+  Ordner vom 03.09.) wurde am selben Tag fast geloescht - es sind die
+  CC0-Saetze von ambientCG, aus denen `aaa_import_materials.py` importiert und
+  auf die `roof_variation.py` direkt zugreift. Sie sind wieder da (alle 11
+  Saetze aus `Tools/aaa_materials.json` nachgeladen, 662 MB), aber die Lehre
+  ist die KLASSE: `cache` (loeschbar) / `ausgabe` (regenerierbar) /
+  `eingabe` (Werkzeug liest sie) / `geschuetzt`. Nur `cache` wird bei
+  `--reinigen` angefasst, zusaetzlich geprueft gegen die erlaubten Wurzeln.
+  `%TEMP%` steht **nicht** in der Liste: der Ordner enthaelt neben
+  Installerresten die Arbeitsdaten laufender Werkzeuge - ein ganzer Ordner
+  laesst sich nicht verantwortungsvoll einstufen.
+* **Eine halbe Messung ist keine Zahl.** Jedes Ergebnis traegt
+  `vollstaendig`; bei Budget-Ueberschreitung steht "abgeschnitten" in der
+  Zeile, und unvollstaendige Messungen werden **nicht gecacht** - sonst erbt
+  der naechste Aufruf eine zu kleine Summe und gibt sie als Bestand aus.
+* **Der Hinweis sperrt nie einen Commit.** Eine volle Platte ist kein Fehler
+  am Commit; ein Hook, der Commits verweigert, wird mit `--no-verify`
+  umgangen. Er geht darum auch nicht durch die Gate-Buchhaltung `Lauf`: die
+  Doppel in `test_vor_dem_commit.py` kennt nur echte Gates, und
+  `test_die_schnelle_stufe_haelt_nur_die_pipeline_gates` verlangt dort
+  weiterhin genau `Gate 0`.
+
+Belege: `Saved/Diagnose/plattenbericht.txt`, `Saved/Diagnose/plattenbericht.json`
+(30-Minuten-Cache), 43 Tests in `Tools/test_platten_waechter.py`.
+
+## Der Gate-Worktree haengt am HAUPT-Arbeitsordner, nicht am aufrufenden (27.09.2026)
+
+`gate_worktree.py` legt den Gate-Worktree unter `<Hauptordner>\.gate-worktree\WiesbadenReal`
+an. GEMESSEN am 27.09.2026: der Stammordner wurde aus `projekt.parent` gebildet,
+und in einem verlinkten Worktree ist DAS dessen Elternordner. Ein `git push` aus
+einem Worktree legte deshalb `.gate-worktree\.gate-worktree\WiesbadenReal` an - mit
+**0 verlinkten Stadtinhalten**, ohne `.uproject`, und Gate 0 wurde nach 11 Minuten
+Gate-Lauf rot.
+
+* **Quelle ist `git worktree list --porcelain`, erster Eintrag.** Bewusst NICHT
+  `rev-parse --git-common-dir`: das zeigt im Hauptbaum auf `<Projekt>\.git`, dessen
+  Elternordner der Projektordner selbst ist - der Stammordner landete dann INNEN
+  im Projekt statt neben ihm. Beide Varianten waren zuerst falsch, die um eine
+  Ebene entscheidet hier alles.
+* **Aus dem Gate-Worktree selbst wird der Push abgewiesen** (`ist_im_gate_worktree`),
+  Exit 1 mit dem Wegweiser zum Hauptordner: die Stadtinhalte sind dort Verlinkungen,
+  ein zweiter Lauf darin prueft nichts Neues.
+* **Der Wächter rät nicht.** Kann `haupt_ordner()` den Pfad nicht ermitteln,
+  antwortet `ist_im_gate_worktree` mit NEIN - ein Wächter darf keinen Push
+  verweigern, weil er selbst nicht nachsehen konnte.
+- **MERKREGEL fuer eigene Wegwerf-Worktrees:** nicht aus ihnen pushen. Der
+  Push-Hook setzt `git worktree list` und verlinkt die Stadt in einen Pfad, der
+  neben dem HAUPT-Projekt liegen muss; das ist aus einem Neben-Worktree jetzt
+  zwar richtig, aber der Push-Hook erwartet den Hauptordner.
+
+## Ein Test darf die Datei, ueber die er etwas wissen will, nicht anfassen (27.09.2026)
+
+`test_zeilenenden.ChurnUnmoeglichTest` verglich `git diff --numstat` VOR und
+NACH einer Zeilenenden-Umschrift - gegen den **Arbeitsbaum**. GEMESSEN: schreibt
+ein fremder Thread die Datei zwischen den beiden Messungen, springt die Zahl von
+`['0','0']` auf `['2','0']` und der Test ist rot, **obwohl an den Zeilenenden
+nichts kaputt ist**. Genau wie bei den drei Gate-B-Tests am selben Tag: bei
+sauberem Baum gruen, bei Bearbeitung rot, und er sagt etwas Falsches aus.
+
+* **Messung am Index, nicht am Arbeitsbaum:** `git show :<pfad>` fuer den Blob
+  und `git hash-object --path <pfad> --stdin` fuer die Prognose. Das Ergebnis ist
+  ein reines Argument der Rechnung - was gerade im Baum liegt, geht nicht ein.
+* **`--path` ist nicht Beiwerk, es ist der Kern.** GEMESSEN: ohne `--path` wendet
+  git die `.gitattributes` nicht an, haelt CRLF fest und liefert fuer LF und CRLF
+  verschiedene Hashes. Der Test waere dann rot, obwohl genau die Normalisierung
+  greift, die er beweisen soll. Ein Test haelt diesen Unterschied jetzt fest.
+* **Zwei Tests der Datei lesen weiter den Arbeitsbaum** (`BestandSauberTest`) -
+  sie pruefen, was beim ARBEITEN mit einer Datei passiert, und nicht, was git
+  daraus macht. Das ist gewollt und steht dort auch so.
+- **Merksatz fuer die Suche nach mehr davon:** ein Test, der eine Datei des
+  Projekts anfasst, um etwas ueber sie zu erfahren, meldet bei einem fremden
+  Thread etwas Falsches - und zerstoert nebenbei dessen Arbeit. Wegwerf-Repos
+  sind richtig (`test_ausliefern`, `test_uebersicht`, `test_gate_worktree` machen
+  das so); gegen das echte Repo darf nur gelesen werden, was git aus dem Index
+  liefert.
+
+## Projektstamm sauber halten: Archiv/ statt lose Logs (27.09.2026)
+- Diagnose-Auswuerfe aus dem Stamm gehoeren nach `Archiv/` (`Logs/`, `Ergebnisse/`,
+  `Skripte/`, `Sonstiges/`) - der Stamm traegt nur noch die 99 getrackten Dateien
+  plus `INHALT*.sha256` und `skills-lock.json`. Neue Lauf-Skripte ab ~27.09. Log
+  direkt dorthin schreiben (`Archiv/Logs/<name>.log`) oder nach dem Lauf verschieben.
+- `Archiv/` ist in der .gitignore und reine Ablage: keine Historie, kein Commit.
+  Eine Datei, die ins Repo soll (z. B. ein wertvoller Report), zurueckkopieren und
+  normal adden - und sie dann aus `Archiv/` loeschen, sonst liegt sie doppelt.
+- Beim Verschieben gilt: nur UNGETRACKTE Stamm-Dateien anfassen. Getrackte Skripte
+  (`anchor_bounds.cmd` & Co.) bleiben, egal wie alt sie aussehen - fremde Threads
+  und alte Loefe rufen sie ueber relative Pfade.
+
+## Plattenplatz: Zen-Deckel, Aufgabenplanung und was beide wirklich kosten (27.09.2026)
+- **`[Zen.AutoLaunch] ExtraArgs` im Projekt-`Config\DefaultEngine.ini` ERSETZT die Liste,
+  sie ergaenzt sie nicht.** Wer nur `--gc-cache-duration-seconds` eintragt, wirft
+  `--http asio` und `--cache-bucket-limit-overwrites` weg - der Editor wartet dann
+  vergeblich auf den lokalen Zen-Dienst. Die vollstaendige Liste aus
+  `Engine\Config\BaseEngine.ini` ist mit kopiert.
+- **Zen hat eine echte Groessen-Obergrenze: `--gc-disksize-softlimit`, und die Einheit
+  sind BYTES.** GEMESSEN an `zenserver.exe --gc-disksize-softlimit=1`: der Log schreibt
+  `0B used, 1B soft limit ... Disk usage GC in 1B`. Nicht Prozent, nicht MB. Das ist
+  die entscheidende Erkenntnis: die Zeit-Frist (`--gc-cache-duration-seconds`, 14 Tage
+  im Auslieferungsstand) begrenzt die Groesse NICHT - wird an einem Tag viel gebaut,
+  waechst der Bestand ueber die Frist hinaus. Beide Werte stehen jetzt in der Ini
+  (7 Tage + 60 GiB).
+- **Gegenprobe beim Start, ohne Datei zu oeffnen:** `Saved\Logs\<lauf>.log` enthaelt die
+  Zeile `LogZenServiceInstance: Display: Launching executable ... args '--port 8558 ...
+  --gc-disksize-softlimit 64424509440 ...'`, und `Zen\Data\logs\zenserver.log` darauf
+  `1.00G used, 60G soft limit`. Steht dort `0B soft limit`, ist die Ini-Zeile nicht
+  angekommen.
+- **`zenserver.exe --help` startet einen ECHTEN Server** (der Aufruf kehrt nicht
+  zurueck) - `--help` mit Timeout und Output-Datei, danach den Prozess beenden. Fuer
+  reine Argumente reicht `grep -a` in der DLL/Binary. `--log-file` gibt es nicht
+  (nur `--abslog`), und ein nicht existierendes Argument beendet den Server sofort mit
+  `Error: Invalid zenserver arguments: Option 'log-file' does not exist`.
+- **Neubauzeit nach dem Leeren, gemessen 27.09.2026:** erster Commandlet-Start baute
+  1,0 GB Zen-Cache in **15 s** auf, der Kartenlauf (Alkis31, 125024 Segmente) auf
+  dem nun gefuellten Cache **67 s**. Das Loeschen des Caches ist also billig - die
+  274 GB waren ein reines Plattenproblem, kein Zeitproblem.
+- **`schtasks /create` laeuft OHNE Windows-Anmeldung durch** (`CREATE_EXIT=0`,
+  `RUN_EXIT=0`), Anmeldemodus "Nur interaktiv": die Aufgabe startet nur bei
+  angemeldetem Benutzer, braucht aber kein Kennwort. `Tools\platten_waechter_eintragen.cmd`
+  legt sie an (taeglich 08:30), `-Entfernen` nimmt sie wieder weg.
+- **Der Aufgabenplanungseintrag darf `--immer` NICHT tragen.** GEMESSEN: mit
+  `--immer` gibt es nie den Rueckgabecode 3, und damit feuert die Warnung nie. Genau
+  das war der Fehler des ersten Entwurfs. Ohne `--immer` schweigt der Waechter bei
+  gesundem Rechner und meldet sich nur bei Platznot.
+- **Eine blockierende Benachrichtigung ist fuer eine unbeaufsichtigte Aufgabe falsch.**
+  `System.Windows.Forms.MessageBox` haelt den Prozess offen, bis jemand auf OK klickt -
+  die Aufgabe stuende endlos als "laeuft". `msg.exe` gibt es auf diesem Rechner nicht
+  (10.0.26200). Richtig ist ein Toast ueber `Windows.UI.Notifications` in einem
+  PowerShell-Kindprozess: asynchron, der Lauf endet nach **1 s** mit Exit 3.
+- **`$t.GetElementsByTagName('text')` ist eine LIVE-Sammlung - das erste
+  `AppendChild` invalidiert sie, der naechste Zugriff wirft "Die Sammlung wurde
+  geaendert". GEMESSEN: derselbe Aufruf scheitert ohne `@(...)` und gelingt mit
+  (`TOAST_FEHLER` -> `TOAST_OK`). Weit gefaehrlicher als der Fehler selbst: der
+  ganze Block steckt in einem `catch {}`, eine kaputte Benachrichtigung faellt
+  also **lautlos** aus und der Wächter meldet trotzdem Exit 3. Alles, was den
+  Nutzer erreichen soll, gehoert im Klartext auf Erfolg geprueft, nicht in einen
+  stillschweigenden catch.
+- **Zwei Berichtsdateien, nicht eine.** `plattenbericht.txt` wird bei JEDEM Lauf
+  ueberschrieben und ist im Normalfall eine Zeile (80 Bytes). Deshalb kopiert der
+  Warnfall seinen Detailbericht nach `plattenbericht_warnung.txt` (2506 Bytes) - ohne
+  das waere der Nachweis einer Platznot nach dem naechsten gesunden Tag weg, also
+  genau dann, wenn man ihn lesen will.
+
+## Platten-Gate: ein Engine-Start bricht bei zu wenig Platz ab (27.09.2026)
+- **Das Gate sitzt in `Tools\engine_run_lock.ps1`, nicht im Commit-Hook.** Der Lock
+  ist der einzige Punkt, den WIRKLICH jeder Engine-Start passiert: 31 der 72
+  `.cmd`-Wrapper rufen ihn, dazu `build_release.ps1` und `gate_worktree.py`. Ein Gate
+  an anderer Stelle liefe an den meisten Starts vorbei.
+- **Zwei Grenzen, absichtlich zwei.** `platten_waechter.py` MELDET ab 20 %
+  (`GRENZE_PROZENT`), das Gate BRICHT AB ab 10 % (`-PlattenGrenze`). Dazwischen liegt
+  die Zone, in der noch gearbeitet werden kann. Nimmt man die Meldegrenze als
+  Abbruchgrenze, sperrt man den Rechner dort - und gewoennt sich an
+  `-PlattenGrenze 0`.
+- **`-Modus Status` und `-Modus Freigeben` haben KEIN Gate.** Sie starten nichts, sie
+  fragen ab bzw. loeschen. Ein Gate dort waere die schlimmste denkbare Stelle: auf
+  einer vollen Platte koennte man den eigenen Lock nicht mehr loesen, und die
+  Notausgaenge (`Freigeben -Gewalt`, `cleanup -SperreIgnorieren`) waeren mit blockiert.
+- **Ein Abbruch darf NICHTS zuruecklassen - und die erste Fassung tat es.**
+  GEMESSEN: `exit (Teste-Plate (Sperre-Nehmen ...))` liest sich richtig, wertet aber
+  BEIDES aus. `Sperre-Nehmen` laeuft, legt die Datei an, und `Teste-Plate` verwirft
+  danach nur den Rueckgabewert: Exit 4, aber die Sperre stand da. Wer sie nicht
+  weckt, sieht den naechsten Lauf als "Lock belegt" statt als Platznot - und raeumt
+  notfalls fremde Editoren weg. Richtig ist ZWEI Schritte: erst pruefen, dann nur bei
+  0 sperren. `PlattenGateTest.test_abbruch_hinterlaesst_keine_sperrdatei` nagelt es fest.
+- **Nicht messbar heisst NICHT voll.** Ein Gate, das im Zweifel blockiert, haelt den
+  Rechner irgendwann an. Ein fehlendes Laufwerk ist eher ein Rechte- als ein
+  Platzproblem - der Start laeuft dann weiter.
+- **Der Selbsttest braucht einen eigenen Schalter fuer "nicht messbar".**
+  `-PlattenTestGiga -1` bedeutet im Skript "nicht gesetzt" (es wird also die ECHTE
+  Platte gemessen - der Test meldete 34 % und pruefte den Zufall). Dafuer gibt es
+  `-PlattenTestNichtMessbar`.
+- **Zwei Notausgaenge, weil ein Gate ohne Ausgang nur im Weg ist:**
+  `-PlattenTrotz` (trotzdem starten, fuer den Fall dass man den Editor zum
+  Aufraeumen braucht) und `-PlattenGrenze 0` (Gate aus). Exit 4 ist der eigene Code
+  des Gate - 3 bleibt "Lock belegt", damit ein Sklick nicht zwei Ursachen verwechselt.
+- **GEMESSEN 27.09.2026, Ablauf des Gate:** `-Modus Start` und `-Modus Nehmen` mit
+  0.5 GB Freiplatz -> Exit 4, keine Sperrdatei, echter maschineller Lock unberuehrt;
+  mit 400 GB -> Exit 0 und Sperre da; `Status`/`Freigeben` auf "vollen" Platten ->
+  Exit 0.
+
+
+## Engine-Lock: `verwaist` heisst nicht, dass der Rechner tot ist (27.09.2026)
+- **Die Meldung war grammatisch falsch und logisch falsch gelesen.** Sie lautete
+  `"Lock: verwaist - {Get-LockText} lebt nicht mehr"`, und `Get-LockText` endet auf
+  `"Rechner OMENBERT"`. Daraus las sich woertlich **`Rechner OMENBERT lebt nicht
+  mehr`** - OMENBERT laeuft, nur der zurueckgebliebene PROZESS war tot. GEMESSEN mit
+  einer Sperrdatei fuer die tote PID 999999 auf diesem Rechner. Nur Zeile 331 hatte
+  ein Praedikat am Textende; die anderen zehn Stellen haengen ein eigenes an.
+- **Die Erkennung war nie kaputt - das musste erst GEMESSEN werden.** Gegenprobe mit
+  einer Sperrdatei fuer einen LEBENDEN Prozess: derselbe Aufruf meldet `BELEGT durch
+  einen anderen Lauf`, nicht `verwaist`. Wer auf die Formulierung hin die Diagnose
+  umbaut, sucht den falschen Fehler. `VerwaistMeldungTest` haelt beide Faelle fest.
+- **`verwaist` ist der NORMALZUSTAND nach jedem Lauf, keine Stoerung.** Der Besitzer
+  ist der aufrufende `cmd.exe`, der nach dem Lauf endet (`Get-Besitzer`). Die
+  Sperrdatei liegt also planmaessig da und ist beim naechsten `-Modus Status`
+  zwangslaeufig verwaist. Das steht jetzt im Kommentarkopf - wer es nicht weiss, liest
+  das als Rechner-Stoerung.
+- **`Host=OMENBERT` in der Sperrdatei ist reiner Ballast.** Es steht drin, wird aber
+  nirgends geprueft - `Get-LockZustand` vergleicht PID und Startzeit, nicht den
+  Rechnernamen. Es wird nur mit ausgegeben, und genau daran ist der Satz gescheitert.
+  (Ein Rechner-Vergleich waere auch sinnlos: die Sperre liegt in %LOCALAPPDATA% und
+  wird nach einem Neustart ohnehin nicht gefunden.)
+
+## Plattenwaechter: jeder Loeschpfad hinterlaesst eine Begruendung (27.09.2026)
+- **Das Loeschprotokoll ist `Saved\Diagnose\loeschprotokoll.jsonl`, angehaengt und
+  JSONL (eine Zeile je Eingriff).** Es wird NIE ueberschrieben. Eine Reportdatei, die
+  jeder Lauf neu schreibt, verliert genau die Historie, die man braucht: "wann hat
+  dieser Waechter eigentlich geloescht".
+- **Zwei Zeilen je Pfad, in dieser Reihenfolge: `absicht` VOR dem Eingriff, `ergebnis`
+  danach.** Die Absicht muss vorher stehen - ein Protokoll, das erst hinterher
+  geschrieben wird, beweist nichts und kann einen abgebrochenen Lauf nicht mehr
+  erklaeren. GEMESSEN: `ProtokollTest.test_absicht_steht_vor_der_ergebniszeile`.
+- **`rmtree` laeuft mit `ignore_errors=True` und SCHLUCKT Fehler.** Das Ergebnis wird
+  deshalb nicht aus dem Rueckgabewert abgeleitet, sondern nachgeprueft
+  (`os.path.exists`). Laege der Ordner noch da, steht `unvollstaendig` mit
+  `weg=false` im Protokoll und der Pfad wird NICHT als geloescht gemeldet. Sonst
+  behauptete das Protokoll "geloescht", und der Ordner laege noch da.
+- **Der Schutz ist jetzt DREIFACH: Klasse, Pfadnormalisierung, Protokoll.** Der
+  dritte Teil heisst: **ohne schreibbares Protokoll wird garnichts geloescht**, und
+  der Pfad wandert nach `abgewiesen`. GEMESSEN: Schreiben nach `Q:\gibt\es\nicht`
+  -> `False` -> `geloescht: []`, Ordner bleibt. `protokoll_schreiben` gibt darum
+  `True/False` zurueck und wird nicht stillschweigend verschluckt.
+- **Die Groesse wird direkt VOR dem Eingriff gemessen**, nicht aus der
+  Kandidatenliste geholt - die ist eine Momentaufnahme von vorher. Im Protokoll steht
+  als `bytes` und `gib`, ausserdem `dateien` und `messung_vollstaendig` (bei
+  unvollstaendiger Messung warnt `loeschreport` ausdruecklich).
+- **GEMESSEN 27.09.2026, Fund beim Testen: die Suite schrieb in das ECHTE Protokoll.**
+  `protokoll_pfad` nimmt darum eine `wurzel`, und `reinigen` reicht sie durch - die
+  Tests laufen mit TEMP-Wurzeln (`tempfile_tmp`) und duerfen dort nichts im echten
+  Projekt anruehren. Drei Eintraege mit tmp-Pfaden standen nach einem Lauf in der
+  echten Datei. **Ein Protokoll, in dem Tests stehen, beweist nichts ueber den
+  Waechter.** `ProtokollTest.test_protokoll_bleibt_im_wurzelverzeichnis_des_aufrufers`
+- **Der lesbare Report (`loeschreport`) nimmt die Begruendung aus der
+  Kandidatenliste** - dieselbe Zeile, nach der auch entschieden wurde, dass der Pfad
+  loeschbar ist, plus die Summe. Eine Begruendung, die nur im Code steht, hilft
+  niemandem, wenn es drei Monate spaeter darum geht, warum ein Ordner fehlt.
+
+## Der Platten-Hinweis im Hook nennt die Handlung (27.09.2026)
+- **GEMESSEN vorher: der Hinweis sagte `UNTER der Grenze (20 %)` und sonst nichts.**
+  Eine Zahl ohne Folge - der Leser weiss nicht, dass gleich der naechste
+  Engine-Start scheitert, und schon gar nicht, wo die zweite Schwelle liegt.
+  `Tools\vor_dem_commit.py` haengt jetzt `_gate_verweis()` an: NAECHSTES, die
+  Gate-Schwelle, Exit 4, der Ort (`Tools\engine_run_lock.ps1`) und der Notausgang
+  (`-PlattenTrotz`), dazu der Abstand ("aktuell 36 % frei - bis zum Abbruch
+  noch 26 %").
+- **Die Gate-Schwelle wird aus der ps1 GELESEN (`platten_waechter.gate_grenze`),
+  nicht im Hook wiederholt.** Zwei Kopien einer Schwelle fallen auseinander - und
+  dann sagt der Hinweis 10 % an, waehrend das Gate bei 12 % zuschlaegt. Der
+  Hinweis waere dann nicht nutzlos, sondern irrefuehrend. GEMESSEN: eine ps1 mit
+  12.5 ergibt auch 12.5. Fehlt die Datei (Push-Worktree), kommt `None` und der
+  Verweis nennt keine Zahl, statt eine zu erfinden.
+- **Der Verweis erscheint NUR, wenn ueberhaupt gemeldet wurde.** Im gesunden Fall
+  schweigt der Hook wie bisher - er darf nicht lauter werden. Und er geht
+  weiterhin NICHT durch den `Lauf`: `test_vor_dem_commit.py` (fremde Datei) hat
+  eine `LaufDoppel`, die nur `fahre`/`ueberspringe`/`bericht` kennt, und
+  `test_die_schnelle_stufe_haelt_nur_die_pipeline_gates` verlangt exakt
+  `["Gate 0  Engine-Pfade"]`. `HinweisVerweisTest` hat beides festgenagelt.
+- **Auch der Bericht selbst traegt den Handlungsblock** (`handlungsblock`), damit
+  der Aufgabenplanungslauf dieselbe Handlung sieht. Er unterscheidet die beiden
+  Zonen: zwischen Meldegrenze und Gate heisst es "bricht ab" als ZUKUNFT ("erst
+  aufraeumen, dann bauen"), unter dem Gate ist es das Jetzt ("ABBRICHT JEDER
+  Engine-Start"). GEMESSEN: 12 % und 6 % gegen dieselbe Vorlage.
+
+## Release-Bilder kommen aus dem oeffentlichen Schaufenster (27.09.2026)
+- **Das Spiel-Repo ist privat, also ist JEDER Link dorthin fuer Fremde tot.**
+  GEMESSEN am 27.09.2026 anonym, ohne Token: Bild-URL `.../Wiesbaden-GTA/blob/
+  main/docs/meilensteine/bilder/x.jpg?raw=true` -> **404**, die Release-Seite
+  -> **404**, das Release-Asset unter `/releases/download/<tag>/<name>` ->
+  **404** (alle 37, ohne Ausnahme). Mit Konto ist alles 200. Wer eine
+  Release-Seite mit privaten Bildlinks baut, zeigt Fremden nur
+  Broken-Image-Platzhalter - und bemerkt es nie selbst.
+- **OEFFENTLICH sind genau zwei Dinge:** das Schaufenster-Repo
+  `chaotiKKK/wiesbaden-real-meilensteine` (PUBLIC) und die Pages-Seite
+  `https://chaotikkk.github.io/wiesbaden-real-meilensteine/`. Beide erzeugt
+  `Tools/schaufenster.py` aus derselben `docs/meilensteine.md`. Bild-URL:
+  `https://raw.githubusercontent.com/chaotiKKK/wiesbaden-real-meilensteine/main/bilder/<name>`
+  - GEMESSEN anonym 200 fuer alle 35 Bildlinks aus allen 15 Releases.
+- **Bilder anzeigen ist nicht dasselbe wie Bilder herunterladen - und der
+  Download-Weg hing am privaten Repo.** Die Bildlinks im Text zeigen seit dem
+  27.09.2026 auf das Schaufenster, die *Download-Liste* des Releases aber nicht:
+  ein Asset gehoert zum Repo, in dem das Release liegt. Deshalb liegen die 14
+  Meilenstein-Releases als SPIEGEL im oeffentlichen Repo
+  (`Tools/releases_oeffentlich.py`), mit demselben Text und denselben Bildern.
+  GEMESSEN danach: 14 oeffentliche Releases, 35 Assets, **alle 35 anonym
+  HTTP 200**, Release-Seite anonym 200. Das private Release `city-content-alkis16`
+  (Kartendaten) wird bewusst NICHT gespiegelt.
+- **Ein Erzeuger fuer beide Seiten.** `Tools/releases_oeffentlich.py` ruft
+  dieselbe `releases_texte_ausrichten.release_text` auf wie der private
+  Ausrichter - kein zweiter Formatter, der still auseinanderlaufen koennte.
+  Jeder `gh`-Aufruf traegt `--repo`; ohne das waere ein Tippfehler ein
+  Schreibzugriff auf das private Spiel-Repo (festgenagelt in
+  `Tools/test_releases_oeffentlich.py`).
+- **`PRIVAT` bricht den Erzeuger ab**, sobald doch ein `Wiesbaden-GTA`-Link
+  entsteht; es unterscheidet die beiden Aehnlich benannten Repos an einem
+  Zeichen. Die Fusszeile zeigt aufs Schaufenster statt auf `docs/meilensteine.md`.
+- **Gate 6 prueft beides, statt es zu behaupten** (`Tools/release_abgleich.py`):
+  Release-Text und Bildbasis werden verglichen, UND es kommt ein HTTP-HEAD
+  **ohne** Anmeldung dazu - je Release fuer das erste Bild und fuer alle 35
+  oeffentlichen Download-Wege (8 Abrufe nebenlaeufig, GEMESSEN 25 s Laufzeit).
+  Ein Netzfehler dabei ist "nicht messbar" (Exit 3) und niemals "in Ordnung".
+- **FALLE, die Zeit kostete: das Schaufenster kann aelter sein als die Seite.**
+  Am 27.09.2026 trug es noch die Bildnamen von vor PR #20 (`12-hq-turm.jpg`
+  statt `10-hq-turm.jpg`) - jeder neue oeffentliche Link lieferte 404, obwohl
+  im Text kein privater Repo-Name mehr stand. Nach jeder Umbenennung:
+  `python Tools/schaufenster.py --ziel <Klon> --ref origin/main`, dort
+  committen und pushen, DANN die Release-Texte neu erzeugen.
+- **Nach jedem Merge an den Releases: drei Schritte in dieser Reihenfolge** -
+  `python Tools/releases_bilder_ausrichten.py --anwenden`, `python
+  Tools/releases_texte_ausrichten.py --anwenden`, `python
+  Tools/releases_oeffentlich.py --anwenden`. Die ersten beiden lesen per
+  Vorgabe `origin/main`, NICHT den Arbeitszweig; sonst nehmen sie dem Release
+  genau die Bilder, die der Zweig gerade erst hinzufuegt.
+- **GEMESSEN beim Spiegeln: `gh` bricht mitten im Lauf ab.** Nach acht von
+  vierzehn Releases: `dial tcp ...: connectex`. `Tools/releases_oeffentlich.py`
+  wiederholt deshalb Verbindungsfehler dreimal (5 s, dann 10 s) - ein echter
+  gh-Fehler mit Text in stderr wird NICHT wiederholt. Der Lauf ist ueberhaupt
+  wiederholbar: zweiter Lauf = "passt", nichts passiert.
+- **Was oeffentlich NICHT ist:** der Quellcode, `docs/meilensteine.md` und die
+  Releases des privaten Repos. Die Text- und Asset-Inhalte sind gespiegelt,
+  das Original bleibt privat.
+
+## Ein Lauf richtet alle Release-Ausgaben aus (28.09.2026)
+- **Vier Werkzeuge, feste Reihenfolge, sonst richtet der Lauf mehr kaputt als
+  er repariert:** `schaufenster.py` (Seite + Bilder ins oeffentliche Repo,
+  committen, pushen) -> `releases_bilder_ausrichten.py` -> `releases_texte_
+  ausrichten.py` -> `releases_oeffentlich.py`. `releases_ausrichten.py` macht
+  das in einem Lauf, mit `--anwenden` zum Schreiben und ohne zum Planen.
+- **Warum das Schaufenster ZUERST laufen muss:** die Bildnamen der
+  Ausrichter kommen aus `origin/main`. Wer die Assets vorher ausrichtet,
+  loescht dem Release genau die Bilder, die der gerade gemergte Zweig
+  hinzugefuegt hat - am 27.09.2026 so geschehen, zwei Bilder weg. Deshalb
+  exportiert das Werkzeug Seite UND Bilder per `git archive` aus EINEM Ref und
+  reicht genau diese Dateien beiden Ausrichtern; `--ref` (Vorgabe
+  `origin/main`), nicht der Arbeitszweig.
+- **Die falsche Reihenfolge war bis heute eine Sache, die man sich merken
+  musste.** GEMESSEN: der Plan brauchte 27,5 s und meldete 14x "passt" - nach
+  dem Merge ist er genau ein Aufruf.
+- **Exit-Codes sind eine Aussage, kein Boolean:** 0 fertig, 1 beim Ausrichten
+  gescheitert, 2 Voraussetzung fehlt (Ref ohne Seite, falscher Klon, schmutziger
+  Klon), 3 Gate am Ende war rot - ausdruecklich NICHT "fertig". Das Gate
+  (`release_abgleich.py`) ist der Beweis; `--kein-gate` nimmt ihn weg.
+- **Ein schmutziger Klon bricht ab, weil `git add -A` sonst fremde Arbeit
+  mitveroeffentlicht.** Ebenso ein Klon, dessen `origin` nicht auf
+  `chaotiKKK/wiesbaden-real-meilensteine` zeigt: dort waere jeder Schreibzugriff
+  gelandet. `klon_finden()` sucht `--ziel`, dann `WB_SCHAUFENSTER`, dann alle
+  Elternebenen, dann das Home - und nennt bei Misserfolg alle geprueften Pfade,
+  statt einen zu raten. Der Klon liegt eine Ebene ueber dem Projektordner.
+- **FALLE, die einen ganzen Tag gekostet hat: die Stand-Zeile ist ein Inhalt,
+  kein Uhrwerk.** Die Seite schreibt "Stand TT.MM.JJJJ" in die Fusszeile. Mit
+  `date.today()` meldete der Plan am 28.09. "geaendert: index.html" fuer einen
+  Klon, der am Vortag aus DEMSELBEN Ref gebaut worden war - der einzige
+  Unterschied waren vier Ziffern, und `git` haette nichts zu committen gehabt.
+  `stand_text(ref)` nimmt deshalb `git log -1 --format=%cs <ref>`: derselbe Ref
+  ergibt immer dieselbe Seite. `stand_hinweis()` sagt im Plan, WENN der
+  Unterschied nur in der Stand-Zeile liegt, statt einen Encoding-Fehler zu
+  vermuten, den es nicht gibt.
+- **Zweiter gleichartiger Fall: die Zeilenenden.** Der oeffentliche Klon hat
+  kein `.gitattributes`, sein Arbeitsbaum hat CRLF, `schaufenster.erzeugen`
+  schreibt LF. `gleich()` vergleicht Text tolerant gegen CRLF und Bilder
+  byteweise, sonst meldet jeder Lauf dieselbe erfundene Aenderung.
+- **Tests:** `Tools/test_releases_ausrichten.py` (20) - `LAUF` ist eine
+  Attrappe, `git archive` liefert ein gebautes tar, also kein git, kein gh,
+  kein Netz.

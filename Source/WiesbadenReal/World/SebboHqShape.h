@@ -18,6 +18,14 @@ enum class EHqMaterial : uint8
 	Metal    UMETA(DisplayName = "Metall"),
 	/** Markierungen auf dem Landeplatz. */
 	Marking  UMETA(DisplayName = "Markierung"),
+	/** Deckenleuchten der Innenraeume (Laternenglas, emittierend). */
+	Lamp     UMETA(DisplayName = "Leuchte"),
+	/** Mobiliarholz: Schreibtische, Regale, Tuerfluegel. */
+	Wood     UMETA(DisplayName = "Holz"),
+	/** Polsteraeum: Sessel, Baenke, Sofa. */
+	Fabric   UMETA(DisplayName = "Polster"),
+	/** Bepflanzung der Kuebel (Blattwerk der Stadtbaeume). */
+	Plant    UMETA(DisplayName = "Pflanze"),
 	MAX      UMETA(Hidden)
 };
 
@@ -59,6 +67,20 @@ struct WIESBADENREAL_API FHqPart
 	/** Geschoss, zu dem das Teil gehoert (-1 = Sockel/Krone/Dach). */
 	UPROPERTY(BlueprintReadOnly, Category = "HQ")
 	int32 Floor = -1;
+
+	/** Drehung in Grad; Standard achsparallel. Fuer schraege Teile (Handlauf). */
+	UPROPERTY(BlueprintReadOnly, Category = "HQ")
+	FRotator Rotation = FRotator::ZeroRotator;
+
+	/**
+	 * Kollision aus? Fuer reine Deko wie den Handlauf: die Figurenprobe fuehrt
+	 * die Kapsel dicht an den Stufenkanten entlang, ein kollidierender Handlauf
+	 * waere dort ein neuer Grund zum Haengenbleiben (Steckenbleiben zaehlt als
+	 * Fehlschlag). Wahr bleibt: ohne Kollision sieht man das Teil, es stört nur
+	 * niemanden.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "HQ")
+	bool bCollision = true;
 };
 
 /** Ein physisches Zielvolumen der Tower-Ankunft in lokalen Zentimetern. */
@@ -165,6 +187,37 @@ struct WIESBADENREAL_API FSebboHqDimensions
  */
 namespace SebboHq
 {
+	/**
+	 * Laenge der beiden Zufahrtsdecks ab Fassadenlinie.
+	 *
+	 * NICHT gleich lang und das ist richtig so: die Garage muss die
+	 * FAHRBAHN erreichen (Garage 1200), der Fussgaenger den PLATTER-GEHWEG
+	 * (1100 - der endet damit in der Gehwegmitte, nicht im Asphalt).
+	 * Festgehalten in SebboHqPlatterAccessTest: "Portalweg trifft den
+	 * Platter-Gehweg" und "Garagendeck erreicht die Fahrbahnkante".
+	 */
+	inline constexpr double GarageBridgeLengthCm = 1200.0;
+	inline constexpr double PedestrianBridgeLengthCm = 1100.0;
+
+	/**
+	 * Gemessene Anschluss-Hoehe der Zufahrtsdecks an die Platter Strasse.
+	 *
+	 * Die Platter Fahrbahn faellt an den Oeffnungen entlang rund 6 Prozent;
+	 * ein Deck auf EINER Hoehe endet dort mit einer Kante bis 15 cm. Der
+	 * Actor tastet darum die Oberflaeche an der Deckenkante ab und reicht sie
+	 * hier je Y-Spalte ein - das Deck laeuft dann stufenlos auf Strassen-
+	 * niveau zu ("ebenerdig mit der Platter Strasse"). Ohne Angabe bleibt
+	 * alles auf dem nominellen Bodenniveau.
+	 */
+	struct WIESBADENREAL_API FSebboHqAnschluss
+	{
+		/** Aussenrand-Hoehe (cm, oertlich) der Garagendecke, je Y-Spalte. */
+		TArray<double> GarageZCm;
+
+		/** Aussenrand-Hoehe (cm, oertlich) des Deckes zum Personeneingang. */
+		TArray<double> PortalZCm;
+	};
+
 	/** Turmhuelle: Sockel, Regelgeschosse, Kern, Krone, Landeplatz. */
 	WIESBADENREAL_API void BuildShell(
 		const FSebboHqDimensions& Dimensions, TArray<FHqPart>& OutParts);
@@ -234,10 +287,77 @@ namespace SebboHq
 		const FSebboHqDimensions& Dimensions, TArray<FHqPart>& OutParts);
 
 	/**
+	 * Innenausbau aller Geschosse: Beleuchtung, Tueren, Moeblierung.
+	 *
+	 * JEDES Geschoss bekommt dasselbe Programm (Buerohaus mit Lobby vor den
+	 * Kern-Tueren, Schreibtischwinkel zur Platter Strasse, Sitzungstisch zum
+	 * +Y-Fenster, Regal und Sofa zum -Y-Fenster). Ein gleichfoermiges
+	 * Stockwerk liest sich an der Glasfassade als Absicht; Zufalls-Moeblierung
+	 * sieht nach Fehlern aus.
+	 *
+	 * GRENZEN (Vertrag mit den Proben): der Kern bleibt HEILIG - Treppenweg
+	 * (Lauf/Podest) und Aufzugsschacht bekommen nichts Kollidierendes, die
+	 * Figurprobe laeuft dort. Moebel stehen ausschliesslich im Ring zwischen
+	 * Kernwand (450) und Fassade. Leuchten, Tuerfluegel und Klinken sind reine
+	 * Deko OHNE Kollision (wie der Handlauf: Steckenbleiben zaehlt als
+	 * Fehlschlag), Moebel duerfen kollidieren - man laeuft daran vorbei.
+	 *
+	 * Die Schacht-Oeffnung der -X-Wand bekommt bewusst KEINEN Fluegel: dort
+	 * stehen bereits die funktionierenden Schiebetueren des Aufzugs
+	 * (LandingLeft/Right). Gebaut wird nur die Fluchttuer zum Treppenhaus,
+	 * offen gegen die Bueroseite der Wand.
+	 */
+	WIESBADENREAL_API void BuildInnenausbau(
+		const FSebboHqDimensions& Dimensions, TArray<FHqPart>& OutParts);
+
+	/**
 	 * Private Garage und Personeneingang an der +X-Seite (Platter Strasse).
 	 * Die oeffentliche Fahrbahn, Gehweg und Bordstein gehoeren bewusst NICHT
 	 * hierher; dieser reine Builder beschreibt nur die Tower-Seite der Grenze.
 	 */
 	WIESBADENREAL_API FSebboHqArrivalLayout BuildArrivalFacilities(
-		const FSebboHqDimensions& Dimensions);
+		const FSebboHqDimensions& Dimensions, const FSebboHqAnschluss* Anschluss = nullptr);
+
+	/**
+	 * Ein importiertes Dach-Asset mit Einbaulage (cm, oertlich).
+	 *
+	 * Logo, Antennen und Satellitenschuessel sind BLENDER-Assets
+	 * (Tools/Blender/make_sebbo_dach.py, Import ueber Tools/import_sebbo_dach.py
+	 * nach /Game/SebboTower/Meshes) und keine Primitive - darum liefern sie
+	 * hier Pfad und Pose statt eines FHqPart. Der Ursprung der Meshes ist der
+	 * Standfuss (z = 0), PosCm.Z ist also die Standflaeche.
+	 */
+	struct WIESBADENREAL_API FSebboHqDachProp
+	{
+		/** Assetpfad, z.B. /Game/SebboTower/Meshes/SM_WbSeboDachMast. */
+		FString MeshPfad;
+
+		/** Einbaulage des Mesh-Ursprungs (cm, oertlich). */
+		FVector PosCm = FVector::ZeroVector;
+
+		/** Drehung um die Hochachse (Grad). */
+		double YawDeg = 0.0;
+
+		/** Halbe Ausdehnung (cm) um den Ursprung fuer Freihalte-Pruefungen. */
+		FVector ExtentCm = FVector::ZeroVector;
+	};
+
+	/**
+	 * Dachaufbauten: Werbe-Logo auf der Krone, Antennen, Satelliten-
+	 * schuessel, Magazinstaender und vier Topfpflanzen.
+	 *
+	 * GRENZEN (Vertrag mit SebboHq.Dachaufbauten): nichts ragt in den
+	 * Anflugkorridor des Landeplatzes (Rotorradius um den Platz bei +X) und
+	 * nichts steht im Kerngrundriss. Darum stehen Schuessel und Masten hinter
+	 * dem Kern (-X) und das Logo so weit zurueckgesetzt auf der Krone, dass
+	 * sein Vorsprung den Korridor nicht erreicht.
+	 *
+	 * Blattwerk und Magazinstaender stehen an den vier Ecken des Dachrands
+	 * bzw. an der +Y-Kante. Beide Gruende sind pruefbar: die Kuebel kommen
+	 * nicht in den Laufweg (Konvexhuelle, Steckenbleiben zaehlt als Fehlschlag)
+	 * und der Magazinstaender zeigt mit +X zur Strasse, weil sein Cover
+	 * aufgemalte Grafik ist.
+	 */
+	WIESBADENREAL_API void BuildDachaufbauten(
+		const FSebboHqDimensions& Dimensions, TArray<FSebboHqDachProp>& OutProps);
 }

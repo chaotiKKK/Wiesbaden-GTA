@@ -4,6 +4,7 @@
 
 #include "GIS/GeoCoordinateConverter.h"
 #include "World/WiesbadenBusLineFile.h"
+#include "World/WiesbadenRailTransport.h"
 
 /**
  * Der gemeinsame Leser der Liniendatei: parst die echten Dateien unter
@@ -150,5 +151,70 @@ bool FWiesbadenBusLineFileTest::RunTest(const FString& Parameters)
 	// ungueltig machen (sie zaehlen selbst).
 	ClearCache();
 	TestTrue(TEXT("Daten ueberleben den Cache-Reset"), Line6->WorldPath.Num() > 100);
+	return true;
+}
+
+/**
+ * Eigener Rueckweg (25.09.): beide Linien fahren die Gegenrichtung auf ihrer
+ * eigenen OSM-Relation. Frueher fuhr der Bus die Hinweg-Linie rueckwaerts - am
+ * Hauptbahnhof (getrennte Richtungsfahrbahnen) stand die Halte Richtung
+ * Nordfriedhof dadurch auf der falschen Strassenseite.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWiesbadenBusLineFileReturnTest,
+	"WiesbadenReal.Traffic.BusLineFile.Rueckweg",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FWiesbadenBusLineFileReturnTest::RunTest(const FString& Parameters)
+{
+	using namespace WiesbadenBusLineFile;
+	UGeoCoordinateConverter* Converter = NewObject<UGeoCoordinateConverter>();
+	if (!TestTrue(TEXT("Konverter"), Converter && Converter->InitializeWithWiesbadenOrigin())) { return false; }
+	ClearCache();
+
+	for (const TCHAR* Name : { TEXT("line6.json"), TEXT("line3.json") })
+	{
+		const TSharedRef<const FLineRoute> L = ReadLine(Name, *Converter);
+		const FString Tag(Name);
+		if (!TestTrue(Tag + TEXT(": Rueckweg gelesen"), L->Route.HasReturnLeg())) { continue; }
+		const TArray<double>& RS = L->Route.ReturnStopArcCm;
+		TestEqual(Tag + TEXT(": ein Name je Rueckweg-Halte"), L->File.ReturnStopNames.Num(), RS.Num());
+		TestEqual(Tag + TEXT(": ein Bogen je Rueckweg-Punkt"), L->ReturnArcCm.Num(), L->ReturnWorldPath.Num());
+		bool bOrder = true;
+		for (int32 j = 0; j < RS.Num(); ++j)
+		{
+			if (RS[j] < 0.0 || RS[j] > L->Route.ReturnLengthCm || (j > 0 && RS[j] < RS[j - 1])) { bOrder = false; }
+		}
+		TestTrue(Tag + TEXT(": Rueckweg-Halte aufsteigend und auf der Linie"), bOrder);
+
+		// Anschluss: der Rueckweg endet an der Einstiegshaltestelle (Halt 0 des
+		// Hinwegs) und beginnt nahe dem fernen Ende des Hinwegs.
+		FVector Stop0, T0;
+		WiesbadenRailTransport::SamplePolyline(L->WorldPath, L->ArcCm, L->Route.StopArcCm[0], Stop0, T0);
+		TestTrue(Tag + TEXT(": Rueckweg endet an der Einstiegshaltestelle (< 5 m)"),
+			FVector::Dist2D(L->ReturnWorldPath.Last(), Stop0) < 500.0);
+		TestTrue(Tag + TEXT(": Rueckweg beginnt am fernen Ende (< 200 m)"),
+			FVector::Dist2D(L->ReturnWorldPath[0], L->WorldPath.Last()) < 20000.0);
+		TestTrue(Tag + TEXT(": Ausstieg Nordfriedhof ist nicht die Einstiegshaltestelle"),
+			FVector::Dist2D(L->ReturnWorldPath.Last(), [&]() { FVector P, T;
+				WiesbadenRailTransport::SamplePolyline(L->ReturnWorldPath, L->ReturnArcCm, RS.Last(), P, T); return P; }()) > 1500.0);
+
+		// Hauptbahnhof: die Halte Richtung Nordfriedhof liegt auf der ANDEREN
+		// Richtungsfahrbahn - links des Hinwegs, mindestens 15 m von dessen Halte.
+		const int32 Fwd = L->File.StopNames.IndexOfByKey(FString(TEXT("Hauptbahnhof")));
+		const int32 Ret = L->File.ReturnStopNames.IndexOfByKey(FString(TEXT("Hauptbahnhof")));
+		if (!TestTrue(Tag + TEXT(": Hauptbahnhof in beiden Richtungen"), Fwd != INDEX_NONE && Ret != INDEX_NONE)) { continue; }
+		FVector PF, TF, PR, TR;
+		WiesbadenRailTransport::SamplePolyline(L->WorldPath, L->ArcCm, L->Route.StopArcCm[Fwd], PF, TF);
+		WiesbadenRailTransport::SamplePolyline(L->ReturnWorldPath, L->ReturnArcCm, RS[Ret], PR, TR);
+		const FVector RightF(-TF.Y, TF.X, 0.0);
+		const FVector RightR(-TR.Y, TR.X, 0.0);
+		TestTrue(Tag + TEXT(": Hauptbahnhof-Halten beider Richtungen > 15 m auseinander"), FVector::Dist2D(PF, PR) > 1500.0);
+		TestTrue(Tag + TEXT(": Halte Richtung Nordfriedhof liegt links des Hinwegs (Gegenfahrbahn)"),
+			FVector::DotProduct(PR - PF, RightF.GetSafeNormal()) < -1000.0);
+		TestTrue(Tag + TEXT(": und die Halte Richtung Mainz links des Rueckwegs"),
+			FVector::DotProduct(PF - PR, RightR.GetSafeNormal()) < -1000.0);
+		TestTrue(Tag + TEXT(": gegenlaeufig"), FVector::DotProduct(TF.GetSafeNormal2D(), TR.GetSafeNormal2D()) < -0.5);
+	}
+	ClearCache();
 	return true;
 }

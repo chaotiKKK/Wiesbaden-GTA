@@ -431,6 +431,9 @@ private:
 		EOSMRoofShape Shape,
 		double RoofHeightCm,
 		int32 MaterialVariant,
+		EOSMBuildingType BuildingType,
+		bool bIsLandmark,
+		int64 SourceId,
 		const FString& FacadeOverrideKey,
 		double RoofOverhangMeters,
 		FBuildingMeshData& OutMeshData) const;
@@ -478,6 +481,44 @@ public:
 	 */
 	static int32 SelectMaterialVariant(const TMap<FName, FString>& Tags, EOSMBuildingType Type,
 		int64 SeedId);
+
+	/**
+	 * Dachdeckung aus Fassaden-Variante, Dachform, Gebaeudetyp und Landmarke -
+	 * EINE Deckung je Gebaeude.
+	 *
+	 * 0 = Terrakotta-Pfanne (Wohnbau: Putz/Backstein/Fachwerk),
+	 * 1 = Schiefer (Gruenderzeit/Civic/Uni: Sandstein-Fassade),
+	 * 2 = Zink/Blech (Moderne/Buero/Industrie ODER jedes Flachdach),
+	 * 3 = Kupfergruen/Patina (buergerliche Wahrzeichen + jede Kuppel/Turmhelm),
+	 * 4 = dunkler Schiefer (Kirchen).
+	 *
+	 * Kirchen (EOSMBuildingType::Church) und Wahrzeichen (bIsLandmark) tragen
+	 * eine EIGENE, markante Deckung statt der allgemeinen Sandstein->Schiefer-
+	 * Regel: Kirchen dunklen Schiefer (ortsgerecht - Marktkirche/Bergkirche/
+	 * Ringkirche), buergerliche Wahrzeichen (Kurhaus, Rathaus, Theater ...) die
+	 * kupfergruene Patina, und jede Kuppel/jedes Zeltdach ebenfalls Kupfergruen.
+	 * Alle uebrigen Sandstein-Bauten (Civic/Uni/Gruenderzeit) bleiben beim
+	 * normalen Schiefer.
+	 *
+	 * Loest die alte Regionswuerfelung im Dachmaterial ab: die Deckung folgt
+	 * dem Gebaeudetyp, nicht einer 14-m-Weltzelle. Datenrein pruefbar (Test
+	 * GIS.RoofCovering).
+	 */
+	static int32 RoofCoveringIndex(int32 MaterialVariant, EOSMRoofShape Shape,
+		EOSMBuildingType BuildingType, bool bIsLandmark);
+
+	/**
+	 * Deterministische Tonstufe (0-255) je Gebaeude aus der OSM-Id.
+	 *
+	 * BuildRoof legt den Wert in den G-Kanal der Dach-Vertexfarbe; das Material
+	 * verschiebt damit die Deckungsfarbe leicht (+-~9 %), sodass eine Reihe
+	 * gleichtypiger Haeuser nicht identisch wirkt - die DeckungsART (R-Kanal,
+	 * RoofCoveringIndex) bleibt davon unberuehrt. Eigene Mischkonstante, damit
+	 * der Ton NICHT mit der Fassaden-/Deckungswahl korreliert. Datenrein
+	 * pruefbar (Test GIS.RoofTone): gleiche Id -> gleicher Ton, benachbarte Ids
+	 * -> unterschiedliche Toene, gleichverteilt.
+	 */
+	static uint8 RoofToneByte(int64 SourceId);
 
 public:
 	/**

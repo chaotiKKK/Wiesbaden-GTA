@@ -3,69 +3,46 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
-
+#include "Vehicles/WiesbadenHelicopter.h"
 #include "WiesbadenLegacyHelicopter.generated.h"
 
-class UStaticMeshComponent;
-
 /**
- * Das ALTE Helikopter-Modell als Standstueck - neben dem neuen Spielerheli.
+ * Der ZWEITE fliegbare Hubschrauber - dasselbe Fluggeraet, anderes Modell.
  *
- * Bis zum Ka-52-Neubau (2026-09-17) war der Spielerheli der alte Landmarken-
- * Heli aus /Game/Assets/Landmarks. Seit der Neubau das Fluggeraet ist, steht das
- * alte Modell hier als reine Anschauung daneben: gleiche Bauart, andere
- * Herkunft - und ohne Fluglogik, damit es nicht faellt, nicht abstuerzt und
- * nicht besessen wird.
+ * WAS SICH GEAENDERT HAT UND WARUM:
  *
- * Warum ein eigener Actor und nicht AWiesbadenHelicopter mit Schalter: Der
- * Spielerheli ist ein Pawn mit Schwerkraft, Rotordrehzahl und Eingabe. Ein
- * zweiter davon in "geparkt" muesste all das einzeln abschalten - eine
- * Standfigur mit drei Netzen ist dagegen in sich stimmig.
+ * Bis hierher war das ein `AActor` - eine Standfigur aus drei Netzen, "ohne
+ * Fluglogik, damit es nicht faellt, nicht abstuerzt und nicht besessen wird".
+ * Genau daran lag es: ein Actor ist kein Pawn, also konnte ihn nie jemand
+ * uebernehmen. Er liess sich nicht betreten und nicht fliegen, und
+ * `FindNearbyVehicle` sah ihn nicht einmal, weil es Pawns sucht.
  *
- * Masse und Lage sind die des ALTEN Modells (Stand vor dem Neubau, aus
- * WiesbadenHelicopter.cpp): Modellmasstab 1460/100,7 = 14,5, Mast bei
- * (1 | -5) im Modell, Rotornabe im Rotormesh bei (0 | 33), Nabenhoehen 345 und
- * 300 cm. Das neue Ka-52-Mesh braucht nichts davon (schon gebacken) - genau
- * deshalb muss der Aufbau hier stehen, sonst stuenden die Rotoren quer.
+ * Die alte Begruendung - ein zweiter Spielerheli muesste Schwerkraft,
+ * Drehzahl und Eingabe "einzeln abschalten" - traegt nicht mehr, seit er
+ * genau das NICHT soll. Er soll fliegen. Damit ist die Ableitung die kleinere
+ * Loesung: eine Flugmechanik, zwei Modelle. Was am Flugverhalten verbessert
+ * wird, gilt sofort fuer beide.
+ *
+ * WAS DIESE KLASSE NOCH TUT:
+ *
+ * Nur die Geometrie umhaengen. Das alte Landmarken-Modell ist 100,7 cm lang
+ * und wird auf 14,6 m skaliert (Faktor 14,5), seine Laengsachse liegt auf Y,
+ * der Rotormast sitzt bei (1 | -5) im Modell und die Nabe im Rotormesh bei
+ * (0 | 33). Alles Messungen am Asset - ohne sie kreisen die Blaetter neben
+ * dem Mast. Das Ka-52-Mesh der Basisklasse braucht nichts davon (schon
+ * eingebacken), genau deshalb muss es hier stehen.
  */
 UCLASS()
-class WIESBADENREAL_API AWiesbadenLegacyHelicopter : public AActor
+class WIESBADENREAL_API AWiesbadenLegacyHelicopter : public AWiesbadenHelicopter
 {
 	GENERATED_BODY()
 
 public:
 	AWiesbadenLegacyHelicopter();
-
-	/**
-	 * Laenge des aufgestellten Modells entlang seiner Blickrichtung, cm.
-	 * Fuer die Abstandspruefung beim Aufstellen (Rotorkreise sollen sich nicht
-	 * durchdringen) - kommt aus der Geometrie, nicht aus einer zweiten Zahl.
-	 */
-	double GetNoseToTailCm() const;
-
-	/** Durchmesser des oberen Rotorkreises, cm (Abstand zweier Standstuecke). */
-	double GetUpperRotorDiameterCm() const;
+	virtual void Tick(float DeltaSeconds) override;
 
 	/** Rumpfnetz (fuer Kamera-/Sichtpruefungen und den Test). */
 	UStaticMeshComponent* GetFuselageMesh() const { return FuselageMesh; }
-	UStaticMeshComponent* GetUpperRotorMesh() const { return UpperRotorMesh; }
-	UStaticMeshComponent* GetLowerRotorMesh() const { return LowerRotorMesh; }
-
-protected:
-	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Helikopter")
-	USceneComponent* Root = nullptr;
-
-	/** Rumpf (alter Landmarken-Heli, Ka-52-artige Silhouette). */
-	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Helikopter")
-	UStaticMeshComponent* FuselageMesh = nullptr;
-
-	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Helikopter")
-	USceneComponent* UpperRotorHub = nullptr;
-	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Helikopter")
-	USceneComponent* LowerRotorHub = nullptr;
-	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Helikopter")
-	UStaticMeshComponent* UpperRotorMesh = nullptr;
-	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Helikopter")
-	UStaticMeshComponent* LowerRotorMesh = nullptr;
+	UStaticMeshComponent* GetUpperRotorMesh() const { return MainRotorBlade; }
+	UStaticMeshComponent* GetLowerRotorMesh() const { return LowerRotorBlade; }
 };

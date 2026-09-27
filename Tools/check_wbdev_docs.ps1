@@ -3,9 +3,12 @@
 # Stellt sicher, dass die Referenz (docs/reference/wbdev-konsolenbefehle.md) mit
 # dem Code synchron bleibt - OHNE Editor, rein statisch und deterministisch:
 #
-#   1) BEFEHLS-DECKUNG (beidseitig): jeder `UFUNCTION(Exec)`-WbDev-Befehl im
-#      Header ist in der Referenz dokumentiert (## WbXxx-Abschnitt), und die
-#      Referenz erfindet keinen Befehl, den es nicht gibt.
+#   1) BEFEHLS-DECKUNG (beidseitig): jeder `UFUNCTION(Exec)`-WbDev-Befehl in
+#      IRGENDEINEM Header unter Source/ ist in der Referenz dokumentiert
+#      (## WbXxx-Abschnitt), und die Referenz erfindet keinen Befehl, den es
+#      nicht gibt. Alle Header, weil die Exec-Kette auch HUD und Pawn erreicht
+#      (WbOption/WbOptionen sitzen bewusst im HUD) - nur den PlayerController
+#      zu lesen meldete sie faelschlich als PHANTOM.
 #   2) LOG-DRIFT (Code -> Doku): jede feste Textpassage jeder `UE_LOG(... "WbDev:
 #      ...")`-Zeile im PlayerController taucht woertlich in der Referenz auf.
 #      Wird eine Log-Meldung umformuliert, ohne die Referenz nachzuziehen, faellt
@@ -28,7 +31,9 @@ foreach ($f in @($Header, $Cpp, $Ref)) {
     if (-not (Test-Path $f)) { Write-Output "ABBRUCH: Datei fehlt: $f"; exit 2 }
 }
 
-$headerText = Get-Content $Header -Raw
+# Alle Header: Exec-Befehle koennen auf jedem Glied der Exec-Kette sitzen.
+$headerText = (Get-ChildItem (Join-Path $Root "Source") -Recurse -Filter *.h |
+    ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
 $cppText    = Get-Content $Cpp -Raw
 $refText    = Get-Content $Ref -Raw
 # Referenz auf eine leerraum-normalisierte Zeile ziehen: so trifft ein Textstueck

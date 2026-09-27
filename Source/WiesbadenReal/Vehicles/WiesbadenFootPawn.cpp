@@ -2,19 +2,20 @@
 
 #include "Vehicles/WiesbadenFootPawn.h"
 
+#include "Core/WiesbadenInputMap.h"       // Belegungstabelle (Tastatur + XBox)
 #include "Vehicles/WiesbadenHelicopter.h"   // ApplyStickShaping: eine Kennlinie fuer alle Sticks
 #include "Weapons/WiesbadenWeaponComponent.h"
+#include "Weapons/WiesbadenWeaponSpec.h"
 
 #include "WiesbadenReal.h"
 
-#include "Animation/AnimSequence.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
-#include "Components/SkeletalMeshComponent.h"
-#include "Engine/SkeletalMesh.h"
+#include "Vehicles/WiesbadenSebboFigureComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Components/StaticMeshComponent.h"
 #include "Vehicles/WiesbadenCarAudioComponent.h"
+#include "World/WiesbadenVisualTuning.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/StaticMesh.h"
 #include "Components/SpotLightComponent.h"
@@ -33,7 +34,7 @@ AWiesbadenFootPawn::AWiesbadenFootPawn()
 	PrimaryActorTick.bCanEverTick = true;
 
 	Capsule = CreateDefaultSubobject<UCapsuleComponent>(TEXT("Capsule"));
-	Capsule->InitCapsuleSize(40.0f, 90.0f);
+	Capsule->InitCapsuleSize(40.0f, StandingHalfHeightCm);
 	Capsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	Capsule->SetCollisionObjectType(ECC_Pawn);
 	Capsule->SetCollisionResponseToAllChannels(ECR_Block);
@@ -43,13 +44,16 @@ AWiesbadenFootPawn::AWiesbadenFootPawn()
 	// Fuss und am Steuer optisch ruhig.
 	CameraArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraArm"));
 	CameraArm->SetupAttachment(Capsule);
-	CameraArm->TargetArmLength = 300.0f;
+	CameraArm->TargetArmLength = ShoulderArmLengthCm;
 	CameraArm->bUsePawnControlRotation = false;
 	CameraArm->bDoCollisionTest = true;
 	CameraArm->SetRelativeLocation(FVector(0.0f, 0.0f, 60.0f));
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->SetupAttachment(CameraArm);
+	// Explizites Bildfeld statt Engine-Default 90 - wie die Fahrzeugkamera
+	// (World/WiesbadenVisualTuning.h), damit der Wechsel zu Fuss optisch ruhig bleibt.
+	Camera->SetFieldOfView(WiesbadenVisualTuning::FootFieldOfView);
 
 	// Sichtbarer Koerper. Die Meshes selbst kollidieren nicht - dafuer ist die
 	// Kapsel da; zwei Kollisionskoerper wuerden sich gegenseitig blockieren.
@@ -62,7 +66,7 @@ AWiesbadenFootPawn::AWiesbadenFootPawn()
 	HeadMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	// Die animierte Figur. Sie kollidiert nicht - dafuer ist die Kapsel da.
-	FigureMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("FigureMesh"));
+	FigureMesh = CreateDefaultSubobject<UWiesbadenSebboFigureComponent>(TEXT("FigureMesh"));
 	FigureMesh->SetupAttachment(Capsule);
 	FigureMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
@@ -96,6 +100,13 @@ void AWiesbadenFootPawn::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Grund-FOV merken: der Zielmodus teilt es durch den Zoomfaktor, und wer
+	// den Wert hier liest, muss ihn nicht zur Kameraeinstellung doppeln.
+	if (Camera)
+	{
+		BaseCameraFOV = Camera->FieldOfView;
+	}
+
 	// Erst hier, nicht im Konstruktor: die Materialien liegen als Assets vor
 	// und sind zur Konstruktionszeit des CDO noch nicht sicher ladbar.
 	BuildBody();
@@ -106,6 +117,10 @@ void AWiesbadenFootPawn::BeginPlay()
 	{
 		Weapon->SetupWeapon();
 	}
+
+	// Waffenlage und Zielzustand einmal sauber setzen - dann gilt die
+	// Armlaenge aus den Eigenschaften, nicht nur der Konstruktionswert.
+	ApplyCameraMode();
 }
 
 void AWiesbadenFootPawn::Tick(float DeltaSeconds)
@@ -168,6 +183,22 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 		return;
 	}
 
+	// Ducken, solange X (oder der rechte Stick) gehalten wird. Aufstehen nur mit
+	// Platz darueber: unter einer niedrigen Decke bleibt die Figur geduckt,
+	// bis sie hervorkommt.
+	// Ducken: X (halten) oder R3 am Gamepad - aus der Belegungstabelle,
+	// nicht als verstreute Einzelabfrage.
+	const bool bCrouchDown =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::DuckenHalten);
+	if (bCrouchDown && !bCrouched && !bAirborne)
+	{
+		SetCrouched(true);
+	}
+	else if (!bCrouchDown && bCrouched && HasRoomToStand())
+	{
+		SetCrouched(false);
+	}
+
 	// Bewegung in Blickrichtung.
 	FVector Move = FVector::ZeroVector;
 	if (PC->IsInputKeyDown(EKeys::W)) { Move += GetActorForwardVector(); }
@@ -188,9 +219,11 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 		// A am Gamepad ist SPRINGEN, nicht mehr Rennen: das ist die uebliche
 		// Belegung, und beide auf derselben Taste hiesse, dass jeder Sprung
 		// zugleich einen Sprint ausloest.
-		const bool bSprint = PC->IsInputKeyDown(EKeys::LeftShift)
-			|| PC->IsInputKeyDown(EKeys::Gamepad_LeftThumbstick);
-		const float SpeedCmPerS = (bSprint ? SprintSpeedKmh : WalkSpeedKmh) * KmhToCmPerS;
+		// Rennen: Umschalt oder L3 (Vorbild RDR2: Sprint auf dem linken Stick).
+		const bool bSprint =
+			WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::RennenHalten);
+		const float SpeedCmPerS = (bCrouched ? CrouchSpeedKmh : bSprint ? SprintSpeedKmh : WalkSpeedKmh)
+			* KmhToCmPerS;
 		const FVector Wanted = Move.GetSafeNormal() * SpeedCmPerS * DeltaSeconds;
 
 		// An Hindernissen entlanggleiten statt stehenzubleiben.
@@ -261,20 +294,31 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 
 	// Springen auf die Leertaste. Flanke, damit Halten nicht dauerspringt,
 	// und nur vom Boden aus - kein zweiter Sprung in der Luft.
-	const bool bJumpDown = PC->IsInputKeyDown(EKeys::SpaceBar)
-		|| PC->IsInputKeyDown(EKeys::Gamepad_FaceButton_Bottom);
-	if (bJumpDown && !bJumpKeyHeld && !bAirborne)
+	const bool bJumpDown =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::Springen);
+	if (bJumpDown && !bJumpKeyHeld && !bAirborne && !bCrouched)
 	{
 		VerticalSpeedCmS = JumpSpeedCmS;
 		bAirborne = true;
 	}
 	bJumpKeyHeld = bJumpDown;
 
-	// Angriff auf die linke Maustaste - Strg und Enter bleiben als Ersatz.
-	const bool bFireDown = PC->IsInputKeyDown(EKeys::LeftMouseButton)
-		|| PC->IsInputKeyDown(EKeys::LeftControl)
-		|| PC->IsInputKeyDown(EKeys::Enter)
-		|| PC->GetInputAnalogKeyState(EKeys::Gamepad_RightTriggerAxis) > 0.35f;
+	// Feuern: linke Maustaste, Strg/Enter als Ersatz, RT am Gamepad
+	// (RDR2-Layout: rechter Trigger schiesst).
+	const bool bFireDown =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::Feuern);
+
+	// Ansicht und Waffenwahl vor dem Feuern abfragen: ein Druck auf C oder
+	// eine Ziffer gilt im selben Bild schon fuer die neue Lage.
+	PollWeaponKeys(PC);
+	PollAimAndWheel(PC);
+	const bool bEgoDown =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::AnsichtWechseln);
+	if (bEgoDown && !bEgoKeyHeld)
+	{
+		ToggleEgoCamera();
+	}
+	bEgoKeyHeld = bEgoDown;
 
 	if (bUsesChainsaw)
 	{
@@ -314,6 +358,7 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 	}
 
 	FollowGround(DeltaSeconds);
+	LastGroundCheckLocation = GetActorLocation();
 
 	// Gemessenes Tempo aus der tatsaechlichen Ortsaenderung - NICHT aus der
 	// Eingabe. Wer gegen eine Hauswand laeuft, steht; die Fuesse sollen dann
@@ -331,64 +376,25 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 
 void AWiesbadenFootPawn::BuildBody()
 {
-	// Die Spielerfigur ist "Sebbo mit Kettensaege" - ein Fotoscan.
-	//
-	// Erste Wahl ist die ANIMIERTE Fassung: Skelett mit neun Knochen und drei
-	// Bewegungen (Tools/Blender/rig_sebbo.py). Mit ihr geht Sebbo im
-	// Schrittzyklus und schwingt die Kettensaege im Nahkampf; die Pistole
-	// entfaellt, weil beide Haende an der Saege sind.
-	if (USkeletalMesh* Skeletal = LoadObject<USkeletalMesh>(
-		nullptr, TEXT("/Game/Assets/People/SK_Sebbo.SK_Sebbo")))
+	// Die Spielerfigur: Sebbo als geriggtes Tripo-Modell. Clips und Clip-Wahl
+	// besitzt die Figur (UWiesbadenSebboFigureComponent).
+	if (FigureMesh && FigureMesh->SetupFigure(2.0f * JumpSpeedCmS / FMath::Max(GravityCmPerS2, 1.0f)))
 	{
-		// Der FBX-Importer benennt Bewegungen als
-		// <Zielname><Armaturname>_<Aktionsname> - fuer Aufraeumarbeiten am
-		// Namen lohnt kein eigener Editorlauf, der Pfad steht eben so da.
-		auto LoadAnim = [](const TCHAR* Name) -> UAnimSequence*
+		FigureMesh->SetRelativeLocation(FVector(0.0f, 0.0f, -88.0f));
+
+		// Nahkampf (Taste 9) ist jetzt ein Tritt: das Modell traegt keine
+		// Kettensaege mehr. Hiebdauer = Laenge des Tritts, Treffer beim
+		// hoechsten Bein (0,67 von 1,42 s in der Quelle).
+		if (const float Kick = FigureMesh->MoveLength(EWbSebboMove::Kick); Kick > 0.0f)
 		{
-			const FString Primary = FString::Printf(
-				TEXT("/Game/Assets/People/SK_SebboSebboRig_%s.SK_SebboSebboRig_%s"), Name, Name);
-			if (UAnimSequence* Found = LoadObject<UAnimSequence>(nullptr, *Primary))
-			{
-				return Found;
-			}
-			const FString Plain = FString::Printf(
-				TEXT("/Game/Assets/People/%s.%s"), Name, Name);
-			return LoadObject<UAnimSequence>(nullptr, *Plain);
-		};
-
-		IdleAnim = LoadAnim(TEXT("Sebbo_Idle"));
-		WalkAnim = LoadAnim(TEXT("Sebbo_Walk"));
-		SwingAnim = LoadAnim(TEXT("Sebbo_Swing"));
-
-		// Nur mit allen drei Bewegungen lohnt der Umstieg: ein Skelett, das
-		// reglos in T-Haltung ueber die Strasse gleitet, waere schlechter als
-		// das statische Modell.
-		if (FigureMesh && IdleAnim && WalkAnim && SwingAnim)
-		{
-			FigureMesh->SetSkeletalMesh(Skeletal);
-			FigureMesh->SetRelativeLocation(FVector(0.0f, 0.0f, -88.0f));
-			FigureMesh->PlayAnimation(IdleAnim, true);
-			CurrentLoop = 1;
-			bUsesChainsaw = true;
-
-			if (BodyMesh) { BodyMesh->SetVisibility(false); }
-			if (HeadMesh) { HeadMesh->SetVisibility(false); }
-
-			// Kettensaege statt Pistole: die Waffe wird gar nicht erst
-			// aufgebaut (SetupWeapon prueft die Sichtbarkeit nicht).
-			if (Weapon) { Weapon->SetVisibility(false, true); }
-
-			// Der Saegenmotor tuckert von Anfang an im Leerlauf.
-			if (SawAudio) { SawAudio->SetEngineRunning(true); }
-
-			UE_LOG(LogWbVehicles, Log,
-				TEXT("Spielerfigur: SK_Sebbo animiert (Gehen + Kettensaege)."));
-			return;
+			SwingSeconds = Kick;
+			SwingHitAtSeconds = 0.47f * Kick;
 		}
 
-		UE_LOG(LogWbVehicles, Warning,
-			TEXT("Spielerfigur: SK_Sebbo ohne vollstaendige Bewegungen (Idle %d, Walk %d, Swing %d) - statisches Modell."),
-			IdleAnim != nullptr, WalkAnim != nullptr, SwingAnim != nullptr);
+		if (BodyMesh) { BodyMesh->SetVisibility(false); }
+		if (HeadMesh) { HeadMesh->SetVisibility(false); }
+		bUsesChainsaw = false;
+		return;
 	}
 
 	// Rueckfall: das statische Modell (kein Skelett importiert).
@@ -482,6 +488,291 @@ void AWiesbadenFootPawn::FireWeapon()
 	Weapon->Fire(Start, Direction);
 }
 
+void AWiesbadenFootPawn::ToggleEgoCamera()
+{
+	bEgoCamera = !bEgoCamera;
+	ApplyCameraMode();
+}
+
+void AWiesbadenFootPawn::ApplyCameraMode()
+{
+	if (!CameraArm || !Camera)
+	{
+		return;
+	}
+
+	if (bEgoCamera)
+	{
+		// Erste Person: Kamera auf Augenhoehe, leicht rechts (Schulter-Feel),
+		// Arm gestaucht. Der Arm folgt weiterhin der Maus (Pitch oben).
+		CameraArm->TargetArmLength = EgoArmLengthCm;
+		CameraArm->SetRelativeLocation(FVector(0.0f, EgoShoulderOffsetCm, 60.0f));
+
+		// Eigene Figur ausblenden (nur fuer diesen Spieler; Schatten bleiben,
+		// damit man in der Ego-Ansicht nicht sichtbar schwebt).
+		if (BodyMesh) { BodyMesh->SetOwnerNoSee(true); }
+		if (HeadMesh) { HeadMesh->SetOwnerNoSee(true); }
+		if (FigureMesh) { FigureMesh->SetOwnerNoSee(true); }
+
+		// Waffe an die Kamera: vorn rechts unterhalb des Blicks, leicht
+		// einwaerts gedreht - die uebliche Ego-Waffenlage. Die Teile sind
+		// StaticMeshComponents am eigenen Actor: OwnerNoSee versteckt sie
+		// fuer den Traeger NICHT, darum bleibt die Waffe sichtbar geschaltet
+		// und haengt nah genug, um im Bild zu bleiben.
+		if (Weapon)
+		{
+			Weapon->AttachToComponent(Camera,
+				FAttachmentTransformRules::KeepRelativeTransform);
+			Weapon->SetRelativeLocation(FVector(22.0f, 14.0f, -16.0f));
+			Weapon->SetRelativeRotation(FRotator(0.0f, -4.0f, 0.0f));
+		}
+	}
+	else
+	{
+		// Schulterkamera: die bekannte Verfolgerlage zurueck.
+		CameraArm->TargetArmLength = ShoulderArmLengthCm;
+		CameraArm->SetRelativeLocation(FVector(0.0f, 0.0f, 60.0f));
+
+		if (BodyMesh) { BodyMesh->SetOwnerNoSee(false); }
+		if (HeadMesh) { HeadMesh->SetOwnerNoSee(false); }
+		if (FigureMesh) { FigureMesh->SetOwnerNoSee(false); }
+
+		if (Weapon)
+		{
+			Weapon->AttachToComponent(Capsule,
+				FAttachmentTransformRules::KeepRelativeTransform);
+			Weapon->SetRelativeLocation(FVector(30.0f, 26.0f, 2.0f));
+			Weapon->SetRelativeRotation(FRotator::ZeroRotator);
+		}
+	}
+
+	// Zielzustand zuletzt: Zoom, Armlaenge und Streuung gelten fuer beide
+	// Lagen (Schulter und Ego).
+	ApplyAimState();
+}
+
+void AWiesbadenFootPawn::PollWeaponKeys(const APlayerController* PC)
+{
+	if (!PC || !Weapon)
+	{
+		return;
+	}
+
+	// Ziffern 1-8 auf die acht Waffen des Auftrags, in dessen Reihenfolge
+	// (Pistole, Gewehr, MG, Laserpistole, Lichtschwert, Raketenwerfer,
+	// Granatwerfer, Plasmacutter). Die vier Nebenwaffen (MP, Schrotflinte,
+	// Scharfschuetze, Kettensaege) haben keine eigene Ziffer mehr - sie
+	// liegen auf dem Mausrad, das durch die ganze Tabelle blaettern kann.
+	// Flankenerkennung je Taste, damit Halten nicht springt.
+	static const FKey Keys[8] = {
+		EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four,
+		EKeys::Five, EKeys::Six, EKeys::Seven, EKeys::Eight };
+	static const int32 CoreWeapons[8] = {
+		static_cast<int32>(EWiesbadenWeaponId::Pistole),
+		static_cast<int32>(EWiesbadenWeaponId::Gewehr),
+		static_cast<int32>(EWiesbadenWeaponId::Maschinengewehr),
+		static_cast<int32>(EWiesbadenWeaponId::Laserpistole),
+		static_cast<int32>(EWiesbadenWeaponId::Lichtschwert),
+		static_cast<int32>(EWiesbadenWeaponId::Raketenwerfer),
+		static_cast<int32>(EWiesbadenWeaponId::Granatwerfer),
+		static_cast<int32>(EWiesbadenWeaponId::Plasmacutter) };
+
+	for (int32 Index = 0; Index < 8; ++Index)
+	{
+		const bool bDown = PC->IsInputKeyDown(Keys[Index]);
+		if (bDown && !WeaponKeyHeld[Index]
+			&& UWiesbadenWeaponComponent::IsValidWeaponIndex(CoreWeapons[Index]))
+		{
+			SelectWeapon(CoreWeapons[Index]);
+		}
+		WeaponKeyHeld[Index] = bDown;
+	}
+}
+
+void AWiesbadenFootPawn::PollAimAndWheel(const APlayerController* PC)
+{
+	if (!PC)
+	{
+		return;
+	}
+
+	// Zielen (ADS): rechte Maustaste ODER linker Trigger am Gamepad
+	// (RDR2-Layout: LT zielt). Kamera zoomt heran, Streuung halbiert sich;
+	// Loslassen stellt beides sofort wieder her.
+	const bool bAimDown =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::Zielen);
+	if (bAimDown != bAiming)
+	{
+		bAiming = bAimDown;
+		if (!bAiming)
+		{
+			AdsZoomLevel = 1.0f;
+		}
+		ApplyAimState();
+	}
+
+	// Waffenwechsel an den Schultertasten (Flanke je Taste): der Gamepad-Weg
+	// fuer das, was am PC das Mausrad tut.
+	const bool bVorHeld =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::WaffeVor);
+	if (bVorHeld && !bWaffeVorHeld && Weapon)
+	{
+		SelectWeapon(WiesbadenWeapons::NextWeaponIndex(Weapon->WeaponIndex, +1));
+	}
+	bWaffeVorHeld = bVorHeld;
+
+	const bool bZurueckHeld =
+		WiesbadenInputMap::IsActionDown(PC, EWiesbadenInputAction::WaffeZurueck);
+	if (bZurueckHeld && !bWaffeZurueckHeld && Weapon)
+	{
+		SelectWeapon(WiesbadenWeapons::NextWeaponIndex(Weapon->WeaponIndex, -1));
+	}
+	bWaffeZurueckHeld = bZurueckHeld;
+
+	// "Mausrad": die Achse meldet ein Delta je Bild, das D-Pad liefert
+	// Klicks als Flanken. Erst ab einem ganzen Klick handeln, damit ein
+	// langsames Scrollen nicht mehrere Stufen springt.
+	WheelAccumulator += PC->GetInputAnalogKeyState(EKeys::MouseWheelAxis);
+	const bool bPadUp = PC->IsInputKeyDown(EKeys::Gamepad_DPad_Up);
+	const bool bPadDown = PC->IsInputKeyDown(EKeys::Gamepad_DPad_Down);
+	if (bPadUp && !bPadUpHeld)
+	{
+		WheelAccumulator += 1.0f;
+	}
+	if (bPadDown && !bPadDownHeld)
+	{
+		WheelAccumulator -= 1.0f;
+	}
+	bPadUpHeld = bPadUp;
+	bPadDownHeld = bPadDown;
+
+	if (FMath::Abs(WheelAccumulator) < 1.0f)
+	{
+		return;
+	}
+	const int32 Clicks = FMath::TruncToInt(WheelAccumulator);
+	WheelAccumulator -= static_cast<float>(Clicks);
+
+	// Aufteilung des Klicks - dieselbe reine Funktion wie am PC, im Test
+	// geprueft (WiesbadenReal.Input.MausradRoute).
+	bool bCuts = false;
+	if (Weapon)
+	{
+		bCuts = WiesbadenWeapons::Spec(Weapon->WeaponIndex).bCuts;
+	}
+
+	switch (WiesbadenInputMap::RouteMausrad(bCuts, bAiming))
+	{
+	case WiesbadenInputMap::EMausradRoute::Schnittebene:
+		// Plasma-Trennen: die Schnittebene dreht in Rasten (Spec), weder
+		// Zoom noch Waffenwechsel. Das Dead-Space-Prinzip.
+		if (Weapon)
+		{
+			const FWiesbadenWeaponSpec& CutSpec =
+				WiesbadenWeapons::Spec(Weapon->WeaponIndex);
+			Weapon->RotateCutPlane(Clicks * CutSpec.CutAngleStepDeg);
+		}
+		break;
+
+	case WiesbadenInputMap::EMausradRoute::Zoom:
+	{
+		// Zielmodus: das Rad zoomt. Die Obergrenze gehoert zur Waffe
+		// (Scharfschuetze 3.5, Plasmacutter 1.4), nicht zum Pawn.
+		const float MaxZoom = Weapon
+			? WiesbadenWeapons::Spec(Weapon->WeaponIndex).AdsZoomMax
+			: 2.0f;
+		AdsZoomLevel = WiesbadenInputMap::ZoomStufe(
+			AdsZoomLevel, Clicks, AdsZoomStep, MaxZoom);
+		ApplyAimState();
+		break;
+	}
+
+	case WiesbadenInputMap::EMausradRoute::Waffenwechsel:
+	default:
+		// Sonst blaettern: durch die ganze Tabelle, ueber beide Raender.
+		if (Weapon)
+		{
+			SelectWeapon(WiesbadenWeapons::NextWeaponIndex(Weapon->WeaponIndex, Clicks));
+		}
+		break;
+	}
+}
+
+void AWiesbadenFootPawn::ApplyAimState()
+{
+	// Zoom = FOV teilen: 2.0 halbiert den Bildausschnitt. Der Grundwert
+	// stammt aus der Kamera selbst (gemerkt beim Start), damit niemand zwei
+	// FOV-Zahlen synchron halten muss.
+	if (Camera)
+	{
+		Camera->SetFieldOfView(BaseCameraFOV / FMath::Max(AdsZoomLevel, 1.0f));
+	}
+
+	// Im Zielmodus rueckt die Kamera dichter an die Schulter.
+	if (CameraArm)
+	{
+		const float BaseArm = bEgoCamera ? EgoArmLengthCm : ShoulderArmLengthCm;
+		CameraArm->TargetArmLength = bAiming ? BaseArm * AdsArmLengthScale : BaseArm;
+	}
+
+	// Zielen macht praezise: halbe Streuung.
+	if (Weapon)
+	{
+		Weapon->SpreadScale = bAiming ? 0.5f : 1.0f;
+	}
+}
+
+void AWiesbadenFootPawn::SelectWeapon(int32 Index)
+{
+	if (!Weapon || !UWiesbadenWeaponComponent::IsValidWeaponIndex(Index))
+	{
+		return;
+	}
+	if (Index == Weapon->WeaponIndex)
+	{
+		return;
+	}
+
+	Weapon->SetWeaponIndex(Index);
+
+	// Feuerrate des Pawns an die neue Waffe.
+	const FWiesbadenWeaponSpec& Spec = WiesbadenWeapons::Spec(Index);
+	FireCooldownSeconds = FMath::Max(FireCooldownSeconds, Spec.ShotIntervalSeconds());
+
+	// Zoom bleibt gueltig, aber nie ueber die Grenze der neuen Waffe.
+	AdsZoomLevel = FMath::Min(AdsZoomLevel, FMath::Max(Spec.AdsZoomMax, 1.0f));
+
+	// Die Kettensaege (Slot 9) schwingt die Figur und tuckert; jede andere
+		// Waffe zeigt die Waffenkomponente und feuert Projektile. Ein laufender
+		// Hieb gehoert zur Saege und wird beim Wechsel abgebrochen.
+	const bool bSaw = Index == static_cast<int32>(EWiesbadenWeaponId::Kettensaege)
+		&& FigureMesh && FigureMesh->HasMove(EWbSebboMove::Kick);
+	bUsesChainsaw = bSaw;
+	SwingRemaining = 0.0f;
+	if (FigureMesh)
+	{
+		FigureMesh->CancelOneShot(EWbSebboMove::Kick);
+	}
+	bMeleeHitDone = false;
+
+	if (Weapon)
+	{
+		Weapon->SetVisibility(!bSaw, true);
+	}
+	// Slot 9 ist ein Tritt (A_Sebbo_Kick), keine Saege mehr: der
+	// Zweitakter-Synthesizer bleibt still.
+	if (SawAudio)
+	{
+		SawAudio->SetEngineRunning(false);
+	}
+
+	// Waffenlage neu anwenden (Ego/Schulter bleibt erhalten).
+	ApplyCameraMode();
+
+	UE_LOG(LogWbVehicles, Log, TEXT("FootPawn: Waffe %d (%s) gewaehlt."),
+		Index, Spec.DisplayName);
+}
+
 void AWiesbadenFootPawn::FollowGround(float DeltaSeconds)
 {
 	UWorld* World = GetWorld();
@@ -490,9 +781,6 @@ void AWiesbadenFootPawn::FollowGround(float DeltaSeconds)
 		return;
 	}
 
-	const FVector Start = GetActorLocation() + FVector(0.0, 0.0, 200.0);
-	const FVector End = Start - FVector(0.0, 0.0, 100000.0);
-
 	// WorldStatic, nicht Visibility: Fahrbahn, Gehweg und Gelaende sind
 	// statische Weltgeometrie. Die Kanaele stimmen hier zwar ueberein, aber die
 	// Bodenabfrage soll denselben Kanal benutzen wie die Kollision, auf der
@@ -500,8 +788,27 @@ void AWiesbadenFootPawn::FollowGround(float DeltaSeconds)
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbFootGround), true);
 	Params.AddIgnoredActor(this);
 
+	// Boden = erste Flaeche unter dem SCHEITEL der Kapsel. Was ueber dem Kopf
+	// liegt, ist Decke: mit einem Start 2 m ueber der Mitte setzte die Abfrage
+	// die geduckte Figur unter einer niedrigen Platte OBEN auf die Platte.
+	//
+	// Ausnahme: gerade VERSETZT (Aussteigen, -WbGoto, Bahn/Bus). Dann kann die
+	// Figur im Gelaende stecken - am 54-%-Hang der Emser Strasse bis ueber den
+	// Kopf -, und nur die alte Reichweite von 2 m ueber der Mitte findet den
+	// Boden wieder. Gehen versetzt nie so weit (Sweep); ein Sprung von mehr als
+	// 1,5 m in einem Bild ist ein Versetzen.
+	const FVector Center = GetActorLocation();
+	if (FVector::Dist(Center, LastGroundCheckLocation) > 150.0)
+	{
+		TeleportGraceSeconds = 0.5f;
+	}
+	const float Reach = TeleportGraceSeconds > 0.0f ? 200.0f
+		: (Capsule ? Capsule->GetScaledCapsuleHalfHeight() : 90.0f);
+	TeleportGraceSeconds = FMath::Max(0.0f, TeleportGraceSeconds - DeltaSeconds);
+	const FVector Start = Center + FVector(0.0, 0.0, Reach);
+
 	FHitResult Hit;
-	if (!World->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params))
+	if (!World->LineTraceSingleByChannel(Hit, Start, Start - FVector(0.0, 0.0, 100000.0), ECC_WorldStatic, Params))
 	{
 		return;
 	}
@@ -563,20 +870,67 @@ void AWiesbadenFootPawn::FollowGround(float DeltaSeconds)
 	}
 }
 
+void AWiesbadenFootPawn::SetRiding(bool bInRiding)
+{
+	// Bahn und Bus setzen den Fahrgast mit der STEHENDEN Kapsel ein (Boden +
+	// 90 cm) und verfolgen waehrend der Fahrt keinen Boden - geduckt schwebte
+	// er 20 cm ueber dem Wagenboden und stuende nach dem Aussteigen mit der
+	// kurzen Kapsel da. Der Wagen hat Kopfhoehe, also aufrichten.
+	if (bInRiding)
+	{
+		SetCrouched(false);
+	}
+	bRiding = bInRiding;
+}
+
+void AWiesbadenFootPawn::SetCrouched(bool bInCrouched)
+{
+	if (!Capsule || bInCrouched == bCrouched)
+	{
+		return;
+	}
+	bCrouched = bInCrouched;
+	const float HalfHeight = bCrouched ? CrouchHalfHeightCm : StandingHalfHeightCm;
+	const float Delta = Capsule->GetUnscaledCapsuleHalfHeight() - HalfHeight;
+	Capsule->SetCapsuleHalfHeight(HalfHeight);
+	// Fuesse bleiben, wo sie sind: der Kapselmittelpunkt wandert um die
+	// Differenz, die Figuren sitzen wieder mit den Sohlen auf der Kapselunterseite.
+	AddActorWorldOffset(FVector(0.0f, 0.0f, -Delta), /*bSweep=*/false);
+	const FVector Feet(0.0f, 0.0f, -(HalfHeight - 2.0f));
+	if (FigureMesh) { FigureMesh->SetRelativeLocation(Feet); }
+	if (BodyMesh) { BodyMesh->SetRelativeLocation(Feet); }
+}
+
+bool AWiesbadenFootPawn::HasRoomToStand() const
+{
+	const UWorld* World = GetWorld();
+	if (!World || !Capsule)
+	{
+		return true;
+	}
+	// Die geduckte Kapsel um die Differenz nach oben schieben - trifft sie
+	// etwas, stoesst der Kopf an. Etwas schmaler als die Kapsel, damit ein
+	// Hang unter den Fuessen nicht als Decke zaehlt.
+	const float Rise = StandingHalfHeightCm - Capsule->GetUnscaledCapsuleHalfHeight();
+	const FVector Start = GetActorLocation();
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbAufstehen), false, this);
+	return !World->SweepTestByChannel(Start, Start + FVector(0.0f, 0.0f, Rise), FQuat::Identity,
+		Capsule->GetCollisionObjectType(),
+		FCollisionShape::MakeCapsule(Capsule->GetUnscaledCapsuleRadius() - 5.0f, Capsule->GetUnscaledCapsuleHalfHeight()),
+		Params, FCollisionResponseParams(Capsule->GetCollisionResponseToChannels()));
+}
+
 void AWiesbadenFootPawn::StartSwing()
 {
 	SwingRemaining = SwingSeconds;
 	bMeleeHitDone = false;
 
-	if (FigureMesh && SwingAnim)
+	if (FigureMesh)
 	{
-		// Einmalig, keine Schleife. CurrentLoop auf 0, damit UpdateFigure
-		// nach dem Hieb die passende Dauerschleife NEU startet - sonst
-		// bliebe die Figur im letzten Bild des Hiebs stehen.
-		FigureMesh->PlayAnimation(SwingAnim, false);
-		FigureMesh->SetPlayRate(SwingAnim->GetPlayLength() / FMath::Max(SwingSeconds, 0.1f));
-		CurrentLoop = 0;
+		FigureMesh->PlayOneShot(EWbSebboMove::Kick, SwingSeconds);
 	}
+	UE_LOG(LogWbVehicles, Log, TEXT("Tritt (Taste 9): A_Sebbo_Kick %.2f s, Saegenklang %s."),
+		SwingSeconds, SawAudio && SawAudio->IsEngineRunning() ? TEXT("AN") : TEXT("aus"));
 }
 
 bool AWiesbadenFootPawn::TryStepUp(const FVector& Wanted, const FHitResult& Blocked)
@@ -589,7 +943,17 @@ bool AWiesbadenFootPawn::TryStepUp(const FVector& Wanted, const FHitResult& Bloc
 
 	// Nur an aufrechten Hindernissen versuchen. Eine flache Rampe blockiert
 	// nicht, und eine Decke ueber dem Kopf ist keine Stufe.
-	if (FMath::Abs(Blocked.Normal.Z) > 0.5f)
+	//
+	// Ausnahme: die KANTE einer Stufe. Trifft die runde Kapselunterseite die
+	// Vorderkante, ist die Kontaktnormale schraeg (im Sebbo-Treppenhaus Z 0,63
+	// bei 15 cm ueber den Fuessen) - die Figur rutschte ab und hing am Podest,
+	// je nach Bildtakt in einem anderen Geschoss. Beruehrt sie zwischen 10 cm
+	// und Stufenhoehe ueber den Fuessen, ist es eine Stufe; Rampen beruehren
+	// tiefer (unter 6 cm bis 30 Grad), Decken hoeher.
+	const float FeetZ = GetActorLocation().Z - (Capsule ? Capsule->GetScaledCapsuleHalfHeight() : 90.0f);
+	const float ContactCm = Blocked.ImpactPoint.Z - FeetZ;
+	const bool bStepEdge = ContactCm > 10.0f && ContactCm <= MaxStepHeightCm;
+	if (FMath::Abs(Blocked.Normal.Z) > 0.5f && !bStepEdge)
 	{
 		return false;
 	}
@@ -608,17 +972,24 @@ bool AWiesbadenFootPawn::TryStepUp(const FVector& Wanted, const FHitResult& Bloc
 			Capsule->GetScaledCapsuleHalfHeight())
 		: FCollisionShape::MakeCapsule(40.0f, 90.0f);
 
+	// Eine Beruehrung am START ist kein Hindernis: an der Wand des
+	// Sebbo-Treppenhauses steht die Kapsel buendig (Radius 40 = Abstand zur
+	// Wand), und jeder Sweep meldete "steckt schon" - die Figur kam nicht vom
+	// Podest auf den naechsten Lauf. Dieselbe Regel wie die Treppensonde
+	// (KapselSchritt in WiesbadenSebboHqSonden.cpp).
+	const auto Blocks = [](const FHitResult& H) { return H.bBlockingHit && !H.bStartPenetrating; };
+
 	FHitResult Probe;
 	const FVector Raised = Start + Lift;
 	if (World->SweepSingleByChannel(Probe, Start, Raised, FQuat::Identity,
-		ECC_Pawn, Shape, Params))
+		ECC_Pawn, Shape, Params) && Blocks(Probe))
 	{
 		return false;
 	}
 
 	const FVector Ahead = Raised + Wanted.GetSafeNormal() * (Wanted.Size() + StepForwardProbeCm);
 	if (World->SweepSingleByChannel(Probe, Raised, Ahead, FQuat::Identity,
-		ECC_Pawn, Shape, Params))
+		ECC_Pawn, Shape, Params) && Blocks(Probe))
 	{
 		return false;
 	}
@@ -628,9 +999,9 @@ bool AWiesbadenFootPawn::TryStepUp(const FVector& Wanted, const FHitResult& Bloc
 	// sonst schwebt die Figur.
 	const FVector Down = Ahead - Lift - FVector(0.0f, 0.0f, 2.0f);
 	if (!World->SweepSingleByChannel(Probe, Ahead, Down, FQuat::Identity,
-		ECC_Pawn, Shape, Params))
+		ECC_Pawn, Shape, Params) || Probe.bStartPenetrating)
 	{
-		return false;
+		return false;   // kein Boden - oder die Figur staende IN der Geometrie
 	}
 
 	SetActorLocation(Probe.Location, /*bSweep=*/false);
@@ -698,6 +1069,16 @@ void AWiesbadenFootPawn::DoMeleeHit()
 		const int32 Felled = City->PedestrianSimulation.BurstNear(
 			Centre, MeleeRadiusCm + MeleeRangeCm * 0.5);
 		Struck += Felled;
+		if (Felled > 0)
+		{
+			City->PlayPedestrianBurstSound(Centre);
+		}
+
+		// Jede zerplatze Figur ist eine Tat ins Fahndungskonto.
+		for (int32 HitIndex = 0; HitIndex < Felled; ++HitIndex)
+		{
+			City->ReportCrime(EWiesbadenCrimeEvent::PedestrianDowned);
+		}
 	}
 
 	if (Struck > 0)
@@ -708,45 +1089,15 @@ void AWiesbadenFootPawn::DoMeleeHit()
 
 void AWiesbadenFootPawn::UpdateFigure(float DeltaSeconds, float SpeedMps)
 {
-	if (!bUsesChainsaw || !FigureMesh)
+	if (FigureMesh)
 	{
-		return;
-	}
-
-	// Kettensaegen-Klang: leiser Zweitakt-Leerlauf, beim Hieb Vollgas. Das
-	// Tempo faerbt leicht mit - im Laufen dreht der Motor etwas hoeher, wie
-	// bei einer getragenen Saege, die mitgeschuettelt wird.
-	if (SawAudio)
-	{
-		const bool bSwinging = SwingRemaining > 0.0f;
-		const float TargetRpm = bSwinging
-			? 9200.0f
-			: 2600.0f + 600.0f * FMath::Clamp(SpeedMps / 2.0f, 0.0f, 1.0f);
-		SawAudio->SetEngineState(TargetRpm, bSwinging ? 1.0f : 0.08f, SpeedMps * 3.6f);
-	}
-
-	// Waehrend des Hiebs laeuft Sebbo_Swing - nichts ueberschreiben.
-	if (SwingRemaining > 0.0f)
-	{
-		return;
-	}
-
-	if (SpeedMps > 0.4f)
-	{
-		if (CurrentLoop != 2 && WalkAnim)
-		{
-			FigureMesh->PlayAnimation(WalkAnim, true);
-			CurrentLoop = 2;
-		}
-		// Schritttakt an das Tempo koppeln: der Zyklus ist fuer 1,67 m/s
-		// gebaut; beim Rennen (16 km/h) laufen die Beine entsprechend
-		// schneller, statt ueber den Asphalt zu gleiten.
-		FigureMesh->SetPlayRate(FMath::Clamp(SpeedMps / WalkAnimSpeedMps, 0.5f, 3.0f));
-	}
-	else if (CurrentLoop != 1 && IdleAnim)
-	{
-		FigureMesh->PlayAnimation(IdleAnim, true);
-		FigureMesh->SetPlayRate(1.0f);
-		CurrentLoop = 1;
+		FWbFigureInput Input;
+		Input.SpeedMps = SpeedMps;
+		Input.YawDeg = GetActorRotation().Yaw;
+		Input.bAirborne = bAirborne;
+		Input.bRiding = bRiding;
+		Input.bCrouching = bCrouched;
+		Input.HealthPoints = HealthPoints;
+		FigureMesh->Animate(DeltaSeconds, Input);
 	}
 }

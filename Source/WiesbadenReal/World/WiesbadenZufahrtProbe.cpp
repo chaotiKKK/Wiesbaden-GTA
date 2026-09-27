@@ -176,7 +176,7 @@ void UWiesbadenZufahrtProbe::Messen()
 	const FNachbarstrasse* PadWahl = nullptr;
 	for (const FNachbarstrasse& N : Nachbarn)
 	{
-		if (N.bZulaessig)
+		if (N.bZulaessig && N.Name.Equals(SebboHqSite::AccessRoadName, ESearchCase::IgnoreCase))
 		{
 			PadWahl = &N;
 			break;
@@ -189,6 +189,7 @@ void UWiesbadenZufahrtProbe::Messen()
 	Zugang.GarageEntranceWorldCm = GarageWelt;
 	Zugang.PedestrianEntranceWorldCm = PortalWelt;
 	Zugang.SearchRadiusCm = 5000.0;
+	Zugang.PreferredStreetName = SebboHqSite::AccessRoadName;
 	const FResolvedRoadAccess Aufgeloest =
 		URoadNetworkGenerator::ResolveRoadAccess(Netz, Zugang);
 
@@ -201,6 +202,7 @@ void UWiesbadenZufahrtProbe::Messen()
 	// derselben Rechnung, in der auch der Turm gebaut wird (X aus der
 	// Garagenoeffnung heraus, Y quer).
 	FString AchseJson;
+	FString GehwegProfilJson;
 	double UnterbauCm = 0.0;
 	double FahrbahnBreiteCm = 0.0;
 	{
@@ -277,6 +279,103 @@ void UWiesbadenZufahrtProbe::Messen()
 					Geschrieben > 0 ? TEXT(", ") : TEXT(""),
 					Lokal.X, Lokal.Y, Punkt.Z);
 				++Geschrieben;
+			}
+
+			// --- 2c) GEHWEGPROFIL: SPALTEN QUEER ZUR STRASSE ---------------
+			//
+			// "Die Hoehendaten fuer den Gehweg rechts stadtauswaerts stimmen
+			// nicht mehr." Eine Zahl sagt mehr als drei Screenshots: je Station
+			// eine Spalte ueber Fahrbahnmitte, Gehweg rechts und links (Rechts
+			// = Bergseite beim Aufstieg, lokale -X-Seite - der Turm steht dort,
+			// und sein Bauplateau zieht das Gelaende genau auf dieser Seite
+			// unter den Gehweg weg). Die Spalten zeigen die WIRKLICHEN
+			// Oberflaechen (Gelaende, Fahrbahn, Gehweg) im eingebauten Zustand,
+			// die Achse das gespeicherte Profil zum Vergleich.
+			{
+				const double HalbFahrbahn = Segment.CarriagewayWidthCm * 0.5;
+				const double GehwegMitte = HalbFahrbahn
+					+ FMath::Max(Segment.SidewalkWidthCm, 100.0) * 0.5;
+				FCollisionQueryParams P(SCENE_QUERY_STAT(WbGehwegProfil), true);
+				int32 Station = 0;
+				for (int32 i = 0; i + 1 < Linie.Num(); i += 3)
+				{
+					const FVector Lokal = Zurueck.RotateVector(Linie[i] - Fuss);
+					if (FVector2D(Lokal.X, Lokal.Y).Size() > 6000.0)
+					{
+						continue;
+					}
+					// Auswaerts = wachsendes lokales Y (bergauf). Rechts ist die
+					// um +90 Grad gedrehte Laengsrichtung - im Turmrahmen damit
+					// die -X-Seite, die Bauplateauseite.
+					FVector2D Laengs(Lokal.X, Lokal.Y);
+					{
+						const FVector Naechste = Zurueck.RotateVector(Linie[i + 1] - Fuss);
+						Laengs = FVector2D(Naechste.X - Lokal.X, Naechste.Y - Lokal.Y);
+						if (Laengs.Y < 0.0)
+						{
+							Laengs = -Laengs;
+						}
+						Laengs.Normalize();
+					}
+					const FVector2D Rechts(-Laengs.Y, Laengs.X);
+
+				// WICHTIG: XY kommt hier schon in WELTKoordinaten (Linie ist
+				// Welt) - NICHT durch NachWelt schicken, das dreht noch einmal
+				// und tastet eine Halle daneben ab (erster Lauf: durchgehend
+				// 130-136 m "Gelaende" ueber einer 110-m-Strasse).
+				auto Spalte = [&World, &P](const FVector2D& XY) -> FString
+				{
+					TArray<FHitResult> Treffer;
+					const FVector Oben = FVector(XY.X, XY.Y, 30000.0);
+						if (!World->LineTraceMultiByChannel(Treffer, Oben,
+							Oben - FVector(0.0, 0.0, 30000.0), ECC_WorldStatic, P))
+						{
+							return FString();
+						}
+						FString SaeuleJson;
+						for (int32 h = 0; h < FMath::Min(Treffer.Num(), 4); ++h)
+						{
+							const FString Komponente = GetNameSafe(Treffer[h].GetComponent());
+							const bool bFahrbahn = Komponente.Contains(TEXT("Road"));
+							const bool bGebaeude = Komponente.Contains(TEXT("Building"));
+							SaeuleJson += FString::Printf(
+								TEXT("%s{\"z_cm\": %.0f, \"art\": \"%s\"}"),
+								h > 0 ? TEXT(", ") : TEXT(""),
+								Treffer[h].Location.Z,
+								bFahrbahn ? TEXT("Fahrbahn") : (bGebaeude ? TEXT("Gebaeude") : TEXT("Gelaende")));
+						}
+						return SaeuleJson;
+					};
+
+					const FVector2D MitteXY(Linie[i].X, Linie[i].Y);
+					// Querschnitt fein: alle 50 cm von -750 bis +750 cm quer.
+					// Erst der Verlauf zeigt die Kante zwischen Fahrbahn, Bordstein
+					// und Gehweg - und wie (und ob) der Gehweg der Fahrbahn folgt.
+					FString QuerJson;
+					for (int32 q = -15; q <= 15; ++q)
+					{
+						const double VersatzCm = q * 50.0;
+						const FVector2D Punkt = MitteXY + Rechts * VersatzCm;
+						// VOLLE Spalte je Punkt: erst die Beschriftung sagt, ob
+						// dort Fahrbahn, Gehweg oder durchwachsendes Gelaende
+						// die oberste Flaeche ist.
+						const FString Saeule = Spalte(Punkt);
+						QuerJson += FString::Printf(TEXT("%s{\"d\": %.0f, \"h\": [%s]}"),
+							q > -15 ? TEXT(", ") : TEXT(""), VersatzCm, *Saeule);
+					}
+					GehwegProfilJson += FString::Printf(
+						TEXT("%s{\"y_lokal\": %.0f, \"achse_z_cm\": %.0f, ")
+						TEXT("\"gehweg_breite_cm\": %.0f, \"bordstein_cm\": %.0f, ")
+						TEXT("\"quer\": [%s], ")
+						TEXT("\"mitte\": [%s], \"rechts\": [%s], \"links\": [%s]}"),
+						Station > 0 ? TEXT(",\n  ") : TEXT(""),
+						Lokal.Y, Linie[i].Z, GehwegMitte, Segment.KerbHeightCm,
+						*QuerJson,
+						*Spalte(MitteXY),
+						*Spalte(MitteXY + Rechts * GehwegMitte),
+						*Spalte(MitteXY - Rechts * GehwegMitte));
+					++Station;
+				}
 			}
 			break;
 		}
@@ -371,6 +470,7 @@ void UWiesbadenZufahrtProbe::Messen()
 		TEXT(" \"pad_wahl\": {\"segment\": %d, \"name\": \"%s\", \"z_cm\": %.0f, \"abstand_m\": %.1f},\n")
 		TEXT(" \"road_access\": {\"garage_segment\": %d, \"portal_segment\": %d, \"gueltig\": %s},\n")
 		TEXT(" \"fahrbahn_lokal\": {\"breite_cm\": %.0f, \"unter_gebaeude_cm\": %.0f, \"achse\": [%s]},\n")
+		TEXT(" \"gehwegprofil\": [\n  %s\n ],\n")
 		TEXT(" \"nachbarstrassen\": [\n  %s\n ],\n")
 		TEXT(" \"ring\": [\n  %s\n ]\n}\n"),
 		Fuss.Z,
@@ -380,7 +480,7 @@ void UWiesbadenZufahrtProbe::Messen()
 		Aufgeloest.Garage.SegmentId, Aufgeloest.Pedestrian.SegmentId,
 		Aufgeloest.IsValid() ? TEXT("true") : TEXT("false"),
 		FahrbahnBreiteCm, UnterbauCm, *AchseJson,
-		*NachbarJson, *RingJson);
+		*GehwegProfilJson, *NachbarJson, *RingJson);
 
 	const FString Pfad = FPaths::ProjectSavedDir() / TEXT("Diagnose") / TEXT("zufahrtsprobe.json");
 	FFileHelper::SaveStringToFile(Inhalt, *Pfad);

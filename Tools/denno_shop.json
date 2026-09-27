@@ -1,0 +1,22 @@
+{
+  "_zweck": "Einzige Quelle fuer Dennos Laden am Sedanplatz 5: Blender-Masse (build_denno_shop.py), Ausschnitt-HLSL (create_facade_cut_materials.py) und die C++-Konstanten (WiesbadenDennoShop.h, geprueft von WiesbadenReal.World.DennoShop.SharedDims).",
+  "laden": {
+    "halbe_breite_m": 6.8,
+    "tiefe_m": 6.5,
+    "decke_m": 3.0,
+    "schild_unten_m": 2.62,
+    "schild_oben_m": 3.4,
+    "front_ueberstand_m": 0.25
+  },
+  "ausschnitt": {
+    "halbe_tiefe_cm": 60.0,
+    "unten_cm": -10.0,
+    "oben_unter_schild_cm": 2.0
+  },
+  "denno": {
+    "x_cm": 300.0,
+    "y_cm": 340.0,
+    "gier_grad": 180.0
+  },
+  "ausschnitt_hlsl": "\nfloat3 d = P - C;\nfloat2 u = normalize(A.xy + float2(1e-6, 0));\nfloat lu = dot(d.xy, u);\nfloat ln = dot(d.xy, float2(-u.y, u.x));\nbool inside = abs(lu) < H.x && abs(ln) < H.y && abs(d.z) < H.z;\nreturn inside ? 0.0 : 1.0;\n"
+}

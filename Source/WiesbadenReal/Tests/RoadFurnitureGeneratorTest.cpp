@@ -79,9 +79,8 @@ bool FRoadFurnitureDerivedTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("3 Stopp-Schilder"), StopSigns, 3);
 	TestEqual(TEXT("1 Tempo-30-Schild"), SpeedLimit30, 1);
 
-	// Leitpfosten: 50-m-Arme mit 50-m-Abstand -> 2 Positionen je Kante,
-	// beidseitig -> 4 je Segment -> 12 gesamt.
-	TestEqual(TEXT("12 Leitpfosten"), Layout.Delineators.Num(), 12);
+	// Leitpfosten nur ausserorts - diese drei Arme sind Wohnstrassen.
+	TestEqual(TEXT("Keine Leitpfosten in der Stadt"), Layout.Delineators.Num(), 0);
 
 	// Haltlinien: je Arm eine, zusammen drei. Zusaetzlich je 30-Zonen-Segment
 	// eine "30" auf der Fahrbahn - alle drei Arme sind Wohnstrassen (bzw. Tempo
@@ -404,7 +403,10 @@ bool FRoadFurnitureSurfaceHeightTest::RunTest(const FString& Parameters)
 	constexpr double TerrainCm = 500.0;
 
 	FRoadNetwork Network;
-	Network.Segments.Add(MakeSegment(0, 1, 0, { FVector(-5000.0, 0.0, TerrainCm), FVector(0.0, 0.0, TerrainCm) }));
+	// Ein Arm ausserorts, damit es Leitpfosten zum Pruefen gibt.
+	FRoadSegment Landstrasse = MakeSegment(0, 1, 0, { FVector(-5000.0, 0.0, TerrainCm), FVector(0.0, 0.0, TerrainCm) }, 100.0);
+	Landstrasse.HighwayType = EOSMHighwayType::Secondary;
+	Network.Segments.Add(Landstrasse);
 	Network.Segments.Add(MakeSegment(1, 2, 0, { FVector(5000.0, 0.0, TerrainCm), FVector(0.0, 0.0, TerrainCm) }));
 	Network.Segments.Add(MakeSegment(2, 3, 0, { FVector(0.0, 5000.0, TerrainCm), FVector(0.0, 0.0, TerrainCm) }, 30.0));
 
@@ -463,6 +465,76 @@ bool FRoadFurnitureSurfaceHeightTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(TEXT("Schild NICHT auf roher Terrainhoehe (nicht im Boden)"),
 			Sign.Location.Z > TerrainCm + 1.0);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoadFurnitureDelineatorRuleTest,
+	"WiesbadenReal.GIS.RoadFurniture.LeitpfostenNurAusserorts",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FRoadFurnitureDelineatorRuleTest::RunTest(const FString& Parameters)
+{
+	// Landstrasse, 100 km/h, ohne Gehweg-Tag - die Typ-Vorgabe "beidseitig"
+	// ist nur eine Annahme und darf die Pfosten nicht verhindern.
+	FRoadSegment Land = MakeSegment(0, 1, 2, { FVector(0.0, 0.0, 0.0), FVector(10000.0, 0.0, 0.0) }, 100.0);
+	Land.HighwayType = EOSMHighwayType::Secondary;
+	Land.SidewalkType = EOSMSidewalkType::Both;
+	TestTrue(TEXT("Landstrasse ohne Gehweg-Tag"), URoadFurnitureGenerator::WantsDelineators(Land));
+
+	FRoadSegment Getaggt = Land;
+	Getaggt.bSidewalkTagged = true;
+	TestFalse(TEXT("Getaggter Gehweg"), URoadFurnitureGenerator::WantsDelineators(Getaggt));
+
+	FRoadSegment Einseitig = Land;
+	Einseitig.SidewalkType = EOSMSidewalkType::Right;
+	TestFalse(TEXT("Einseitiger Gehweg (nur aus einem Tag)"), URoadFurnitureGenerator::WantsDelineators(Einseitig));
+
+	FRoadSegment Tempo50 = Land;
+	Tempo50.MaxSpeedKmh = 50.0;
+	TestFalse(TEXT("Tempo 50"), URoadFurnitureGenerator::WantsDelineators(Tempo50));
+
+	FRoadSegment Wohn = Land;
+	Wohn.HighwayType = EOSMHighwayType::Residential;
+	TestFalse(TEXT("Wohnstrasse"), URoadFurnitureGenerator::WantsDelineators(Wohn));
+
+	// Die Reihe endet vor dem Knoten: gekuerzte Linie ab X = 1000.
+	Land.TrimmedCenterline = { FVector(1000.0, 0.0, 0.0), FVector(10000.0, 0.0, 0.0) };
+	{
+		FRoadNetwork Network;
+		Network.Segments.Add(Land);
+		FFlatHeightSampler Sampler(0.0);
+		FRoadFurnitureSettings Settings;
+		FRoadFurnitureLayout Layout;
+		NewObject<URoadFurnitureGenerator>()->Generate(Network, nullptr, nullptr, &Sampler, Settings, Layout);
+		TestTrue(TEXT("Die Landstrasse bekommt Pfosten"), Layout.Delineators.Num() > 0);
+		for (const FDelineatorInstance& D : Layout.Delineators)
+		{
+			TestTrue(TEXT("Kein Pfosten im Knoten"), D.Location.X >= 1000.0 - 1.0);
+		}
+	}
+
+	// Gespeichertes Layout der alten Regel: Stadt- und Knoten-Pfosten fallen weg.
+	{
+		FRoadNetwork Network;
+		Network.Segments.Add(MakeSegment(7, 3, 4, { FVector(0.0, 0.0, 0.0), FVector(5000.0, 0.0, 0.0) }));
+		Network.Segments.Add(Land);
+		FRoadFurnitureLayout Layout;
+		for (const TPair<int32, FVector>& P : TArray<TPair<int32, FVector>>{
+			{ 7, FVector(2500.0, 375.0, 0.0) },    // Stadt
+			{ 0, FVector(5000.0, 375.0, 0.0) },    // Land, am Rand
+			{ 0, FVector(-200.0, 375.0, 0.0) },    // Land, im Knoten
+			{ 99, FVector::ZeroVector } })         // Segment unbekannt
+		{
+			FDelineatorInstance D;
+			D.SegmentId = P.Key;
+			D.Location = P.Value;
+			Layout.Delineators.Add(D);
+		}
+		TestEqual(TEXT("Stadt- und Knoten-Pfosten entfernt"),
+			URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(Network, Layout), 2);
+		TestEqual(TEXT("Rand-Pfosten und unbekanntes Segment bleiben"), Layout.Delineators.Num(), 2);
 	}
 
 	return true;

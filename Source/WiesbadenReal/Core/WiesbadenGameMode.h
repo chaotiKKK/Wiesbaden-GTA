@@ -13,7 +13,10 @@
 
 class UWiesbadenCitySubsystem;
 class AWiesbadenStoreMerchant;
+class AWiesbadenPlatterParking;
+class AWiesbadenCuttable;
 struct FWiesbadenRoadClearance;
+struct FWiesbadenBuildingClearance;
 
 /**
  * GameMode des Wiesbaden-Core-Moduls.
@@ -126,7 +129,7 @@ public:
 		double OwnDiscCm, double LegacyDiscCm, double OwnLengthCm, double LegacyLengthCm);
 
 	/**
-	 * Standplaetze fuer das Standstueck, in der Reihenfolge des Vorzugs
+	 * Standplaetze fuer eine Maschine, in der Reihenfolge des Vorzugs
 	 * (datenrein, ohne Welt pruefbar: WiesbadenReal.Vehicles.HeliStandplaetze).
 	 *
 	 * Der erste Eintrag ist der bisherige Platz - geradeaus vor dem Spielerheli
@@ -182,7 +185,7 @@ protected:
 	bool SpawnHelicopterNearStart();
 
 	/**
-	 * Das ALTE Heli-Modell als Standstueck neben den Spielerheli stellen.
+	 * Den ZWEITEN fliegbaren Hubschrauber neben den ersten stellen.
 	 *
 	 * Der Spielerheli traegt seit dem Ka-52-Neubau (17.09.2026) das importierte
 	 * Modell; das frueher benutzte Landmarken-Modell steht daneben als Ansicht -
@@ -201,7 +204,7 @@ protected:
 	 * True, wenn an dieser Stelle KEINE Fahrbahn liegt und der Boden traegt.
 	 *
 	 * Die Fahrbahn kommt aus dem STRASSENNETZ, nicht aus der Kollision: das
-	 * Standstueck wird im ersten Bild gesetzt, da ist noch keine Stadtkachel
+	 * Platz wird im ersten Bild vergeben, da ist noch keine Stadtkachel
 	 * gestreamt und ein Lot trifft nur die Landschaft. Die Hoehe kommt weiterhin
 	 * aus dem Lot. Abgetastet wird der ganze RUMPF-Grundriss, nicht nur die
 	 * Mitte - sonst steht die Maschine mit der Nase auf der Strasse.
@@ -213,7 +216,30 @@ protected:
 	 */
 	bool IsHelicopterStandFree(
 		const FVector& Point, double FootprintCm,
-		const FWiesbadenRoadClearance& Carriageway, double& OutGroundZ) const;
+		const FWiesbadenRoadClearance& Carriageway,
+		const FWiesbadenBuildingClearance& Buildings, double& OutGroundZ) const;
+
+	/**
+	 * Sucht den ersten freien Standplatz aus einer Vorzugsliste.
+	 *
+	 * Fuer BEIDE Hubschrauber. Der Ka-52 hatte bisher gar keine Pruefung - er
+	 * wurde vor das Auto gesetzt, ein Lot fuer die Hoehe, fertig. Dass er
+	 * heute frei steht, ist Glueck und keine Zusage: dieselbe Rechnung setzt
+	 * ihn an einer anderen Startadresse in eine Wand.
+	 *
+	 * Geprueft wird gegen Fahrbahn UND Gebaeude. Beide Indizes stammen aus
+	 * serialisierten Daten am WorldBuilder, nicht aus der Kollision - im
+	 * ersten Bild ist noch keine Stadtkachel gestreamt.
+	 *
+	 * @param Candidates   Standplaetze in der Reihenfolge des Vorzugs.
+	 * @param FootprintCm  Grundriss-Radius der Maschine.
+	 * @param Wofuer       Name fuer das Protokoll.
+	 * @param OutLocation  Gewaehlter Platz samt Bodenhoehe (Z aus dem Lot).
+	 * @param OutIndex     Welcher Kandidat es wurde (Diagnose).
+	 */
+	bool FindFreeHelicopterStand(
+		const TArray<FVector>& Candidates, double FootprintCm,
+		const TCHAR* Wofuer, FVector& OutLocation, int32& OutIndex) const;
 
 	/**
 	 * Wechselt zwischen Fahrzeug und zu Fuss (Taste F).
@@ -230,6 +256,9 @@ protected:
 	 * delegiert.
 	 */
 	bool TryMerchantInteraction(class AWiesbadenFootPawn* FootPawn);
+
+	/** F vor Dennos Laden: Lieferauftrag annehmen (true = Taste beansprucht). */
+	bool TryDennoDelivery(class AWiesbadenFootPawn* FootPawn);
 
 	/** Naechster Haendler, dessen eigene Reichweite den Fuss-Pawn einschliesst. */
 	class AWiesbadenStoreMerchant* FindMerchantInReach(const APawn& FootPawn) const;
@@ -278,13 +307,13 @@ protected:
 	 * Helikopter beim Start absetzen.
 	 *
 	 * Der Spielerheli ist das Ka-52-Modell (AWiesbadenHelicopter, seit dem Neubau
-	 * 17.09.2026); das alte Landmarken-Modell steht daneben als Standstueck
+	 * 17.09.2026); das alte Landmarken-Modell steht daneben und ist ebenso fliegbar
 	 * (AWiesbadenLegacyHelicopter).
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Spieler")
 	bool bSpawnHelicopter = true;
 
-	/** Standstueck (altes Heli-Modell) neben den Spielerheli stellen. */
+	/** Den zweiten Hubschrauber (altes Modell) neben den ersten stellen. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Wiesbaden|Spieler")
 	bool bSpawnLegacyHelicopter = true;
 
@@ -318,11 +347,16 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<APawn> PlayerVehicle = nullptr;
 
+	/** Die runtime gebaute Anlage an der Standard-Startadresse. Der Actor ist
+	 * waehrend GameMode::BeginPlay noch nicht per ActorIterator sichtbar. */
+	UPROPERTY(Transient)
+	TObjectPtr<AWiesbadenPlatterParking> PlatterParking = nullptr;
+
 	/** Helikopter am Startpunkt. */
 	UPROPERTY(Transient)
 	class AWiesbadenHelicopter* PlayerHelicopter = nullptr;
 
-	/** Standstueck: das alte Heli-Modell neben dem Spielerheli. */
+	/** Der zweite fliegbare Hubschrauber: das alte Modell. */
 	UPROPERTY(Transient)
 	class AWiesbadenLegacyHelicopter* LegacyHelicopter = nullptr;
 
@@ -344,6 +378,154 @@ private:
 
 	/** Schon ausgestiegen? Sonst geschaehe es in jedem Bild erneut. */
 	bool bOnFootDone = false;
+
+	/**
+	 * Ego-Pruef-Lauf (-WbEgoProbe=<Sekunden>).
+	 *
+	 * Skriptbarer Ersatz fuer die C-Taste und die Zifferntasten 1-9: Tasten-
+	 * Injektion erreicht das D3D-Fenster nicht, also faehrt der GameMode die
+	 * KAMMERAD-KONVENTION hier ab: aussteigen (-WbZuFuss davor), Ansicht Ego,
+	 * Bild, Ansicht Schulter, Bild, Waffen 0-8 je kurz gewaehlt und im Log
+	 * verifiziert (Name + Masse gegen die Tabelle). Ergebnis: vier Bilder in
+	 * Saved/Diagnose + Log-Marker je Schritt.
+	 */
+	float EgoProbeAfterSeconds = -1.0f;
+	bool bEgoProbeDone = false;
+	float EgoProbeElapsed = 0.0f;
+	int32 EgoProbeStep = 0;
+	float EgoProbeStepElapsed = 0.0f;
+
+	/** Fuehrt einen Schritt des Ego-Pruef-Laufs aus (Tick). */
+	void TickEgoProbe(float DeltaSeconds);
+
+	/**
+	 * Figur-Pruef-Lauf (-WbFigurProbe, mit -WbZuFuss): steht, geht, rennt,
+	 * springt, dreht und duckt sich per SIMULIERTER Taste (W, Umschalt,
+	 * Leertaste, Pfeil rechts, X) - der Pawn kennt keine Probe, er sieht nur
+	 * Tasten. Zuletzt legt sie eine niedrige Platte ueber die geduckte Figur,
+	 * laesst X los (die Figur muss geduckt bleiben) und nimmt die Platte weg
+	 * (jetzt muss sie aufstehen).
+	 *
+	 * -WbFigurProbe=Boden: Aussteigen am Hang (mit -WbGoto=<Hangstrasse>),
+	 * Figur 60/150/250 cm ins Gelaende setzen (muss wieder hochkommen), geduckt
+	 * ins Auto und wieder aus (muss stehen), geduckt Mitfahrt beginnen.
+	 * -WbFigurProbe=Treppe: der echte Fuss-Pawn geht per Tasten die Treppe des
+	 * Sebbo-Turms hinauf (Wegpunkte von AWiesbadenSebboHq::GetStairWalk). Die Kamera
+	 * schaut von schraeg vorn auf die Figur; je Phase ein Bild in
+	 * Saved/Diagnose/figur_*.png, alle 0,5 s die gewaehlte Bewegung im Log.
+	 */
+	bool bFigurProbe = false;
+	float FigurProbeTime = 0.0f;
+	int32 FigurProbeShot = 0;
+	float FigurProbeLogIn = 0.0f;
+	TWeakObjectPtr<AActor> FigurProbeDecke;
+	FString FigurProbeMode;
+	float FigurProbeBodenZ = 0.0f;
+	TArray<FVector> FigurProbeWeg;
+	int32 FigurProbeWegIndex = -1;
+	float FigurProbeWegZeit = 0.0f;
+	FRotator FigurProbeBlick = FRotator::ZeroRotator;
+	float FigurProbeStartFussZ = 0.0f;
+	/** Bewegungen, deren Einblenden schon ein Bild bekam (je eine). */
+	TSet<FString> FigurProbeBlendeBilder;
+
+	/** Ein Bild des Figur-Pruef-Laufs (Tick). */
+	void TickFigurProbe(float DeltaSeconds);
+
+	/**
+	 * Gamepad-Pruef-Lauf (-WbPadProbe, mit -WbZuFuss): spielt eine feste
+	 * Sitzung auf dem Gamepad ab und belegt sie im Log - LT zielt (ADS),
+	 * RT feuert, RB/LB wechseln die Waffe.
+	 *
+	 * Warum ueberhaupt eine Probe: die Belegungstabelle
+	 * (Core/WiesbadenInputMap.h) ist im Unit-Test geprueft, sagt aber nichts
+	 * darueber, ob der echte Weg durch PlayerInput, Pawn und Waffenkomponente
+	 * auch wirklich ankommt. Genau diese Kette war nie belegt.
+	 *
+	 * Die Eingaben laufen als SIMULIERTE Tastenereignisse durch
+	 * APlayerController::InputKey - derselbe Weg, den die Tastatur-Proben
+	 * seit dem Sebbo-Haus nehmen. Der Pawn weiss nicht, dass er geprobt
+	 * wird: er sieht nur Tasten. Das ist ein Testwerkzeug, kein Spielcode -
+	 * ohne den Schalter passiert nichts.
+	 */
+	bool bPadProbe = false;
+	float PadProbeTime = 0.0f;
+	int32 PadProbeStep = 0;
+	float PadProbeStepTime = 0.0f;
+	int32 PadProbeSchuesseStart = 0;
+	/** Hoehe der Figur beim Sprungschritt (Startwert, cm). */
+	float PadProbeSprungZ = 0.0f;
+	/** Hoechste erreichte Hoehe waehrend des Sprungs (cm). */
+	float PadProbeSprungMaxZ = 0.0f;
+	/** Ansichtszustand einmalig erfasst? (sonst wird er beim Umschalten mitgelesen). */
+	bool PadProbeAnsichtErfasst = false;
+	/** Ortspunkt beim Beginn einer Laufphase (L3-Probe). */
+	FVector PadProbeLaufStart = FVector::ZeroVector;
+	/** Ansicht vor dem Y-Druck (Ego oder Schulter). */
+	bool PadProbeAnsichtVorher = false;
+	/** Anzahl der bewerteten Schritte am Ende des Laufs. */
+	int32 PadProbeSchritte = 12;
+	/**
+	 * Hat der laufende Schritt seine erwartete Wirkung erreicht? Die
+	 * Tastenschritte warten darauf, statt nach einer festen Zeit zu
+	 * urteilen: bei einem Hänger im Spiel fiel der Messpunkt sonst in
+	 * eine Zeitlupe und die Probe meldete eine Wirkungslosigkeit, die
+	 * es nicht gab.
+	 */
+	bool PadProbeBedingtErreicht = false;
+	/** Steht die Figur wieder am Auto (Ende des Rueckwegs vor dem X-Schritt)? */
+	bool PadProbeAmAuto = false;
+	/** Strecke der letzten Laufphase in cm (L3-Probe). */
+	float PadProbeLaufStrecke = 0.0f;
+	/** Strecke mit L3 gedrueckt in cm (L3-Probe). */
+	float PadProbeRennStrecke = 0.0f;
+	/** Zoom-Stufe vor dem D-Pad-Schritt. */
+	float PadProbeZoomVorher = 1.0f;
+	/** Schnittwinkel vor dem D-Pad-Schritt mit Trennwaffe (Grad). */
+	float PadProbeSchnittVorher = 0.0f;
+	/**
+	 * Waffenstand VOR dem Schultertasten-Druck. Einmal je Schritt lesen:
+	 * der Schritt laeuft viele Bilder, und der Pawn schaltet im selben Bild,
+	 * in dem der Druck ankommt. Jedes Bild neu gelesen ergaebe "2 -> 2" und
+	 * liesse einen Waffenwechsel, der stattgefunden hat, als Fehler erscheinen.
+	 */
+	int32 PadProbeWaffeVorher = INDEX_NONE;
+	/** Anzahl der Schritte, die ihre Erwartung erfuellt haben. */
+	int32 PadProbeOk = 0;
+	/** Anzahl der Schritte, die ihre Erwartung verfehlt haben. */
+	int32 PadProbeFehl = 0;
+
+	/** Ein Schritt des Gamepad-Pruef-Laufs (Tick). */
+	void TickPadProbe(float DeltaSeconds);
+
+	/**
+	 * Bildprobe des Plasmacutters (-WbCutShots, mit -WbZuFuss): stellt ein
+	 * Trenn-Stueck in der Strasse auf, trennt es und legt je Blickwinkel ein
+	 * Bild ab - die Glutkante ist das ganze Bild nur fuer Sekunden da, das
+	 * Log kann sie nicht zeigen.
+	 *
+	 * Bilder: Saved\Diagnose\schnitt_00_vorher.png (ungeklafft, als
+	 * Vergleich) und schnitt_01_nah / _02_schraeg / _03_weit.
+	 */
+	bool bCutShots = false;
+	float CutShotsTime = 0.0f;
+	int32 CutShotsStep = 0;
+	float CutShotsStepTime = 0.0f;
+	/** Das aufgestellte Trenn-Stueck der Bildprobe. */
+	TWeakObjectPtr<AWiesbadenCuttable> CutShotsObjekt;
+
+	// Freie Kamera der Bildprobe, als ViewTarget gesetzt. Sie haengt an
+	// keinem Pawn, dessen Tick die Drehung ueberschreibt - siehe
+	// KameraAuf in TickCutShots.
+	TWeakObjectPtr<AActor> CutShotsKamera;
+	TWeakObjectPtr<class UCameraComponent> CutShotsLinse;
+	/** Weltmittelpunkt des Trenn-Stuecks (Blickziel aller drei Winkel). */
+	FVector CutShotsMitte = FVector::ZeroVector;
+	/** Schon getrennt? */
+	bool bCutShotsGeschnitten = false;
+
+	/** Ein Schritt der Plasmacutter-Bildprobe (Tick). */
+	void TickCutShots(float DeltaSeconds);
 
 	/** Spielzeit seit BeginPlay in Sekunden. */
 	float ElapsedSeconds = 0.0f;

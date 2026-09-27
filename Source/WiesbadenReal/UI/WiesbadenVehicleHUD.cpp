@@ -2,6 +2,12 @@
 
 #include "UI/WiesbadenVehicleHUD.h"
 
+#include "UI/WiesbadenOptions.h"
+#include "GameFramework/GameUserSettings.h"
+#include "Vehicles/WiesbadenFootPawn.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
+#include "Misc/ConfigCacheIni.h"
+
 #include "WiesbadenReal.h"
 
 #include "Audio/WiesbadenAudioSubsystem.h"
@@ -9,12 +15,14 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Core/WiesbadenDevActions.h"
+#include "Core/WiesbadenPlayerController.h"
 #include "Engine/Canvas.h"
 #include "TextureResource.h"
 #include "Engine/Engine.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "NPC/WiesbadenStoreMerchant.h"
+#include "World/WiesbadenDennoShop.h"
 #include "Vehicles/WiesbadenCar.h"
 #include "Vehicles/WiesbadenVehicleControl.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
@@ -24,6 +32,7 @@
 #include "GIS/WiesbadenWorldBuilder.h"
 #include "World/WiesbadenCitySubsystem.h"
 #include "UI/WiesbadenMinimap.h"
+#include "UI/WiesbadenProfilOverlay.h"
 #include "Missions/WiesbadenMissionSubsystem.h"
 #include "Missions/WiesbadenMissionTypes.h"
 #include "Core/WiesbadenGameStateSubsystem.h"
@@ -156,6 +165,25 @@ FString AWiesbadenVehicleHUD::FormatHeadlightMode(uint8 Mode)
 	case EWiesbadenHeadlightMode::HighBeam:	return TEXT("FERN");
 	default:								return TEXT("AUS");
 	}
+}
+
+FString AWiesbadenVehicleHUD::FormatTractionTellTale(bool bWheelSpin, bool bWheelLock)
+{
+	// Blockieren vor Radspin: beim Bremsen ist die Leuchte eine ABS-Anzeige,
+	// beim Beschleunigen eine Antriebsschlupf-Anzeige. Beides zugleich kommt
+	// nicht vor (nie Gas UND Bremse), die Reihenfolge macht sie nur eindeutig.
+	if (bWheelLock) { return TEXT("ABS"); }
+	if (bWheelSpin) { return TEXT("ASR"); }
+	return FString();
+}
+
+float AWiesbadenVehicleHUD::AdvanceTellTaleHold(bool bActive, float HoldRemaining, float Dt, float HoldSeconds)
+{
+	if (bActive)
+	{
+		return FMath::Max(HoldRemaining, HoldSeconds);
+	}
+	return FMath::Max(0.0f, HoldRemaining - Dt);
 }
 
 IWiesbadenVehicleControl* AWiesbadenVehicleHUD::GetPlayerVehicleControl() const
@@ -297,6 +325,25 @@ void AWiesbadenVehicleHUD::DrawTellTales(const IWiesbadenVehicleControl& Vehicle
 	DrawText(FormatHeadlightMode(static_cast<uint8>(Headlights)),
 		Headlights == EWiesbadenHeadlightMode::Off ? TellTaleOff : HeadlightOn,
 		X + 24.0f, Y + 22.0f, GEngine->GetSmallFont(), 1.0f);
+
+	// Traktions-/ABS-Kontrollleuchte: KONSUMIERT die Modell-Flags der Fahrphysik
+	// (Radspin beim Anfahren, Blockieren beim Bremsen) - reine Anzeige, kein
+	// Verhalten. Kurzes Nachleuchten gegen das Flackern im ABS-Puls; wenn nichts
+	// schlupft, steht sie unauffaellig gedimmt als "TRC" da.
+	constexpr float TractionHoldSeconds = 0.4f;
+	const float Dt = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.0f;
+	const FString NowLabel = FormatTractionTellTale(
+		Vehicle.IsWheelSpinning(), Vehicle.IsWheelLocked());
+	if (!NowLabel.IsEmpty())
+	{
+		TractionTellTaleLabel = NowLabel;
+	}
+	TractionTellTaleHold = AdvanceTellTaleHold(
+		!NowLabel.IsEmpty(), TractionTellTaleHold, Dt, TractionHoldSeconds);
+	const bool bTractionLit = TractionTellTaleHold > 0.0f && !TractionTellTaleLabel.IsEmpty();
+	DrawText(bTractionLit ? TractionTellTaleLabel : TEXT("TRC"),
+		bTractionLit ? GaugeWarn : TellTaleOff,
+		X + 150.0f, Y, GEngine->GetMediumFont(), 1.0f);
 }
 
 void AWiesbadenVehicleHUD::DrawFilledTri(const FVector2D& A, const FVector2D& B,
@@ -623,20 +670,35 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	// vorher inline hier und machte DrawHUD zur halben State-Machine.
 	UpdateFirstRunOnboarding();
 
+	// Gespeicherte Optionen anwenden. Im Sekundentakt, weil Spielfigur und
+	// Fahrzeugkamera beim Ein-/Aussteigen neu entstehen und sonst wieder mit
+	// der eingebauten Maus-Empfindlichkeit liefen.
+	ApplyPersistentOptions();
+
 	// Pausemenue zuerst: es liegt ueber allem und haelt die Zeit an.
 	UpdatePauseMenu();
-	if (bPaused)
+
+	// Intro, Titelbildschirm und Hauptmenue liegen ueber allem - auch ueber
+	// dem Pausemenue. Sie nehmen die Eingabe an sich und geben sie erst frei,
+	// wenn der Spieler "Spiel starten" gewaehlt hat. VOR dem Pausemenue, weil
+	// waehrend des Titels nichts zu pausieren gibt.
+	if (UpdateTitleMenu())
 	{
-		// Das Ton-Unterfenster liegt IM Pausemenue (eigener Zustand); es wird
-		// statt der Eintragsliste gezeichnet, solange es offen ist.
-		if (bAudioSettingsOpen)
-		{
-			DrawAudioSettings(Width, Height);
-		}
-		else
-		{
-			DrawPauseMenu(Width, Height);
-		}
+		DrawTitleScreen(Width, Height);
+		return;
+	}
+
+	// WAS GEZEICHNET WIRD, ENTSCHEIDET DIESELBE GROESSE WIE DIE EINGABE
+	// (UpdatePauseMenu unten). Vorher waren es zwei Schalter, und ein
+	// gezeichnetes Optionsfenster konnte taub sein.
+	if (PauseView == EWbPauseView::Optionen)
+	{
+		DrawOptions(Width, Height);
+		return;
+	}
+	if (PauseView == EWbPauseView::Menue)
+	{
+		DrawPauseMenu(Width, Height);
 		return;
 	}
 
@@ -679,6 +741,30 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	{
 		DrawWorldMap(Width, Height);
 		return;
+	}
+
+	// Die Bilder je Sekunde (Gruppe DEBUG). Rechts oben ueber allem, weil es
+	// die EINZIGE Zahl ist, die beim Optimieren etwas sagt - und weil sie
+	// nicht im Tacho steht.
+	if (bFpsAnzeige)
+	{
+		const UWorld* FpsWorld = GetWorld();
+		const float Dt = FpsWorld ? FpsWorld->GetDeltaSeconds() : 0.0f;
+		const int32 Bilder = (Dt > KINDA_SMALL_NUMBER)
+			? FMath::RoundToInt(1.0f / Dt) : 0;
+		DrawTextRechts(FString::Printf(TEXT("%d Bilder/s"), Bilder), DialText,
+			Width - 16.0f, 12.0f, GEngine->GetSmallFont(), 1.0f);
+	}
+
+	// Profil-Tafel (Gruppe DEBUG): halb so gross und halbtransparent, damit
+	// das Bild darunter erkennbar bleibt. Die alte Engine-Statistik
+	// (stat fps/unit/game) liess sich aus Projektcode weder verkleinern noch
+	// aufhellen - ihre undurchsichtigen Tabellen fielen komplett ueber das
+	// Bild (siehe AGENTS.md: landeten in Filmaufnahmen). Oben links, damit
+	// sie nicht mit der Bildrate-Zeile rechts und der Minikarte kollidiert.
+	if (bStatEinblendung)
+	{
+		DrawProfilTafel(16.0f, 12.0f);
 	}
 
 	// F1 schaltet die Legende um (Flanke, damit ein Tastendruck einmal zaehlt).
@@ -891,6 +977,9 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 		TArray<AActor*> Helicopters;
 		TArray<AActor*> Funiculars;
 		TArray<AActor*> Merchants;
+		TArray<AActor*> Shops;
+		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenDennoShop::StaticClass(), Shops);
+		CachedDennoShop = Shops.IsEmpty() ? nullptr : Cast<AWiesbadenDennoShop>(Shops[0]);
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenCar::StaticClass(), Cars);
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenHelicopter::StaticClass(), Helicopters);
 		UGameplayStatics::GetAllActorsOfClass(HudWorld, AWiesbadenNerobergbahn::StaticClass(), Funiculars);
@@ -916,9 +1005,19 @@ void AWiesbadenVehicleHUD::DrawFootPrompt(float CenterX, float Y)
 		FootPromptScanAge = 0.0f;
 	}
 
-	const FString Prompt = BuildFootPrompt(
+	FString Prompt = BuildFootPrompt(
 		CachedFootVehicleCm, CachedFootFunicularCm,
 		FootVehicleReachCm, FootFunicularReachCm, bCachedFootVehicleIsHelicopter);
+	// Vor Dennos Laden gehoert F der Auftragsannahme (GameMode::TryDennoDelivery
+	// hat Vorrang vor dem Einsteigen) - der Hinweis sagt dasselbe.
+	if (const AWiesbadenDennoShop* Shop = CachedDennoShop.Get())
+	{
+		if (Shop->IsPlayerInDeliveryReach(Here))
+		{
+			const UWiesbadenMissionSubsystem* Missions = HudWorld->GetSubsystem<UWiesbadenMissionSubsystem>();
+			Prompt = AWiesbadenDennoShop::BuildDeliveryPrompt(Missions && Missions->HasActiveMission());
+		}
+	}
 
 	if (Prompt.IsEmpty())
 	{
@@ -1018,9 +1117,16 @@ void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString
 	OutLines.Add(TEXT("W A S D             Gehen"));
 	OutLines.Add(TEXT("Umschalt links      Rennen"));
 	OutLines.Add(TEXT("Leertaste           Springen"));
+	OutLines.Add(TEXT("X (halten)          Ducken"));
 	OutLines.Add(TEXT("Maus / Pfeiltasten  Umsehen"));
-	OutLines.Add(TEXT("Linke Maustaste     Kettensaege schwingen"));
+	OutLines.Add(TEXT("Rechte Maustaste    Zielen (Zoom mit Mausrad)"));
+	OutLines.Add(TEXT("Linke Maustaste     Feuern / Kettensaege schwingen"));
+	OutLines.Add(TEXT("Mausrad             Waffe wechseln / im Zielmodus zoomen"));
 	OutLines.Add(TEXT("F                   Einsteigen - auch in Verkehrsautos"));
+	// XBox-Belegung nach RDR2-Vorbild (siehe Core/WiesbadenInputMap.h).
+	OutLines.Add(TEXT("  Gamepad  RT Feuer   LT Zielen   A Springen   L3 Rennen"));
+	OutLines.Add(TEXT("           R3 Ducken  RB/LB Waffe   D-Pad hoch/runter zoomen"));
+	OutLines.Add(TEXT("           X Einsteigen   Y Ansicht wechseln"));
 	OutLines.Add(TEXT("E                   Nerobergbahn - mitfahren"));
 	// Im Wagen bedient die Kurbel den Wasserschieber (AWiesbadenNerobergbahn).
 	OutLines.Add(TEXT("K                   Kurbel drehen - im Nerobergbahn-Wagen"));
@@ -1031,16 +1137,6 @@ bool AWiesbadenVehicleHUD::ToggleControlLegendVisible(
 {
 	const bool bVisible = bShown && ElapsedSeconds <= LegendSeconds;
 	return !bVisible;
-}
-
-FString AWiesbadenVehicleHUD::ComposeFirstRunBanner(
-	const FString& Title, const FString& Subtitle)
-{
-	if (Subtitle.IsEmpty())
-	{
-		return Title;
-	}
-	return FString::Printf(TEXT("%s — %s"), *Title, *Subtitle);
 }
 
 void AWiesbadenVehicleHUD::DrawControlLegend(bool bInVehicle, float X, float Y)
@@ -1074,7 +1170,7 @@ void AWiesbadenVehicleHUD::GetPauseMenuEntries(TArray<FString>& OutEntries)
 	OutEntries.Reset();
 	OutEntries.Add(TEXT("Weiterspielen"));
 	OutEntries.Add(TEXT("Steuerung einblenden"));
-	OutEntries.Add(TEXT("Ton / Lautstaerke"));
+	OutEntries.Add(TEXT("Optionen"));
 	OutEntries.Add(TEXT("Karte zeigen / verbergen (M)"));
 	// Entwicklerbefehle. Ohne sie kostet jede Pruefung eine Fahrt quer durch
 	// die Stadt - der Weg zur Platter Strasse dauert im Spiel Minuten.
@@ -1095,27 +1191,32 @@ void AWiesbadenVehicleHUD::UpdatePauseMenu()
 		return;
 	}
 
+	// Flanke ueber WiesbadenOptions::EdgePressed - DIESELBE Funktion, die das
+	// Optionsfenster benutzt. Vorher stand die Mechanik hier und dort je
+	// einmal; dass beide gleich sind, war eine Behauptung. Jetzt ist es eine
+	// Tatsache, die der Uebersetzer haelt.
 	auto Edge = [PC](const FKey& Key, bool& bHeld) -> bool
 	{
-		const bool bDown = PC->IsInputKeyDown(Key);
-		const bool bPressed = bDown && !bHeld;
-		bHeld = bDown;
-		return bPressed;
+		return WiesbadenOptions::EdgePressed(PC->IsInputKeyDown(Key), bHeld);
 	};
 
 	// Escape oder Start am Gamepad schaltet um.
 	if (Edge(EKeys::Escape, bPauseKeyHeld)
 		|| PC->IsInputKeyDown(EKeys::Gamepad_Special_Right))
 	{
-		if (bAudioSettingsOpen)
+		if (PauseView == EWbPauseView::Optionen)
 		{
-			// Aus dem Ton-Unterfenster nur eine Ebene zurueck ins Pausemenue,
-			// nicht gleich das Spiel fortsetzen.
-			bAudioSettingsOpen = false;
+			// Aus den Optionen nur eine Ebene zurueck ins Pausemenue, nicht
+			// gleich das Spiel fortsetzen.
+			PauseView = EWbPauseView::Menue;
+			PauseSelection = 0;
 		}
 		else
 		{
-			bPaused = !bPaused;
+			PauseView = (PauseView == EWbPauseView::Aus)
+				? EWbPauseView::Menue
+				: EWbPauseView::Aus;
+			bPaused = (PauseView != EWbPauseView::Aus);
 			PauseSelection = 0;
 
 			// Die Zeit wirklich anhalten. Ein Menue, hinter dem der Verkehr
@@ -1126,30 +1227,36 @@ void AWiesbadenVehicleHUD::UpdatePauseMenu()
 		}
 	}
 
-	if (!bPaused)
+	if (PauseView == EWbPauseView::Aus)
 	{
 		return;
 	}
 
-	// Ton-Unterfenster hat Vorrang: eigene Tastenauswertung (Bus + Lautstaerke).
-	if (bAudioSettingsOpen)
+	// Das Optionsfenster hat Vorrang und wertet seine Tasten selbst aus. Die
+	// Bedingung ist DIESELBE, die oben ueber das Zeichnen entscheidet.
+	if (PauseView == EWbPauseView::Optionen)
 	{
-		UpdateAudioSettings();
+		UpdateOptions();
 		return;
 	}
 
 	TArray<FString> Entries;
 	GetPauseMenuEntries(Entries);
 
-	if (Edge(EKeys::Up, bMenuUpHeld) || Edge(EKeys::W, bMenuUpHeld))
+	// Tastatur UND Controller an derselben Zeile. Der Grund ist derselbe wie
+	// an der Achse des Wagens: wer wechselt, trifft dieselbe Taste. Ohne
+	// den Pad-Teil war das Pausemenue an einem Controller nicht zu bedienen.
+	if (Edge(EKeys::Up, bMenuUpHeld) || Edge(EKeys::W, bMenuUpHeld)
+		|| Edge(EKeys::Gamepad_DPad_Up, bMenuUpHeld))
 	{
 		PauseSelection = (PauseSelection + Entries.Num() - 1) % Entries.Num();
 	}
-	if (Edge(EKeys::Down, bMenuDownHeld) || Edge(EKeys::S, bMenuDownHeld))
+	if (Edge(EKeys::Down, bMenuDownHeld) || Edge(EKeys::S, bMenuDownHeld)
+		|| Edge(EKeys::Gamepad_DPad_Down, bMenuDownHeld))
 	{
 		PauseSelection = (PauseSelection + 1) % Entries.Num();
 	}
-	if (Edge(EKeys::Enter, bMenuEnterHeld))
+	if (Edge(EKeys::Enter, bMenuEnterHeld) || Edge(EKeys::Gamepad_FaceButton_Bottom, bMenuEnterHeld))
 	{
 		ActivatePauseEntry(PauseSelection);
 	}
@@ -1166,6 +1273,7 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 
 	auto Unpause = [this, PC]()
 	{
+		PauseView = EWbPauseView::Aus;
 		bPaused = false;
 		PC->SetPause(false);
 		PC->bShowMouseCursor = false;
@@ -1186,8 +1294,9 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 	case 2:
 		// Ton-Unterfenster oeffnen - NICHT entpausieren: die Lautstaerke wird im
 		// angehaltenen Spiel geregelt, Escape fuehrt zurueck ins Pausemenue.
-		bAudioSettingsOpen = true;
-		AudioSelection = 0;
+		PauseView = EWbPauseView::Optionen;
+		OptionSelection = 0;
+		bOptionInputAnnounced = false;
 		break;
 
 	case 3:
@@ -1253,6 +1362,468 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 	}
 }
 
+// =====================================================================
+// Intro, Titelbildschirm mit Hauptmenue
+//
+// Alles in diesem Block ist datenrein in WiesbadenMenuFlow (der Bildschirm-
+// Ablauf, die Eintraege, der Intro-Takt) - hier passiert nur, was eine Welt
+// braucht: lesen, zeichnen, den Sprung ausfuehren. So laesst sich der ganze
+// Ablauf ohne Bildschirm pruefen (Test Menu.*).
+// =====================================================================
+
+bool AWiesbadenVehicleHUD::StickStep(float Axis, bool& bHeld)
+{
+	// Eine Flanke, keine Abfrage: ein gehaltener Stick wuerde sonst in jedem
+	// Bild eine Zeile weiterspringen.
+	const bool bDruecke = FMath::Abs(Axis) > 0.5f;
+	const bool bFlanke = bDruecke && !bHeld;
+	bHeld = bDruecke;
+	return bFlanke;
+}
+
+void AWiesbadenVehicleHUD::RebuildMenuEntries()
+{
+	MenuEntries.Reset();
+	MenuRows.Reset();
+	switch (MenuScreen)
+	{
+	case EWbMenuScreen::Titel:
+		WiesbadenMenu::BuildHauptmenu(MenuEntries);
+		break;
+
+	case EWbMenuScreen::Optionen:
+		WiesbadenMenu::BuildGruppenliste(MenuEntries);
+		break;
+
+	case EWbMenuScreen::Gruppe:
+		{
+			TArray<FWbOptionRow> Zeilen;
+			BuildOptionRows(Zeilen);
+			WiesbadenMenu::BuildGruppe(MenuGruppe, Zeilen, MenuEntries);
+			// Die Zeilen der Seite merken: der Wert eines Eintrags wird ueber
+			// seine Kennung in genau dieser Liste nachgeschlagen, und die
+			// Zeilenliste haengt davon ab, welche Systeme es gerade gibt.
+			for (const FWbOptionRow& Zeile : Zeilen)
+			{
+				if (Zeile.Group == MenuGruppe)
+				{
+					MenuRows.Add(Zeile);
+				}
+			}
+		}
+		break;
+
+	case EWbMenuScreen::Belegung:
+		// Die Belegungs-Seite hat keine Liste, sondern Kontext-Reiter; die
+		// Zeilen kommen direkt aus der Tabelle.
+		break;
+
+	default:
+		break;
+	}
+	MenuSelection = WiesbadenOptions::ClampRow(MenuSelection, MenuEntries.Num());
+}
+
+void AWiesbadenVehicleHUD::ActivateMenuEntry()
+{
+	const FWbMenuEntry* Eintrag = WiesbadenMenu::EntryAt(MenuEntries, MenuSelection);
+	if (!Eintrag)
+	{
+		return;
+	}
+
+	if (Eintrag->Kind == EWbMenuEntryKind::Wert)
+	{
+		// Ein Wert-Eintrag verstellt sich beim BESTAETIGEN um einen Schritt
+		// nach rechts. Die Pfeiltasten verstellen ihn ohnehin; damit ist
+		// auch der Controller bedienbar, ohne die Schultertasten zu finden.
+		for (const FWbOptionRow& Zeile : MenuRows)
+		{
+			if (Zeile.Id == Eintrag->Option)
+			{
+				StepOptionValue(Zeile, 1);
+				return;
+			}
+		}
+		return;
+	}
+
+	bool bGleicherBildschirm = false;
+	const EWbMenuScreen Neu = WiesbadenMenu::Advance(MenuScreen, Eintrag, bGleicherBildschirm);
+	if (bGleicherBildschirm)
+	{
+		return;
+	}
+	if (Eintrag->Action == EWbMenuAction::Beenden)
+	{
+		UE_LOG(LogWbCore, Log, TEXT("Menue: Beenden gewaehlt - Spiel wird beendet."));
+		FGenericPlatformMisc::RequestExit(false);
+		return;
+	}
+	MenuScreen = Neu;
+	MenuSelection = 0;
+	RebuildMenuEntries();
+	UE_LOG(LogWbCore, Log, TEXT("Menue: Bildschirm %d, %d Eintraege, Auswahl %d."),
+		static_cast<int32>(MenuScreen), MenuEntries.Num(), MenuSelection);
+}
+
+bool AWiesbadenVehicleHUD::UpdateTitleMenu()
+{
+	APlayerController* PC = GetOwningPlayerController();
+	UWorld* HudWorld = GetWorld();
+	if (!PC || !HudWorld)
+	{
+		return false;
+	}
+
+	// Einmal beim Start entscheiden. Der Aufruf geht an WiesbadenMenu, weil
+	// dort die Regel steht, dass ein Automationslauf KEIN Intro bekommt: der
+	// Rauchtest wartet auf Belege aus dem laufenden Spiel, und ein wartender
+	// Titelbildschirm wuerde ihn genau dort aufhalten.
+	if (!bTitleGeprueft)
+	{
+		bTitleGeprueft = true;
+		if (WiesbadenMenu::ShouldShowIntro(bIntroGewuenscht, FCommandLine::Get()))
+		{
+			MenuScreen = EWbMenuScreen::Intro;
+			MenuOpenedAt = HudWorld->GetTimeSeconds();
+			MenuSelection = 0;
+			RebuildMenuEntries();
+			UE_LOG(LogWbCore, Log, TEXT("HUD: Intro (%.1f s), dann Titelbildschirm mit Hauptmenue."),
+				WiesbadenMenu::IntroSeconds());
+		}
+	}
+	if (MenuScreen == EWbMenuScreen::MAX)
+	{
+		return false;
+	}
+
+	// Solange der Titel offen ist, gibt es nichts zu pausieren und keine Karte.
+	if (PauseView != EWbPauseView::Aus)
+	{
+		PauseView = EWbPauseView::Aus;
+		bWorldMapOpen = false;
+		bMapSearchActive = false;
+	}
+
+	const double Jetzt = HudWorld->GetTimeSeconds();
+	// Mehrere Tasten je Flanke, eine Flanke je Richtung: Tastatur UND Pad an
+	// derselben Stelle. Genau die Regel, die an der Achse des Wagens
+	// auskommentiert ist (A hupt wie am Pad) - hier ist es nur die Eingabe.
+	auto Runter = [PC](std::initializer_list<FKey> Keys)
+	{
+		for (const FKey& Key : Keys)
+		{
+			if (PC->IsInputKeyDown(Key))
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+
+	const bool bHoch = Runter({EKeys::Up, EKeys::W, EKeys::Gamepad_DPad_Up})
+		|| StickStep(-PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftY), bTitleStickHochHeld);
+	const bool bRunter = Runter({EKeys::Down, EKeys::S, EKeys::Gamepad_DPad_Down})
+		|| StickStep(PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftY), bTitleStickRunterHeld);
+	const bool bLinks = Runter({EKeys::Left, EKeys::A,
+			EKeys::Gamepad_DPad_Left, EKeys::Gamepad_LeftShoulder})
+		|| StickStep(-PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftX), bTitleStickLinksHeld);
+	const bool bRechts = Runter({EKeys::Right, EKeys::D,
+			EKeys::Gamepad_DPad_Right, EKeys::Gamepad_RightShoulder})
+		|| StickStep(PC->GetInputAnalogKeyState(EKeys::Gamepad_LeftX), bTitleStickRechtsHeld);
+	const bool bBest = Runter({EKeys::Enter, EKeys::Gamepad_FaceButton_Bottom});
+	const bool bZurueck = Runter({EKeys::Escape, EKeys::Gamepad_FaceButton_Right});
+
+	const bool bTasteHoch = WiesbadenOptions::EdgePressed(bHoch, bTitleHochHeld);
+	const bool bTasteRunter = WiesbadenOptions::EdgePressed(bRunter, bTitleRunterHeld);
+	const bool bTasteLinks = WiesbadenOptions::EdgePressed(bLinks, bTitleLinksHeld);
+	const bool bTasteRechts = WiesbadenOptions::EdgePressed(bRechts, bTitleRechtsHeld);
+	const bool bTasteBest = WiesbadenOptions::EdgePressed(bBest, bTitleEnterHeld);
+	const bool bTasteZurueck = WiesbadenOptions::EdgePressed(bZurueck, bTitleZurueckHeld);
+
+	// --- Intro: laeuft von selbst, jeder Druck ueberspringt -----------------
+	if (MenuScreen == EWbMenuScreen::Intro)
+	{
+		if (bTasteBest || bTasteZurueck
+			|| (Jetzt - MenuOpenedAt) >= WiesbadenMenu::IntroSeconds())
+		{
+			MenuScreen = EWbMenuScreen::Titel;
+			MenuOpenedAt = Jetzt;
+			MenuSelection = 0;
+			RebuildMenuEntries();
+			UE_LOG(LogWbCore, Log, TEXT("HUD: Intro vorbei - Titelbildschirm mit Hauptmenue."));
+		}
+		return true;
+	}
+
+	// --- Eine Ebene zurueck (Escape / B) -----------------------------------
+	if (bTasteZurueck)
+	{
+		EWbMenuScreen Neu = MenuScreen;
+		WiesbadenMenu::Back(Neu);
+		MenuScreen = Neu;
+		MenuSelection = 0;
+		if (MenuScreen != EWbMenuScreen::MAX)
+		{
+			RebuildMenuEntries();
+		}
+		UE_LOG(LogWbCore, Log, TEXT("Menue: zurueck -> Bildschirm %d."), static_cast<int32>(MenuScreen));
+		return true;
+	}
+
+	// --- Belegungs-Seite: Kontext wechseln, keine Liste --------------------
+	if (MenuScreen == EWbMenuScreen::Belegung)
+	{
+		const int32 Schritt = (bTasteRunter ? 1 : 0) - (bTasteHoch ? 1 : 0);
+		if (Schritt != 0)
+		{
+			const int32 Anzahl = static_cast<int32>(EWbControlContext::MAX);
+			MenuBelegung = static_cast<EWbControlContext>(
+				((static_cast<int32>(MenuBelegung) + Schritt) % Anzahl + Anzahl) % Anzahl);
+		}
+		if (bTasteBest)
+		{
+			MenuScreen = EWbMenuScreen::Titel;
+			MenuSelection = 0;
+			RebuildMenuEntries();
+		}
+		return true;
+	}
+
+	// --- Hauptmenue, Gruppenliste, Optionsseite -----------------------------
+	if (bTasteHoch)
+	{
+		MenuSelection = WiesbadenMenu::MoveSelection(MenuSelection, MenuEntries, -1);
+	}
+	if (bTasteRunter)
+	{
+		MenuSelection = WiesbadenMenu::MoveSelection(MenuSelection, MenuEntries, 1);
+	}
+
+	// Links/rechts verstellen einen Wert - nur auf einer Optionsseite, und
+	// nur wenn gerade ein Wert-Eintrag markiert ist. Sonst waeren die
+	// Pfeiltasten auf dem Titelbildschirm etwas, das ins Leere zeigt.
+	if ((bTasteLinks || bTasteRechts) && MenuScreen == EWbMenuScreen::Gruppe)
+	{
+		const FWbMenuEntry* Eintrag = WiesbadenMenu::EntryAt(MenuEntries, MenuSelection);
+		if (Eintrag && Eintrag->Kind == EWbMenuEntryKind::Wert)
+		{
+			for (const FWbOptionRow& Zeile : MenuRows)
+			{
+				if (Zeile.Id == Eintrag->Option)
+				{
+					StepOptionValue(Zeile, bTasteRechts ? 1 : -1);
+					break;
+				}
+			}
+		}
+	}
+
+	if (bTasteBest)
+	{
+		ActivateMenuEntry();
+	}
+	return true;
+}
+
+void AWiesbadenVehicleHUD::DrawTextMittig(const FString& Text, FLinearColor Color,
+	float MitteX, float Y, UFont* Font, float Scale)
+{
+	UFont* Genutzt = Font ? Font : (GEngine ? GEngine->GetMediumFont() : nullptr);
+	const int32 RohBreite = Genutzt ? Genutzt->GetStringSize(*Text) : 0;
+	DrawText(Text, Color, MitteX - RohBreite * 0.5f * Scale, Y, Genutzt, Scale);
+}
+
+void AWiesbadenVehicleHUD::DrawTextRechts(const FString& Text, FLinearColor Color,
+	float RechtsX, float Y, UFont* Font, float Scale)
+{
+	UFont* Genutzt = Font ? Font : (GEngine ? GEngine->GetMediumFont() : nullptr);
+	const int32 RohBreite = Genutzt ? Genutzt->GetStringSize(*Text) : 0;
+	DrawText(Text, Color, RechtsX - RohBreite * Scale, Y, Genutzt, Scale);
+}
+
+void AWiesbadenVehicleHUD::DrawProfilTafel(float X, float Y)
+{
+	// Daten aus dem getesteten Fenster-Profiler des Subsystems - das HUD misst
+	// nicht selbst (eine zweite Messstelle waere eine zweite Wahrheit).
+	const UWorld* ProfilWorld = GetWorld();
+	const UWiesbadenCitySubsystem* City = ProfilWorld
+		? ProfilWorld->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+	if (!City)
+	{
+		return;
+	}
+
+	const TArray<FString> Zeilen = WbProfilZeilen(City->GetFrameReport());
+	UFont* Schrift = GEngine ? GEngine->GetSmallFont() : nullptr;
+	if (Zeilen.Num() == 0 || !Schrift)
+	{
+		return;
+	}
+
+	// Rohmasse der Schrift bei Skala 1; die Tafelgroesse rechnet sie mit der
+	// Stilskala (0.5 = halb so gross), damit Text und Flaeche zusammenpassen.
+	float RohBreite = 0.0f;
+	for (const FString& Zeile : Zeilen)
+	{
+		RohBreite = FMath::Max(RohBreite, static_cast<float>(Schrift->GetStringSize(*Zeile)));
+	}
+	const float RohHoehe = Schrift->GetMaxCharHeight();
+	const FWbProfilOverlayStyle Stil;
+	const FVector2D Groesse = WbProfilTafelGroesse(Zeilen.Num(), RohBreite, RohHoehe, Stil);
+
+	// Halbtransparenter Hintergrund - das Bild darunter bleibt erkennbar.
+	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, Stil.HintergrundAlpha),
+		X, Y, Groesse.X, Groesse.Y);
+
+	float ZeilenY = Y + Stil.RandPx * Stil.TextSkala;
+	for (const FString& Zeile : Zeilen)
+	{
+		DrawText(Zeile, FLinearColor::White,
+			X + Stil.RandPx * Stil.TextSkala, ZeilenY, Schrift, Stil.TextSkala);
+		ZeilenY += (RohHoehe + Stil.ZeilenAbstandPx) * Stil.TextSkala;
+	}
+}
+
+void AWiesbadenVehicleHUD::DrawTitleScreen(float Width, float Height)
+{
+	const UWorld* HudWorld = GetWorld();
+	const double Jetzt = HudWorld ? HudWorld->GetTimeSeconds() : 0.0;
+
+	if (MenuScreen == EWbMenuScreen::Intro)
+	{
+		// Das Intro ist schwarz und hat nur EINEN Satz. Wer es ueberspringt,
+		// sieht denselben letzten Satz - nicht etwa gar nichts.
+		DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 1.0f), 0.0f, 0.0f, Width, Height);
+		FString Zeile;
+		float Deckkraft = 0.0f;
+		if (!WiesbadenMenu::IntroPhase(Jetzt - MenuOpenedAt, Zeile, Deckkraft)
+			|| Zeile.IsEmpty())
+		{
+			return;
+		}
+		DrawTextMittig(Zeile, FLinearColor(1.0f, 1.0f, 1.0f, Deckkraft),
+			Width * 0.5f, Height * 0.45f, GEngine->GetLargeFont(), 1.0f);
+		DrawTextMittig(TEXT("beliebige Taste ueberspringt"),
+			FLinearColor(1.0f, 1.0f, 1.0f, 0.35f * Deckkraft),
+			Width * 0.5f, Height * 0.56f, GEngine->GetSmallFont(), 1.0f);
+		return;
+	}
+
+	// Alle Bildschirme ausser dem Intro liegen auf einer abgedunkelten Stadt.
+	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.72f), 0.0f, 0.0f, Width, Height);
+
+	// Der Titel steht IMMER oben: auf jeder Unterseite weiss man, wo man ist.
+	DrawTextMittig(WiesbadenMenu::ScreenTitle(MenuScreen), DialText,
+		Width * 0.5f, 48.0f, GEngine->GetLargeFont(), 1.0f);
+
+	if (MenuScreen == EWbMenuScreen::Belegung)
+	{
+		DrawBindingPage(Width, Height);
+		return;
+	}
+
+	constexpr float ZeilenHoehe = 34.0f;
+	const float KastenBreite = FMath::Min(720.0f, Width - 80.0f);
+	const float KastenHoehe = MenuEntries.Num() * ZeilenHoehe + 150.0f;
+	const float X = (Width - KastenBreite) * 0.5f;
+	const float Y = (Height - KastenHoehe) * 0.5f;
+	DrawRect(DialBackground, X, Y, KastenBreite, KastenHoehe);
+
+	// Seitenkopf: welche Gruppe ist offen, bzw. dass die Optionen kommen.
+	if (MenuScreen == EWbMenuScreen::Gruppe)
+	{
+		TArray<FWbMenuEntry> Gruppen;
+		WiesbadenMenu::BuildGruppenliste(Gruppen);
+		FString GruppenName = TEXT("Optionen");
+		for (const FWbMenuEntry& Gruppe : Gruppen)
+		{
+			if (Gruppe.Group == MenuGruppe)
+			{
+				GruppenName = Gruppe.Label;
+				break;
+			}
+		}
+		DrawText(FString::Printf(TEXT("Optionen  /  %s"), *GruppenName), IndicatorOn,
+			X + 24.0f, Y + 18.0f, GEngine->GetMediumFont(), 1.0f);
+	}
+
+	for (int32 Index = 0; Index < MenuEntries.Num(); ++Index)
+	{
+		const FWbMenuEntry& Eintrag = MenuEntries[Index];
+		const bool bGewaehlt = (Index == MenuSelection);
+		const float ZeileY = Y + 62.0f + Index * ZeilenHoehe;
+		DrawText((bGewaehlt ? TEXT("> ") : TEXT("  ")) + Eintrag.Label,
+			bGewaehlt ? IndicatorOn : DialScale,
+			X + 24.0f, ZeileY, GEngine->GetMediumFont(), 1.0f);
+
+		// Bei einer Wertezeile steht der Wert RECHTS - dort, wo das Auge
+		// nach der Aenderung sucht, nicht unter dem Label.
+		if (Eintrag.Kind == EWbMenuEntryKind::Wert)
+		{
+			for (const FWbOptionRow& Zeile : MenuRows)
+			{
+				if (Zeile.Id == Eintrag.Option)
+				{
+				DrawTextRechts(WiesbadenOptions::FormatValue(Zeile.Kind, ReadOptionValue(Zeile)),
+					bGewaehlt ? IndicatorOn : DialText,
+					X + KastenBreite - 24.0f, ZeileY,
+					GEngine->GetMediumFont(), 1.0f);
+					break;
+				}
+			}
+		}
+	}
+
+	// Fusszeile: die Erklaerung des gewaehlten Eintrags, darunter die
+	// Bedienung. Ohne die Fusszeile weiss man nicht, was "Warp zur Strasse"
+	// tun soll, wenn man darauf steht.
+	const FWbMenuEntry* Gewaehlt = WiesbadenMenu::EntryAt(MenuEntries, MenuSelection);
+	if (Gewaehlt && !Gewaehlt->Hinweis.IsEmpty())
+	{
+		DrawText(Gewaehlt->Hinweis, TellTaleOff,
+			X + 24.0f, Y + KastenHoehe - 62.0f, GEngine->GetSmallFont(), 1.0f);
+	}
+	DrawText(TEXT("Pfeile waehlen   Enter bestaetigt   Escape zurueck   (Pad: Steuerkreuz, A, B)"),
+		TellTaleOff, X + 24.0f, Y + KastenHoehe - 34.0f, GEngine->GetSmallFont(), 1.0f);
+}
+
+void AWiesbadenVehicleHUD::DrawBindingPage(float Width, float Height)
+{
+	TArray<FString> Kontexte;
+	WiesbadenMenu::GetContextLabels(Kontexte);
+
+	// Reiter: welcher Kontext offen ist. Der angezeichte Name kommt aus der
+	// Tabelle, nicht aus dem Enum - sonst muesste die Seite an zwei Stellen
+	// gepflegt werden.
+	const int32 KontextIndex = static_cast<int32>(MenuBelegung);
+	const FString KontextName = Kontexte.IsValidIndex(KontextIndex)
+		? Kontexte[KontextIndex] : TEXT("?");
+
+	const float KastenBreite = FMath::Min(900.0f, Width - 60.0f);
+	const float X = (Width - KastenBreite) * 0.5f;
+	const float Y = 120.0f;
+	TArray<FWbControlBinding> Bindungen;
+	WiesbadenMenu::ControlBindings(MenuBelegung, Bindungen);
+	const float KastenHoehe = Bindungen.Num() * 24.0f + 96.0f;
+	DrawRect(DialBackground, X, Y, KastenBreite, KastenHoehe);
+	DrawText(FString::Printf(TEXT("STEUERUNG  /  %s"), *KontextName), IndicatorOn,
+		X + 20.0f, Y + 14.0f, GEngine->GetMediumFont(), 1.0f);
+	DrawText(TEXT("Aktion"), TellTaleOff, X + 20.0f, Y + 52.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(TEXT("Tastatur"), TellTaleOff, X + 250.0f, Y + 52.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(TEXT("Xbox 360"), TellTaleOff, X + 470.0f, Y + 52.0f, GEngine->GetSmallFont(), 1.0f);
+
+	for (int32 Index = 0; Index < Bindungen.Num(); ++Index)
+	{
+		const FString Text = FormatBindingLine(Bindungen[Index]);
+		DrawText(Text, DialScale, X + 20.0f, Y + 70.0f + Index * 24.0f,
+			GEngine->GetSmallFont(), 1.0f);
+	}
+	DrawText(TEXT("Pfeil hoch/runter: anderer Bereich   Enter: zurueck zum Hauptmenue"),
+		TellTaleOff, X + 20.0f, Y + KastenHoehe - 26.0f, GEngine->GetSmallFont(), 1.0f);
+}
+
 void AWiesbadenVehicleHUD::DrawPauseMenu(float Width, float Height)
 {
 	TArray<FString> Entries;
@@ -1312,7 +1883,694 @@ FString AWiesbadenVehicleHUD::FormatVolumePercent(float Slider01)
 	return FString::Printf(TEXT("%d %%"), Pct);
 }
 
-void AWiesbadenVehicleHUD::UpdateAudioSettings()
+void AWiesbadenVehicleHUD::WbOptionen()
+{
+	APlayerController* PC = GetOwningPlayerController();
+	if (!PC)
+	{
+		return;
+	}
+
+	// Setzt DENSELBEN Zustand wie der Weg ueber das Pausemenue - damit ist das
+	// Fenster auch hier bedienbar, nicht nur sichtbar. Angehalten wird dabei
+	// bewusst NICHT: eine Pause ab Bild 0 haelt den Welt-Takt an, die Stadt
+	// wird nie fertig gestreamt, und der Lauf koennte weder ein Bild machen
+	// noch eine Wirkung zeigen.
+	const bool bOeffnen = (PauseView != EWbPauseView::Optionen);
+	PauseView = bOeffnen ? EWbPauseView::Optionen : EWbPauseView::Aus;
+	if (bOeffnen)
+	{
+		OptionSelection = 0;
+		bOptionInputAnnounced = false;
+	}
+
+	TArray<FWbOptionRow> Rows;
+	BuildOptionRows(Rows);
+	UE_LOG(LogWbCore, Log, TEXT("WbOptionen: Fenster %s, %d Zeilen."),
+		bOeffnen ? TEXT("offen") : TEXT("zu"), Rows.Num());
+
+	// Die ganze Liste einmal ins Protokoll - damit ist nachlesbar, welcher
+	// Index zu welcher Zeile gehoert, ohne das Bild zu brauchen.
+	if (bOeffnen)
+	{
+		for (int32 i = 0; i < Rows.Num(); ++i)
+		{
+			UE_LOG(LogWbCore, Log, TEXT("  [%2d] %-22s %s = %s"),
+				i, *WiesbadenOptions::GroupLabel(Rows[i].Group), *Rows[i].Label,
+				*WiesbadenOptions::FormatValue(Rows[i].Kind, ReadOptionValue(Rows[i])));
+		}
+	}
+}
+
+void AWiesbadenVehicleHUD::WbOption(int32 Zeile, int32 Schritte)
+{
+	TArray<FWbOptionRow> Rows;
+	BuildOptionRows(Rows);
+	if (!Rows.IsValidIndex(Zeile))
+	{
+		UE_LOG(LogWbCore, Warning,
+			TEXT("WbOption: Zeile %d gibt es nicht (%d Zeilen)."), Zeile, Rows.Num());
+		return;
+	}
+
+	OptionSelection = Zeile;
+	const FWbOptionRow& Row = Rows[Zeile];
+	const double Vorher = ReadOptionValue(Row);
+
+	double Wert = Vorher;
+	const int32 Richtung = (Schritte >= 0) ? 1 : -1;
+	for (int32 i = 0; i < FMath::Abs(Schritte); ++i)
+	{
+		Wert = WiesbadenOptions::Step(Row.Kind, Wert, Richtung);
+	}
+	WriteOptionValue(Row, Wert);
+
+	// ZURUECKGELESEN, nicht behauptet: was hier steht, hat das besitzende
+	// System wirklich angenommen.
+	const double Nachher = ReadOptionValue(Row);
+	UE_LOG(LogWbCore, Log,
+		TEXT("WbOption: %s  %s -> %s (gesetzt: %s)%s"),
+		*Row.Label,
+		*WiesbadenOptions::FormatValue(Row.Kind, Vorher),
+		*WiesbadenOptions::FormatValue(Row.Kind, Wert),
+		*WiesbadenOptions::FormatValue(Row.Kind, Nachher),
+		WiesbadenOptions::ValueArrived(Wert, Nachher)
+			? TEXT("") : TEXT("  ACHTUNG: NICHT ANGEKOMMEN"));
+}
+
+void AWiesbadenVehicleHUD::BuildOptionRows(TArray<FWbOptionRow>& OutRows) const
+{
+	// KEINE ZEILE, DEREN SYSTEM ES NICHT GIBT. Ein Regler ohne Mischpult oder
+	// ein Verkehrsregler ohne Stadt waere genau die Option, die nichts tut.
+	TArray<FString> BusLabels;
+	int32 BusCount = 0;
+	if (const APlayerController* PC = GetOwningPlayerController())
+	{
+		if (const UGameInstance* GI = PC->GetGameInstance())
+		{
+			if (GI->GetSubsystem<UWiesbadenAudioSubsystem>())
+			{
+				GetAudioBusLabels(BusLabels);
+				BusCount = BusLabels.Num();
+			}
+		}
+	}
+
+	WiesbadenOptions::BuildRows(BusCount, BusLabels, OutRows);
+
+	// Ohne Stadt-Subsystem faellt die Gruppe Spielwelt weg.
+	const UWorld* HudWorld = GetWorld();
+	const UWiesbadenCitySubsystem* City =
+		HudWorld ? HudWorld->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+	if (!City)
+	{
+		OutRows.RemoveAll([](const FWbOptionRow& Row)
+		{
+			return Row.Group == EWbOptionGroup::Spielwelt;
+		});
+	}
+
+	// Ohne GameUserSettings faellt die Gruppe Grafik weg.
+	if (!GEngine || !GEngine->GetGameUserSettings())
+	{
+		OutRows.RemoveAll([](const FWbOptionRow& Row)
+		{
+			return Row.Group == EWbOptionGroup::Grafik;
+		});
+	}
+}
+
+namespace
+{
+	/**
+	 * Die vier Qualitaetsstufen - Lesen UND Schreiben in EINER Zeile.
+	 *
+	 * Hier lagen zwei spiegelbildliche Kaskaden: viermal ein
+	 * Beschriftungsvergleich mit einem Getter, und gleich darunter noch einmal
+	 * derselbe Vergleich mit dem passenden Setter. Zwei Listen, die
+	 * zusammenpassen mussten, ohne dass irgendetwas das erzwungen haette.
+	 *
+	 * Jetzt steht jedes Paar einmal da. Ein Getter ohne seinen Setter ist
+	 * nicht mehr aufschreibbar.
+	 */
+	struct FWbQualitaetsBindung
+	{
+		EWbOptionId Id;
+		int32 (UGameUserSettings::*Lesen)() const;
+		void  (UGameUserSettings::*Schreiben)(int32);
+	};
+
+	const FWbQualitaetsBindung QualitaetsBindungen[] =
+	{
+		{ EWbOptionId::Sichtweite, &UGameUserSettings::GetViewDistanceQuality,
+		                           &UGameUserSettings::SetViewDistanceQuality },
+		{ EWbOptionId::Schatten,   &UGameUserSettings::GetShadowQuality,
+		                           &UGameUserSettings::SetShadowQuality },
+		{ EWbOptionId::Effekte,    &UGameUserSettings::GetVisualEffectQuality,
+		                           &UGameUserSettings::SetVisualEffectQuality },
+		{ EWbOptionId::Texturen,   &UGameUserSettings::GetTextureQuality,
+		                           &UGameUserSettings::SetTextureQuality },
+	};
+
+	const FWbQualitaetsBindung* FindeQualitaet(EWbOptionId Id)
+	{
+		for (const FWbQualitaetsBindung& B : QualitaetsBindungen)
+		{
+			if (B.Id == Id)
+			{
+				return &B;
+			}
+		}
+		return nullptr;
+	}
+
+	/**
+	 * Eine Kennung, die an kein System gebunden ist.
+	 *
+	 * Das darf es nicht geben - eine solche Zeile stuende im Menue, liesse
+	 * sich verstellen und bewirkte nichts. Darum schlaegt sie hier an, statt
+	 * still eine 0 zurueckzugeben.
+	 */
+	void MeldeUnversorgt(const FWbOptionRow& Row)
+	{
+		ensureMsgf(false,
+			TEXT("Optionszeile %s (Kennung %d) ist an kein System gebunden - ")
+			TEXT("sie braucht einen Zweig in ReadOptionValue UND WriteOptionValue."),
+			*Row.Label, static_cast<int32>(Row.Id));
+	}
+
+	// Tripwire: eine neue Kennung faellt hier auf, bevor sie im Menue steht.
+	// Wer sie hinzufuegt, muss beide Richtungen bedienen und diese Zahl
+	// nachziehen - der Uebersetzer laesst ihn sonst nicht durch.
+	static_assert(static_cast<int32>(EWbOptionId::MAX) == 16,
+		"Neue Optionskennung: sie braucht einen Zweig in ReadOptionValue UND "
+		"in WriteOptionValue. Danach diese Zahl nachziehen.");
+}
+
+UWiesbadenCitySubsystem* AWiesbadenVehicleHUD::FindCity() const
+{
+	UWorld* HudWorld = GetWorld();
+	return HudWorld ? HudWorld->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+}
+
+UWiesbadenAudioSubsystem* AWiesbadenVehicleHUD::FindAudio() const
+{
+	const APlayerController* PC = GetOwningPlayerController();
+	const UGameInstance* GI = PC ? PC->GetGameInstance() : nullptr;
+	return GI ? GI->GetSubsystem<UWiesbadenAudioSubsystem>() : nullptr;
+}
+
+bool AWiesbadenVehicleHUD::StepOptionValue(const FWbOptionRow& Row, int32 Richtung)
+{
+	// EIN Schritt mit Nachweis - und der Weg, ueber den BEIDE Fenster einen
+	// Wert verstellen (das alte Optionsfenster und die neue Optionsseite des
+	// Hauptmenues). Zwei Kopien dieser Rechnung waeren zwei Orte, an denen
+	// sich die Meldung "gesetzt: ..." unterscheiden koennte.
+	if (Richtung == 0)
+	{
+		return false;
+	}
+	const double Alt = ReadOptionValue(Row);
+	const double Neu = WiesbadenOptions::Step(Row.Kind, Alt, Richtung);
+	if (FMath::IsNearlyEqual(Alt, Neu))
+	{
+		// Am Anschlag: kein "gesetzt: ..." - es wurde nichts bewirkt.
+		return false;
+	}
+	WriteOptionValue(Row, Neu);
+
+	// MIT NACHWEIS: was angekommen ist, wird zurueckgelesen und gemeldet.
+	// Eine Option, die nichts bewirkt, faellt damit im Protokoll auf, nicht
+	// erst im Bild.
+	UE_LOG(LogWbCore, Log,
+		TEXT("Optionen: %s %s -> %s (gesetzt: %s)"),
+		*Row.Label,
+		*WiesbadenOptions::FormatValue(Row.Kind, Alt),
+		*WiesbadenOptions::FormatValue(Row.Kind, Neu),
+		*WiesbadenOptions::FormatValue(Row.Kind, ReadOptionValue(Row)));
+	return true;
+}
+
+double AWiesbadenVehicleHUD::ReadOptionValue(const FWbOptionRow& Row) const
+{
+	switch (Row.Id)
+	{
+	case EWbOptionId::Sichtweite:
+	case EWbOptionId::Schatten:
+	case EWbOptionId::Effekte:
+	case EWbOptionId::Texturen:
+	{
+		const UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		const FWbQualitaetsBindung* Bindung = FindeQualitaet(Row.Id);
+		return (Settings && Bindung)
+			? static_cast<double>((Settings->*(Bindung->Lesen))())
+			: 0.0;
+	}
+
+	case EWbOptionId::Bildratengrenze:
+	{
+		const UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		return Settings ? Settings->GetFrameRateLimit() : 0.0;
+	}
+
+	case EWbOptionId::Vollbild:
+	{
+		// Gelesen wird die EIGENTLICHE Fenstereinstellung, nicht ein
+		// Merker: nur so steht im Menue, was wirklich gilt.
+		const UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		return Settings && Settings->GetFullscreenMode() != EWindowMode::Windowed ? 1.0 : 0.0;
+	}
+
+	case EWbOptionId::VSync:
+	{
+		const UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		return Settings && Settings->IsVSyncEnabled() ? 1.0 : 0.0;
+	}
+
+	case EWbOptionId::Aufloesungsskalierung:
+	{
+		// Die Engine gibt vier Werte heraus, keinen Strukt-Wert: der
+		// tatsaechliche Prozentwert steckt in CurrentScaleValue.
+		const UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		if (!Settings)
+		{
+			return 1.0;
+		}
+		float Normalisiert = 0.0f;
+		float Prozent = 0.0f;
+		float MinProzent = 0.0f;
+		float MaxProzent = 0.0f;
+		Settings->GetResolutionScaleInformationEx(Normalisiert, Prozent, MinProzent, MaxProzent);
+		return static_cast<double>(Prozent) / 100.0;
+	}
+
+	case EWbOptionId::FpsAnzeige:
+		return bFpsAnzeige ? 1.0 : 0.0;
+
+	case EWbOptionId::StatEinblendung:
+		return bStatEinblendung ? 1.0 : 0.0;
+
+	case EWbOptionId::KollisionsOverlay:
+		return bKollisionsOverlay ? 1.0 : 0.0;
+
+	case EWbOptionId::TonBus:
+	{
+		if (Row.BusIndex < 0)
+		{
+			break;
+		}
+		const UWiesbadenAudioSubsystem* Audio = FindAudio();
+		return Audio ? Audio->GetBusVolume(static_cast<EWbAudioBus>(Row.BusIndex)) : 1.0;
+	}
+
+	case EWbOptionId::MausEmpfindlichkeit:
+		return MouseSensitivityFactor;
+
+	case EWbOptionId::Steuerungshilfe:
+		return bShowControlLegend ? 1.0 : 0.0;
+
+	case EWbOptionId::Verkehrsdichte:
+	{
+		const UWiesbadenCitySubsystem* City = FindCity();
+		return City ? City->TrafficSimulation.Settings.TrafficDensity : 0.0;
+	}
+
+	case EWbOptionId::Tageszeit:
+	{
+		// Gelesen wird die QUELLE, nicht die Uhr: bei Systemzeit laeuft die
+		// Stunde weiter, und die Zeile wuerde im Menue vor sich hin zaehlen.
+		const UWiesbadenCitySubsystem* City = FindCity();
+		if (!City)
+		{
+			return 0.0;
+		}
+		return (City->Weather.Settings.TimeSource == EWiesbadenTimeSource::SystemClock)
+			? -1.0
+			: FMath::RoundToDouble(City->Weather.Settings.FixedHours);
+	}
+
+	case EWbOptionId::MAX:
+		break;
+	}
+
+	MeldeUnversorgt(Row);
+	return 0.0;
+}
+
+void AWiesbadenVehicleHUD::WriteOptionValue(const FWbOptionRow& Row, double Value)
+{
+	switch (Row.Id)
+	{
+	case EWbOptionId::Sichtweite:
+	case EWbOptionId::Schatten:
+	case EWbOptionId::Effekte:
+	case EWbOptionId::Texturen:
+	case EWbOptionId::Bildratengrenze:
+	{
+		UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		if (!Settings)
+		{
+			return;
+		}
+		if (const FWbQualitaetsBindung* Bindung = FindeQualitaet(Row.Id))
+		{
+			(Settings->*(Bindung->Schreiben))(FMath::Clamp(FMath::RoundToInt(Value), 0, 4));
+		}
+		else
+		{
+			Settings->SetFrameRateLimit(static_cast<float>(Value));
+		}
+
+		// ApplyNonResolutionSettings, NICHT ApplySettings: letzteres fasst auch
+		// Aufloesung und Fenstermodus an und laesst das Fenster flackern, ohne
+		// dass jemand daran gedreht haette.
+		Settings->ApplyNonResolutionSettings();
+		Settings->SaveSettings();
+		return;
+	}
+
+	case EWbOptionId::TonBus:
+	{
+		if (Row.BusIndex < 0)
+		{
+			break;
+		}
+		if (UWiesbadenAudioSubsystem* Audio = FindAudio())
+		{
+			// SetBusVolume wendet sofort an UND speichert selbst.
+			Audio->SetBusVolume(static_cast<EWbAudioBus>(Row.BusIndex),
+				static_cast<float>(Value));
+		}
+		return;
+	}
+
+	case EWbOptionId::Vollbild:
+	{
+		UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		if (!Settings)
+		{
+			return;
+		}
+		// Hier ist ApplySettings richtig und ApplyNonResolutionSettings
+		// falsch: der Fenstermodus IST eine Aufloesungseinstellung, und
+		// ApplyNonResolutionSettings wuerde ihn stehen lassen und die Zeile
+		// waere eine Anzeige, die nichts bewirkt.
+		Settings->SetFullscreenMode(Value >= 0.5
+			? EWindowMode::Fullscreen : EWindowMode::Windowed);
+		Settings->ApplySettings(false);
+		Settings->SaveSettings();
+		return;
+	}
+
+	case EWbOptionId::VSync:
+	{
+		UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		if (!Settings)
+		{
+			return;
+		}
+		Settings->SetVSyncEnabled(Value >= 0.5);
+		Settings->ApplyNonResolutionSettings();
+		Settings->SaveSettings();
+		return;
+	}
+
+	case EWbOptionId::Aufloesungsskalierung:
+	{
+		UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+		if (!Settings)
+		{
+			return;
+		}
+		const int32 Prozent = FMath::Clamp(FMath::RoundToInt(Value * 100.0), 50, 100);
+		Settings->SetResolutionScaleValueEx(static_cast<float>(Prozent));
+		Settings->ApplyNonResolutionSettings();
+		Settings->SaveSettings();
+		return;
+	}
+
+	case EWbOptionId::FpsAnzeige:
+		bFpsAnzeige = (Value >= 0.5);
+		GConfig->SetBool(TEXT("WiesbadenReal.Optionen"), TEXT("FpsAnzeige"),
+			bFpsAnzeige, GGameUserSettingsIni);
+		return;
+
+	case EWbOptionId::StatEinblendung:
+	{
+		bStatEinblendung = (Value >= 0.5);
+		GConfig->SetBool(TEXT("WiesbadenReal.Optionen"), TEXT("StatEinblendung"),
+			bStatEinblendung, GGameUserSettingsIni);
+		// Frueher: stat fps/unit/game einschalten. Diese Engine-Tabellen liessen
+		// sich weder verkleinern noch halbtransparent machen (feste Fonts,
+		// undurchsichtige Hintergrundkacheln, StatsRender2.cpp) und deckten das
+		// Bild zu. Jetzt zeichnet das HUD seine eigene Profil-Tafel
+		// (DrawProfilTafel); "stat none" raeumt nur noch Reste auf.
+		if (UWorld* Welt = GetWorld())
+		{
+			if (GEngine)
+			{
+				GEngine->Exec(Welt, TEXT("stat none"));
+			}
+		}
+		GConfig->Flush(false, GGameUserSettingsIni);
+		return;
+	}
+
+	case EWbOptionId::KollisionsOverlay:
+	{
+		bKollisionsOverlay = (Value >= 0.5);
+		GConfig->SetBool(TEXT("WiesbadenReal.Optionen"), TEXT("KollisionsOverlay"),
+			bKollisionsOverlay, GGameUserSettingsIni);
+		// "show collision" schaltet UM, und UGameViewportClient::
+		// ToggleShowCollision ist privat - der Konsolenbefehl ist der
+		// oeffentliche Weg dorthin. Deshalb nur beim Einschalten ausfuehren
+		// und den Merker fuehren: sonst waere der Bildschirm nach dem
+		// Aus-Schalten beim naechsten Laden wieder an.
+		if (bKollisionsOverlay && GEngine)
+		{
+			GEngine->Exec(GetWorld(), TEXT("show Collision"));
+		}
+		GConfig->Flush(false, GGameUserSettingsIni);
+		return;
+	}
+
+	case EWbOptionId::MausEmpfindlichkeit:
+		MouseSensitivityFactor = static_cast<float>(Value);
+		GConfig->SetFloat(TEXT("WiesbadenReal.Optionen"),
+			TEXT("MausEmpfindlichkeit"), MouseSensitivityFactor, GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+		return;
+
+	case EWbOptionId::Steuerungshilfe:
+		bShowControlLegend = (Value >= 0.5);
+		// Dauerhaft eingeblendet heisst: der Verblass-Zaehler darf nicht
+		// weiterlaufen, sonst ist die Hilfe nach ein paar Sekunden wieder weg.
+		ElapsedSeconds = 0.0f;
+		GConfig->SetBool(TEXT("WiesbadenReal.Optionen"),
+			TEXT("Steuerungshilfe"), bShowControlLegend, GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+		return;
+
+	case EWbOptionId::Verkehrsdichte:
+	{
+		UWiesbadenCitySubsystem* City = FindCity();
+		if (!City)
+		{
+			return;
+		}
+		City->TrafficSimulation.Settings.TrafficDensity = static_cast<float>(Value);
+		GConfig->SetFloat(TEXT("WiesbadenReal.Optionen"),
+			TEXT("Verkehrsdichte"), static_cast<float>(Value), GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+		return;
+	}
+
+	case EWbOptionId::Tageszeit:
+	{
+		UWiesbadenCitySubsystem* City = FindCity();
+		if (!City)
+		{
+			return;
+		}
+		if (Value < 0.0)
+		{
+			City->Weather.SetTimeSource(EWiesbadenTimeSource::SystemClock);
+		}
+		else
+		{
+			City->Weather.SetTimeSource(EWiesbadenTimeSource::FixedHour,
+				static_cast<float>(Value));
+		}
+		// Sofort nachziehen, sonst steht die Sonne bis zum naechsten Takt falsch.
+		City->Weather.UpdateClock(FDateTime::UtcNow(), FDateTime::Now());
+		StoredTimeOfDay = static_cast<float>(Value);
+		GConfig->SetFloat(TEXT("WiesbadenReal.Optionen"),
+			TEXT("Tageszeit"), static_cast<float>(Value), GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+		return;
+	}
+
+	case EWbOptionId::MAX:
+		break;
+	}
+
+	MeldeUnversorgt(Row);
+}
+
+void AWiesbadenVehicleHUD::LoadPersistentOptions()
+{
+	// NUR WAS WIRKLICH IN DER DATEI STEHT. Fehlt ein Schluessel, hat niemand
+	// daran gedreht - dann bleibt der Wert, den das Spiel selbst mitbringt
+	// (etwa eine Verkehrsdichte aus dem Stadt-Prompt). Blind Vorgaben zu
+	// schreiben hiesse, die Einstellung eines anderen zu ueberfahren.
+	float Faktor = 1.0f;
+	if (GConfig->GetFloat(TEXT("WiesbadenReal.Optionen"),
+		TEXT("MausEmpfindlichkeit"), Faktor, GGameUserSettingsIni))
+	{
+		MouseSensitivityFactor = FMath::Clamp(Faktor, 0.25f, 3.0f);
+	}
+
+	bool bLegende = true;
+	if (GConfig->GetBool(TEXT("WiesbadenReal.Optionen"),
+		TEXT("Steuerungshilfe"), bLegende, GGameUserSettingsIni))
+	{
+		bShowControlLegend = bLegende;
+	}
+
+	// Die Debug-Schalter stehen VOR dem Stadt-Block: sie gehoeren nicht zur
+	// Stadt, und wer sie gesetzt hat, will sie auch ohne geladene Stadt
+	// wiederfinden (die Statik laesst sich sofort einschalten, das
+	// Kollisions-Overlay mit dem Viewport des Titels).
+	GConfig->GetBool(TEXT("WiesbadenReal.Optionen"), TEXT("FpsAnzeige"),
+		bFpsAnzeige, GGameUserSettingsIni);
+	GConfig->GetBool(TEXT("WiesbadenReal.Optionen"), TEXT("StatEinblendung"),
+		bStatEinblendung, GGameUserSettingsIni);
+	GConfig->GetBool(TEXT("WiesbadenReal.Optionen"), TEXT("KollisionsOverlay"),
+		bKollisionsOverlay, GGameUserSettingsIni);
+	// Dasselbe fuer die Kollisionsboxen: nur einschalten. Wer sie AUS
+	// gespeichert hat, darf sie nicht durch zweimaliges Aus-Schalten
+	// wiederbekommen.
+	if (bKollisionsOverlay && GEngine)
+	{
+		if (UWorld* Welt = GetWorld())
+		{
+			GEngine->Exec(Welt, TEXT("show Collision"));
+		}
+	}
+
+	UWorld* HudWorld = GetWorld();
+	UWiesbadenCitySubsystem* City =
+		HudWorld ? HudWorld->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+	if (!City)
+	{
+		return;
+	}
+
+	float Dichte = 0.0f;
+	if (GConfig->GetFloat(TEXT("WiesbadenReal.Optionen"),
+		TEXT("Verkehrsdichte"), Dichte, GGameUserSettingsIni))
+	{
+		City->TrafficSimulation.Settings.TrafficDensity = FMath::Clamp(Dichte, 0.0f, 1.0f);
+	}
+
+	// Die Tageszeit wird hier nur GEMERKT, nicht gesetzt - siehe
+	// StoredTimeOfDay: das Stadt-Subsystem wuerde sie gleich wieder
+	// ueberschreiben. Angewendet wird sie im Takt von ApplyPersistentOptions.
+	//
+	// -WbTime hat Vorrang: wer die Stunde auf der Befehlszeile erzwingt, will
+	// genau die - nicht die zuletzt im Menue gewaehlte.
+	float Erzwungen = -1.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("WbTime="), Erzwungen))
+	{
+		return;
+	}
+	float Stunde = -1.0f;
+	if (GConfig->GetFloat(TEXT("WiesbadenReal.Optionen"),
+		TEXT("Tageszeit"), Stunde, GGameUserSettingsIni))
+	{
+		StoredTimeOfDay = Stunde;
+	}
+}
+
+void AWiesbadenVehicleHUD::ApplyPersistentOptions()
+{
+	UWorld* HudWorld = GetWorld();
+	if (!HudWorld)
+	{
+		return;
+	}
+
+	if (!bOptionsLoaded)
+	{
+		bOptionsLoaded = true;
+		LoadPersistentOptions();
+	}
+
+	const float Now = HudWorld->GetTimeSeconds();
+	if (Now < NextOptionApplyAt)
+	{
+		return;
+	}
+	NextOptionApplyAt = Now + 1.0f;
+
+	// Die gespeicherte Tageszeit nachziehen. Einmal setzen genuegt nicht: das
+	// Stadt-Subsystem setzt seine Zeitquelle in seinem ersten Takt und hat den
+	// geladenen Wert dabei ueberschrieben (gemessen: gespeicherte 22 Uhr kam
+	// als heller Tag zurueck). Geschrieben wird nur, wenn es wirklich abweicht.
+	if (StoredTimeOfDay > -1.5f)
+	{
+		if (UWiesbadenCitySubsystem* City = HudWorld->GetSubsystem<UWiesbadenCitySubsystem>())
+		{
+			const bool bSollSystem = (StoredTimeOfDay < 0.0f);
+			const bool bIstSystem =
+				(City->Weather.Settings.TimeSource == EWiesbadenTimeSource::SystemClock);
+			const bool bStundeWeicht = !bSollSystem
+				&& !FMath::IsNearlyEqual(City->Weather.Settings.FixedHours, StoredTimeOfDay);
+
+			if (bSollSystem != bIstSystem || bStundeWeicht)
+			{
+				if (bSollSystem)
+				{
+					City->Weather.SetTimeSource(EWiesbadenTimeSource::SystemClock);
+				}
+				else
+				{
+					City->Weather.SetTimeSource(EWiesbadenTimeSource::FixedHour, StoredTimeOfDay);
+				}
+				City->Weather.UpdateClock(FDateTime::UtcNow(), FDateTime::Now());
+			}
+		}
+	}
+
+	// Die Empfindlichkeit muss NACHGEZOGEN werden: Spielfigur und
+	// Fahrzeugkamera entstehen beim Ein- und Aussteigen neu und braechten sonst
+	// wieder ihre eingebauten Werte mit.
+	APlayerController* PC = GetOwningPlayerController();
+	APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+	if (!Pawn)
+	{
+		return;
+	}
+
+	// Die Grundwerte stehen in den Klassen selbst (WiesbadenFootPawn.h: 1,0;
+	// WiesbadenVehicleCameraComponent.h: 2,2). Sie sind verschieden, weil sich
+	// zu Fuss und im Wagen unterschiedlich schnell umsehen laesst - darum ist
+	// die Option ein Faktor darauf und kein absoluter Wert.
+	constexpr float FussGrundwert = 1.0f;
+	constexpr float WagenGrundwert = 2.2f;
+
+	if (AWiesbadenFootPawn* Foot = Cast<AWiesbadenFootPawn>(Pawn))
+	{
+		Foot->MouseSensitivity = FussGrundwert * MouseSensitivityFactor;
+	}
+	if (UWiesbadenVehicleCameraComponent* Cam =
+		Pawn->FindComponentByClass<UWiesbadenVehicleCameraComponent>())
+	{
+		Cam->MouseSensitivity = WagenGrundwert * MouseSensitivityFactor;
+	}
+}
+
+void AWiesbadenVehicleHUD::UpdateOptions()
 {
 	APlayerController* PC = GetOwningPlayerController();
 	if (!PC)
@@ -1321,132 +2579,204 @@ void AWiesbadenVehicleHUD::UpdateAudioSettings()
 	}
 
 	// Ein Schritt je Tastendruck (Flanke ueber ZWEI Tasten): links/rechts sollen
-	// die Lautstaerke nudgen, nicht bei gehaltener Taste in einem Bild von 0 auf
-	// 100 springen.
+	// nudgen, nicht bei gehaltener Taste in einem Bild von 0 auf 100 springen.
+	// Zwei Tasten je Richtung (Pfeile UND WASD), sonst dieselbe Flanke wie im
+	// Pausemenue - buchstaeblich dieselbe Funktion.
 	auto Edge = [PC](const FKey& KeyA, const FKey& KeyB, bool& bHeld) -> bool
 	{
-		const bool bDown = PC->IsInputKeyDown(KeyA) || PC->IsInputKeyDown(KeyB);
-		const bool bPressed = bDown && !bHeld;
-		bHeld = bDown;
-		return bPressed;
+		return WiesbadenOptions::EdgePressed(
+			PC->IsInputKeyDown(KeyA) || PC->IsInputKeyDown(KeyB), bHeld);
 	};
 
-	TArray<FString> Labels;
-	GetAudioBusLabels(Labels);
-	const int32 Count = Labels.Num();
-	if (Count <= 0)
+	TArray<FWbOptionRow> Rows;
+	BuildOptionRows(Rows);
+	if (Rows.IsEmpty())
+	{
+		return;
+	}
+	OptionSelection = WiesbadenOptions::ClampRow(OptionSelection, Rows.Num());
+
+	// EINMAL JE OEFFNEN MELDEN, DASS ES HIER ANKOMMT. Vorher konnte das
+	// Fenster gezeichnet sein, waehrend diese Funktion nie lief - die Zeile
+	// belegt, dass Zeichnen und Eingabe jetzt an derselben Groesse haengen.
+	if (!bOptionInputAnnounced)
+	{
+		bOptionInputAnnounced = true;
+		UE_LOG(LogWbCore, Log,
+			TEXT("Optionen: Tastenauswertung laeuft (%d Zeilen, Auswahl %d)."),
+			Rows.Num(), OptionSelection);
+	}
+
+	if (Edge(EKeys::Up, EKeys::W, bMenuUpHeld)
+		|| Edge(EKeys::Gamepad_DPad_Up, EKeys::Gamepad_DPad_Up, bMenuUpHeld))
+	{
+		OptionSelection = WiesbadenOptions::NextRow(OptionSelection, Rows.Num(), -1);
+	}
+	if (Edge(EKeys::Down, EKeys::S, bMenuDownHeld)
+		|| Edge(EKeys::Gamepad_DPad_Down, EKeys::Gamepad_DPad_Down, bMenuDownHeld))
+	{
+		OptionSelection = WiesbadenOptions::NextRow(OptionSelection, Rows.Num(), 1);
+	}
+
+	int32 Richtung = 0;
+	if (Edge(EKeys::Left, EKeys::A, bMenuLeftHeld)
+		|| Edge(EKeys::Gamepad_LeftShoulder, EKeys::Gamepad_LeftShoulder, bMenuLeftHeld))
+	{
+		Richtung -= 1;
+	}
+	if (Edge(EKeys::Right, EKeys::D, bMenuRightHeld)
+		|| Edge(EKeys::Gamepad_RightShoulder, EKeys::Gamepad_RightShoulder, bMenuRightHeld))
+	{
+		Richtung += 1;
+	}
+	// A (der untere Gesichtsknopf) verstellt ebenfalls - wer die Schulter-
+	// tasten nicht findet, kommt sonst an keiner Zeile vorbei.
+	if (Richtung == 0
+		&& Edge(EKeys::Gamepad_FaceButton_Bottom, EKeys::Gamepad_FaceButton_Bottom, bMenuEnterHeld))
+	{
+		Richtung += 1;
+	}
+	if (Richtung == 0)
 	{
 		return;
 	}
 
-	if (Edge(EKeys::Up, EKeys::W, bMenuUpHeld))
-	{
-		AudioSelection = (AudioSelection + Count - 1) % Count;
-	}
-	if (Edge(EKeys::Down, EKeys::S, bMenuDownHeld))
-	{
-		AudioSelection = (AudioSelection + 1) % Count;
-	}
-
-	// Lautstaerke live und dauerhaft ueber das Mischpult stellen: SetBusVolume
-	// wendet sofort an und speichert in die GameUserSettings. Fehlt das
-	// Subsystem/die Assets, bleibt das Fenster bedienbar, nur ohne Wirkung.
-	UWiesbadenAudioSubsystem* Audio = nullptr;
-	if (UGameInstance* GI = PC->GetGameInstance())
-	{
-		Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>();
-	}
-	if (!Audio)
-	{
-		return;
-	}
-
-	constexpr float VolumeStep = 0.05f;   // 5 % je Druck - fein genug, nicht zaeh
-	float Delta = 0.0f;
-	if (Edge(EKeys::Left, EKeys::A, bMenuLeftHeld))
-	{
-		Delta -= VolumeStep;
-	}
-	if (Edge(EKeys::Right, EKeys::D, bMenuRightHeld))
-	{
-		Delta += VolumeStep;
-	}
-
-	if (!FMath::IsNearlyZero(Delta))
-	{
-		const EWbAudioBus Bus = static_cast<EWbAudioBus>(AudioSelection);
-		const float NewVol = FMath::Clamp(Audio->GetBusVolume(Bus) + Delta, 0.0f, 1.0f);
-		Audio->SetBusVolume(Bus, NewVol);
-	}
+	// Der Weg liegt in StepOptionValue - dieselbe Funktion, die auch die
+	// Optionsseite des Hauptmenues benutzt (inklusive Nachweis im Protokoll).
+	StepOptionValue(Rows[OptionSelection], Richtung);
 }
 
-void AWiesbadenVehicleHUD::DrawAudioSettings(float Width, float Height)
+void AWiesbadenVehicleHUD::WbTitel(int32 Bildschirm)
 {
-	TArray<FString> Labels;
-	GetAudioBusLabels(Labels);
-
-	UWiesbadenAudioSubsystem* Audio = nullptr;
-	if (APlayerController* PC = GetOwningPlayerController())
+	// Der einzelne Befehl darf den Weg durch die Ebenen abkuerzen: "WbTitel 2"
+	// soll die Gruppenliste zeigen, nicht erst das Hauptmenue, das man sich
+	// erst durchspielen muesste. Deshalb wird der Bildschirm direkt gesetzt
+	// statt ueber Back() nachgestellt.
+	const int32 Gewuenscht = FMath::Clamp(Bildschirm, 0, 3);
+	switch (Gewuenscht)
 	{
-		if (UGameInstance* GI = PC->GetGameInstance())
+	case 0:  MenuScreen = EWbMenuScreen::Intro;      break;
+	case 1:  MenuScreen = EWbMenuScreen::Titel;      break;
+	case 2:  MenuScreen = EWbMenuScreen::Optionen;   break;
+	default: MenuScreen = EWbMenuScreen::Belegung;   break;
+	}
+	if (UWorld* HudWorld = GetWorld())
+	{
+		MenuOpenedAt = HudWorld->GetTimeSeconds();
+	}
+	MenuSelection = 0;
+	bTitleGeprueft = true;
+	RebuildMenuEntries();
+	UE_LOG(LogWbCore, Log, TEXT("HUD: WbTitel %d -> Bildschirm %d, %d Eintraege."),
+		Gewuenscht, static_cast<int32>(MenuScreen), MenuEntries.Num());
+}
+
+void AWiesbadenVehicleHUD::DrawOptions(float Width, float Height)
+{
+	TArray<FWbOptionRow> Rows;
+	BuildOptionRows(Rows);
+
+	constexpr float LineHeight = 26.0f;
+	constexpr float GroupGap = 20.0f;
+	constexpr float BoxWidth = 760.0f;
+
+	// Hoehe aus dem Inhalt: Zeilen plus je eine Zwischenueberschrift.
+	int32 GroupCount = 0;
+	{
+		EWbOptionGroup Last = EWbOptionGroup::MAX;
+		for (const FWbOptionRow& Row : Rows)
 		{
-			Audio = GI->GetSubsystem<UWiesbadenAudioSubsystem>();
+			if (Row.Group != Last)
+			{
+				++GroupCount;
+				Last = Row.Group;
+			}
 		}
 	}
-
-	constexpr float LineHeight = 30.0f;
-	constexpr float BoxWidth = 580.0f;
-	const float BoxHeight = Labels.Num() * LineHeight + 132.0f;
+	const float BoxHeight = Rows.Num() * LineHeight + GroupCount * GroupGap + 150.0f;
 
 	const float X = (Width - BoxWidth) * 0.5f;
-	const float Y = (Height - BoxHeight) * 0.5f;
+	const float Y = FMath::Max(20.0f, (Height - BoxHeight) * 0.5f);
 
-	// Wie das Pausemenue: ganzen Schirm abdunkeln, dann die Tafel.
-	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f), 0.0f, 0.0f, Width, Height);
-	DrawRect(DialBackground, X, Y, BoxWidth, BoxHeight);
+	// Ganzen Schirm abdunkeln, dann die Tafel - und die DECKEND.
+	//
+	// DialBackground ist mit Alpha 0,55 fuer Instrumente gedacht, durch die man
+	// die Strasse noch sehen soll. Fuer eine Werteliste ist das falsch: im
+	// ersten Bild schien der Kaefer durch die Lautstaerkeregler, und die Zahlen
+	// waren schwer zu lesen. Eine Tafel, auf der etwas ABGELESEN wird, deckt.
+	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.72f), 0.0f, 0.0f, Width, Height);
+	DrawRect(FLinearColor(0.03f, 0.035f, 0.045f, 0.97f), X, Y, BoxWidth, BoxHeight);
 
-	DrawText(TEXT("TON / LAUTSTAERKE"), DialText, X + 24.0f, Y + 20.0f,
+	// Schmaler heller Rand, damit die Tafel eine Kante hat.
+	const FLinearColor Rand(0.30f, 0.62f, 0.80f, 0.85f);
+	DrawRect(Rand, X, Y, BoxWidth, 2.0f);
+	DrawRect(Rand, X, Y + BoxHeight - 2.0f, BoxWidth, 2.0f);
+	DrawRect(Rand, X, Y, 2.0f, BoxHeight);
+	DrawRect(Rand, X + BoxWidth - 2.0f, Y, 2.0f, BoxHeight);
+
+	DrawText(TEXT("OPTIONEN"), DialText, X + 24.0f, Y + 18.0f,
 		GEngine->GetLargeFont(), 1.0f);
 
-	const float LabelX = X + 24.0f;
-	const float BarX = X + 210.0f;
-	const float BarW = 280.0f;
-	const float BarH = 14.0f;
+	const float LabelX = X + 30.0f;
+	const float ValueX = X + 300.0f;
+	const float BarX = X + 470.0f;
+	const float BarW = 250.0f;
+	const float BarH = 12.0f;
 	const FLinearColor BarBack(0.14f, 0.15f, 0.17f, 0.9f);
 	const FLinearColor BarFill(0.20f, 0.70f, 0.95f, 0.95f);
 
-	for (int32 Index = 0; Index < Labels.Num(); ++Index)
+	float RowY = Y + 58.0f;
+	EWbOptionGroup LastGroup = EWbOptionGroup::MAX;
+
+	for (int32 Index = 0; Index < Rows.Num(); ++Index)
 	{
-		const bool bSelected = (Index == AudioSelection);
-		const float RowY = Y + 62.0f + Index * LineHeight;
+		const FWbOptionRow& Row = Rows[Index];
 
-		const FString Name = (bSelected ? TEXT("> ") : TEXT("  ")) + Labels[Index];
-		DrawText(Name, bSelected ? IndicatorOn : DialScale, LabelX, RowY,
-			GEngine->GetMediumFont(), 1.0f);
-
-		const float Vol = Audio
-			? FMath::Clamp(Audio->GetBusVolume(static_cast<EWbAudioBus>(Index)), 0.0f, 1.0f)
-			: 1.0f;
-
-		const float BarY = RowY + 4.0f;
-		DrawRect(BarBack, BarX, BarY, BarW, BarH);
-		if (Vol > 0.0f)
+		if (Row.Group != LastGroup)
 		{
-			DrawRect(BarFill, BarX, BarY, BarW * Vol, BarH);
+			LastGroup = Row.Group;
+			RowY += GroupGap * 0.4f;
+			DrawText(WiesbadenOptions::GroupLabel(Row.Group), IndicatorOn,
+				LabelX, RowY, GEngine->GetSmallFont(), 1.0f);
+			RowY += GroupGap * 0.8f;
 		}
 
-		DrawText(FormatVolumePercent(Vol), bSelected ? DialText : DialScale,
-			BarX + BarW + 14.0f, RowY, GEngine->GetSmallFont(), 1.0f);
+		const bool bSelected = (Index == OptionSelection);
+		const double Value = ReadOptionValue(Row);
+
+		DrawText((bSelected ? TEXT("> ") : TEXT("  ")) + Row.Label,
+			bSelected ? IndicatorOn : DialScale,
+			LabelX + 14.0f, RowY, GEngine->GetMediumFont(), 1.0f);
+
+		// DER WERT STEHT IMMER DA - auch bei der nicht gewaehlten Zeile. Wer
+		// erst auswaehlen muss, um zu sehen, was eingestellt ist, sucht.
+		DrawText(WiesbadenOptions::FormatValue(Row.Kind, Value),
+			bSelected ? DialText : DialScale,
+			ValueX, RowY, GEngine->GetMediumFont(), 1.0f);
+
+		const double Fraction = WiesbadenOptions::BarFraction(Row.Kind, Value);
+		if (Fraction >= 0.0)
+		{
+			const float BarY = RowY + 4.0f;
+			DrawRect(BarBack, BarX, BarY, BarW, BarH);
+			if (Fraction > 0.0)
+			{
+				DrawRect(BarFill, BarX, BarY, BarW * static_cast<float>(Fraction), BarH);
+			}
+		}
+
+		RowY += LineHeight;
 	}
 
-	if (!Audio)
+	// Fusszeile: was die gewaehlte Zeile bewirkt, und die Tasten.
+	const float FootY = Y + BoxHeight - 52.0f;
+	if (Rows.IsValidIndex(OptionSelection))
 	{
-		DrawText(TEXT("Mischpult inaktiv - Mix-Assets fehlen (Content/Audio/Mix)."),
-			TellTaleOff, LabelX, Y + BoxHeight - 46.0f, GEngine->GetSmallFont(), 1.0f);
+		DrawText(Rows[OptionSelection].Hinweis, DialScale,
+			LabelX, FootY, GEngine->GetSmallFont(), 1.0f);
 	}
-
-	DrawText(TEXT("Pfeile waehlen   Links/Rechts leiser/lauter   Esc zurueck"),
-		TellTaleOff, LabelX, Y + BoxHeight - 26.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(TEXT("Hoch/Runter waehlen   Links/Rechts verstellen   Esc zurueck   (gespeichert)"),
+		TellTaleOff, LabelX, FootY + 22.0f, GEngine->GetSmallFont(), 1.0f);
 }
 
 const FRoadNetwork* AWiesbadenVehicleHUD::FindRoadNetwork()
@@ -1777,9 +3107,17 @@ void AWiesbadenVehicleHUD::DrawTransientHint(float Width, float Height)
 	{
 		return;
 	}
+	// Mehrzeilig ueber Zeilenumbrueche (z. B. Dennos Auftrag + Kurier-Bilanz);
+	// jede weitere Zeile bleibt 2 s laenger stehen, damit sie gelesen wird.
+	TArray<FString> Lines;
+	TransientHintText.ParseIntoArrayLines(Lines, /*bCullEmpty=*/true);
+	if (Lines.IsEmpty())
+	{
+		return;
+	}
 	const float Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 	const float Age = Now - TransientHintShownAt;
-	const float HoldSeconds = 3.5f;
+	const float HoldSeconds = 3.5f + 2.0f * (Lines.Num() - 1);
 	if (Age < 0.0f || Age > HoldSeconds)
 	{
 		return;
@@ -1787,13 +3125,30 @@ void AWiesbadenVehicleHUD::DrawTransientHint(float Width, float Height)
 	// Letzte 1 s ausblenden.
 	const float Alpha = Age > (HoldSeconds - 1.0f) ? (HoldSeconds - Age) : 1.0f;
 
-	const float PanelW = 460.0f;
-	const float PanelH = 40.0f;
+	// Das Feld waechst mit dem laengsten Text (mindestens die alten 460 px).
+	UFont* Font = GEngine ? GEngine->GetMediumFont() : nullptr;
+	float TextW = 0.0f;
+	float LineH = 20.0f;
+	for (const FString& Line : Lines)
+	{
+		float LineW = 0.0f;
+		float MeasuredH = 0.0f;
+		GetTextSize(Line, LineW, MeasuredH, Font, 1.0f);
+		TextW = FMath::Max(TextW, LineW);
+		LineH = FMath::Max(LineH, MeasuredH);
+	}
+	const float PanelW = FMath::Min(FMath::Max(460.0f, TextW + 36.0f), Width - 40.0f);
+	const float PanelH = 20.0f + LineH * Lines.Num() + 4.0f * (Lines.Num() - 1);
 	const float X = (Width - PanelW) * 0.5f;
 	const float Y = Height * 0.24f;
 	DrawPanelBackdrop(X, Y, PanelW, PanelH, 8.0f, FLinearColor(0.14f, 0.05f, 0.05f), 0.78f * Alpha);
-	DrawText(TransientHintText, FLinearColor(1.0f, 0.78f, 0.42f, Alpha),
-		X + 18.0f, Y + 10.0f, GEngine ? GEngine->GetMediumFont() : nullptr, 1.0f);
+	for (int32 Index = 0; Index < Lines.Num(); ++Index)
+	{
+		// Folgezeilen (Bilanz, Nachsatz) etwas zurueckgenommen.
+		const FLinearColor Colour = Index == 0 ? FLinearColor(1.0f, 0.78f, 0.42f, Alpha)
+			: FLinearColor(0.92f, 0.86f, 0.74f, Alpha);
+		DrawText(Lines[Index], Colour, X + 18.0f, Y + 10.0f + Index * (LineH + 4.0f), Font, 1.0f);
+	}
 }
 
 void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
@@ -1900,23 +3255,94 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 			{
 				MapSearchQuery.LeftChopInline(1);
 			}
+
+			// Vorschlaege im Takt, nicht je Buchstabe: die Suche laeuft ueber
+			// alle ~125.000 Segmente. 0,4 s sind schneller, als ein Mensch
+			// tippt, und sie kosten einmal statt viermal je Sekunde.
+			const double Jetzt = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+			const bool bTextGeaendert = MapPC->WasInputKeyJustPressed(EKeys::BackSpace);
+			if (Jetzt - MapSuggestionAge > 0.4 || (bTextGeaendert && Jetzt - MapSuggestionAge > 0.15))
+			{
+				MapSuggestionAge = static_cast<float>(Jetzt);
+				FWiesbadenMinimap::FindStreetSuggestions(
+					*Network, MapSearchQuery, MapSuggestions, 6);
+				// Die Markierung haengt an der Liste, nicht am Getippten: ein
+				// Tipp, der die Liste kuerzt, darf sie nicht springen lassen.
+				MapSuggestion = FMath::Clamp(MapSuggestion,
+					0, FMath::Max(0, MapSuggestions.Num() - 1));
+			}
+
+			// Pfeil hoch/runter waehlt den Vorschlag. Beim ersten Anschlag
+			// geht es nach oben - der erste Vorschlag ist der wahrscheinlichste.
+			const int32 Schritt =
+				(MapPC->WasInputKeyJustPressed(EKeys::Down) ? 1 : 0)
+				- (MapPC->WasInputKeyJustPressed(EKeys::Up) ? 1 : 0);
+			if (Schritt != 0 && MapSuggestions.Num() > 0)
+			{
+				MapSuggestion = ((MapSuggestion + Schritt) % MapSuggestions.Num()
+					+ MapSuggestions.Num()) % MapSuggestions.Num();
+			}
+
 			if (MapPC->WasInputKeyJustPressed(EKeys::Escape))
 			{
 				bMapSearchActive = false;
 			}
-			else if (MapPC->WasInputKeyJustPressed(EKeys::Enter))
+			else if (MapPC->WasInputKeyJustPressed(EKeys::Enter)
+				|| MapPC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Bottom))
 			{
+				// Was bestaetigt wird, ist der markierte Vorschlag - oder,
+				// wenn keiner da ist, der getippte Text. Sonst wuerde Enter
+				// etwas bestaetigen, das man gar nicht gelesen hat.
+				const FString Gewaehlt = MapSuggestions.IsValidIndex(MapSuggestion)
+					? MapSuggestions[MapSuggestion] : MapSearchQuery;
 				FVector2D Hit;
-				if (FWiesbadenMinimap::FindStreetCenter(*Network, MapSearchQuery, Hit))
+				if (FWiesbadenMinimap::FindStreetCenter(*Network, Gewaehlt, Hit))
 				{
 					MapCentreWorld = Hit;
 					bMapCentreInit = true;
 					MapZoom = FMath::Clamp(4.0f,
 						FWiesbadenMinimap::WorldMapMinZoom, FWiesbadenMinimap::WorldMapMaxZoom);
+					// Bestaetigt heisst: ab jetzt ist der Knopf scharf. Ohne
+					// diese Zeile bliebe er aus, und wer ihn sucht, faende ihn
+					// nicht - obwohl die Strasse laengst gefunden ist.
+					MapSearchStreet = Gewaehlt;
 				}
 				bMapSearchActive = false;
 			}
 		}
+
+		// -- Der Knopf "Warp to Location" --------------------------------------
+		// Aktiv, sobald eine Strasse bestaetigt wurde. W (Tastatur) oder X
+		// (Pad) springen dorthin; danach geht die Karte zu, weil man angekommen
+		// ist und sie nun aus der Naehe sieht.
+		const bool bWarpDa = !MapSearchStreet.IsEmpty();
+		const bool bWarpTaste = MapPC->IsInputKeyDown(EKeys::W)
+			|| MapPC->IsInputKeyDown(EKeys::Gamepad_FaceButton_Left);
+		if (bWarpTaste && !bWarpKeyHeld && bWarpDa)
+		{
+			if (AWiesbadenPlayerController* PC = Cast<AWiesbadenPlayerController>(MapPC))
+			{
+				if (PC->WarpToStreet(MapSearchStreet))
+				{
+					ShowTransientHint(FString::Printf(
+						TEXT("Angekommen: %s"), *MapSearchStreet));
+					bWorldMapOpen = false;
+				}
+			}
+		}
+		bWarpKeyHeld = bWarpTaste;
+
+		// -- Ansicht wieder auf den Spieler ----------------------------------
+		// C oder das Steuerkreuz runter. Ohne das kommt man aus einer
+		// gequetschten Ecke der Karte nur ueber Zuschalten heraus.
+		const bool bZentrieren = MapPC->IsInputKeyDown(EKeys::C)
+			|| MapPC->IsInputKeyDown(EKeys::Gamepad_DPad_Down);
+		if (bZentrieren && !bMapResetKeyHeld)
+		{
+			MapZoom = 2.0f;
+			bMapCentreInit = false;
+		}
+		bMapResetKeyHeld = bZentrieren;
 	}
 
 	// Aktuelle Sicht (fuer UV-Fenster UND Overlays); Blickzentrum wird geklemmt.
@@ -2062,6 +3488,26 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 		}
 	}
 
+	// Aktives Missionsziel (z. B. Dennos Lieferadresse) - dieselbe Bernstein-Raute
+	// wie auf der Minikarte, damit man die Adresse auf dem Stadtplan findet.
+	const UWiesbadenMissionSubsystem* MapMissions =
+		GetWorld() ? GetWorld()->GetSubsystem<UWiesbadenMissionSubsystem>() : nullptr;
+	const FMissionObjective* MapObjective = MapMissions ? MapMissions->GetCurrentObjective() : nullptr;
+	if (MapObjective && Proj.IsValid())
+	{
+		const FLinearColor MissionMarker(1.0f, 0.72f, 0.20f, 1.0f);
+		const FVector2D M = Proj.Project(MapObjective->Location);
+		constexpr float D = 9.0f;
+		DrawLine(M.X, M.Y - D, M.X + D, M.Y, MissionMarker, 3.0f);
+		DrawLine(M.X + D, M.Y, M.X, M.Y + D, MissionMarker, 3.0f);
+		DrawLine(M.X, M.Y + D, M.X - D, M.Y, MissionMarker, 3.0f);
+		DrawLine(M.X - D, M.Y, M.X, M.Y - D, MissionMarker, 3.0f);
+		const APawn* ObjPawn = MapPC ? MapPC->GetPawn() : nullptr;
+		const double Dist = ObjPawn ? FVector::Dist2D(MapObjective->Location, ObjPawn->GetActorLocation()) : 0.0;
+		DrawText(FString::Printf(TEXT("%s  %s"), *MapObjective->Label, *FormatMapDistance(Dist)),
+			MissionMarker, M.X + 13.0f, M.Y - 8.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
+	}
+
 	// Chrome.
 	DrawText(TEXT("WIESBADEN"), DialText, 24.0f, 20.0f,
 		GEngine ? GEngine->GetMediumFont() : nullptr, 1.7f);
@@ -2070,20 +3516,79 @@ void AWiesbadenVehicleHUD::DrawWorldMap(float Width, float Height)
 		GEngine ? GEngine->GetMediumFont() : nullptr, 1.3f);
 
 	// Suchfeld (Feature 6): oben zentriert, solange aktiv.
-	if (bMapSearchActive)
+	// -- Die Suchleiste ------------------------------------------------------
+	// Sie ist der Grund, warum die Karte bedienbar ist, und deshalb mehr als
+	// ein Textfeld: Tippen, Vorschlaege darunter, und sobald eine Strasse
+	// bestaetigt ist, der Knopf, der dorthin springt.
 	{
-		const float BoxW = 380.0f, BoxH = 30.0f;
-		const float Bx = Width * 0.5f - BoxW * 0.5f, By = 74.0f;
-		DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.72f), Bx, By, BoxW, BoxH);
-		DrawText(FString::Printf(TEXT("Strasse: %s_"), *MapSearchQuery), DialText,
-			Bx + 10.0f, By + 6.0f, GEngine ? GEngine->GetMediumFont() : nullptr, 1.2f);
+		const float BoxW = 520.0f;
+		const float ZeilenHoehe = 24.0f;
+		const float VorschlagHoehe = MapSuggestions.Num() * ZeilenHoehe;
+		const float BoxH = 34.0f + VorschlagHoehe + (bMapSearchActive ? 0.0f : 40.0f);
+		const float Bx = Width * 0.5f - BoxW * 0.5f;
+		const float By = 66.0f;
+		DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.78f), Bx, By, BoxW, BoxH);
+
+		if (bMapSearchActive)
+		{
+			DrawText(FString::Printf(TEXT("Strasse: %s_"), *MapSearchQuery), DialText,
+				Bx + 12.0f, By + 7.0f, GEngine ? GEngine->GetMediumFont() : nullptr, 1.2f);
+		}
+		else if (!MapSearchStreet.IsEmpty())
+		{
+			// Geschlossen, aber eine Strasse gewaehlt: der Name steht da, und
+			// darunter der Knopf. So sieht man auch spaeter noch, WOHIN der
+			// Knopf springt - ein Knopf ohne Ziel waere eine Lotterie.
+			DrawText(FString::Printf(TEXT("Strasse: %s"), *MapSearchStreet), DialText,
+				Bx + 12.0f, By + 7.0f, GEngine ? GEngine->GetMediumFont() : nullptr, 1.2f);
+		}
+		else
+		{
+			DrawText(TEXT("Tab: Strasse suchen"), TellTaleOff,
+				Bx + 12.0f, By + 7.0f, GEngine ? GEngine->GetMediumFont() : nullptr, 1.2f);
+		}
+
+		// Vorschlaege: exakter Name zuerst, dann was mit dem Getippten beginnt.
+		for (int32 Index = 0; Index < MapSuggestions.Num(); ++Index)
+		{
+			const bool bMarkiert = (bMapSearchActive && Index == MapSuggestion);
+			DrawText((bMarkiert ? TEXT("> ") : TEXT("  ")) + MapSuggestions[Index],
+				bMarkiert ? IndicatorOn : DialScale,
+				Bx + 12.0f, By + 38.0f + Index * ZeilenHoehe,
+				GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
+		}
+
+		// -- Der Knopf ---------------------------------------------------------
+		// Aktiv, sobald eine Strasse bestaetigt wurde: heller Rahmen, und die
+		// Beschriftung nennt die Taste. Inaktiv ist er grau und sagt, was
+		// fehlt - ein Knopf, der auf einen Druck nichts tut, ist der schlimmste
+		// Fall, weil er wie ein Fehler aussieht.
+		if (!bMapSearchActive)
+		{
+			const float KnopfH = 30.0f;
+			const float KnopfY = By + BoxH - KnopfH - 6.0f;
+			const bool bScharf = !MapSearchStreet.IsEmpty();
+			const FLinearColor Rahmen = bScharf ? IndicatorOn : TellTaleOff;
+			const FLinearColor Fuellung(0.0f, 0.0f, 0.0f, bScharf ? 0.55f : 0.25f);
+			DrawRect(Fuellung, Bx + 12.0f, KnopfY, BoxW - 24.0f, KnopfH);
+			// Rahmen aus vier Linien - DrawRect kann nur fuellen.
+			DrawRect(Rahmen, Bx + 12.0f, KnopfY, BoxW - 24.0f, 2.0f);
+			DrawRect(Rahmen, Bx + 12.0f, KnopfY + KnopfH - 2.0f, BoxW - 24.0f, 2.0f);
+			DrawRect(Rahmen, Bx + 12.0f, KnopfY, 2.0f, KnopfH);
+			DrawRect(Rahmen, Bx + BoxW - 14.0f, KnopfY, 2.0f, KnopfH);
+			DrawText(bScharf
+					? TEXT(">  Warp to Location   (W / X)")
+					: TEXT("Warp to Location - erst eine Strasse waehlen"),
+				Rahmen, Bx + 24.0f, KnopfY + 6.0f,
+				GEngine ? GEngine->GetMediumFont() : nullptr, 1.1f);
+		}
 	}
 
-	DrawText(TEXT("Enter / A / Klick: Wegpunkt setzen   Rueck / B: loeschen"),
-		DialScale, 24.0f, Height - 50.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
+	DrawText(TEXT("Enter / Y / Klick: Wegpunkt setzen   Rueck / B: loeschen   C: auf den Spieler"),
+		DialScale, 24.0f, Height - 62.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
 	DrawText(bMapSearchActive
-		? TEXT("Tippen: Strassenname   Enter: hinspringen   Esc/Tab: abbrechen")
-		: TEXT("M: schliessen   +/- / Rad: Zoom   Pfeile: schwenken   Tab: Strasse suchen"),
+		? TEXT("Tippen: Name   Pfeile: Vorschlag   Enter: bestaetigen   Tab/Esc: schliessen")
+		: TEXT("M: schliessen   +/- oder LB/RB: Zoom   Pfeile: schwenken   Tab: suchen   W: ankommen"),
 		DialScale, 24.0f, Height - 32.0f, GEngine ? GEngine->GetSmallFont() : nullptr, 1.1f);
 	if (Proj.IsValid())
 	{
@@ -2296,20 +3801,6 @@ void AWiesbadenVehicleHUD::DrawVehicleBanner(float CenterX, float Y)
 	DrawText(VehicleBannerText, Fg, CenterX - TextWidth * 0.5f, Y, Font, 1.0f);
 }
 
-bool AWiesbadenVehicleHUD::IsFirstRunPromptArmed() const
-{
-	if (!FirstRun.bArmed)
-	{
-		return false;
-	}
-	const UWorld* W = GetWorld();
-	if (!W)
-	{
-		return false;
-	}
-	return W->GetTimeSeconds() < FirstRun.ExpiresAt;
-}
-
 namespace
 {
 	/** Planarer Abstand (XY) in cm - Drift-, Ziel- und Naehe-Rechnungen. */
@@ -2384,21 +3875,20 @@ void AWiesbadenVehicleHUD::UpdateFirstRunOnboarding()
 		ArmFirstRunPrompt(*HudWorld, City, bPlayerIdle);
 	}
 
-	if (FirstRun.bArmed && FirstRun.Title.IsEmpty())
-	{
-		ComposeFirstRunText(HudWorld);
-	}
-
-	// Zeigen, solange verdient und nicht zurueckgenommen.
-	if (FirstRun.bArmed && !FirstRun.Title.IsEmpty())
+	// HIER STAND DAS ERSTKONTAKT-BANNER MIT DEM STRASSENNAMEN.
+	//
+	// Beim Start blendete das HUD mittig "Marktstrasse" ein - den Namen der
+	// Strasse, auf der die Scharfschaltung zufaellig geschah. Es sagte nichts,
+	// was das HUD nicht ohnehin dauerhaft oben anzeigt, und es veraltete: der
+	// Name wurde EINMAL beim Scharfschalten genommen und danach nicht mehr
+	// nachgefuehrt. Ersatzlos entfernt, zusammen mit ComposeFirstRunText und
+	// ComposeFirstRunBanner, die nur dafuer da waren.
+	//
+	// Der Steuerungshinweis bleibt - er nennt keinen Ort, sondern die Tasten,
+	// und haengt jetzt allein an der Scharfschaltung statt an einem Titel.
+	if (FirstRun.bArmed)
 	{
 		ShowFirstRunContextHintOnce();
-
-		// Der Untertitel ist "bewusst leer", wenn kein Missionsziel in der Naehe
-		// liegt - das ist der Normalfall. Trotzdem wurde fest "%s — %s"
-		// formatiert: der erste Satz, den ein neuer Spieler sieht, war
-		// "Marktstrasse — " mit haengendem Gedankenstrich.
-		ShowTransientHint(ComposeFirstRunBanner(FirstRun.Title, FirstRun.Subtitle));
 	}
 
 	// Ehrlich zuruecknehmen: abgelaufen, nicht mehr im Leerlauf oder abgedriftet.
@@ -2408,12 +3898,8 @@ void AWiesbadenVehicleHUD::UpdateFirstRunOnboarding()
 
 		// Und dann WIRKLICH vorbei: ohne diesen Merker griff oben sofort wieder
 		// ArmFirstRunPrompt (Bedingung ist nur "Stadt fertig + Leerlauf"), der
-		// Hinweis kam bei jedem Halt zurueck - mit dem Strassennamen der ersten
-		// Scharfschaltung. Nach einer Fahrt quer durch die Stadt stand im Wagen
-		// weiter "Marktstrasse", waehrend das HUD "Nerotal" anzeigte.
+		// Hinweis kam sonst bei jedem Halt zurueck.
 		FirstRun.bConsumed = true;
-		FirstRun.Title.Reset();
-		FirstRun.Subtitle.Reset();
 	}
 }
 
@@ -2439,30 +3925,6 @@ void AWiesbadenVehicleHUD::ArmFirstRunPrompt(
 	}
 
 	FirstRun.Context = ResolveFirstRunContext();
-}
-
-void AWiesbadenVehicleHUD::ComposeFirstRunText(const UWorld* HudWorld)
-{
-	FirstRun.Title = CurrentStreetName.IsEmpty()
-		? FString(TEXT("Wiesbaden"))
-		: CurrentStreetName;
-
-	// Untertitel: nahes aktives Missionsziel, sonst bewusst leer.
-	const UWiesbadenMissionSubsystem* Missions =
-		HudWorld ? HudWorld->GetSubsystem<UWiesbadenMissionSubsystem>() : nullptr;
-	const FMissionObjective* Objective = Missions ? Missions->GetCurrentObjective() : nullptr;
-	if (!Objective || Objective->Location.IsZero() || FirstRun.ArmWorldPos.IsZero())
-	{
-		return;
-	}
-
-	const FVector2D ObjectivePos(Objective->Location.X, Objective->Location.Y);
-	const double FlatCm = WbPlanarDistanceCm(ObjectivePos, FirstRun.ArmWorldPos);
-	if (FlatCm <= 50000.0)
-	{
-		FirstRun.Subtitle = FString::Printf(
-			TEXT("zum Ziel %s %.0f m"), *Objective->Label, FlatCm / 100.0);
-	}
 }
 
 void AWiesbadenVehicleHUD::ShowFirstRunContextHintOnce()

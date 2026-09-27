@@ -17,6 +17,7 @@ class UGeoCoordinateConverter;
 class UBoxComponent;
 class UPointLightComponent;
 class UPrimitiveComponent;
+class AWiesbadenSebboHqElevator;
 
 /** Die drei getrennten Wege schreiben nur diesen gemeinsamen Tower-Zielzustand. */
 UENUM(BlueprintType)
@@ -118,6 +119,39 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Sebbo HQ|Arrival")
 	ESebboHqArrivalTarget GetArrivalTarget() const { return ArrivalTarget; }
 
+	/**
+	 * Weltlage der Landeplatzmitte auf dem Dach.
+	 *
+	 * FUER WAS: Der Hubschrauber muss nach einer Zerstoerung auf dem Landeplatz
+	 * des Sebbotower wieder einstehen koennen. Er braucht also eine
+	 * Weltposition - und zwar die des gebauten Landeplatzes, nicht eine
+	 * eigene Rechnung daneben.
+	 *
+	 * WARUM GetActorLocation() FALSCH WAERE: Der Actor wird im Ursprung
+	 * gespawnt und nie bewegt (siehe BuiltBase unten). Wer den Actor fragt,
+	 * bekommt (0,0,0) und setzt den Hubschrauber in die Nil in der Naehe
+	 * des Weltursprungs - genau das tat die Treppenprobe und meldete dann
+	 * "nichts unter den Fuessen".
+	 *
+	 * Gerechnet wird mit DERSELBE Beziehung, die auch das Ankunftsziel und
+	 * das gruene Landelicht benutzen (BuiltBase + Heading, HelipadTarget aus
+	 * BuildArrivalFacilities). Wer diese drei Stellen getrennt rechnet,
+	 * erzeugt drei Orte, an denen der Landeplatz liegt.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Sebbo HQ|Arrival")
+	FVector GetHelipadWorldLocation() const;
+
+	/**
+	 * Der Weg, den ein Mensch die Treppe hinaufgeht - fuer die Figurprobe
+	 * (-WbFigurProbe=Treppe), die den ECHTEN Fuss-Pawn per Tasten hinaufschickt.
+	 * Dieselben Masse wie ProbeStaircase: Lauf hinauf (+X), quer aufs Podest,
+	 * zurueck, quer auf den naechsten Lauf. Weltpunkte (Z = Sollhoehe der Fuesse), Start
+	 * auf der ersten Stufe ueber dem Gelaende, Blick in +X des Turms.
+	 *
+	 * @return false, solange der Turm nicht gebaut ist.
+	 */
+	bool GetStairWalk(FVector& OutStart, FRotator& OutFacing, TArray<FVector>& OutWaypoints) const;
+
 private:
 	/** Bodenhoehe am Standort; false, solange die Zelle nicht gestreamt ist. */
 	bool ResolveGround(const FVector& WorldXY, double& OutZ) const;
@@ -151,6 +185,17 @@ private:
 		const FVector& LocalPosition, const FVector& BaseWorld, const FRotator& BaseYaw,
 		const FLinearColor& Color, float Intensity, float Radius);
 
+	/**
+	 * Laesst die drei Innenlichter der Etage des Spielers folgen.
+	 *
+	 * 15 Etagen x drei Zonen waeren 45 dauerhafte Punktlichter - zu viel fuer
+	 * einen Frame. Drei Lichter genuegen, weil der Spieler ohnehin nur eine
+	 * Etage gleichzeitig sieht; die Deckenleuchten des Innenausbaus leuchten
+	 * materialseitig immer. Gleiches Muster wie die Laternen-Leuchten der
+	 * Strassenmoebel.
+	 */
+	void UpdateInteriorLights();
+
 	bool HasCrossTraffic(const FVector& WorldPosition) const;
 
 	UFUNCTION()
@@ -163,6 +208,9 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<UStaticMeshComponent*> Parts;
+
+	UPROPERTY(Transient)
+	AWiesbadenSebboHqElevator* Elevator = nullptr;
 
 	UPROPERTY(Transient)
 	UBoxComponent* GarageArrivalVolume = nullptr;
@@ -185,6 +233,13 @@ private:
 
 	UPROPERTY(Transient)
 	UPointLightComponent* HelipadGuidanceLight = nullptr;
+
+	/** Begrenzter Punktlicht-Pool fuer die Innenraeume (folgt dem Spieler). */
+	UPROPERTY(Transient)
+	TArray<UPointLightComponent*> InteriorLights;
+
+	/** Zuletzt beleuchtete Etage - nur beim Wechsel neu positionieren. */
+	int32 LastInteriorLightFloor = INDEX_NONE;
 
 	UPROPERTY(VisibleInstanceOnly, Category = "Sebbo HQ|Arrival")
 	ESebboHqArrivalTarget ArrivalTarget = ESebboHqArrivalTarget::None;

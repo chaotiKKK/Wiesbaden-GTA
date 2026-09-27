@@ -143,6 +143,31 @@ void FWiesbadenRoadClearance::BuildInternal(const FRoadNetwork& Network,
 		}
 	}
 
+	// Wendeplatten: ein Kreis (Abschnitt der Laenge 0) - sonst stuenden
+	// Baeume und Laternen auf dem Pflaster, ueber das gewendet wird.
+	for (const FRoadTurningPlate& Plate : Network.TurningPlates)
+	{
+		const FVector2D Mitte(Plate.Center.X, Plate.Center.Y);
+		if (bLimitToArea && FVector2D::Distance(Mitte, Center) > AreaRadiusCm + Plate.RadiusCm)
+		{
+			continue;
+		}
+		FSpan Span;
+		Span.Start = Mitte;
+		Span.End = Mitte;
+		Span.RadiusCm = Plate.RadiusCm + Margin;
+		const int32 Index = Spans.Add(Span);
+		const FIntPoint MinCell = CellOf(Mitte - FVector2D(Span.RadiusCm, Span.RadiusCm));
+		const FIntPoint MaxCell = CellOf(Mitte + FVector2D(Span.RadiusCm, Span.RadiusCm));
+		for (int32 Cx = MinCell.X; Cx <= MaxCell.X; ++Cx)
+		{
+			for (int32 Cy = MinCell.Y; Cy <= MaxCell.Y; ++Cy)
+			{
+				Cells.FindOrAdd(FIntPoint(Cx, Cy)).Add(Index);
+			}
+		}
+	}
+
 	if (OversizedSpans > 0)
 	{
 		UE_LOG(LogTemp, Warning,

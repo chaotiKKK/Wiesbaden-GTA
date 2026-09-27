@@ -249,7 +249,8 @@ FResolvedRoadAccess URoadNetworkGenerator::ResolveRoadAccess(
 
 		for (const FRoadSegment& Segment : Network.Segments)
 		{
-			if (Segment.bIsArea)
+			if (Segment.bIsArea || (!Override.PreferredStreetName.IsEmpty()
+				&& !Segment.StreetName.Equals(Override.PreferredStreetName, ESearchCase::IgnoreCase)))
 			{
 				continue;
 			}
@@ -291,6 +292,142 @@ FResolvedRoadAccess URoadNetworkGenerator::ResolveRoadAccess(
 	Result.Garage = ResolvePoint(Override.GarageEntranceWorldCm, Override.GarageWidthCm);
 	Result.Pedestrian = ResolvePoint(Override.PedestrianEntranceWorldCm, Override.PedestrianWidthCm);
 	return Result;
+}
+
+int32 URoadNetworkGenerator::AlignCompanionFootways(FRoadNetwork& Network, bool bSidewalksGenerated,
+	int32* OutRaisedSegments)
+{
+	// Fahrbahnen, deren Gehwegstreifen einen Fussweg "besitzen" koennen.
+	struct FKante
+	{
+		FVector A, B;
+		int32 Segment;
+	};
+	auto IstFahrbahn = [](const FRoadSegment& S)
+	{
+		return !S.bIsArea && S.Layer == 0 && !S.bIsBridge && !S.bIsTunnel
+			&& (uint8)S.HighwayType <= (uint8)EOSMHighwayType::Service && S.CarriagewayWidthCm > 0.0;
+	};
+	auto IstFussweg = [](const FRoadSegment& S)
+	{
+		return !S.bIsArea && S.Layer == 0 && !S.bIsBridge && !S.bIsTunnel
+			&& (S.HighwayType == EOSMHighwayType::Footway || S.HighwayType == EOSMHighwayType::Path
+				|| S.HighwayType == EOSMHighwayType::Pedestrian);
+	};
+
+	const double ZelleCm = 5000.0;
+	auto Schluessel = [ZelleCm](double X, double Y)
+	{
+		return ((int64)FMath::FloorToDouble(X / ZelleCm) << 32) ^ ((int64)FMath::FloorToDouble(Y / ZelleCm) & 0xffffffffLL);
+	};
+	TArray<FKante> Kanten;
+	TMap<int64, TArray<int32>> Raster;
+	for (int32 i = 0; i < Network.Segments.Num(); ++i)
+	{
+		const FRoadSegment& S = Network.Segments[i];
+		if (!IstFahrbahn(S)) { continue; }
+		const TArray<FVector>& L = S.TrimmedCenterline.Num() >= 2 ? S.TrimmedCenterline : S.Centerline;
+		for (int32 k = 0; k + 1 < L.Num(); ++k)
+		{
+			const int32 Idx = Kanten.Add({ L[k], L[k + 1], i });
+			const FVector M = (L[k] + L[k + 1]) * 0.5;
+			Raster.FindOrAdd(Schluessel(M.X, M.Y)).Add(Idx);
+		}
+	}
+
+	// Liegt P im Gehwegstreifen einer Fahrbahn und laeuft parallel? Dann deren
+	// Gehweghoehe an dieser Stelle (Fahrbahn + Bordstein) und ob sie auf dieser
+	// Seite selbst einen Gehweg baut.
+	auto Treffer = [&](const FVector& P, const FVector2D& Richtung, double& OutZ, bool& bOutDoppel) -> bool
+	{
+		double Bester = TNumericLimits<double>::Max();
+		bool bGefunden = false;
+		const int64 CX = (int64)FMath::FloorToDouble(P.X / ZelleCm);
+		const int64 CY = (int64)FMath::FloorToDouble(P.Y / ZelleCm);
+		for (int64 DX = -1; DX <= 1; ++DX)
+		{
+			for (int64 DY = -1; DY <= 1; ++DY)
+			{
+				const TArray<int32>* Zelle = Raster.Find(((CX + DX) << 32) ^ ((CY + DY) & 0xffffffffLL));
+				if (!Zelle) { continue; }
+				for (const int32 Idx : *Zelle)
+				{
+					const FKante& K = Kanten[Idx];
+					const FRoadSegment& S = Network.Segments[K.Segment];
+					const FVector2D A(K.A.X, K.A.Y), B(K.B.X, K.B.Y), Q(P.X, P.Y);
+					const FVector2D AB = B - A;
+					const double L2 = AB.SizeSquared();
+					if (L2 < 1.0) { continue; }
+					const FVector2D Dir = AB / FMath::Sqrt(L2);
+					if (FMath::Abs(FVector2D::DotProduct(Dir, Richtung)) < 0.85) { continue; }   // nicht parallel
+					const double T = FMath::Clamp(FVector2D::DotProduct(Q - A, AB) / L2, 0.0, 1.0);
+					const FVector2D Fuss = A + AB * T;
+					const double Abstand = FVector2D::Distance(Q, Fuss);
+					const double Streifen = S.CarriagewayWidthCm * 0.5 + FMath::Max(S.SidewalkWidthCm, 100.0) + 150.0;
+					if (Abstand > Streifen || Abstand >= Bester) { continue; }
+					Bester = Abstand;
+					bGefunden = true;
+					OutZ = FMath::Lerp(K.A.Z, K.B.Z, T) + S.KerbHeightCm;
+					// Seite: +1 = links der Fahrtrichtung (wie BuildSidewalk(1.0)).
+					const FVector2D Links = FPolygonUtils::GetLeftNormal(Dir);
+					const bool bLinks = FVector2D::DotProduct(Q - Fuss, Links) > 0.0;
+					const bool bGehweg = S.SidewalkType == EOSMSidewalkType::Both
+						|| (bLinks && S.SidewalkType == EOSMSidewalkType::Left)
+						|| (!bLinks && S.SidewalkType == EOSMSidewalkType::Right);
+					bOutDoppel = bSidewalksGenerated && bGehweg;
+				}
+			}
+		}
+		return bGefunden;
+	};
+
+	auto Richtung = [](const TArray<FVector>& L, int32 i)
+	{
+		const FVector& A = L[FMath::Max(i - 1, 0)];
+		const FVector& B = L[FMath::Min(i + 1, L.Num() - 1)];
+		return FVector2D(B.X - A.X, B.Y - A.Y).GetSafeNormal();
+	};
+
+	int32 Begleitwege = 0;
+	int32 Angehoben = 0;
+	for (FRoadSegment& S : Network.Segments)
+	{
+		if (!IstFussweg(S) || S.Centerline.Num() < 2) { continue; }
+		// Zuerst entscheiden (ueber die Mittellinie), dann beide Linien anpassen.
+		int32 Im = 0, Doppel = 0;
+		for (int32 i = 0; i < S.Centerline.Num(); ++i)
+		{
+			double Z = 0.0;
+			bool bDoppel = false;
+			if (Treffer(S.Centerline[i], Richtung(S.Centerline, i), Z, bDoppel))
+			{
+				++Im;
+				Doppel += bDoppel ? 1 : 0;
+			}
+		}
+		if (Im * 10 < S.Centerline.Num() * 6) { continue; }   // weniger als 60 % im Streifen
+
+		for (TArray<FVector>* Linie : { &S.Centerline, &S.TrimmedCenterline })
+		{
+			for (int32 i = 0; i < Linie->Num(); ++i)
+			{
+				double Z = 0.0;
+				bool bDoppel = false;
+				if (Treffer((*Linie)[i], Richtung(*Linie, i), Z, bDoppel))
+				{
+					(*Linie)[i].Z = Z;
+				}
+			}
+		}
+		++Angehoben;
+		if (Doppel * 10 >= Im * 6)
+		{
+			S.bBegleitweg = true;
+			++Begleitwege;
+		}
+	}
+	if (OutRaisedSegments) { *OutRaisedSegments = Angehoben; }
+	return Begleitwege;
 }
 
 double URoadNetworkGenerator::GetRoadAccessKerbHeightCm(const FResolvedRoadAccess& Access,
@@ -613,6 +750,10 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 			Segment.SidewalkWidthCm = TypeDef.SidewalkWidthMeters * MetersToCm;
 			Segment.KerbHeightCm = TypeDef.KerbHeightMeters * MetersToCm;
 			Segment.MaxSpeedKmh = MaxSpeed;
+			Segment.bSidewalkTagged = Way.HasTag(TEXT("sidewalk"))
+				|| Way.HasTag(TEXT("sidewalk:both"))
+				|| Way.HasTag(TEXT("sidewalk:left"))
+				|| Way.HasTag(TEXT("sidewalk:right"));
 			Segment.Layer = Way.GetLayer();
 			Segment.bIsBridge = Way.IsBridge();
 
@@ -697,6 +838,9 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 
 	// -- Projektion auf Terrainhoehe ---------------------------------------
 
+	int32 ProfileGeglaettet = 0;
+	int32 ProfileMitDelle = 0;
+	double GroessteProfilAenderung = 0.0;
 	for (int32 SegmentIndex = 0; SegmentIndex < OutNetwork.Segments.Num(); ++SegmentIndex)
 	{
 		FRoadSegment& Segment = OutNetwork.Segments[SegmentIndex];
@@ -706,6 +850,17 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 
 		ProjectToTerrain(WorkingTrimmed2D[SegmentIndex], HeightSampler,
 			Settings.RoadSurfaceOffsetCm, Segment.Layer, Settings, Segment.TrimmedCenterline);
+
+		// Bruecken, Tunnel und Rampen (Layer != 0) behalten ihr Profil.
+		if (Segment.Layer == 0 && !Segment.bIsBridge && !Segment.bIsTunnel && !Segment.bIsArea
+			&& HeightSampler && HeightSampler->HasValidData())
+		{
+			const double Aenderung = SmoothLongitudinalProfile(
+				Segment.Centerline, Segment.TrimmedCenterline, Settings.ProfileSmoothingHalfWindowCm);
+			ProfileGeglaettet += Aenderung > 1.0 ? 1 : 0;
+			ProfileMitDelle += Aenderung > 30.0 ? 1 : 0;
+			GroessteProfilAenderung = FMath::Max(GroessteProfilAenderung, Aenderung);
+		}
 
 		// Flaechenumriss ebenfalls auf das Gelaende legen.
 		//
@@ -726,6 +881,20 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 				Settings.RoadSurfaceOffsetCm, Segment.Layer, Settings, Projected);
 			Segment.AreaOutline = MoveTemp(Projected);
 		}
+	}
+
+	UE_LOG(LogWbRoads, Log,
+		TEXT("Laengsprofil geglaettet (+-%.0f cm): %d Segmente veraendert, %d davon mit Dellen/Hoeckern ueber 30 cm, groesste Aenderung %.0f cm."),
+		Settings.ProfileSmoothingHalfWindowCm, ProfileGeglaettet, ProfileMitDelle, GroessteProfilAenderung);
+
+	// Begleitende Fusswege auf Gehweghoehe - VOR den Kreuzungsplatten, die
+	// ihre Ecken aus den Bandenden holen.
+	{
+		int32 Angehoben = 0;
+		const int32 Begleitwege = AlignCompanionFootways(OutNetwork, Settings.bGenerateSidewalks, &Angehoben);
+		UE_LOG(LogWbRoads, Log,
+			TEXT("Begleitende Fusswege: %d auf Gehweghoehe gelegt, davon %d als Doppel des erzeugten Gehwegs nicht gebaut."),
+			Angehoben, Begleitwege);
 	}
 
 	for (FRoadIntersection& Intersection : OutNetwork.Intersections)
@@ -1003,6 +1172,12 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 	UE_LOG(LogWbRoads, Log, TEXT("Schritt 5-6: %d Spuren, %d Verbindungen (%d gesperrt)."),
 		OutNetwork.Lanes.Num(), OutNetwork.Connections.Num(), RestrictedCount);
 
+	OutNetwork.TurningPlates.Reset();
+	if (Settings.bGenerateTurningPlates)
+	{
+		BuildTurningPlates(OutNetwork);
+	}
+
 	// -- Schritt 7: Geometrie ----------------------------------------------
 
 	if (OutMeshData)
@@ -1068,6 +1243,12 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 				}
 			}
 
+			// Doppel des erzeugten Gehwegs: kein zweites Pflaster.
+			if (Segment.bBegleitweg)
+			{
+				continue;
+			}
+
 			BuildSegmentMesh(OutNetwork, Segment, *TypeLibrary, HeightSampler, Settings, Access, *OutMeshData);
 
 			if (Settings.bGenerateLaneMarkings)
@@ -1087,6 +1268,12 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 		for (const FRoadIntersection& Intersection : OutNetwork.Intersections)
 		{
 			BuildIntersectionMesh(Intersection, Settings, *OutMeshData);
+		}
+		// Wendeplatten: Asphalt wie eine Kreuzungsplatte (Kanal Intersection -
+		// damit auch Kollision und Hoehenabfrage fuer Spieler und Auto).
+		for (const FRoadTurningPlate& Plate : OutNetwork.TurningPlates)
+		{
+			BuildIntersectionMesh(Plate.AsJunction(), Settings, *OutMeshData);
 		}
 
 		// Hoehenlage je Kanal.
@@ -1907,6 +2094,157 @@ void URoadNetworkGenerator::BuildLanes(
 	}
 }
 
+void URoadNetworkGenerator::BuildTurningPlates(FRoadNetwork& Network) const
+{
+	// Sackgasse = Spur ohne ECHTEN Nachfolger. Die Wende, die ConnectLanes an
+	// zweispurigen Sackgassen auf die Gegenspur desselben Abschnitts legt,
+	// zaehlt nicht - auch dort gehoert eine Platte hin (und der Verkehr faehrt
+	// dann ueber sie statt als Haarnadel quer ueber die Fahrbahn). Gegenspur
+	// wie in FWiesbadenTrafficSimulation::AddDeadEndTurnarounds: desselben
+	// Abschnitts, hoechstens 15 m vom Ende; sonst wendet die Spur auf sich.
+	TSet<int32> HatNachfolger;
+	for (const FLaneConnection& C : Network.Connections)
+	{
+		const bool bWendeImAbschnitt = C.TurnType == ETurnType::UTurn
+			&& Network.Lanes.IsValidIndex(C.FromLaneId) && Network.Lanes.IsValidIndex(C.ToLaneId)
+			&& Network.Lanes[C.FromLaneId].SegmentId == Network.Lanes[C.ToLaneId].SegmentId;
+		if (!bWendeImAbschnitt)
+		{
+			HatNachfolger.Add(C.FromLaneId);
+		}
+	}
+	TMap<int32, TArray<int32>> JeAbschnitt;
+	for (int32 i = 0; i < Network.Lanes.Num(); ++i)
+	{
+		JeAbschnitt.FindOrAdd(Network.Lanes[i].SegmentId).Add(i);
+	}
+
+	int32 AnBauwerken = 0;
+	int32 Doppelt = 0;
+	for (int32 L = 0; L < Network.Lanes.Num(); ++L)
+	{
+		const FRoadLane& Spur = Network.Lanes[L];
+		if (Spur.Centerline.Num() < 2 || Spur.bIsBusLane || Spur.bIsBikeLane || HatNachfolger.Contains(L)
+			|| !Network.Segments.IsValidIndex(Spur.SegmentId))
+		{
+			continue;
+		}
+		const FRoadSegment& Abschnitt = Network.Segments[Spur.SegmentId];
+		// Auf Bruecken und in Tunneln gibt es kein Gelaende, auf dem eine Platte laege.
+		if (Abschnitt.bIsBridge || Abschnitt.bIsTunnel || Abschnitt.Layer != 0)
+		{
+			++AnBauwerken;
+			continue;
+		}
+
+		const FVector E = Spur.GetEndPoint();
+		const FVector Dir = Spur.GetExitDirection();
+		FVector S = E;
+		double Bester = 1500.0;
+		for (const int32 O : JeAbschnitt.FindRef(Spur.SegmentId))
+		{
+			const FRoadLane& Andere = Network.Lanes[O];
+			if (O != L && Andere.Direction != Spur.Direction && !Andere.bIsBusLane && Andere.Centerline.Num() >= 2)
+			{
+				const double Dist = FVector::Dist2D(Andere.GetStartPoint(), E);
+				if (Dist < Bester) { Bester = Dist; S = Andere.GetStartPoint(); }
+			}
+		}
+
+		FVector2D C;
+		double LoopR;
+		WiesbadenTurnaround::LoopCircle(E, Dir, S, C, LoopR);
+		const double R = LoopR + WiesbadenTurnaround::PlateMarginCm;
+
+		// Mehrspurige Einbahnstrassen: je Spur ein Kreis, fast deckungsgleich -
+		// eine Platte genuegt.
+		bool bSchonDa = false;
+		for (const FRoadTurningPlate& Andere : Network.TurningPlates)
+		{
+			if (FVector2D::Distance(FVector2D(Andere.Center), C) < 0.5 * FMath::Min(Andere.RadiusCm, R))
+			{
+				bSchonDa = true;
+				break;
+			}
+		}
+		if (bSchonDa)
+		{
+			++Doppelt;
+			continue;
+		}
+
+		// Laengsgefaelle der letzten ~8 m der Spur, sanft begrenzt: die Platte
+		// setzt die Strasse fort, statt eine Stufe zu bilden.
+		const FVector2D D = FVector2D(Dir.X, Dir.Y).GetSafeNormal();
+		double Gefaelle = 0.0;
+		{
+			double Laenge = 0.0;
+			for (int32 i = Spur.Centerline.Num() - 1; i > 0; --i)
+			{
+				Laenge += FVector::Dist2D(Spur.Centerline[i], Spur.Centerline[i - 1]);
+				if (Laenge >= 800.0 || i == 1)
+				{
+					Gefaelle = Laenge > 1.0 ? (E.Z - Spur.Centerline[i - 1].Z) / Laenge : 0.0;
+					break;
+				}
+			}
+			Gefaelle = FMath::Clamp(Gefaelle, -0.2, 0.2);
+		}
+
+		FRoadTurningPlate Platte;
+		Platte.SegmentIndex = Spur.SegmentId;
+		Platte.LaneId = L;
+		Platte.RadiusCm = R;
+		Platte.Gradient = D * Gefaelle;
+		Platte.Center = FVector(C.X, C.Y, E.Z + Gefaelle * FVector2D::DotProduct(C - FVector2D(E), D));
+
+		// Umriss: der Kreis HINTER der Endkante der Fahrbahn (dort endet das
+		// Band gerade), dazu die Endkante selbst - konvex, also als Faecher
+		// vermaschbar wie eine Kreuzungsplatte.
+		const TArray<FVector>& Mitte = Abschnitt.TrimmedCenterline.Num() >= 2 ? Abschnitt.TrimmedCenterline : Abschnitt.Centerline;
+		const FVector2D Ende2D = FVector2D::DistSquared(FVector2D(Mitte[0]), FVector2D(E)) < FVector2D::DistSquared(FVector2D(Mitte.Last()), FVector2D(E))
+			? FVector2D(Mitte[0]) : FVector2D(Mitte.Last());
+		const FVector2D Links(D.Y, -D.X);
+		const double HalbeBreite = Abschnitt.CarriagewayWidthCm * 0.5;
+		TArray<FVector2D> Punkte;
+		Punkte.Add(Ende2D + Links * HalbeBreite);
+		Punkte.Add(Ende2D - Links * HalbeBreite);
+		const double Vor = FVector2D::DotProduct(C - Ende2D, D);
+		const double Quer = FVector2D::DotProduct(C - Ende2D, Links);
+		if (R > FMath::Abs(Vor))
+		{
+			const double Sehne = FMath::Sqrt(R * R - Vor * Vor);
+			Punkte.Add(Ende2D + Links * (Quer + Sehne));
+			Punkte.Add(Ende2D + Links * (Quer - Sehne));
+		}
+		constexpr int32 Randpunkte = 32;
+		for (int32 k = 0; k < Randpunkte; ++k)
+		{
+			const double A = 2.0 * UE_DOUBLE_PI * k / Randpunkte;
+			const FVector2D P = C + FVector2D(FMath::Cos(A), FMath::Sin(A)) * R;
+			if (FVector2D::DotProduct(P - Ende2D, D) >= 0.0)
+			{
+				Punkte.Add(P);
+			}
+		}
+		FVector2D Schwerpunkt = FVector2D::ZeroVector;
+		for (const FVector2D& P : Punkte) { Schwerpunkt += P; }
+		Schwerpunkt /= static_cast<double>(Punkte.Num());
+		Punkte.Sort([&Schwerpunkt](const FVector2D& A, const FVector2D& B)
+		{
+			return FMath::Atan2(A.Y - Schwerpunkt.Y, A.X - Schwerpunkt.X) < FMath::Atan2(B.Y - Schwerpunkt.Y, B.X - Schwerpunkt.X);
+		});
+		for (const FVector2D& P : Punkte)
+		{
+			Platte.Polygon.Add(FVector(P.X, P.Y, Platte.HeightAt(P)));
+		}
+		Network.TurningPlates.Add(MoveTemp(Platte));
+	}
+
+	UE_LOG(LogWbRoads, Log, TEXT("Wendeplatten: %d an Sackgassen (%d mehrspurig zusammengefasst, %d an Bruecken/Tunneln ausgelassen)."),
+		Network.TurningPlates.Num(), Doppelt, AnBauwerken);
+}
+
 void URoadNetworkGenerator::CollectTurnRestrictions(
 	const FOSMDataSet& DataSet,
 	TSet<TPair<int64, int64>>& OutForbiddenWayPairs) const
@@ -2109,6 +2447,135 @@ void URoadNetworkGenerator::ConnectLanes(
 			}
 		}
 	}
+}
+
+double URoadNetworkGenerator::SmoothLongitudinalProfile(
+	TArray<FVector>& Centerline, TArray<FVector>& TrimmedCenterline, double HalfWindowCm)
+{
+	const int32 N = Centerline.Num();
+	if (HalfWindowCm <= 0.0 || N < 3)
+	{
+		return 0.0;
+	}
+	TArray<double> Bogen;
+	Bogen.SetNumZeroed(N);
+	for (int32 i = 1; i < N; ++i)
+	{
+		Bogen[i] = Bogen[i - 1] + FVector::Dist2D(Centerline[i - 1], Centerline[i]);
+	}
+	const double Gesamt = Bogen.Last();
+	if (Gesamt < 2.0 * HalfWindowCm)
+	{
+		return 0.0;
+	}
+
+	// Gleitendes Mittel mit SYMMETRISCHEM Fenster: an den Enden schrumpft es
+	// auf den Abstand zum Ende. Ein gleichmaessiges Gefaelle bleibt dadurch
+	// exakt erhalten (ein einseitiges Fenster verschob es gemessen um 5 cm).
+	auto Mittel = [&Bogen, N, Gesamt](const TArray<double>& Werte, double Halbbreite, TArray<double>& Aus)
+	{
+		Aus.SetNumUninitialized(N);
+		for (int32 i = 0; i < N; ++i)
+		{
+			const double H = FMath::Min3(Halbbreite, Bogen[i], Gesamt - Bogen[i]);
+			double Summe = 0.0;
+			int32 Anzahl = 0;
+			for (int32 j = i; j >= 0 && Bogen[j] >= Bogen[i] - H - 0.01; --j) { Summe += Werte[j]; ++Anzahl; }
+			for (int32 j = i + 1; j < N && Bogen[j] <= Bogen[i] + H + 0.01; ++j) { Summe += Werte[j]; ++Anzahl; }
+			Aus[i] = Summe / Anzahl;
+		}
+	};
+
+	// 1) Robuste Gerade je Punkt: Steigung = Median der Einzelsteigungen im
+	//    Fenster, Hoehe = Median der um diese Steigung bereinigten Werte. Eine
+	//    Delle kippt die Einzelsteigungen paarweise nach unten und oben und
+	//    faellt aus beiden Medianen heraus; ein Gefaelle bleibt exakt. Ein
+	//    blosser Median der Hoehen reichte nicht (am 10-%-Hang ist der
+	//    Unterschied im Fenster so gross wie die Delle: 43 cm Rest), das
+	//    Ersetzen von Ausreissern gegen das Mittel auch nicht (25 cm).
+	TArray<double> Arbeit;
+	Arbeit.SetNumUninitialized(N);
+	TArray<double> Werte;
+	for (int32 i = 0; i < N; ++i)
+	{
+		const double H = FMath::Min3(HalfWindowCm, Bogen[i], Gesamt - Bogen[i]);
+		int32 Lo = i;
+		int32 Hi = i;
+		while (Lo > 0 && Bogen[Lo - 1] >= Bogen[i] - H - 0.01) { --Lo; }
+		while (Hi + 1 < N && Bogen[Hi + 1] <= Bogen[i] + H + 0.01) { ++Hi; }
+		if (Hi - Lo < 2)
+		{
+			Arbeit[i] = Centerline[i].Z;
+			continue;
+		}
+		auto Median = [](TArray<double>& V)
+		{
+			V.Sort();
+			const int32 M = V.Num();
+			return (M % 2) ? V[M / 2] : 0.5 * (V[M / 2 - 1] + V[M / 2]);
+		};
+		Werte.Reset();
+		for (int32 j = Lo; j < Hi; ++j)
+		{
+			const double Ds = Bogen[j + 1] - Bogen[j];
+			if (Ds > 1.0) { Werte.Add((Centerline[j + 1].Z - Centerline[j].Z) / Ds); }
+		}
+		const double Steigung = Werte.Num() > 0 ? Median(Werte) : 0.0;
+		Werte.Reset();
+		for (int32 j = Lo; j <= Hi; ++j)
+		{
+			Werte.Add(Centerline[j].Z - Steigung * (Bogen[j] - Bogen[i]));
+		}
+		Arbeit[i] = Median(Werte);
+	}
+
+	// 2) Zum Schluss ein kurzes Mittel ueber die halbe Breite gegen Knicke.
+	TArray<double> Glatt;
+	Mittel(Arbeit, HalfWindowCm * 0.5, Glatt);
+	TArray<double> Delta;
+	Delta.SetNumUninitialized(N);
+	double Groesste = 0.0;
+	for (int32 i = 0; i < N; ++i)
+	{
+		// 3) Enden fest, Wirkung ueber HalfWindowCm aufwachsen lassen.
+		const double Gewicht = FMath::Clamp(FMath::Min(Bogen[i], Gesamt - Bogen[i]) / HalfWindowCm, 0.0, 1.0);
+		Delta[i] = Gewicht * (Glatt[i] - Centerline[i].Z);
+		Groesste = FMath::Max(Groesste, FMath::Abs(Delta[i]));
+	}
+	for (int32 i = 0; i < N; ++i)
+	{
+		Centerline[i].Z += Delta[i];
+	}
+
+	// 4) Getrimmte Linie: dieselbe Aenderung an ihrer Bogenposition. Sie ist
+	//    ein Teilstueck derselben Linie und laeuft in dieselbe Richtung, darum
+	//    genuegt eine vorwaerts laufende Suche.
+	int32 Cursor = 0;
+	for (FVector& P : TrimmedCenterline)
+	{
+		double BesteDist = TNumericLimits<double>::Max();
+		int32 BesterAbschnitt = Cursor;
+		double BestesT = 0.0;
+		for (int32 j = Cursor; j < N - 1 && j < Cursor + 400; ++j)
+		{
+			const FVector2D A(Centerline[j].X, Centerline[j].Y);
+			const FVector2D B(Centerline[j + 1].X, Centerline[j + 1].Y);
+			const FVector2D AB = B - A;
+			const double LenSq = AB.SizeSquared();
+			const double T = LenSq > KINDA_SMALL_NUMBER
+				? FMath::Clamp(FVector2D::DotProduct(FVector2D(P.X, P.Y) - A, AB) / LenSq, 0.0, 1.0) : 0.0;
+			const double Dist = FVector2D::DistSquared(A + AB * T, FVector2D(P.X, P.Y));
+			if (Dist < BesteDist)
+			{
+				BesteDist = Dist;
+				BesterAbschnitt = j;
+				BestesT = T;
+			}
+		}
+		Cursor = BesterAbschnitt;
+		P.Z += FMath::Lerp(Delta[BesterAbschnitt], Delta[BesterAbschnitt + 1], BestesT);
+	}
+	return Groesste;
 }
 
 void URoadNetworkGenerator::ProjectToTerrain(
@@ -2933,8 +3400,8 @@ void URoadNetworkGenerator::BuildIntersectionMesh(
 	if (Intersection.SidewalkPolygon.Num() >= 3 && Intersection.Polygon.Num() >= 3)
 	{
 		// Bordsteinhoehe: dieselbe, mit der BuildSegmentMesh die Gehwegbaender
-		// anlegt (FRoadSegment::KerbHeightCm, Standard 12 cm).
-		constexpr double JunctionKerbHeightCm = 12.0;
+		// anlegt (FRoadSegment::KerbHeightCm, Standard 4 cm).
+		const double JunctionKerbHeightCm = FRoadSegment().KerbHeightCm;
 
 		FRoadMeshSection& SidewalkSection = FindOrAddSection(
 			OutMeshData, ERoadMeshChannel::Sidewalk, EOSMSurfaceType::Concrete);

@@ -54,13 +54,35 @@ def flush_results():
 
 
 def bounds_reaches_origin(actor):
-    """True, wenn die Actor-Bounds den Kartenursprung (0, 0) einschliessen.
+    """True, None wenn nicht messbar, wenn die Actor-Bounds den Kartenursprung
+    (0, 0) einschliessen.
 
     Genau das war die Falle: die Punkt-Bounds der leeren Komponenten am
     Ursprung spannten jede Bounds zur Geometrie zurueck.
+
+    Nach einem Reload im Commandlet sind etliche Zell-Actoren nur
+    Platzhalter ohne ObjectInstance ("Internal Error - ObjectInstance is
+    null") - die sind weder Treffer noch Fehlbefund, sondern nicht
+    messbar. Deshalb None statt False, damit der Zaehler sie ausweist.
     """
-    origin, extent = actor.get_actor_bounds(False)
+    try:
+        origin, extent = actor.get_actor_bounds(False)
+    except Exception:
+        return None
     return (abs(origin.x) <= extent.x and abs(origin.y) <= extent.y)
+
+
+def count_origin(chunks):
+    """(Treffer, nicht messbar) unter den Zell-Actoren."""
+    hits = 0
+    unknown = 0
+    for c in chunks:
+        r = bounds_reaches_origin(c)
+        if r is None:
+            unknown += 1
+        elif r:
+            hits += 1
+    return hits, unknown
 
 
 LES.load_level(MAP)
@@ -81,7 +103,9 @@ if not chunks:
     flush_results()
     raise SystemExit(1)
 
-before = sum(1 for c in chunks if bounds_reaches_origin(c))
+before, before_unknown = count_origin(chunks)
+if before_unknown:
+    log("Hinweis: %d Zell-Actoren waren vor dem Lauf nicht messbar." % before_unknown)
 
 anchored = 0
 for chunk in chunks:
@@ -90,13 +114,27 @@ for chunk in chunks:
     chunk.anchor_streaming_bounds()
     anchored += 1
 
+# ZAEHLEN VOR DEM SPEICHERN: der UFUNCTION-Aufruf macht die Python-Referenz
+# auf den Actor unbrauchbar (ObjectInstance null), und ein load_level im
+# Commandlet liefert danach 0 Zell-Actoren - nach dem Speichern ist im
+# selben Prozess nichts mehr messbar. Die ehrliche Gegenprobe ist ein
+# FRISCHER Prozess: Tools/verify_anchor_state.py (nur lesend).
+after, after_unknown = count_origin(chunks)
+
 # Speichern - hier schreibt WP die ActorDescs mit den neuen Bounds neu.
+# Stand 25.09.: beides meldet "ok" und schreibt die External-Actor-Pakete
+# (2010 Dateien mit neuer Zeit), der frische Prozess sieht die Verschiebung
+# trotzdem nicht - die 5.8-Python-API hat keinen per-Actor-Save (Sonde:
+# Tools/probe_save_api.py), der Fix gehoert ins C++.
 bSaved = unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True, True)
 log("save_dirty_packages: %s" % ("ok" if bSaved else "FEHLER"))
+bLevel = unreal.EditorLoadingAndSavingUtils.save_current_level()
+log("save_current_level: %s" % ("ok" if bLevel else "FEHLER"))
 
-after = sum(1 for c in chunks if bounds_reaches_origin(c))
-
-log("FERTIG: %d Chunks verankert. Bounds-ueber-Ursprung vorher %d, nachher %d."
-    % (anchored, before, after))
+log("FERTIG: %d Chunks verankert. Bounds-ueber-Ursprung vorher %d, nachher %d%s."
+    % (anchored, before, after,
+       " (davon nicht messbar: %d)" % after_unknown if after_unknown else ""))
+log("Gegengeprueft wird das in einem FRISCHEN Prozess: "
+    "WB_MAP=%s python-cmd Tools/verify_anchor.cmd" % MAP)
 
 flush_results()

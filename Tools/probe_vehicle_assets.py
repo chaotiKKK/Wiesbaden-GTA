@@ -55,7 +55,7 @@ for p in EAL.list_assets("/Game/Vehicles/Beetle", recursive=False, include_folde
 
 # Meshes: Materialslots je Beetle-Mesh
 result["beetle"]["meshes"] = {}
-for mesh_name in ["SM_VWBeetle1969", "SM_VWBeetle1969_Body", "SM_VWBeetle1969_Traffic", "SM_VWBeetle_Wheel"]:
+for mesh_name in ["SM_VWBeetle1969", "SM_VWBeetle1969_Body", "SM_VWBeetle_Wheel"]:
     m = EAL.load_asset("/Game/Vehicles/Beetle/" + mesh_name)
     if isinstance(m, unreal.StaticMesh):
         smats = m.get_editor_property("static_materials")

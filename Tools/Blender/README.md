@@ -20,6 +20,10 @@ im Hintergrundmodus:
 | `make_nerobergbahn_textures.py` (in `Tools/`, Pillow statt Blender) | Erzeugt Schriftzug, Wasserstandsskala, Geschwindigkeitsanzeige und Riffelmuster des Wagens als transparente PNG → `Content/Nerobergbahn/Textures/Source/`. Vor `make_nerobergbahn.py` laufen, damit die Kontrollbilder die Schrift zeigen. |
 | `check_nerobergbahn_gleis.py` | Prüft die Gleisbauteile ohne Renderlauf: Maße, Höhenkette (Schienenfuß = Schwellenkrone = Seilkanalkrone, Bettkrone = Schwellenunterseite), Windung, Sprossen-/Rostteilung, Radspur gegen die Schienenlage. 0 Fehler = alles sitzt aufeinander. |
 | `check_nerobergbahn_wagen.py` | Prüft den Wagen **und die Bahnsteighalle** ohne Renderlauf. Wagen: Maße, Neigung der Kontaktlinie (19,1 % gegen Soll 19,5 %), Windung, **und den Innenraum** (Sitzhöhe, Lehnenoberkante, Bankzahl, freier Mittelgang, Kopfreiheit über der Augenhöhe der Mitfahrkamera, Tacho/Schauglas/Kurbel innerhalb des Kastens). Halle: Trogsohle, Bahnsteighöhe (0,80 m), Stützenzahl/-kopf unter der Binderunterkante, Dachüberdeckung des Bahnsteigs, Balustradenhöhe, freies Einstiegsjoch, Windung von `balken()`/`docke()`. Meldet am Ende „Innenraum: N Fehler" und „Bahnsteighalle: N Fehler" — 0 = der C++-Code darf sich auf die Maße verlassen. |
+| `make_sebbo_dach.py` | Die fünf Dachaufbauten des SebboTower: Satellitenschüssel, Antennenmast, Dachschild (Wortmarke + seBBo-AG-Logo), Magazinständer mit Titelbild und Topfpflanze → FBX + `sebbo_dach.json` (je Slot Grundfarbe, ART und Bildtextur). Bildvorlagen in `Data/Raw/SebboTower/quellen/`. |
+| `check_sebbo_dach.py` | Prüft dieselben fünf Bauteile ohne Renderlauf: Maße, Windung (Außen-Normalen), UV-Reihenfolge der Bildflächen, Feld- und Tafelverhältnis gegen die Texturmaße, Vorsprung des blauen Feldes, Blatt-Slots auf ART `foliage`. 0 Fehler = der Import darf sich darauf verlassen. |
+| `make_sebbo_dach_textures.py` (in `Tools/`, Pillow statt Blender) | Erzeugt die drei Bildtexturen nach `Content/SebboTower/Textures/Source/`: die freigestellte seBBo-AG-Wortmarke, die SEBBO-Wortmarke und das Magazin-Cover. Läuft **vor** `make_sebbo_dach.py`, sonst zeigen die Kontrollbilder leere Platten. Prüft vorher die Maße der fünf Quelldateien. |
+| `check_sebbo_dach_bilder.py` (in `Tools/`, Pillow statt Blender) | Misst die aufgemalten Bilder in den Kontrollbildern gegen ihre Quelltextur: Schwerpunkt von Gelb/Rosa/Weiß/Grün/Hellblau je Feld, Abweichung > 5 % = gespiegelt oder auf dem Kopf. Läuft **nach** `make_sebbo_dach.py`. |
 
 ## Fallstricke
 
@@ -116,6 +120,37 @@ Beide sind uns hier tatsächlich passiert und beide **melden keinen Fehler**:
   Für den Kontrollrender hängt `bind_decal_texture()` dieselbe Datei an
   Base Color UND Alpha (DITHERED); fehlt die Datei, läuft der Bau durch und
   meldet nur einen Hinweis — der Slot bleibt dann die blaue Grundfarbe.
+
+## Aufgemalte Grafik: Womit sie im Spiel sichtbar wird
+
+Drei Dinge sind beim Sebbo-Dach zusammengefallen, die man erst nach dem Import sieht:
+
+- **Blattflächen brauchen ein ZWEISEITIGES Material.** Ein Blatt ist ein einzelner
+  Streifen aus sieben Vierecken, kein geschlossener Körper. Unreal cullt die
+  Rückseite, und dann fehlt von der einen Seite aus die halbe Pflanze. Der
+  Blender-Render zeigt das nie, weil EEVEE nicht cullt. Deshalb gibt es im
+  Manifest die sechste ART `foliage` und dafür `M_WbSebo_Blatt` (zwei Master
+  mit identischen Parametern, nur `two_sided` unterscheidet sie).
+
+- **Der Kontrollrender braucht `view_transform = "Standard"`.** Blenders
+  Vorgabe AgX entsättigt kräftige Farben, und um die geht es hier — das Gelb der
+  Flamme, das Rosa des Herzens, das Gelb des Magazinfeldes „PAGE-20". Mit AgX
+  werden daraus drei graue Flecken, und `check_sebbo_dach_bilder.py` kann nichts
+  mehr unterscheiden. Zusätzlich muss die Sonne von +X kommen: Schild, Tafel und
+  Schüssel zeigen alle nach +X, mit der alten Drehung lief das Licht an ihnen
+  vorbei und das Schild stand bei (37,58,96) statt (6,59,109).
+
+- **Der Grundton des Logos gehört als sRGB-Hex ins Material, nicht als
+  Handeintrag.** Das marineblaue Schildfeld muss exakt der Grundton des Fotos sein
+  (`063b6d`), sonst steht ein heller Rand um die freigestellte Wortmarke, weil der
+  ausgesparte Grund durchscheint. `make_sebbo_dach.py` rechnet ihn deshalb über
+  `srgb()` in lineares RGB — Unreal-LinearColor erwartet lineare Werte.
+
+Und die eine Sorte Fehler, die *vor* allem passiert: **die Quelldateien
+vertauscht.** 921×2048 war die Makroaufnahme der Blüte, das Magazin-Cover ist
+650×800. Beide sind „ein Foto von Pflanzen", beide ergeben ein glaubwürdiges
+Asset — das falsche. `QUELLEN_ERWARTET` in `make_sebbo_dach_textures.py` prüft
+die Maße deshalb vor dem ersten Pixel.
 
 ## Quelle
 

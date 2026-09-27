@@ -8,6 +8,7 @@
 #include "BuildingCollisionSpawnerComponent.generated.h"
 
 class UBoxComponent;
+struct FRoadNetwork;
 
 /**
  * Haelt Kollisionskoerper fuer die Gebaeude in Spielernaehe.
@@ -41,6 +42,36 @@ public:
 
 	/** Uebernimmt die Gebaeudeliste (aus dem gebackenen WorldBuilder). */
 	void SetBuildings(const TArray<FGeneratedBuilding>& InBuildings);
+
+	/**
+	 * Kuerzt die Grundriss-Kaesten an Fahrspuren (nach SetBuildings aufrufen).
+	 *
+	 * Der Kasten ist das minimale gedrehte Rechteck um den GANZEN Grundriss. Bei
+	 * einer Ueberbauung (LuisenForum ueber der Schwalbacher Strasse) oder einem
+	 * L-foermigen Haus an der Ecke deckt er die Strasse mit ab - eine unsichtbare
+	 * Wand auf allen Spuren, an der Spielerauto und Busse haengen blieben. Durch
+	 * ein echtes Gebaeude fuehrt aber keine Fahrbahn: laufen Spuren (Strassen-
+	 * klassen bis living_street, auf Hoehe des Gebaeudefusses) durch den Kasten,
+	 * wird er an der Strasse abgeschnitten; bliebe zu wenig uebrig, bekommt das
+	 * Gebaeude keinen Kasten (die Strasse geht vor).
+	 */
+	void ClipAgainstRoads(const FRoadNetwork& Network);
+
+	/** Ergebnis von ClipBoxAgainstPoints. */
+	enum class EBoxClip : uint8 { Untouched, Clipped, Removed };
+
+	/**
+	 * Datenrein: Kasten (Mitte, Halbmasse, Gier) so kuerzen, dass kein Punkt
+	 * naeher als MarginCm darin liegt. Geschnitten wird an der Seite, die am
+	 * meisten Flaeche uebrig laesst; bleibt weniger als MinKeepFraction,
+	 * lautet das Ergebnis Removed (Kasten unveraendert).
+	 */
+	static EBoxClip ClipBoxAgainstPoints(FVector2D& Center, FVector2D& Extent, float YawDegrees,
+		const TArray<FVector2D>& Points, double MarginCm, double MinKeepFraction);
+
+	/** Gekuerzte bzw. entfernte Kaesten beim letzten ClipAgainstRoads. */
+	int32 GetClippedCount() const { return ClippedCount; }
+	int32 GetRemovedCount() const { return RemovedCount; }
 
 	/** Setzt die Koerper auf die Gebaeude um den Beobachter um. */
 	void UpdateAround(const FVector& Observer);
@@ -81,4 +112,6 @@ private:
 	TArray<FGeneratedBuilding> Buildings;
 
 	int32 ActiveBodyCount = 0;
+	int32 ClippedCount = 0;
+	int32 RemovedCount = 0;
 };

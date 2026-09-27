@@ -16,6 +16,21 @@ class UMaterialInterface;
 class UStaticMesh;
 
 /**
+ * Laterne (Mast, Kappe, Glas) als EIN Dreiecksnetz, im VORSKALIERTEN Raum
+ * einer Mast-Instanz: die Masten sind Engine-Zylinder mit Skalierung
+ * 0,18 x 0,18 x 7 - das Netz ist so gebaut, dass es NACH dieser Skalierung
+ * die echten Masse hat. Je Dreieck drei eigene Ecken (keine geteilten).
+ */
+struct FStreetLampGeometry
+{
+	TArray<FVector3f> Positions;
+	TArray<FVector3f> Normals;
+	TArray<FVector2f> UVs;
+	/** Je Dreieck: 0 = Mast und Kappe (Mastmaterial), 1 = Glas (leuchtet). */
+	TArray<int32> Section;
+};
+
+/**
  * Visueller Ausstattungs-Spawner: rendert die Platzierungsdaten des
  * Strassenausstattungs-Passes (FRoadFurnitureLayout) als echte Meshes.
  *
@@ -171,6 +186,31 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Laternen")
 	FLinearColor LampLightColor = FLinearColor(1.0f, 0.78f, 0.48f);
 
+	/**
+	 * Leuchtkraft der Leuchtenglaeser bei voller Nacht (Emissiv-Faktor).
+	 *
+	 * Die Glaeser sitzen auf ALLEN Masten, nicht nur auf den 48 mit echtem
+	 * Licht - so bleibt die Stadt nachts auch in der Ferne mit Lichtpunkten
+	 * besetzt, waehrend die teuren Punktlichter nur um den Spieler stehen.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Laternen", meta = (ClampMin = "0.0"))
+	float LampGlassGlowAtNight = 8.0f;
+
+	/**
+	 * Nachtanteil 0..1 aus dem Sonnenstand (Sinus der Sonnenhoehe): ab der
+	 * Schwelle der Fahrzeug-Automatik (0,18) blendet das Licht ein, unter
+	 * dem Horizont (-0,05) leuchtet es voll. Datenrein fuer den Test.
+	 */
+	static float ComputeStreetLampNightFactor(float SunElevationFactor);
+
+	/**
+	 * Laternen-Geometrie fuer Mast-Instanzen mit `InstanceScale` (datenrein, Test).
+	 * Mast = Einheitszylinder (wie /Engine/BasicShapes/Cylinder), Kappe 64 cm
+	 * breit 22 cm ueber der Mastspitze, Glas 50 cm breit darunter - dieselben
+	 * Masse wie die frueheren getrennten Kopf-Instanzen.
+	 */
+	static FStreetLampGeometry BuildStreetLampGeometry(const FVector& InstanceScale);
+
 	// -- Sichtweiten ---------------------------------------------------------
 	//
 	// Die Ausstattung lag in EINFACHEN InstancedStaticMeshComponents. Ein
@@ -297,6 +337,17 @@ private:
 	/** Legt den begrenzten Vorrat an Punktlichtern an (idempotent). */
 	void CreateLampLightPool();
 
+	/**
+	 * Leuchtenkoepfe: der Mast-HISM bekommt statt des nackten Zylinders ein
+	 * Laternen-Netz mit Kappe und Glas (idempotent). Frueher trugen zwei
+	 * eigene HISM die Koepfe - 2 x 72.433 Instanzen mehr, die das Instanz-
+	 * Budget des Rauchtests (800.000) rissen. So kostet der Kopf keine einzige.
+	 */
+	void EnsureLampHeads();
+
+	/** Glas-Leuchtkraft und Punktlichter nach der Tageszeit schalten. */
+	void UpdateLampNightState();
+
 	// Schildermasten (gemeinsames Material) -> ISM.
 	UPROPERTY(Transient)
 	UHierarchicalInstancedStaticMeshComponent* SignPoleInstances = nullptr;
@@ -346,6 +397,16 @@ private:
 	// Echte Punktlichter, auf MaxActiveLampLights begrenzt.
 	UPROPERTY(Transient)
 	TArray<UPointLightComponent*> LampLights;
+
+	/** Zur Laufzeit gebautes Laternen-Netz (Mast + Kappe + Glas). */
+	UPROPERTY(Transient)
+	UStaticMesh* LampMesh = nullptr;
+	// Eine MID fuer alle Glaeser - nachts ein einziger Parameter-Wechsel.
+	UPROPERTY(Transient)
+	class UMaterialInstanceDynamic* LampGlassMID = nullptr;
+
+	/** Zuletzt gesetzter Nachtanteil (-1 = noch nie). */
+	float LastLampNightFactor = -1.0f;
 
 	/**
 	 * Standorte aller Laternen - Grundlage fuer die Auswahl der Leuchten.

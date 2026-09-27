@@ -16,6 +16,15 @@ SHOT="Saved/Diagnose/Messstelle00000.png"
 
 for Z in 1 2 2.5 3 3.5 4 4.5 5 8; do
   rm -f "$SHOT"
+  # Das Wegsein wird geprueft, nicht geglaubt: "rm -f" meldet einen
+  # gesperrten Pfad nicht (und die Schleife unten wartet nur auf
+  # Existenz). Liegt der alte Screenshot noch da, waere jede Zoom-Stufe ein
+  # Bild des VORHERIGEN Laufs - die Datei bekaeme den Zufall kommentarlos
+  # als Aufnahme des neuen Zoomwerts.
+  if [ -e "$SHOT" ]; then
+    echo "  Zoom $Z: $SHOT laesst sich nicht loeschen (gesperrt?) - ABBRUCH, das waere ein Bild des vorigen Laufs. $(date +%T)" >> sweep_map_zoom.log
+    exit 1
+  fi
   echo "=== Zoom $Z start $(date +%T) ===" >> sweep_map_zoom.log
   "$UE" "$PROJ" /Game/Maps/WiesbadenCity_Alkis4 -game -WbShowMap -WbMapZoom=$Z -WbShot=20 \
     -windowed -ResX=1600 -ResY=900 -stdout -unattended -nop4 > "sweep_z${Z}.log" 2>&1 &

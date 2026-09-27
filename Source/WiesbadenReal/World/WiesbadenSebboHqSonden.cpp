@@ -124,6 +124,63 @@ namespace
 	}
 }
 
+bool AWiesbadenSebboHq::GetStairWalk(FVector& OutStart, FRotator& OutFacing, TArray<FVector>& OutWaypoints) const
+{
+	const UWorld* World = GetWorld();
+	if (!World || !bBuilt)
+	{
+		return false;
+	}
+	// Masse wie in ProbeStaircase (dort begruendet).
+	const double Innen = Dimensions.CoreCm * 0.5 - 25.0;
+	const double Trennung = 12.5;
+	const double TrennY = (-Innen + -Trennung) * 0.5;
+	const double LaufY = (-Innen + 20.0 + TrennY - 5.0) * 0.5;
+	const double PodestY = (TrennY + -Trennung) * 0.5;
+	const double LaufX0 = -Innen + 40.0;
+	const double LaufX1 = Innen - 40.0;
+	const int32 Stufenzahl = 16;
+	const double Stufenhoehe = Dimensions.FloorHeightCm / Stufenzahl;
+	const double Auftritt = ((Innen * 2.0) - 40.0) / Stufenzahl;
+
+	OutFacing = FRotator(0.0, HeadingDegrees, 0.0);
+	const auto NachWelt = [&](double X, double Y, double Z) { return BuiltBase + OutFacing.RotateVector(FVector(X, Y, Z)); };
+
+	// Erste Stufe ueber dem Gelaende (am Hang schneidet es die unteren).
+	double GelaendeUeberFuss = 0.0;
+	FHitResult Boden;
+	FCollisionQueryParams P(SCENE_QUERY_STAT(WbTreppenWeg), true);
+	P.AddIgnoredActor(this);
+	const FVector Oben = NachWelt(LaufX0, LaufY, 20000.0);
+	if (World->LineTraceSingleByChannel(Boden, Oben, Oben - FVector(0.0, 0.0, 40000.0), ECC_WorldStatic, P))
+	{
+		GelaendeUeberFuss = Boden.Location.Z - BuiltBase.Z;
+	}
+	int32 Erste = 0;
+	while (20.0 + (Erste + 1) * Stufenhoehe < GelaendeUeberFuss + 10.0 && Erste < Stufenzahl - 2)
+	{
+		++Erste;
+	}
+	OutStart = NachWelt(-Innen + 20.0 + (Erste + 0.5) * Auftritt, LaufY, 20.0 + (Erste + 1) * Stufenhoehe + 2.0 + 90.0);
+
+	// Z = Sollhoehe der Fuesse dort (oberste Stufe = Podest des naechsten
+	// Geschosses: 20 + 16 Stufen ueber dem Geschossboden).
+	OutWaypoints.Reset();
+	for (int32 Geschoss = 0; Geschoss < Dimensions.FloorCount; ++Geschoss)
+	{
+		const double Podest = 20.0 + (Geschoss + 1) * Dimensions.FloorHeightCm;
+		OutWaypoints.Add(NachWelt(LaufX1, LaufY, Podest));
+		if (Geschoss + 1 >= Dimensions.FloorCount)
+		{
+			break;   // oben endet der Lauf auf dem Dachaufbau
+		}
+		OutWaypoints.Add(NachWelt(LaufX1, PodestY, Podest));
+		OutWaypoints.Add(NachWelt(LaufX0, PodestY, Podest));
+		OutWaypoints.Add(NachWelt(LaufX0, LaufY, Podest));
+	}
+	return true;
+}
+
 void AWiesbadenSebboHq::ProbeStaircase() const
 {
 	const UWorld* World = GetWorld();
@@ -217,9 +274,12 @@ void AWiesbadenSebboHq::ProbeStaircase() const
 		bool bGeschossGeschafft = true;
 
 		// 1) Den Lauf hinauf (in +X), Schrittweite 40 cm.
-		const int32 SchritteLauf = FMath::CeilToInt((Innen - 20.0 - StartX) / 40.0);
+		// Der Kapselmittelpunkt muss mindestens ihren Radius vor der +X-Wand
+		// anhalten. Auf der letzten Stufe steht er bereits bei X ~= 381 cm;
+		// ein aufgerundeter zwanzigster Schritt stoesst in die Kernwand.
+		const int32 SchritteLauf = FMath::FloorToInt((LaufX1 - StartX) / 40.0);
 		for (int32 i = 0; i < (Geschoss == 0 ? SchritteLauf
-			: FMath::CeilToInt((LaufX1 - LaufX0) / 40.0)); ++i)
+			: FMath::FloorToInt((LaufX1 - LaufX0) / 40.0)); ++i)
 		{
 			FVector Nach;
 			FString Grund;
@@ -265,7 +325,7 @@ void AWiesbadenSebboHq::ProbeStaircase() const
 
 		// 3) Ueber das Podest zurueck zum Anfang des naechsten Laufs.
 		{
-			const int32 SchritteZurueck = FMath::CeilToInt((LaufX1 - LaufX0) / 40.0);
+			const int32 SchritteZurueck = FMath::FloorToInt((LaufX1 - LaufX0) / 40.0);
 			for (int32 i = 0; i < SchritteZurueck; ++i)
 			{
 				FVector Nach;
@@ -316,7 +376,14 @@ void AWiesbadenSebboHq::ProbeStaircase() const
 	const double ErreichteHoehe = Jetzt.Z - Fuss.Z;
 	ErreichtesGeschoss = FMath::Clamp(
 		FMath::FloorToInt(ErreichteHoehe / Dimensions.FloorHeightCm), 0, Dimensions.FloorCount);
-	const bool bDachErreicht = ErreichteHoehe >= Sollhoehe - Dimensions.FloorHeightCm;
+	// Wer STECKENBLIEB, hat das Dach nicht erreicht - egal wie hoch er kam.
+	// Frueher reichte "hoechstens ein Geschoss unter der Dachhoehe": ein Lauf,
+	// der in Geschoss 14 bei 58,85 m in der Geometrie steckte, meldete
+	// dach_erreicht=true (treppenprobe.json vom 25.09.2026) - ein nicht
+	// begehbarer Turm galt als begehbar.
+	const bool bSteckengeblieben = Gescheitert > 0 || !Woran.IsEmpty();
+	const bool bDachErreicht = !bSteckengeblieben
+		&& ErreichteHoehe >= Sollhoehe - Dimensions.FloorHeightCm;
 
 	UE_LOG(LogWbSebboHq, Log,
 		TEXT("Treppenprobe: %d von %d Geschossen erreicht, %d Schritte, ")
@@ -535,7 +602,7 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		// am Ende darauf. Darum hier NICHT den Turm ignorieren.
 		FCollisionQueryParams Belag(SCENE_QUERY_STAT(WbAnkunftProbeBelag), true);
 
-		const double StartX = Half + 700.0;
+		const double StartX = Half + SebboHq::GarageBridgeLengthCm - 20.0;
 		const double ZielX = Layout.GarageTarget.CenterCm.X;
 		constexpr double SchrittCm = 50.0;
 		constexpr double BodenfreiheitCm = 20.0;
@@ -665,7 +732,8 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		FCollisionQueryParams P(SCENE_QUERY_STAT(WbAnkunftProfil), true);
 		P.AddIgnoredActor(this);   // der Turm ist hier nicht die Frage
 		int32 N = 0;
-		for (double X = Half + 700.0; X >= Layout.GarageTarget.CenterCm.X - 50.0; X -= 100.0)
+		for (double X = Half + SebboHq::GarageBridgeLengthCm - 20.0;
+			X >= Layout.GarageTarget.CenterCm.X - 50.0; X -= 100.0)
 		{
 			const FVector Oben = NachWelt(FVector(X, GarageY, 0.0)) + FVector(0.0, 0.0, 20000.0);
 			FHitResult Treffer;
@@ -732,7 +800,8 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		// langen Stufen der Portalrampe waren damit komplett unsichtbar, bei
 		// 20 cm langen blinkte jede zweite Probe auf den Hallenboden durch.
 		// Beides sah wie fehlende Geometrie aus und war die Messung.
-		for (double X = Half + 500.0 - 3.0; X >= -Half; X -= 10.0)
+		for (double X = Half + SebboHq::PedestrianBridgeLengthCm - 3.0;
+			X >= -Half; X -= 10.0)
 		{
 			const FVector Oben = NachWelt(FVector(X, PortalY, BodenZ + 200.0));
 			FHitResult Treffer;
@@ -789,11 +858,14 @@ void AWiesbadenSebboHq::ProbeArrival() const
 		// meldete "steckt in der Geometrie (RoadCollisionStaticMesh)" - ein
 		// verbautes Portal, das es nicht gab. Dass es vorher gutging, lag nur
 		// daran, dass SteckenderKoerper das Landscape ausnimmt.
-		constexpr double StartXLokal = 400.0;
+		// Auf dem Platter-Gehweg am Beginn der privaten Bruecke starten.
+		// Bei +400 cm laege die Kapsel auf dem oeffentlichen Weg UNTER ihr.
+		const double StartXLokal = SebboHq::PedestrianBridgeLengthCm - 50.0;
 		double StartZ = BodenZ + 2.0;
 		{
 			FCollisionQueryParams PS(SCENE_QUERY_STAT(WbAnkunftProbeFussStart), true);
-			PS.AddIgnoredActor(this);
+			// Die Bruecke ist hier der Belag. Sie wegzufiltern wuerde den
+			// tieferen oeffentlichen Weg als Startflaeche waehlen.
 			const FVector Oben = NachWelt(
 				FVector(Half + StartXLokal, PortalY, BodenZ + 2000.0));
 			FHitResult Belag;

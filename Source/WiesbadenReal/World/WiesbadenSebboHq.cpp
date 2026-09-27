@@ -16,6 +16,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "World/WiesbadenCitySubsystem.h"
+#include "World/WiesbadenSebboHqElevator.h"
 #include "GIS/WiesbadenWorldBuilder.h"
 #include "GIS/RoadNetworkGenerator.h"
 
@@ -46,9 +47,16 @@ namespace
 	{
 		switch (Material)
 		{
-		case EHqMaterial::Glass:   return TEXT("/Game/Materials/City/M_WbLmSlate.M_WbLmSlate");
+		case EHqMaterial::Glass:   return TEXT("/Game/Materials/City/M_WbFacade_Glas.M_WbFacade_Glas");
 		case EHqMaterial::Metal:   return TEXT("/Game/Materials/City/M_WbLmSlate.M_WbLmSlate");
 		case EHqMaterial::Marking: return TEXT("/Game/Materials/City/M_WbLmWhite.M_WbLmWhite");
+		// Weisses Leuchtenfeld, NICHT Laternenglas: das Glas-Material ist ein
+		// Reflexions-Material und spiegelte bei Nacht den cyanen Regenhimmel in
+		// grossen Tafeln an der Fassade (gesehen 27.09., WbSeries_000/001).
+		case EHqMaterial::Lamp:    return TEXT("/Game/Materials/City/M_WbLmWhite.M_WbLmWhite");
+		case EHqMaterial::Wood:    return TEXT("/Game/Nerobergbahn/Materials/MI_Nb_NbHolz.MI_Nb_NbHolz");
+		case EHqMaterial::Fabric:  return TEXT("/Game/Nerobergbahn/Materials/MI_Nb_NbCreme.MI_Nb_NbCreme");
+		case EHqMaterial::Plant:   return TEXT("/Game/Materials/City/M_WbTree.M_WbTree");
 		default:                   return TEXT("/Game/Materials/City/M_WbLmWhite.M_WbLmWhite");
 		}
 	}
@@ -137,11 +145,74 @@ bool AWiesbadenSebboHq::ResolveGround(const FVector& WorldXY, double& OutZ) cons
 	return false;
 }
 
+void AWiesbadenSebboHq::UpdateInteriorLights()
+{
+	if (InteriorLights.IsEmpty())
+	{
+		return;
+	}
+
+	// Welche Etage sieht der Spieler gerade? Der BLICKPUNKT zaehlt, nicht der
+	// Pawn: in Messlaeufen filmt die Posen-Serie mit einer freien Kamera, und
+	// eine am Pawn haengende Beleuchtung liess die fotografierten Etagen dunkel
+	// (gesehen 27.09.). Im Spiel sitzt die Kamera ohnehin am Spieler, in der
+	// Figurprobe in der Figur - damit leuchtet ihr beim Aufstieg jede Etage.
+	// Root haengt am Ursprung und alle Teile tragen WELTKoordinaten
+	// (SetWorldLocation wie im Teile-Loop) - darum rechnet hier alles ueber
+	// BuiltBase statt ueber Relative-Transforms, und die Lichter werden per
+	// SetWorldLocation bewegt. Eine Relative-Fassung versetzte die Lichter
+	// beim ersten Etagenwechsel ans Welt-Origo (gesehen 27.09.).
+	double FussZ = Dimensions.SlabCm;
+	bool bBlickGefunden = false;
+	if (const UWorld* World = GetWorld())
+	{
+		if (const APlayerController* PC = World->GetFirstPlayerController())
+		{
+			FVector Blick;
+			FRotator Blickrichtung;
+			PC->GetPlayerViewPoint(Blick, Blickrichtung);
+			FussZ = Blick.Z - BuiltBase.Z;
+			bBlickGefunden = true;
+		}
+	}
+
+	const int32 Floor = FMath::Clamp(
+		FMath::FloorToInt32((FussZ - Dimensions.SlabCm) / Dimensions.FloorHeightCm),
+		0, Dimensions.FloorCount - 1);
+	if (Floor == LastInteriorLightFloor)
+	{
+		return;   // nur beim Etagenwechsel bewegen
+	}
+	LastInteriorLightFloor = Floor;
+
+	// Beweiszeile fuer Messlaeufe: welche Etage leuchtet und warum. Laeuft
+	// beim ERSTEN Aufruf immer (Startwert INDEX_NONE) und danach bei jedem
+	// Etagenwechsel - eine stille Sperre versteckte Fehler zu lange.
+	UE_LOG(LogWbSebboHq, Log, TEXT("Innenlicht auf Etage %d (%s, %.0f m ueber dem Turmfuss)."),
+		Floor, bBlickGefunden ? TEXT("Blickpunkt") : TEXT("ohne Blick, Vorgabe"), FussZ);
+
+	// Drei Zonen der Etage wie in BuildInnenausbau: Lobby, Buerowinkel,
+	// Sitzungswinkel - unmittelbar unter der Geschossdecke.
+	const double Z = Floor * Dimensions.FloorHeightCm + Dimensions.FloorHeightCm - 60.0;
+	static const FVector Zonen[] = {
+		FVector(-1000.0, 56.0, 0.0), FVector(1000.0, 0.0, 0.0), FVector(0.0, 1000.0, 0.0) };
+	for (int32 i = 0; i < InteriorLights.Num() && i < UE_ARRAY_COUNT(Zonen); ++i)
+	{
+		if (InteriorLights[i])
+		{
+			const FRotator Drehung(0.0, HeadingDegrees, 0.0);
+			InteriorLights[i]->SetWorldLocation(
+				BuiltBase + Drehung.RotateVector(FVector(Zonen[i].X, Zonen[i].Y, Z)));
+		}
+	}
+}
+
 void AWiesbadenSebboHq::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	if (bBuilt)
 	{
+		UpdateInteriorLights();
 		// Treppenprobe NACH dem Bauen, nicht im selben Bild (siehe
 		// SecondsSinceBuild): die Kollisionskoerper brauchen einen Takt.
 		if (!bProbed && SecondsSinceBuild >= 0.0f)
@@ -233,6 +304,7 @@ bool AWiesbadenSebboHq::ResolvePlateau(double& OutZ) const
 	Zugang.GarageEntranceWorldCm = GrundXY + Drehung.RotateVector(Layout.GarageTarget.CenterCm);
 	Zugang.PedestrianEntranceWorldCm = GrundXY + Drehung.RotateVector(Layout.PedestrianTarget.CenterCm);
 	Zugang.SearchRadiusCm = 5000.0;
+	Zugang.PreferredStreetName = SebboHqSite::AccessRoadName;
 
 	for (TActorIterator<AWiesbadenWorldBuilder> It(const_cast<UWorld*>(World)); It; ++It)
 	{
@@ -256,10 +328,67 @@ void AWiesbadenSebboHq::Build(const FVector& BaseWorld, const FRotator& BaseYaw)
 {
 	BuiltBase = BaseWorld;
 
+	// ANSCHLUSS AN DIE PLATTER STRASSE MESSEN.
+	//
+	// Die Fahrbahn faellt an den Oeffnungen entlang rund 6 Prozent; ein Deck
+	// auf fester Hoehe endet dort mit einer Kante bis 15 cm. Darum tastet der
+	// Actor die Oberflaeche an der Deckenkante ab und reicht sie dem Builder
+	// je Y-Spalte - das Deck laeuft dann stufenlos auf Strassenniveau zu
+	// ("ebenerdig mit der Platter Strasse"). Ohne Treffer bleibt alles auf
+	// dem nominellen Boden.
+	const double FloorZ = SebboHq::GetAccessFloorCm(Dimensions);
+	const double HalfLocal = Dimensions.FootprintCm * 0.5
+		+ FMath::Max(0.0, Dimensions.PodiumOversizeCm);
+	SebboHq::FSebboHqAnschluss Anschluss;
+	{
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(WbSebboAnschluss), true);
+		const auto Taste = [this, &BaseWorld, &BaseYaw, &Params, FloorZ](
+			double XLocal, double YLocal) -> double
+		{
+			const FVector Oben = BaseWorld + BaseYaw.RotateVector(FVector(XLocal, YLocal, 0.0))
+				+ FVector(0.0, 0.0, 800.0);
+			FHitResult Hit;
+			if (GetWorld()->LineTraceSingleByChannel(Hit, Oben,
+				Oben - FVector(0.0, 0.0, 1600.0), ECC_WorldStatic, Params))
+			{
+				// Baum, Mauer oder Absperrung neben der Deckenkante wuerde das
+				// Deck sonst unnoetig hochziehen - nur plausible Strassenhoehen
+				// durchlassen.
+				return FMath::Clamp(Hit.ImpactPoint.Z - BaseWorld.Z,
+					FloorZ - 120.0, FloorZ + 60.0);
+			}
+			return FloorZ;
+		};
+
+		const FSebboHqArrivalLayout Ziele = SebboHq::BuildArrivalFacilities(Dimensions);
+		const auto SpaltenAus = [&Taste](TArray<double>& Reihe, double XLocal,
+			const FHqArrivalTarget& Ziel, double RandZuschlag)
+		{
+			const double Rand = Ziel.ExtentCm.Y + RandZuschlag;
+			for (int32 s = 0; s < 3; ++s)
+			{
+				const double YLocal = Ziel.CenterCm.Y - Rand + 2.0 * Rand * (s + 0.5) / 3.0;
+				Reihe.Add(Taste(XLocal, YLocal));
+			}
+		};
+		SpaltenAus(Anschluss.GarageZCm, HalfLocal + SebboHq::GarageBridgeLengthCm,
+			Ziele.GarageTarget, 30.0);
+		SpaltenAus(Anschluss.PortalZCm, HalfLocal + SebboHq::PedestrianBridgeLengthCm,
+			Ziele.PedestrianTarget, 10.0);
+
+		UE_LOG(LogWbSebboHq, Log,
+			TEXT("Sebbo-Zufahrt: Anschluss Garage %.0f/%.0f/%.0f cm, Portal %.0f/%.0f/%.0f cm ")
+			TEXT("(Boden %.0f cm)."),
+			Anschluss.GarageZCm[0], Anschluss.GarageZCm[1], Anschluss.GarageZCm[2],
+			Anschluss.PortalZCm[0], Anschluss.PortalZCm[1], Anschluss.PortalZCm[2], FloorZ);
+	}
+
 	TArray<FHqPart> Teile;
 	SebboHq::BuildShell(Dimensions, Teile);
 	SebboHq::BuildVerticalCore(Dimensions, Teile);
-	const FSebboHqArrivalLayout ArrivalLayout = SebboHq::BuildArrivalFacilities(Dimensions);
+	SebboHq::BuildInnenausbau(Dimensions, Teile);
+	const FSebboHqArrivalLayout ArrivalLayout =
+		SebboHq::BuildArrivalFacilities(Dimensions, &Anschluss);
 	Teile.Append(ArrivalLayout.Parts);
 
 	for (const FHqPart& Teil : Teile)
@@ -279,12 +408,16 @@ void AWiesbadenSebboHq::Build(const FVector& BaseWorld, const FRotator& BaseYaw)
 		// Kollision war der Haltstreifen vor der Garage eine Schwelle quer in
 		// der Einfahrt - die Laufzeit-Sonde blieb mit dem Fahrzeugquader
 		// daran haengen, noch bevor sie die Oeffnung erreicht hatte.
-		Komponente->SetCollisionEnabled(Teil.Material == EHqMaterial::Marking
+		Komponente->SetCollisionEnabled(Teil.Material == EHqMaterial::Marking || !Teil.bCollision
 			? ECollisionEnabled::NoCollision
 			: ECollisionEnabled::QueryAndPhysics);
 		Komponente->RegisterComponent();
 		Komponente->SetWorldLocation(BaseWorld + BaseYaw.RotateVector(Teil.CenterCm));
-		Komponente->SetWorldRotation(BaseYaw);
+		// Teilweise gedrehte Teile (Handlauf): erst das Teil in sich drehen,
+		// dann den Turm in die Welt stellen. FRotator besitzt kein operator*
+		// fuer Komposition - Quaternionen: Q1 * Q2 wendet Q2 zuerst an.
+		Komponente->SetWorldRotation(
+			FRotator(BaseYaw.Quaternion() * Teil.Rotation.Quaternion()));
 		// Engine-Cube und -Cylinder sind 100 cm gross und um den Ursprung
 		// zentriert - die Skalierung ist darum schlicht Groesse/100.
 		Komponente->SetWorldScale3D(Teil.SizeCm / 100.0);
@@ -295,6 +428,54 @@ void AWiesbadenSebboHq::Build(const FVector& BaseWorld, const FRotator& BaseYaw)
 				Komponente->SetMaterial(0, Material);
 			}
 		}
+		Parts.Add(Komponente);
+	}
+
+	// DACHAUFBAUTEN: Werbe-Logo, Antennen und Satellitenschuessel sind
+	// BLENDER-Assets (Tools/Blender/make_sebbo_dach.py, Import ueber
+	// Tools/import_sebbo_dach.py) und keine Primitive. Ohne die importierten
+	// Meshes (frischer Checkout) faellt der Turm nicht aus - die Silhouette
+	// fehlt dann nur, mit Warnung im Log.
+	TArray<SebboHq::FSebboHqDachProp> DachProps;
+	// Innenbeleuchtung: drei Punktlichter statt 45 - sie folgen dem Spieler
+	// in die naechste Etage (UpdateInteriorLights), warmweiss wie Bueros.
+	InteriorLights.SetNum(3);
+	const FLinearColor Innenlicht(1.0f, 0.93f, 0.80f);
+	// DEZENTER als die Leuchturme der Anfahrt: 6000 cd mit der vollen
+	// Volumetric-Streuung der Leitlichter fuehrten in Innenraeumen zu einem
+	// weissen Nebelball (Ego-Bild der Figurprobe, 27.09.).
+	CreateGuidanceLight(InteriorLights[0], TEXT("InnenlichtLobby"),
+		FVector(-1000.0, 56.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 1500.0f, 900.0f);
+	CreateGuidanceLight(InteriorLights[1], TEXT("InnenlichtBuero"),
+		FVector(1000.0, 0.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 1500.0f, 900.0f);
+	CreateGuidanceLight(InteriorLights[2], TEXT("InnenlichtSitzung"),
+		FVector(0.0, 1000.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 1500.0f, 900.0f);
+	for (UPointLightComponent* Licht : InteriorLights)
+	{
+		if (Licht)
+		{
+			Licht->SetVolumetricScatteringIntensity(0.25f);
+		}
+	}
+
+	SebboHq::BuildDachaufbauten(Dimensions, DachProps);
+	for (const SebboHq::FSebboHqDachProp& Prop : DachProps)
+	{
+		UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *Prop.MeshPfad);
+		if (!Mesh)
+		{
+			UE_LOG(LogWbSebboHq, Warning, TEXT("Dach-Asset fehlt: %s"), *Prop.MeshPfad);
+			continue;
+		}
+		UStaticMeshComponent* Komponente = NewObject<UStaticMeshComponent>(this);
+		Komponente->SetStaticMesh(Mesh);
+		Komponente->SetupAttachment(Root);
+		// MIT Kollision wie die Huellflaechen: auf dem Dach laeuft der Spieler
+		// herum, Mast und Schuessel sollen nicht passierbar sein.
+		Komponente->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		Komponente->RegisterComponent();
+		Komponente->SetWorldLocation(BaseWorld + BaseYaw.RotateVector(Prop.PosCm));
+		Komponente->SetWorldRotation(BaseYaw + FRotator(0.0, Prop.YawDeg, 0.0));
 		Parts.Add(Komponente);
 	}
 
@@ -321,12 +502,31 @@ void AWiesbadenSebboHq::Build(const FVector& BaseWorld, const FRotator& BaseYaw)
 		ArrivalLayout.HelicopterTarget.CenterCm + FVector(0.0, 0.0, 150.0), BaseWorld, BaseYaw,
 		FLinearColor(0.25f, 1.0f, 0.5f), 6000.0f, 2600.0f);
 
+	FActorSpawnParameters LiftSpawn;
+	LiftSpawn.Owner = this;
+	Elevator = GetWorld()->SpawnActor<AWiesbadenSebboHqElevator>(BaseWorld, BaseYaw, LiftSpawn);
+	if (Elevator)
+	{
+		Elevator->Initialize(Dimensions);
+	}
+
 	UE_LOG(LogWbSebboHq, Log,
 		TEXT("Sebbo-Hauptsitz gebaut bei (%.0f, %.0f, %.0f): %d Bauteile, %d Geschosse, ")
 		TEXT("%.0f m hoch, Landeplatz auf %.0f m."),
 		BaseWorld.X, BaseWorld.Y, BaseWorld.Z, Parts.Num(), Dimensions.FloorCount,
 		SebboHq::GetRoofHeightCm(Dimensions) / 100.0,
 		SebboHq::GetHelipadHeightCm(Dimensions) / 100.0);
+}
+
+FVector AWiesbadenSebboHq::GetHelipadWorldLocation() const
+{
+	// DERSELBE Ausdruck, mit dem oben das Ankunftsvolumen und das Lande-
+	// licht gesetzt werden: Fusspunkt des Turms plus der Gierdrehung
+	// folgende lokale Lage des Landeplatzes. Ein eigener Ausdruck hier waere
+	// die dritte Kopie derselben Zahl.
+	const FSebboHqArrivalLayout Layout = SebboHq::BuildArrivalFacilities(Dimensions);
+	const FRotator Drehung(0.0, HeadingDegrees, 0.0);
+	return BuiltBase + Drehung.RotateVector(Layout.HelicopterTarget.CenterCm);
 }
 
 void AWiesbadenSebboHq::CreateArrivalVolume(UBoxComponent*& OutVolume, FName Name,

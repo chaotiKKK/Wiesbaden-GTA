@@ -72,9 +72,29 @@ struct FWiesbadenHeliMastSample
 	float MainHubOffsetCm = 0.0f;
 	float LowerHubOffsetCm = 0.0f;
 
-	/** Seitenabstand Blatt-Drehpunkt -> Naben-Drehpunkt (cm); der Kreisbahn-Detektor. */
+	/**
+	 * Angewandte Achsenkorrektur, also der Seitenabstand des Blatt-Component-
+	 * Ursprugs von der Nabe (cm).
+	 *
+	 * WICHTIG, die Zahl ist KEIN Fehler und kein Kreisbahn-Detektor mehr: der
+	 * Component-Ursprung traegt seit dem 26.09.2026 die Korrektur, mit der der
+	 * gemessene Drehpunkt des Mesh auf die Rotorstangenachse gelegt wird
+	 * (AWiesbadenHelicopter::GetRotorDrehpunktCm, ComputeRotorMountOffset).
+	 * Beim Ka-52 sind das 2,6 cm (oben) und 5,3 cm (unten) - genau die Werte,
+	 * die man braucht, damit die Scheibe auf der Stange laeuft. Vorher stand
+	 * hier "Blatt-Drehpunkte X cm ab Nabe", und das sah nach dem gerade
+	 * behobenen Fehler aus. Die Wirkung steht in MainAxisResidualCm.
+	 */
 	float MainBladeOffsetCm = 0.0f;
 	float LowerBladeOffsetCm = 0.0f;
+
+	/**
+	 * Seitenabstand des GEDREHTEN Mesh-Drehpunkts von der Rotorstangenachse
+	 * (cm). Das ist die eigentliche Forderung und muss 0 sein - so, wie
+	 * "Naben 0,0 cm ab Mastachse" fuer die Nabe.
+	 */
+	float MainAxisResidualCm = 0.0f;
+	float LowerAxisResidualCm = 0.0f;
 
 	/**
 	 * Blattstern-Mitte im RUMPF-Frame (cm): x/y quer zur Mastachse, z auf der Stange.
@@ -181,6 +201,19 @@ public:
 
 	/** Kameramodus (Follow/Orbit/Cockpit) - fuer die Cockpit-Instrumententafel. */
 	virtual EWiesbadenVehicleCameraMode GetCameraMode() const = 0;
+
+	// -- Traktions-Kontrollleuchten (HUD) ---------------------------------
+	// Reine MODELL-Ausgaben der Fahrphysik (durchdrehende Antriebsraeder /
+	// blockierende Raeder), vom HUD nur KONSUMIERT - kein Verhalten haengt
+	// daran. Standard false, damit nur das Fahrzeug, das die Flags fuehrt
+	// (der Kaefer mit dem eigenen Einspurmodell), sie ueberschreiben muss;
+	// der ChaosCar hat keine solchen Flags und bleibt bei false.
+
+	/** Drehen die Antriebsraeder gerade durch (Radspin)? */
+	virtual bool IsWheelSpinning() const { return false; }
+
+	/** Blockieren die Raeder gerade (Bremse ueber der Haftgrenze)? */
+	virtual bool IsWheelLocked() const { return false; }
 };
 
 UINTERFACE(MinimalAPI)

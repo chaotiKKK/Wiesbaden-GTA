@@ -6,6 +6,7 @@
 
 #include "GIS/RoadNetworkTypes.h"
 
+#include "Vehicles/WiesbadenVehiclePhysics.h"
 #include "WiesbadenTrafficSimulation.generated.h"
 
 struct FWiesbadenTrafficLightSystem;
@@ -135,6 +136,42 @@ struct WIESBADENREAL_API FTrafficVehicle
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	float SteerAngleRad = 0.0f;
 
+	/** Fahrzeugtyp (Index in WiesbadenTrafficCars::Types()), beim Einsetzen aus der Id. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 TypeIndex = 0;
+
+	/** Tempo der Karosserie aus der Fahrphysik (cm/s) - das, was man sieht. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	double BodySpeedCmS = 0.0;
+
+	/** Gerollter Winkel der Raeder (rad, 0..2 pi): Physik-Tempo durch Radradius. */
+	float WheelSpinRad = 0.0f;
+
+	/** Nicken und Wanken der Karosserie aus den Beschleunigungen (Grad) - wie
+	 *  beim Spielerauto (AWiesbadenCar::ComputeBodyTilt), nur an der Karosserie. */
+	float BodyPitchDeg = 0.0f;
+	float BodyRollDeg = 0.0f;
+
+	/** Steigung der Fahrbahn unter dem Fahrzeug (Grad, + = bergauf). */
+	float SlopePitchDeg = 0.0f;
+
+	/** Solltempo des Vorticks (fuer die Sollbeschleunigung des Fahrers). */
+	double PrevSollSpeedCmS = 0.0;
+
+	/**
+	 * Die Fahrphysik des Spielerautos (FWiesbadenVehiclePhysics) mit den Werten
+	 * des Vorbilds - ein Fahrer am Steuer folgt der Sollbahn
+	 * (WiesbadenTrafficCars::ComputeDriverInput).
+	 */
+	FWiesbadenVehiclePhysics Physics;
+	bool bPhysicsInitialized = false;
+
+	/**
+	 * Steht am Ende einer Sackgasse und wartet, bis der Spieler nicht mehr
+	 * hinsieht - erst dann verschwindet es (vorher: mitten im Bild).
+	 */
+	bool bWaitingAtDeadEnd = false;
+
 	/** False bis zum ersten Tick; dann wird die Karosserie auf die Bahn gesetzt. */
 	bool bBodyInitialized = false;
 
@@ -152,6 +189,36 @@ struct WIESBADENREAL_API FTrafficVehicle
 	 */
 	bool bWasApproachingSignal = false;
 	bool bWasHeldAtRed = false;
+
+	/** Fahrbild-Messung: letzte Lenkrichtung (-1/0/+1) und seitliches Nachziehen
+	 *  des Sicherheitsnetzes im letzten Tick (cm). */
+	int8 SteerSign = 0;
+	float LastRecoverCm = 0.0f;
+
+	/** Weicher Spurwechsel: Querversatz der Sollposition zur neuen Spur beim
+	 *  Wechsel (cm, klingt ueber LaneChangeSeconds ab) und die Zeit seither. */
+	float LaneShiftStartCm = 0.0f;
+	float LaneShiftElapsed = 0.0f;
+
+	/** Karosserie auf der Bahn (bBodyOnPath): um so viel liegt sie HINTER der
+	 *  Sollposition (cm, entlang der Bahn; negativ = davor), und die zuletzt
+	 *  verlassene Bahn - ihre Hinterachse steht dort oft noch. */
+	float BodyLagCm = 0.0f;
+	bool bPrevOnLane = true;
+	int32 PrevEdgeIndex = INDEX_NONE;
+
+	/**
+	 * ZUSAMMENSTOSS mit dem Spielerauto (ApplyPlayerImpact): Versatz und
+	 * Drehung der Karosserie gegen ihre Fahrlinie samt Rutsch- und
+	 * Drehgeschwindigkeit. Der Fahrer bremst, bleibt kurz stehen und faehrt
+	 * dann langsam in seine Spur zurueck (StepKnock).
+	 */
+	FVector2D KnockOffsetCm = FVector2D::ZeroVector;
+	FVector2D KnockVelCmS = FVector2D::ZeroVector;
+	float KnockYawRad = 0.0f;
+	float KnockYawRateRadS = 0.0f;
+	float KnockRestSeconds = 0.0f;
+	bool bKnocked = false;
 };
 
 /** Parameter der Verkehrs-Simulation. */
@@ -208,6 +275,14 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	bool bKeepJunctionsClear = true;
 
 	/**
+	 * Haltelinie je Zufahrt aus der Knotengeometrie statt pauschal 350 cm vor
+	 * dem Spurende (FWiesbadenTrafficSimulation::ComputeStopSetbackCm). Aus =
+	 * alter Stand, fuer den A/B-Vergleich (-WbHaltelinienAlt).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	bool bGeometricStopLines = true;
+
+	/**
 	 * Kreuzungskonflikte ueberhaupt beachten.
 	 *
 	 * Abschaltbar, damit die Wirkung der Regel MESSBAR bleibt - so wie die
@@ -221,6 +296,14 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
 	bool bJunctionConflicts = true;
+
+	/**
+	 * Sackgassen meiden (an): an einer Kreuzung wird eine Sackgasse (siehe
+	 * DeadEndLanes) nur gewaehlt, wenn es keine andere Fortsetzung gibt, und
+	 * dort wird nicht eingesetzt. Nur zum MESSEN abschaltbar: -WbSackgassenErlaubt.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	bool bAvoidDeadEnds = true;
 
 	/**
 	 * Platz, den es hinter der Kreuzung geben muss, in cm.
@@ -237,6 +320,28 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "100.0"))
 	double JunctionExitSpaceCm = 480.0;
+
+	/**
+	 * KREUZUNG FREI HALTEN, ernst gemeint (an): eingefahren wird erst, wenn
+	 * hinter der Kreuzung mindestens MinGapCm + VehicleHalfLengthCm frei sind
+	 * (sonst gilt JunctionExitSpaceCm), und die Haltelinie einer Zufahrt haelt
+	 * auch zu ihrer EIGENEN Zielspur Abstand.
+	 *
+	 * GEMESSEN am 26.09.2026: 91 von 92 "Fahrzeuge ineinander"-Paaren lagen an
+	 * Kreuzungen, 51 davon zwischen einem Wartenden vor der Ecke und einem
+	 * Fahrzeug, das 1,6-4 m weit in der Querstrasse stand. Der Folgeabstand
+	 * gilt Mitte zu Mitte (700 cm): wer bei 480 cm freier Zielspur einfuhr,
+	 * musste 2 m VOR deren Anfang halten - mitten in der Kreuzung. Und die
+	 * Haltelinie nahm die eigene Zielspur ausdruecklich aus.
+	 * Gilt nur an echten Kreuzungen (mindestens drei Arme), nicht an den
+	 * Stossstellen zerteilter Strassen, und ein Fahrzeug auf der Zielspur
+	 * zaehlt mit seinem Bremsweg: streng ueberall kostete an der
+	 * Albrecht-Duerer-Strasse (8,9-m-Stuecke) so viel Fluss, dass der Anteil
+	 * Stehender von 29 auf 40 % stieg.
+	 * Nur zum Messen abschaltbar: -WbKreuzungAlt.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic")
+	bool bStrictJunctionClearance = true;
 
 	/**
 	 * Halbe Laenge und halbe Breite eines Verkehrsfahrzeugs in cm.
@@ -341,6 +446,90 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic", meta = (ClampMin = "10.0"))
 	double MaxDecelerationCmS2 = 800.0;
+
+	/**
+	 * VORAUSSCHAUENDES Folgen (Gipps): mit dieser Verzoegerung (cm/s^2) plant
+	 * ein Fahrer, hinter seinem Vordermann zum Stehen zu kommen, und mit dieser
+	 * Reaktionszeit (s) haelt er Abstand.
+	 *
+	 * Frueher loeste die Abstandsregel nur den NAECHSTEN Tick exakt: der
+	 * Folger fuhr mit 7 m Mittenabstand hinterher (bei 50 km/h eine halbe
+	 * Sekunde) und bremste, wenn der Vordermann stand, in EINEM Tick von 50 auf
+	 * 0. Die Physik-Karosserie kann das nicht - sie schwang nach, das
+	 * Sicherheitsnetz zog sie quer zurueck, und genau das war im Spiel als
+	 * Schwanken, Rutschen und Ineinanderfahren zu sehen. Die exakte Regel
+	 * bleibt als Notbremse darunter.
+	 *
+	 * 350 cm/s^2 ist ein zuegiges, aber alltaegliches Bremsen; 0,6 s ergeben im
+	 * Gleichgewicht rund 0,9 s Zeitluecke plus MinGapCm.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrbild", meta = (ClampMin = "50.0"))
+	double ComfortDecelerationCmS2 = 350.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrbild", meta = (ClampMin = "0.0"))
+	double FollowReactionSeconds = 0.6;
+
+	/**
+	 * Dauer eines Spurwechsels (s): die Sollposition zieht in einem weichen
+	 * S-Bogen hinueber statt in einem Tick 3,5 m quer zu springen.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrbild", meta = (ClampMin = "0.5"))
+	double LaneChangeSeconds = 3.5;
+
+	/** Unter diesem Tempo (cm/s) wechselt niemand die Spur - kein Hopsen im stehenden Stau. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrbild", meta = (ClampMin = "0.0"))
+	double LaneChangeMinSpeedCmS = 280.0;
+
+	/** A/B: altes Fahrbild (exakte Abstandsregel, Spurwechsel als Sprung, Rot sofort), -WbFahrbildAlt. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrbild")
+	bool bSmoothDriving = true;
+
+	/**
+	 * KAROSSERIE AUF DER BAHN: Hinter- und Vorderachse liegen auf der
+	 * Fahrlinie, die Ausrichtung ist ihre Verbindung, der Radeinschlag folgt
+	 * aus der Kruemmung. Die Fahrphysik bleibt fuer das LAENGS-Fahren (Motor,
+	 * Gaenge, Bremse, Gewichtsverlagerung) - die Karosserie laeuft mit ihrem
+	 * physikalischen Tempo entlang der Bahn hinter der Sollposition her.
+	 *
+	 * Vorher lenkte die Karosserie frei einem Zielpunkt nach, schnitt in den
+	 * engen Kreuzungen Ecken, das Sicherheitsnetz zog sie QUER zurueck, und
+	 * wer so zum Stehen kam, stand schraeg. Gemessen: 26-31 cm seitliches
+	 * Nachziehen je Fahrzeug-Sekunde, Gier-Abweichung RMS 25-28 Grad, 10-17 %
+	 * schraeg im Stand, stehende Autos bis 64 Grad quer zur Spur.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrbild")
+	bool bBodyOnPath = true;
+
+	/** Groesster Nachlauf der Karosserie hinter der Sollposition (cm) - mehr wird
+	 *  unsichtbar mitgezogen, damit Kolonnen nicht ineinander rutschen. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrbild", meta = (ClampMin = "0.0"))
+	double MaxBodyLagCm = 200.0;
+
+	/**
+	 * ZUSAMMENSTOSS mit dem Spielerauto: Stosszahl (0 = plastisch, 1 =
+	 * elastisch; Blech knautscht, darum wenig), Rutschverzoegerung der
+	 * querstehenden Reifen (cm/s^2, ~0,7 g), Abbau der Drehung (rad/s^2), wie
+	 * lange der Fahrer nach dem Stillstand erschrocken stehen bleibt (s), auf
+	 * welcher Strecke er in seine Spur zurueckfaehrt (cm) und wie langsam
+	 * (cm/s).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double KnockRestitution = 0.2;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "50.0"))
+	double KnockFrictionCmS2 = 700.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "0.1"))
+	double KnockYawDampingRadS2 = 4.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "0.0"))
+	double KnockWaitSeconds = 1.5;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "100.0"))
+	double KnockRecoverDistanceCm = 700.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Zusammenstoss", meta = (ClampMin = "50.0"))
+	double KnockRecoverSpeedCmS = 300.0;
 
 	// (Die Regel dazu steht als RequiredLaneChangeGapCm weiter unten.)
 
@@ -521,6 +710,37 @@ struct WIESBADENREAL_API FWiesbadenTrafficSettings
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrphysik", meta = (ClampMin = "0.0"))
 	double DrivingBodyDeviationCm = 120.0;
+
+	/**
+	 * Karosserie mit der Fahrphysik des Spielerautos: Gaenge, Reifen-
+	 * Seitenkraefte, Radlastverlagerung - gelenkt und gefahren von einem
+	 * Fahrer, der der Sollbahn folgt (WiesbadenTrafficCars). false = das
+	 * alte kinematische Einspurmodell (StepBicycleModel).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Fahrphysik")
+	bool bPhysicsBodies = true;
+
+	// -- Nicht vor den Augen des Spielers ----------------------------------
+	//
+	// Fahrzeuge setzten an jedem Spuranfang im 600-m-Umkreis ein und
+	// verschwanden am Ende jeder Sackgasse - auch mitten im Bild. Jetzt gilt:
+	// was der Spieler sehen koennte, entsteht und verschwindet nicht.
+
+	/**
+	 * Sichtweite des Verkehrs in Metern: so weit zeichnet ihn
+	 * UTrafficVehicleSpawnerComponent. Im Blickkegel und naeher als das setzt
+	 * kein Fahrzeug ein und verschwindet keines.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Sicht", meta = (ClampMin = "50.0"))
+	double DrawDistanceMeters = 550.0;
+
+	/** Zuschlag auf das halbe Blickfeld (Grad): Bildrand, Umsehen, Kurven. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Sicht", meta = (ClampMin = "0.0", ClampMax = "90.0"))
+	double ViewConeMarginDeg = 20.0;
+
+	/** So nah gilt alles als sichtbar, egal wohin die Kamera schaut (m). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Traffic|Sicht", meta = (ClampMin = "0.0"))
+	double AlwaysVisibleMeters = 15.0;
 };
 
 /** Momentaufnahme der Simulation (pro Tick, fuer HUD/Blueprint). */
@@ -601,6 +821,14 @@ struct WIESBADENREAL_API FWiesbadenTrafficReport
 
 	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
 	int32 LaneChangeTightBoth = 0;
+
+	/** Einsatzorte, die im letzten Tick verworfen wurden, weil der Spieler sie sehen koennte. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 SpawnsSkippedInView = 0;
+
+	/** Fahrzeuge, die am Sackgassen-Ende warten, bis niemand hinsieht. */
+	UPROPERTY(BlueprintReadOnly, Category = "Traffic")
+	int32 WaitingAtDeadEnd = 0;
 };
 
 /**
@@ -828,7 +1056,45 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 
 		/** Fahrzeuge, die an mindestens einem Paar beteiligt sind. */
 		int32 VehiclesInvolved = 0;
+
+		/**
+		 * Davon: an einer Kreuzung - mindestens eines auf einer Verbindung
+		 * oder naeher als JunctionZoneCm an Anfang/Ende seiner Spur.
+		 */
+		int32 AtJunction = 0;
+
+		/**
+		 * Davon: nur mit den ECHTEN Massen des Typs ineinander (Tripo-Modell,
+		 * Ursprung in der Radstandmitte), mit der Einheitsbox
+		 * VehicleHalfLengthCm/VehicleHalfWidthCm nicht.
+		 */
+		int32 OnlyRealSize = 0;
+
+		/** Davon: mehr als 2,5 m Hoehenunterschied - Bruecke ueber Strasse, kein
+		 *  echtes Ineinander (die Pruefung selbst bleibt in der Ebene). */
+		int32 DifferentLevels = 0;
+
+		/** Die ersten Paare im Einzelnen (Zustand beider Fahrzeuge), fuer das Log. */
+		TArray<FString> Samples;
 	};
+
+	/** Bis hierher (cm) vor dem Ende bzw. nach dem Anfang einer Spur zaehlt ein Paar als "an der Kreuzung". */
+	static constexpr double JunctionZoneCm = 1500.0;
+
+	/**
+	 * Die sichtbare Grundflaeche eines Fahrzeugs: Mitte, Fahrtrichtung, halbe
+	 * Laenge und Breite. Mit bBody die Karosserie aus der Fahrphysik und die
+	 * echten Masse des Typs (WiesbadenTrafficCars::Types(): Ursprung in der
+	 * Radstandmitte, vorn FrontCm, hinten RearCm), sonst die Sollposition.
+	 * Datenrein (Test Traffic.JunctionConflict).
+	 */
+	static void GetVehicleFootprint(const FTrafficVehicle& Vehicle, bool bBody,
+		FVector& OutCenter, FVector& OutForward, double& OutHalfLengthCm, double& OutHalfWidthCm);
+
+	/** Wie AreVehiclesOverlapping, aber mit eigener Groesse je Fahrzeug. */
+	static bool AreBoxesOverlapping(
+		const FVector& CenterA, const FVector& ForwardA, double HalfLengthA, double HalfWidthA,
+		const FVector& CenterB, const FVector& ForwardB, double HalfLengthB, double HalfWidthB);
 
 	/**
 	 * Zaehlt die ineinander steckenden Paare (O(n^2), nur fuer die Diagnose).
@@ -837,6 +1103,39 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	 * Die Diagnose ruft es alle 15 s.
 	 */
 	void CountVehicleOverlaps(FOverlapReport& Out) const;
+
+	/**
+	 * FAHRBILD: Wie natuerlich bewegen sich die Karosserien? Summen seit dem
+	 * letzten Abholen (TakeMotionQuality). Jede Zahl steht fuer ein Symptom,
+	 * das im Spiel zu sehen war: Lenkzappeln, seitliches Rutschen (das
+	 * Sicherheitsnetz zieht die Karosserie quer), schraeg stehende oder
+	 * schwankende Karosserien, Bremsungen der Sollposition, die kein Auto
+	 * fahren kann, und Spurwechsel mitten im Stau.
+	 */
+	struct FMotionQuality
+	{
+		double AllSeconds = 0.0;         // Fahrzeug-Sekunden gesamt
+		double DrivingSeconds = 0.0;     // davon Karosserie schneller als 3 m/s
+		int32 SteerReversals = 0;        // Lenk-Richtungswechsel (|Einschlag| > 1 Grad) in Fahrt
+		double SlideCm = 0.0;            // seitliches Nachziehen durch das Sicherheitsnetz
+		double YawErrSqDegS = 0.0;       // (Karosserie- minus Bahnrichtung)^2 * dt, alle Fahrzeuge
+		double StandYawBad = 0.0;        // Fahrzeug-Sekunden im Stand mit mehr als 10 Grad Schraeglage
+		double OffsetSqCmS = 0.0;        // Seitenversatz^2 * dt
+		double RollSqDegS = 0.0;         // Wanken^2 * dt (in Fahrt)
+		double PitchSqDegS = 0.0;        // Nicken^2 * dt (in Fahrt)
+		int32 HardSollBrakes = 0;        // Ticks mit Soll-Verzoegerung ueber 8 m/s^2
+		double MaxSollDecelCmS2 = 0.0;
+		int32 LaneChanges = 0;
+		int32 LaneChangesSlow = 0;       // davon unter einem Drittel des Wunschtempos
+	};
+	int32 GetLifetimePlayerImpacts() const { return LifetimePlayerImpacts; }
+
+	FMotionQuality TakeMotionQuality()
+	{
+		const FMotionQuality Out = Motion;
+		Motion = FMotionQuality();
+		return Out;
+	}
 
 	/**
 	 * Stecken zwei Fahrzeuge ineinander? Datenrein, ohne Netz und ohne Welt.
@@ -866,6 +1165,17 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	 * @param OutClearOnA Bogenlaenge auf A, ab der A den Punkt passiert hat.
 	 * @param OutClearOnB Dasselbe auf B.
 	 */
+	/**
+	 * Kommen sich zwei Wege durch einen Knoten naeher als MinDistanceCm (eine
+	 * Autobreite), OHNE sich zu schneiden? Dann passen zwei Autos dort nicht
+	 * nebeneinander - FindConnectionConflict sieht nur Schnittpunkte. Gemessen am
+	 * Bahnhofsplatz: zwei Autos standen auf Wegen 1,3 m nebeneinander im Knoten.
+	 * OutClear* = Bogenlaenge, ab der der jeweils andere den engen Abschnitt
+	 * verlassen hat. Datenrein (Test Traffic.Fahrbild).
+	 */
+	static bool FindPathProximity(const FLaneConnection& A, const FLaneConnection& B,
+		double MinDistanceCm, double& OutClearOnA, double& OutClearOnB);
+
 	static bool FindConnectionConflict(const FLaneConnection& A, const FLaneConnection& B,
 		double& OutClearOnA, double& OutClearOnB);
 
@@ -934,6 +1244,40 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 		double CurrentSpeedCmS, double DistanceToLineCm,
 		double StopBufferCm, double DecelerationCmS2);
 
+	/** Ein Wegstueck, auf dem an einer Kreuzung ein anderes Fahrzeug steht oder faehrt. */
+	struct FStopObstacle
+	{
+		FVector From = FVector::ZeroVector;
+		FVector To = FVector::ZeroVector;
+	};
+
+	/**
+	 * HALTELINIE einer Zufahrt: Wie weit vor dem Spurende (Fahrzeugmitte) muss
+	 * ein wartendes Fahrzeug stehen, damit es NICHTS von dem beruehrt, was an
+	 * diesem Knoten sonst faehrt oder wartet?
+	 *
+	 * Frueher hielt jede Zufahrt pauschal 350 cm vor ihrem Spurende. Im Netz
+	 * enden die Spuren aber verschieden nah am Knoten: an spitz zulaufenden
+	 * Armen stand der Wartende der einen Zufahrt im Wartebereich der anderen,
+	 * und wo die Spur dicht an den Querweg reicht, im Weg der Abbieger. Genau
+	 * das war das "Verkeilen" an Kreuzungen (gemessen am Bahnhofsplatz: alle
+	 * 13-19 Paare je Diagnose an Kreuzungen, meist beide stehend).
+	 *
+	 * Geschoben wird in StepCm-Schritten von BaseCm bis hoechstens MaxCm (und
+	 * nie ueber den Spuranfang); die Grundflaeche ist ein Rechteck halber Laenge
+	 * HalfLengthCm und halber Breite HalfWidthCm, jedes Hindernis ein Streifen
+	 * halber Breite ObstacleHalfWidthCm um sein Wegstueck. Findet sich keine
+	 * freie Stelle (Zusammenfuehrung, die ueber viele Meter eng parallel
+	 * laeuft), bleibt es bei BaseCm und bOutResolved ist false.
+	 * Datenrein (Test Traffic.StopLines).
+	 */
+	static double ComputeStopSetbackCm(const TArray<FVector>& Approach, double LengthCm,
+		const TArray<FStopObstacle>& Obstacles, double BaseCm, double MaxCm, double StepCm,
+		double HalfLengthCm, double HalfWidthCm, double ObstacleHalfWidthCm, bool& bOutResolved);
+
+	/** Haltelinie einer Spur: Abstand der wartenden Fahrzeugmitte vor dem Spurende (cm). */
+	double GetStopDistanceCm(int32 LaneId) const;
+
 	/** Ehrliches, verkehrsUNABHAENGIGES Signal: war seit Initialize je eine von
 	 *  einer Ampel kontrollierte Verbindung rot? False heisst bei geladener Stadt:
 	 *  die Sim ist gar nicht an das Ampelsystem gekoppelt (SetTrafficLightSystem
@@ -961,6 +1305,28 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	 * Fahrzeug.
 	 */
 	void SetObserverLocation(const FVector& InLocation);
+
+	/**
+	 * Blick des Spielers (Kamera): Ort, Richtung, waagerechtes Blickfeld.
+	 * Setzt zugleich den Bezugspunkt (SetObserverLocation). Ohne Blick
+	 * (datenreine Tests) gilt nichts als sichtbar.
+	 */
+	void SetObserverView(const FVector& InLocation, const FVector& InViewDirection, float HorizontalFovDeg);
+
+	/**
+	 * Koennte der Spieler diesen Punkt sehen? Im Blickkegel (halbes Blickfeld
+	 * plus Zuschlag) und naeher als die Sichtweite - oder ganz nah.
+	 * Datenrein (Test Vehicles.Traffic.SpawnOutOfView).
+	 */
+	static bool IsPointInView(const FVector& Point, const FVector& ViewLocation, const FVector& ViewDirection,
+		double CosHalfCone, double DrawDistanceCm, double AlwaysVisibleCm);
+
+	/** IsPointInView mit dem gesetzten Blick; false ohne Blick. */
+	bool IsVisibleToObserver(const FVector& Point) const;
+
+	/** Seit Initialize: verworfene Einsatzorte in Sicht / Wartende an Sackgassen. */
+	int64 GetLifetimeSpawnsSkippedInView() const { return LifetimeSpawnsSkippedInView; }
+	int64 GetLifetimeDeadEndWaits() const { return LifetimeDeadEndWaits; }
 
 	/**
 	 * Meldet das Spielerfahrzeug als Hindernis.
@@ -999,6 +1365,65 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 	 * Datenrein und statisch, damit die Regel direkt geprueft werden kann -
 	 * die Zahl entscheidet, ob ueberhaupt je ueberholt wird.
 	 */
+	/**
+	 * Vorausschauendes Folgetempo nach Gipps (cm/s): so schnell darf der Folger
+	 * fahren, dass er mit DecelCmS2 hinter dem Vordermann (der ebenso bremsen
+	 * koennte) zum Stehen kaeme - nach einer Reaktionszeit ReactionSeconds.
+	 * Gap und MinGap von Mitte zu Mitte. Im Gleichgewicht haelt das
+	 * MinGap + 1,5 * Tempo * Reaktionszeit. Datenrein (Test Traffic.Fahrbild).
+	 */
+	static double SafeFollowSpeedCmS(double GapCm, double MinGapCm, double SpeedCmS,
+		double LeaderSpeedCmS, double DecelCmS2, double ReactionSeconds);
+
+	/** Querversatz eines weichen Spurwechsels nach Elapsed von Duration Sekunden:
+	 *  StartCm * (1 - s), s = Glaettungsstufe 5. Ordnung (Tempo und Querbeschleunigung
+	 *  beginnen und enden bei null). Datenrein. */
+	static double LaneShiftOffsetCm(double StartCm, double Elapsed, double Duration);
+
+	/** Ergebnis eines Stosses (ComputeImpact): Geschwindigkeitsaenderungen beider
+	 *  Fahrzeuge (cm/s, Ebene), Aenderung der Gierrate des Verkehrsautos (rad/s,
+	 *  wie BodyYawRad: von +X nach +Y positiv) und der Stossimpuls (kg*cm/s). */
+	struct FImpactResult
+	{
+		FVector2D PlayerDeltaVCmS = FVector2D::ZeroVector;
+		FVector2D TrafficDeltaVCmS = FVector2D::ZeroVector;
+		double TrafficDeltaYawRateRadS = 0.0;
+		double ImpulseKgCmS = 0.0;
+	};
+
+	/**
+	 * Stoss zweier Fahrzeuge in der Ebene nach Impulserhaltung: das Spielerauto
+	 * als Masse, das Verkehrsauto als Koerper mit Masse und Gier-
+	 * Traegheitsmoment. Trifft der Stoss ausserhalb seiner Mitte, dreht es sich
+	 * (Hebelarm r x n). NormalIntoTraffic zeigt vom Spieler IN das
+	 * Verkehrsauto. False, wenn sie sich schon voneinander entfernen.
+	 * Datenrein (Test Traffic.Zusammenstoss).
+	 */
+	static bool ComputeImpact(const FVector2D& ContactCm, const FVector2D& NormalIntoTraffic,
+		const FVector2D& PlayerVelocityCmS, double PlayerMassKg,
+		const FVector2D& TrafficCenterCm, const FVector2D& TrafficVelocityCmS,
+		double TrafficMassKg, double TrafficYawInertiaKgM2, double Restitution, FImpactResult& Out);
+
+	/**
+	 * Ein Zusammenstoss-Tick: Rutschen und Ausdrehen mit Reibung, dann
+	 * erschrocken stehen, dann auf KnockRecoverDistanceCm Fahrstrecke zurueck
+	 * in die Spur (auch im Stand langsam). Datenrein.
+	 */
+	static void StepKnock(FTrafficVehicle& Vehicle, const FWiesbadenTrafficSettings& InSettings, double Dt);
+
+	/**
+	 * Das Spielerauto stoesst an ein Verkehrsauto (Treffer an seinem
+	 * Kollisionskoerper). Stoss nach ComputeImpact; das Verkehrsauto rutscht
+	 * und dreht, sein Fahrer bremst. OutPlayerDeltaVCmS ist die Geschwindig-
+	 * keitsaenderung des Spielerautos (Welt, Ebene). False = Fahrzeug unbekannt
+	 * oder kein Aufeinanderzu.
+	 */
+	bool ApplyPlayerImpact(int32 VehicleId, const FVector& ContactPoint, const FVector& NormalIntoTraffic,
+		const FVector& PlayerVelocityCmS, double PlayerMassKg, FVector& OutPlayerDeltaVCmS);
+
+	/** Bogenlaenge des naechstgelegenen Punkts einer Polylinie (Ebene). Datenrein. */
+	static double ProjectOntoPolylineCm(const TArray<FVector>& Line, const FVector& Point);
+
 	static double RequiredLaneChangeGapCm(const FWiesbadenTrafficSettings& InSettings,
 		double SpeedCmS);
 
@@ -1091,7 +1516,92 @@ struct WIESBADENREAL_API FWiesbadenTrafficSimulation
 
 		/** Hat die Spur ueberhaupt eine Fortsetzung? */
 		bool bHasSuccessor = true;
+
+		/** Strassenklasse der Spur - zeigt, ob der Steher im Durchgangsnetz steht. */
+		EOSMHighwayType HighwayType = EOSMHighwayType::None;
 	};
+
+	/**
+	 * Gehoert die Klasse zum DURCHGANGSNETZ des Verkehrs?
+	 *
+	 * Service-Wege (OSM highway=service: Parkplatzgassen, Zufahrten, Gassen,
+	 * Hofeinfahrten) sind es nicht. Zufahrten und Gassen sind zudem einspurig
+	 * in EINER Richtung gebaut (RoadTypeLibrary), Parkplatzgassen bilden
+	 * Schleifen: Fahrzeuge, die dort eingesetzt wurden oder hineinbogen,
+	 * kreisten auf Parkflaechen und blockierten sich gegenseitig (gemeldet
+	 * 26.09.2026). Darum setzt der Verkehr dort nicht ein und biegt nur hinein,
+	 * wenn es keine andere Fortsetzung gibt.
+	 */
+	static bool IsThroughTrafficClass(EOSMHighwayType Type)
+	{
+		return Type != EOSMHighwayType::Service;
+	}
+
+	/**
+	 * WENDEN AM SACKGASSENENDE: ergaenzt das Netz, damit Fahrzeuge am Ende
+	 * einer Spur ohne Fortsetzung wenden und zurueckfahren, statt dort zu
+	 * warten und unbeobachtet zu verschwinden.
+	 *
+	 *  - Zweispurige Sackgasse: Wendeschleife (ETurnType::UTurn) von der Spur
+	 *    auf die Gegenspur desselben Abschnitts.
+	 *  - Einspurige Sackgasse (Zufahrten, Gassen: nur EINE Spur gebaut):
+	 *    gespiegelte Rueckspur, Wendeschleife darauf, und am Anfang der
+	 *    Sackgasse Verbindungen zurueck auf die Spuren, die die Kreuzung dort
+	 *    verlassen.
+	 *
+	 * Neue Spuren/Verbindungen kommen nur ANS ENDE (bestehende Nummern bleiben
+	 * gueltig) und tragen bAddedTurnaround. Idempotent: ein Netz, das schon
+	 * Wendeschleifen hat, bleibt unveraendert. Vor Initialize aufrufen.
+	 * @return Zahl der Wendeschleifen; OutReverseLanes = angelegte Rueckspuren.
+	 */
+	static int32 AddDeadEndTurnarounds(FRoadNetwork& InOutNetwork, int32* OutReverseLanes = nullptr);
+
+	/** Wendeschleife vom Spurende E (Fahrtrichtung Dir) zum Start S der Gegenrichtung. */
+	static TArray<FVector> BuildTurnaroundPath(const FVector& E, const FVector& Dir, const FVector& S,
+		const FRoadTurningPlate* Plate = nullptr);
+
+	/** Fahrzeuge insgesamt und davon auf Service-Wegen (Diagnose -WbStauLog). */
+	void CountVehiclesOnServiceRoads(int32& OutOnService, int32& OutTotal) const;
+
+	/**
+	 * Ampel-Schlangenprobe (-WbAmpelSpur=<Spur>): je Gruenphase der Zufahrt
+	 * eine Logzeile - Dauer, Wartende zu Beginn, ueber die Haltelinie
+	 * Abgeflossene, Wartende danach und wohin der Vorderste will. Beantwortet
+	 * "baut sich die Schlange pro Gruen ab?" mit Zahlen statt Eindruck.
+	 * Nach TrafficSimulation.Tick aufrufen; ohne gesetzte Spur ein No-Op.
+	 */
+	void SetQueueProbeLane(int32 LaneId) { ProbeLaneId = LaneId; }
+	void StepQueueProbe(float DeltaSeconds);
+
+private:
+	int32 ProbeLaneId = INDEX_NONE;
+	double ProbeTime = 0.0;
+	double ProbePhaseStart = 0.0;
+	bool bProbeGreen = false;
+	int32 ProbeWaitingAtStart = 0;
+	int32 ProbeDeparted = 0;
+	int32 ProbeEntered = 0;
+	int32 ProbeHeadConnection = INDEX_NONE;
+	bool bProbeHeadGreenSeen = false;
+	TSet<int32> ProbeOnLane;
+
+	/**
+	 * SACKGASSEN-SPUREN: von hier geht es nur per Wendeschleife weiter (oder
+	 * gar nicht) - auch ueber mehrere Spuren hinweg, wenn jede Fortsetzung
+	 * wieder in eine Sackgasse fuehrt. Verkehr biegt nur hinein, wenn es an
+	 * der Kreuzung keine andere Fortsetzung gibt, und setzt dort nicht ein.
+	 * Gemeldet 26.09.2026: am Garagenhof fuhren Autos in die Hofzufahrt und
+	 * standen (spaeter: wendeten) vor dem Spieler.
+	 */
+	TSet<int32> DeadEndLanes;
+
+public:
+	/** Liegt die Spur in einer Sackgasse (Diagnose/Tests)? */
+	bool IsDeadEndLane(int32 LaneId) const { return DeadEndLanes.Contains(LaneId); }
+
+private:
+
+public:
 
 	/**
 	 * Die aktuellen Steher mit Grund, hoechstens MaxCount, die naechsten zuerst.
@@ -1143,6 +1653,9 @@ private:
 
 	/** Gewicht der Zielspur einer Verbindung (Strassenklasse). */
 	double GetSuccessorWeight(int32 ConnectionIndex) const;
+
+	/** Strassenklasse der Zielspur einer Verbindung (None, wenn unbekannt). */
+	EOSMHighwayType GetSuccessorClass(int32 ConnectionIndex) const;
 
 public:
 	/**
@@ -1240,6 +1753,20 @@ private:
 	/** Fuehrt die Karosserie eines Fahrzeugs der Sollbahn nach. */
 	void UpdateBodyPose(FTrafficVehicle& Vehicle, double Dt) const;
 
+	/** Karosserie mit Fahrphysik + Fahrer einen Tick weiter (setzt BodyLocation XY, Gier, Lenkung). */
+	void StepPhysicsBody(FTrafficVehicle& Vehicle, const FVector& Target, double Dt) const;
+
+	/** Karosserie auf der Bahn (bBodyOnPath): Physik laengs, Achsen auf der Fahrlinie. */
+	void StepBodyOnPath(FTrafficVehicle& Vehicle, double Dt) const;
+
+	/**
+	 * Punkt und Richtung auf dem Fahrweg, OffsetCm von der Sollposition
+	 * (negativ = dahinter, auch auf der zuletzt verlassenen Bahn; positiv =
+	 * davor, auch auf der Folgebahn), mit dem Querversatz eines laufenden
+	 * weichen Spurwechsels zu dem Zeitpunkt, an dem das Fahrzeug dort ist.
+	 */
+	void SamplePathAt(const FTrafficVehicle& Vehicle, double OffsetCm, FVector& OutLocation, FVector& OutForward) const;
+
 private:
 
 	/** Position und Fahrtrichtung auf einer Polylinie bei Distanz abtasten. */
@@ -1301,6 +1828,12 @@ private:
 	/** Seit Initialize aufsummierte Kennzahlen fuer die ehrliche Ampel-Diagnose. */
 	int32 LifetimeVehiclesHeldAtRed = 0;
 	int32 LifetimeLaneChanges = 0;
+
+	/** Fahrbild-Summen seit dem letzten TakeMotionQuality. */
+	FMotionQuality Motion;
+
+	/** Zusammenstoesse mit dem Spielerauto seit Start (ApplyPlayerImpact). */
+	int32 LifetimePlayerImpacts = 0;
 	int32 LifetimeLaneChangeCandidates = 0;
 	int32 LifetimeLaneChangeNoNeighbour = 0;
 	int32 LifetimeLaneChangeBlockedByGap = 0;
@@ -1352,8 +1885,20 @@ private:
 
 	TMap<int32, TArray<FConnectionConflict>> ConnectionConflicts;
 
+	/**
+	 * Verbindungen an ECHTEN Kreuzungen: am Knoten treffen mindestens drei
+	 * Abschnitte zusammen. OSM zerteilt Strassen in Stuecke von wenigen
+	 * Metern; an diesen Stossstellen kreuzen sich nur Spurwechsel derselben
+	 * Strasse - dort gilt die strenge Blockierfreihaltung nicht.
+	 */
+	TSet<int32> MultiArmConnections;
+
 	/** Verbindungen je Kreuzungsknoten (fuer die Konflikt-Vorberechnung). */
 	void BuildConnectionConflicts();
+
+	/** Haltelinie je Zufahrt aus der Knotengeometrie (ComputeStopSetbackCm); leer = ueberall Grundwert. */
+	TArray<double> LaneStopDistanceCm;
+	void BuildStopLines();
 
 	/**
 	 * Haelt Fahrzeuge vor der Kreuzung, solange ein kreuzender Weg belegt ist.
@@ -1375,6 +1920,16 @@ private:
 	/** Bezugspunkt fuer Spawn und Entfernen (Spielerposition). */
 	FVector ObserverLocation = FVector::ZeroVector;
 	bool bHasObserver = false;
+
+	/** Blick des Spielers (SetObserverView). */
+	bool bHasView = false;
+	FVector ViewDirection = FVector::ForwardVector;
+	double ViewCosHalfCone = 0.0;
+
+	/** Zaehler der Einsatzversuche - streut die Ortswahl, wenn ein Ort verworfen wird. */
+	int64 SpawnAttempts = 0;
+	int64 LifetimeSpawnsSkippedInView = 0;
+	int64 LifetimeDeadEndWaits = 0;
 
 	/** Spielerfahrzeug als Hindernis, auf das der Verkehr reagiert. */
 	FVector PlayerObstacleLocation = FVector::ZeroVector;

@@ -319,9 +319,12 @@ void URegionAssetSpawnerComponent::AnchorEmptyInstanceComponents(const FVector& 
 		}
 		if (Component->GetInstanceCount() > 0)
 		{
-			// Mit Instanzen gilt wieder die echte Geometrie; die
-			// Rueck-Ankerung stellt den Ausgangszustand her.
-			Component->SetRelativeLocation(FVector::ZeroVector);
+			// Mit Instanzen gilt wieder die echte Geometrie; die Komponente
+			// gehoert an den Actor. SetWorldLocation, nicht SetRelativeLocation
+			// (Zero): relativ genullt traegt die Null nur, solange der Actor
+			// auf (0,0,0) steht - der Weltort ist die Aussage, und beide
+			// Setter duerfen sich nicht gegenseitig in die Karten schreiben.
+			Component->SetWorldLocation(Owner->GetActorLocation());
 		}
 		else
 		{

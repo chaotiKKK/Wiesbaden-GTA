@@ -109,6 +109,21 @@ public:
 		FVector2D& OutExtent,
 		double& OutYawRadians);
 
+	/**
+	 * Punkt IN einer gedrehten Box (Gebaeude-Grundriss)?
+	 *
+	 * Dieselbe Konvention wie die Grundrisspruefung des Ausstattungs-Passes:
+	 * Extent sind HALBE Kantenlaengen, YawGrad die Drehung der Box um die
+	 * Hochachse. Ohne diese eine Funktion stellte jede Stelle ihre eigene
+	 * Pruefung auf - und zwei Konventionen, die um 90 Grad auseinanderliegen,
+	 * zaehlen dasselbe Haus als "drin" und "draussen".
+	 *
+	 * @return true, wenn der Punkt im Rechteck liegt (Rand gehoert dazu).
+	 */
+	static bool IsInsideRotatedBox2D(
+		const FVector2D& Point, const FVector2D& Center,
+		const FVector2D& Extent, double YawDeg);
+
 	// -- Triangulierung -----------------------------------------------------
 
 	/**

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "GIS/WiesbadenWorldBuilder.h"
+#include "World/WiesbadenVisualTuning.h"
 
 #include "WiesbadenReal.h"
 
@@ -18,6 +19,9 @@
 #include "Landscape.h"
 #include "LandscapeProxy.h"
 #include "GIS/WiesbadenHeightAudit.h"
+#include "GIS/WiesbadenPlacementAudit.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Engine/Texture2D.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/ExponentialHeightFogComponent.h"
@@ -146,6 +150,7 @@ namespace
 		Access.GarageEntranceWorldCm = ToWorld(Layout.GarageTarget.CenterCm);
 		Access.PedestrianEntranceWorldCm = ToWorld(Layout.PedestrianTarget.CenterCm);
 		Access.SearchRadiusCm = 5000.0;
+		Access.PreferredStreetName = SebboHqSite::AccessRoadName;
 		Access.GarageWidthCm = 700.0;
 		Access.PedestrianWidthCm = 200.0;
 	}
@@ -182,6 +187,7 @@ namespace
 		Pad.RoadAnchorCm = FVector2D(
 			Access.GarageEntranceWorldCm.X, Access.GarageEntranceWorldCm.Y);
 		Pad.RoadSearchRadiusCm = Access.SearchRadiusCm;
+		Pad.PreferredStreetName = Access.PreferredStreetName;
 		// Oberkante des privaten Bodens ueber dem Plateau - EIN Eigentuemer.
 		// Hier stand dieselbe Rechnung ein zweites Mal; der Turm liest sie
 		// laengst aus GetAccessFloorCm, und zwei Kopien derselben Beziehung
@@ -447,6 +453,17 @@ void AWiesbadenWorldBuilder::BuildCity()
 			FString::Printf(TEXT("fehlgeschlagen: %s"), *LastError),
 			FPlatformTime::Seconds() - StartTime);
 		return;
+	}
+
+	// Platzierungs-Audit (Schalter -WbPlacementAudit): zaehlt, wie oft die
+	// sechs Regeln der Platzierungs-Spec am IST-Stand verletzt werden, und
+	// schreibt die Belegkoordinaten fuer die Kontrollbilder. Hier, solange
+	// Context->Data noch vollstaendig ist - der OSM-Datensatz liefert dafuer
+	// die kartierten Knoten und die Bahnwege und wird weiter unten nicht mehr
+	// gebraucht. Am Platzierungsverhalten aendert der Audit NICHTS.
+	if (FParse::Param(FCommandLine::Get(), TEXT("WbPlacementAudit")))
+	{
+		LastPlacementAuditSummary = RunPlacementAuditFor(Context->Data);
 	}
 
 	RoadNetwork = MoveTemp(Context->Data.RoadNetwork);
@@ -1756,7 +1773,10 @@ void AWiesbadenWorldBuilder::EnsureLightingActors()
 			// mehr Himmelslicht, damit die verschatteten Fassaden/Gehwege nicht
 			// dunkel absaufen. 2.2 hebt die Schattenseiten sichtbar an und bleibt
 			// unter dem milchigen 3.5.
-			Comp->SetIntensity(2.2f);
+			// Wert zentral in World/WiesbadenVisualTuning.h (Befund 24.09.2026:
+			// EnsureCinematicLighting stellte dasselbe Himmelslicht auf 3.2 -
+			// je nach Aufrufreihenfolge gewann einer der beiden).
+			Comp->SetIntensity(WiesbadenVisualTuning::SkyLightIntensity);
 		}
 		MarkAlwaysLoaded(Sky);
 	}
@@ -1817,12 +1837,12 @@ void AWiesbadenWorldBuilder::EnsureLightingActors()
 			// Enges Fenster statt fester Belichtung: Tag/Nacht-Wechsel bleibt
 			// moeglich, das Ausbleichen am Tag nicht.
 			PP.bOverride_AutoExposureMinBrightness = true;
-			PP.AutoExposureMinBrightness = 0.6f;
+			PP.AutoExposureMinBrightness = WiesbadenVisualTuning::AutoExposureMinBrightness;
 			PP.bOverride_AutoExposureMaxBrightness = true;
-			PP.AutoExposureMaxBrightness = 1.6f;
+			PP.AutoExposureMaxBrightness = WiesbadenVisualTuning::AutoExposureMaxBrightness;
 
 			PP.bOverride_AutoExposureBias = true;
-			PP.AutoExposureBias = 0.0f;
+			PP.AutoExposureBias = WiesbadenVisualTuning::AutoExposureBias;
 
 			++Created;
 		}
@@ -2005,6 +2025,49 @@ void AWiesbadenWorldBuilder::CheckRoadTerrainHeights()
 		Report, FPaths::ProjectDir() / TEXT("hoehen_report.json"));
 }
 
+FString AWiesbadenWorldBuilder::RunPlacementAuditFor(const FWiesbadenCityData& Data)
+{
+	// Eigenes Exemplar mit denselben Parametern wie die Pipeline: der Audit
+	// projiziert die Bahnkoordinaten damit GENAU dorthin, wo die Bahn steht,
+	// und die kartierten Knoten exakt auf ihre Strasse.
+	UGeoCoordinateConverter* AuditConverter = PipelineConverter;
+	if (!AuditConverter || !AuditConverter->IsInitialized())
+	{
+		AuditConverter = NewObject<UGeoCoordinateConverter>(this);
+		if (!(bUseWiesbadenOrigin
+			? AuditConverter->InitializeWithWiesbadenOrigin()
+			: AuditConverter->Initialize(CustomOrigin)))
+		{
+			UE_LOG(LogWbCore, Error,
+				TEXT("Platzierungs-Audit: kein Geo-Bezug - der Lauf wird abgebrochen, ")
+				TEXT("weil jede Position sonst falsch liege."));
+			return TEXT("Platzierungs-Audit FEHLGESCHLAGEN: kein Geo-Bezug.");
+		}
+	}
+
+	const FPlacementAuditReport Report = FWiesbadenPlacementAudit::Run(
+		Data.RoadNetwork, Data.FurnitureLayout, Data.RegionAssetLayout,
+		Data.Buildings, Data.OSMData, *AuditConverter);
+
+	UE_LOG(LogWbCore, Log, TEXT("%s"), *Report.ToString());
+
+	const FString Pfad = FPaths::ProjectDir() / TEXT("placement_report.json");
+	if (FWiesbadenPlacementAudit::WriteJson(Report, Pfad))
+	{
+		UE_LOG(LogWbCore, Log, TEXT("Platzierungs-Audit: Bericht geschrieben -> %s"), *Pfad);
+	}
+
+	int32 Gesamt = 0;
+	for (const FPlacementRuleCount& Regel : Report.Regeln)
+	{
+		Gesamt += Regel.Verstoesse;
+	}
+
+	return FString::Printf(
+		TEXT("Platzierungs-Audit: %d Verstoesse ueber %d Regeln (%.1f s) -> %s"),
+		Gesamt, Report.Regeln.Num(), Report.DurationSeconds, *Pfad);
+}
+
 void AWiesbadenWorldBuilder::DistributeRegionAssetsToChunks()
 {
 	UWorld* World = GetWorld();
@@ -2153,6 +2216,30 @@ void AWiesbadenWorldBuilder::BeginPlay()
 
 	if (LayoutCount > 0)
 	{
+		// Aeltere Bakes tragen noch Pfosten an jeder Strasse.
+		const int32 OhnePfosten =
+			URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(RoadNetwork, FurnitureLayout);
+		if (OhnePfosten > 0)
+		{
+			TMap<int32, EOSMHighwayType> Klasse;
+			for (const FRoadSegment& Segment : RoadNetwork.Segments)
+			{
+				Klasse.Add(Segment.SegmentId, Segment.HighwayType);
+			}
+			int32 Schnellstrasse = 0;
+			for (const FDelineatorInstance& Pfosten : FurnitureLayout.Delineators)
+			{
+				const EOSMHighwayType* Typ = Klasse.Find(Pfosten.SegmentId);
+				Schnellstrasse += Typ && (*Typ == EOSMHighwayType::Motorway || *Typ == EOSMHighwayType::MotorwayLink
+					|| *Typ == EOSMHighwayType::Trunk || *Typ == EOSMHighwayType::TrunkLink) ? 1 : 0;
+			}
+			UE_LOG(LogWbCore, Log,
+				TEXT("Leitpfosten: %d nach der Ausserorts-Regel entfernt (innerorts oder im Knoten), %d bleiben - ")
+				TEXT("%d an Landstrassen, %d an Autobahn/Kraftfahrstrasse."),
+				OhnePfosten, FurnitureLayout.Delineators.Num(),
+				FurnitureLayout.Delineators.Num() - Schnellstrasse, Schnellstrasse);
+		}
+
 		UE_LOG(LogWbCore, Log,
 			TEXT("Ausstattung wird aus dem gespeicherten Layout aufgebaut: ")
 			TEXT("%d Schilder, %d Leitpfosten, %d Markierungen, %d Laternen."),

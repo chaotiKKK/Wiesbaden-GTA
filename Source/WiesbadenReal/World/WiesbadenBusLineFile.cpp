@@ -3,6 +3,7 @@
 #include "World/WiesbadenBusLineFile.h"
 
 #include "GIS/GeoCoordinateConverter.h"
+#include "GIS/RoadNetworkTypes.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -79,6 +80,15 @@ namespace
 		ReadPairs(StopArr, F.GeoStops);
 		ReadStrings(NameArr, F.StopNames);
 		ReadStrings(MonArr, F.MonitorStops);
+		const TArray<TSharedPtr<FJsonValue>>* RetPathArr = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* RetStopArr = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* RetNameArr = nullptr;
+		Obj->TryGetArrayField(TEXT("return_path"), RetPathArr);
+		Obj->TryGetArrayField(TEXT("return_stops"), RetStopArr);
+		Obj->TryGetArrayField(TEXT("return_stop_names"), RetNameArr);
+		ReadPairs(RetPathArr, F.GeoReturnPath);
+		ReadPairs(RetStopArr, F.GeoReturnStops);
+		ReadStrings(RetNameArr, F.ReturnStopNames);
 		// "*" heisst: JEDE Halte der Linie bekommt eine Saeule (der Monitor stellt
 		// je Halte zwei auf, eine pro Strassenseite). Ein Platzhalter statt einer
 		// Liste mit 40 Namen: eine verlaengerte Linie bekommt damit von selbst
@@ -129,9 +139,64 @@ namespace
 		return F;
 	}
 
+	/** Eine Polylinie samt Halten in die Welt legen: Punkte, kumulierte Bogenlaenge,
+	 *  Halte-Bogenlaengen (jede Halte auf den naechsten Pfadpunkt, aufsteigend). */
+	double ProjectPolyline(const TArray<FVector2D>& Geo, const TArray<FVector2D>& GeoStops,
+		const UGeoCoordinateConverter& Converter, TArray<FVector>& OutPath, TArray<double>& OutArc,
+		TArray<double>& OutStopArc)
+	{
+		OutPath.Reset();
+		OutArc.Reset();
+		OutStopArc.Reset();
+		for (const FVector2D& G : Geo)
+		{
+			const FVector Wld = Converter.GeoToUnrealGround(FGeoCoordinate(G.Y, G.X, 0.0));
+			OutPath.Add(FVector(Wld.X, Wld.Y, 0.0));
+		}
+		if (OutPath.Num() < 2)
+		{
+			return 0.0;
+		}
+		OutArc.Add(0.0);
+		for (int32 i = 1; i < OutPath.Num(); ++i)
+		{
+			OutArc.Add(OutArc.Last() + FVector2D::Distance(
+				FVector2D(OutPath[i - 1].X, OutPath[i - 1].Y), FVector2D(OutPath[i].X, OutPath[i].Y)));
+		}
+		for (const FVector2D& G : GeoStops)
+		{
+			const FVector Wld = Converter.GeoToUnrealGround(FGeoCoordinate(G.Y, G.X, 0.0));
+			const FVector2D S(Wld.X, Wld.Y);
+			int32 Best = 0;
+			double BestD = TNumericLimits<double>::Max();
+			for (int32 i = 0; i < OutPath.Num(); ++i)
+			{
+				const double D = FVector2D::DistSquared(FVector2D(OutPath[i].X, OutPath[i].Y), S);
+				if (D < BestD) { BestD = D; Best = i; }
+			}
+			OutStopArc.Add(OutArc[Best]);
+		}
+		OutStopArc.Sort();
+		return OutArc.Last();
+	}
+
 	/** Geo -> Welt, Bogenlaengen und Halte-Bogenlaengen: genau einmal je Datei. */
 	void ProjectRoute(WiesbadenBusLineFile::FLineRoute& Out, const UGeoCoordinateConverter& Converter)
 	{
+		// Eigener Rueckweg (falls in der Datei): eigene Linie, eigene Halte.
+		Out.Route.ReturnStopArcCm.Reset();
+		Out.Route.ReturnLengthCm = 0.0;
+		if (Out.File.GeoReturnPath.Num() >= 2 && Out.File.GeoReturnStops.Num() >= 2)
+		{
+			Out.Route.ReturnLengthCm = ProjectPolyline(Out.File.GeoReturnPath, Out.File.GeoReturnStops,
+				Converter, Out.ReturnWorldPath, Out.ReturnArcCm, Out.Route.ReturnStopArcCm);
+			UE_LOG(LogWbBusLineFile, Log,
+				TEXT("Linie %s: eigener Rueckweg %.2f km, %d Halte (Ausstieg bei Bogen %.0f m, danach %.0f m zur Einstiegshaltestelle)."),
+				*Out.File.Ref, Out.Route.ReturnLengthCm / 100000.0, Out.Route.ReturnStopArcCm.Num(),
+				Out.Route.ReturnStopArcCm.Num() > 0 ? Out.Route.ReturnStopArcCm.Last() / 100.0 : 0.0,
+				Out.Route.ReturnStopArcCm.Num() > 0 ? (Out.Route.ReturnLengthCm - Out.Route.ReturnStopArcCm.Last()) / 100.0 : 0.0);
+		}
+
 		const WiesbadenBusLineFile::FLineFile& F = Out.File;
 		Out.WorldPath.Reset();
 		Out.ArcCm.Reset();
@@ -286,4 +351,44 @@ void WiesbadenBusLineFile::ClearCache()
 {
 	GRouteCache.Reset();
 	GScheduleCache.Reset();
+}
+
+bool WiesbadenBusLineFile::RightKerbOffsetCm(const FRoadNetwork& Net, const FVector& Pos,
+	const FVector& Dir, double& OutCm)
+{
+	const FVector D = Dir.GetSafeNormal2D();
+	const FVector Right(-D.Y, D.X, 0.0);   // rechte Hand (Welt: Ost +X, Sued +Y)
+	const FVector P(Pos.X, Pos.Y, 0.0);
+	const double Reach = 1500.0;
+	double BestDist = Reach;
+	bool bFound = false;
+	for (const FRoadSegment& S : Net.Segments)
+	{
+		// Nur Fahrbahnen: Fusswege, Radwege, Treppen und Flaechen haben keine
+		// Bordsteinkante, an der ein Bus haelt.
+		if (S.bIsArea || (uint8)S.HighwayType > (uint8)EOSMHighwayType::Service) { continue; }
+		const TArray<FVector>& C = S.Centerline;
+		for (int32 i = 0; i + 1 < C.Num(); ++i)
+		{
+			const FVector A(C[i].X, C[i].Y, 0.0);
+			const FVector B(C[i + 1].X, C[i + 1].Y, 0.0);
+			if (FMath::Min(A.X, B.X) > P.X + Reach || FMath::Max(A.X, B.X) < P.X - Reach
+				|| FMath::Min(A.Y, B.Y) > P.Y + Reach || FMath::Max(A.Y, B.Y) < P.Y - Reach) { continue; }
+			const FVector AB = B - A;
+			const double L2 = AB.SizeSquared();
+			if (L2 < 1.0) { continue; }
+			// Nur Strassen in unserer Richtung (quer einmuendende zaehlen nicht).
+			if (FMath::Abs(FVector::DotProduct(AB.GetSafeNormal(), D)) < 0.8) { continue; }
+			const double T = FMath::Clamp(FVector::DotProduct(P - A, AB) / L2, 0.0, 1.0);
+			const FVector Q = A + AB * T;
+			const double Dist = FVector::Dist(P, Q);
+			if (Dist < BestDist)
+			{
+				BestDist = Dist;
+				OutCm = FVector::DotProduct(Q - P, Right) + S.CarriagewayWidthCm * 0.5;
+				bFound = true;
+			}
+		}
+	}
+	return bFound;
 }

@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name run_bus_audit
+if errorlevel 1 exit /b 1
 rem Kopfloser Boden-Audit: dieselbe Fahrbahn-Messung wie -WbBusGroundAudit im
 rem Spielbetrieb, aber OHNE Fenster (-nullrhi). Zwei Gruende:
 rem   * ein Spiel-Fenster im Hintergrund wird von der Engine gedrosselt; die

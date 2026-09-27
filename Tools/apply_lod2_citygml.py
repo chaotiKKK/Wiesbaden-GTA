@@ -63,6 +63,11 @@ def main():
     total = sum(1 for e in els if isinstance(e, dict) and e.get("type") == "way")
 
     nh, nr, nrh = enrich_elements(els, data)
+    # Gebaeude ueber Strassen (LuisenForum) als Bruecke auftrennen - sonst stuenden
+    # sie nach jeder Neuerzeugung wieder bis zum Boden auf der Fahrbahn.
+    sys.path.insert(0, here)
+    from alkis_ueberbauungen import apply_ueberbauungen
+    apply_ueberbauungen(els)
     json.dump(doc, open(alkis_out, "w", encoding="utf-8"), ensure_ascii=False)
 
     from collections import Counter

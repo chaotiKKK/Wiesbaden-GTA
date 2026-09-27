@@ -110,6 +110,11 @@ namespace
 		S.AllRedSeconds = 2.0;
 		S.LeftTurnGreenSeconds = 5.0;
 		S.bProtectedLeftTurns = true;
+		// Diese Tests pruefen die GESCHUETZTE Linksphase (so laeuft sie an
+		// reinen Linksabbiegespuren). Im Testnetz teilt sich der Linksabbieger
+		// die Spur mit dem Geradeausverkehr - mit der neuen Regel waere er dort
+		// bedingt vertraeglich; das prueft Traffic.LinksabbiegerGemischteSpur.
+		S.bPermissiveLeftOnSharedLanes = false;
 		S.bGreenWave = false;      // fuer die Programm-Tests stoert der Ortsversatz
 		S.RandomSeed = 4242;
 		return S;
@@ -334,6 +339,59 @@ bool FSignalProgramTest::RunTest(const FString& Parameters)
 			KuerzesteMit < LaengsteMit - 0.01);
 	}
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSharedLaneLeftTest,
+	"WiesbadenReal.Traffic.LinksabbiegerGemischteSpur",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FSharedLaneLeftTest::RunTest(const FString& Parameters)
+{
+	// Gemessen am 26.09.2026 an einer einspurigen Landesstrassen-Zufahrt: mit
+	// eigener Linksphase blockierte der jeweils "falsche" Vorderste die Spur,
+	// je Gruen floss EIN Fahrzeug ab. Ein Linksabbieger auf gemischter Spur
+	// faehrt deshalb mit dem Geradeausverkehr (und wartet im Fahrverhalten
+	// auf den Gegenverkehr).
+	FWiesbadenTrafficLightSettings S = MakeProgramSettings();
+	S.bPermissiveLeftOnSharedLanes = true;
+
+	// Spur 0 fuehrt geradeaus UND links: gemischt.
+	const FRoadNetwork Gemischt = MakeLeftTurnNetwork();
+	{
+		FWiesbadenTrafficLightSystem Sys;
+		Sys.Initialize(Gemischt, S);
+		TestTrue(TEXT("Linksabbieger der gemischten Spur ist bedingt vertraeglich"), Sys.IsPermissiveLeft(1));
+		TestFalse(TEXT("Geradeaus ist es nicht"), Sys.IsPermissiveLeft(0));
+		TestTrue(TEXT("Links und geradeaus derselben Spur haben zugleich Gruen"), Sys.CanBeGreenTogether(0, 1));
+		int32 MitLinksphase = 0;
+		double Mittel = 0.0, Min = 0.0, Max = 0.0;
+		Sys.GetProgramStatistics(MitLinksphase, Mittel, Min, Max);
+		TestEqual(TEXT("keine eigene Linksphase an der gemischten Spur"), MitLinksphase, 0);
+	}
+
+	// Gegenprobe: reine Linksabbiegespur (Spur 0 fuehrt NUR links) behaelt
+	// die geschuetzte Phase.
+	{
+		FRoadNetwork NurLinks = MakeLeftTurnNetwork();
+		NurLinks.Connections.RemoveAt(0);   // Geradeaus von Spur 0 weg -> Index 0 = links
+		FWiesbadenTrafficLightSystem Sys;
+		Sys.Initialize(NurLinks, S);
+		TestFalse(TEXT("reine Linksabbiegespur ist NICHT bedingt vertraeglich"), Sys.IsPermissiveLeft(0));
+		int32 MitLinksphase = 0;
+		double Mittel = 0.0, Min = 0.0, Max = 0.0;
+		Sys.GetProgramStatistics(MitLinksphase, Mittel, Min, Max);
+		TestEqual(TEXT("reine Linksabbiegespur behaelt ihre Linksphase"), MitLinksphase, 1);
+	}
+
+	// Gegenprobe: mit abgeschalteter Regel bleibt es beim alten Verhalten.
+	{
+		FWiesbadenTrafficLightSettings Alt = S;
+		Alt.bPermissiveLeftOnSharedLanes = false;
+		FWiesbadenTrafficLightSystem Sys;
+		Sys.Initialize(Gemischt, Alt);
+		TestFalse(TEXT("alte Regel: Links und geradeaus getrennt"), Sys.CanBeGreenTogether(0, 1));
+	}
 	return true;
 }
 

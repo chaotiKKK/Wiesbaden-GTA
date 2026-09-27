@@ -9,6 +9,7 @@
 #include "Components/SceneComponent.h"
 #include "Components/BoxComponent.h"
 #include "World/WiesbadenCitySubsystem.h"
+#include "World/TrafficVehicleSpawnerComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/EngineTypes.h"
 #include "Engine/StaticMesh.h"
@@ -16,6 +17,8 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -48,6 +51,18 @@ FBeetleAssembly AWiesbadenCar::ChooseBeetleAssembly(
 	return Choice;
 }
 
+FRotator AWiesbadenCar::WheelVisualRotation(float ForwardRollDegrees,
+	float SteeringDegrees, bool bLeftSide)
+{
+	// Das einzige Rad-Mesh stammt vom rechten Vorderrad; dort zeigt die Felge
+	// nach +Y. Links dreht eine halbe Gierumdrehung die Felge nach aussen.
+	// UE-Pitch dreht bei positivem Wert den unteren Reifenpunkt nach +X.
+	// Beim Vorwaertsrollen muss dieser Punkt nach -X laufen. Die um 180 Grad
+	// gedrehte linke Seite braucht dafuer das entgegengesetzte Pitch-Vorzeichen.
+	return FRotator(bLeftSide ? ForwardRollDegrees : -ForwardRollDegrees,
+		SteeringDegrees + (bLeftSide ? 180.0f : 0.0f), 0.0f);
+}
+
 AWiesbadenCar::AWiesbadenCar()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -64,18 +79,20 @@ AWiesbadenCar::AWiesbadenCar()
 	// Die Box sitzt so hoch, dass ihre Unterkante auf Radaufstandshoehe liegt.
 	CollisionBox = CreateDefaultSubobject<UBoxComponent>(TEXT("CollisionBox"));
 	CollisionBox->SetupAttachment(SceneRoot);
+
+	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
+	VisualRoot->SetupAttachment(SceneRoot);
+	VisualRoot->SetRelativeLocation(FVector(0.0f, 0.0f, -GroundClearanceCm));
 	CollisionBox->SetBoxExtent(FVector(204.0f, 78.0f, 75.0f));
 	CollisionBox->SetRelativeLocation(FVector(0.0f, 0.0f, 75.0f));
 	CollisionBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	CollisionBox->SetCollisionResponseToAllChannels(ECR_Block);
 
-	// Karosserie: VW Kaefer 1969 als Platzhaltermodell. Faellt auf den
-	// Engine-Basis-Cube zurueck, solange das Asset nicht importiert ist -
-	// ohne diesen Rueckfall waere das Fahrzeug im Level unsichtbar und der
-	// Fehler schwer zu erkennen.
-	// Herbie: vollstaendiges VW-Kaefer-Modell (Kotfluegel, Chrom, Raeder,
-	// Scheiben) - loest den kaputten Platzhalter-Body ab. Faellt auf das alte
-	// Beetle-Mesh und zuletzt den Cube zurueck.
+	// Geschlossene, neu aufgebaute Karosserie mit Lack, Scheiben und Leuchten.
+	// Der gescannte Body hat Luecken und verblichene UV-Inseln; er bleibt nur
+	// als Asset-Rueckfall erhalten. Die vier separaten Reifen drehen weiter.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> RestoredMesh(
+		TEXT("/Game/Vehicles/Beetle/Restored/restored_beetle_body/StaticMeshes/SM_VWBeetle1969_Restored.SM_VWBeetle1969_Restored"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> HerbieMesh(
 		TEXT("/Game/Vehicles/Beetle/SM_Herbie.SM_Herbie"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> BeetleMesh(
@@ -103,7 +120,8 @@ AWiesbadenCar::AWiesbadenCar()
 
 	UStaticMesh* Cube = CubeMesh.Object;
 	UStaticMesh* Herbie = HerbieMesh.Succeeded() ? HerbieMesh.Object : nullptr;
-	UStaticMesh* Beetle = BeetleMesh.Succeeded() ? BeetleMesh.Object : nullptr;
+	UStaticMesh* Beetle = RestoredMesh.Succeeded() ? RestoredMesh.Object
+		: (BeetleMesh.Succeeded() ? BeetleMesh.Object : nullptr);
 	UStaticMesh* BeetleWheel = BeetleWheelMesh.Succeeded() ? BeetleWheelMesh.Object : nullptr;
 
 	// Karosserie + Rad-Darstellung aus den verfuegbaren Meshes waehlen (rein/
@@ -115,7 +133,7 @@ AWiesbadenCar::AWiesbadenCar()
 	const bool bBodyIncludesWheels = !Assembly.bSeparateWheels;
 
 	BodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BodyMesh"));
-	BodyMesh->SetupAttachment(SceneRoot);
+	BodyMesh->SetupAttachment(VisualRoot);
 
 	switch (Assembly.Body)
 	{
@@ -125,12 +143,16 @@ AWiesbadenCar::AWiesbadenCar()
 		BodyMesh->SetStaticMesh(Beetle);
 		BodyMesh->SetRelativeLocation(FVector::ZeroVector);
 		BodyMesh->SetRelativeScale3D(FVector::OneVector);
-		// Herbie-Lackierung auf die Karosserie legen (auf diese UVs gebacken).
-		for (int32 Slot = 0; Slot < 4; ++Slot)
+		// Die neue Karosserie besitzt eigene Materialslots fuer den intakten
+		// Lack. Die alten vier UV-Kacheln passen nur auf den Scan-Rueckfall.
+		if (!RestoredMesh.Succeeded())
 		{
-			if (HerbieMats[Slot])
+			for (int32 Slot = 0; Slot < 4; ++Slot)
 			{
-				BodyMesh->SetMaterial(Slot, HerbieMats[Slot]);
+				if (HerbieMats[Slot])
+				{
+					BodyMesh->SetMaterial(Slot, HerbieMats[Slot]);
+				}
 			}
 		}
 		break;
@@ -152,6 +174,11 @@ AWiesbadenCar::AWiesbadenCar()
 		BodyMesh->SetRelativeScale3D(FVector(4.4f, 1.8f, 0.6f));
 		break;
 	}
+
+	// Grundausrichtung der Karosserie merken (identisch, ausser Herbie-Voll:
+	// 90 Grad). Die Gewichtsverlagerung legt Nicken/Wanken im FAHRZEUG-Rahmen
+	// darauf - unabhaengig davon, wie das jeweilige Mesh orientiert ist.
+	BodyBaseRotation = BodyMesh->GetRelativeRotation();
 
 	// Radpositionen, am Modell vermessen (Reifenmitten, cm im Fahrzeug-
 	// Lokalsystem: +X vorwaerts, +Y rechts, Z = Radradius ueber der Strasse).
@@ -183,7 +210,7 @@ AWiesbadenCar::AWiesbadenCar()
 	for (int32 Index = 0; Index < 4; ++Index)
 	{
 		UStaticMeshComponent* Wheel = Wheels[Index];
-		Wheel->SetupAttachment(SceneRoot);
+		Wheel->SetupAttachment(VisualRoot);
 		Wheel->SetRelativeLocation(WheelPositions[Index]);
 		Wheel->SetRelativeScale3D(WheelScale);
 
@@ -248,12 +275,15 @@ AWiesbadenCar::AWiesbadenCar()
 	// BeginPlay auf - im Konstruktor gibt es weder eine Welt noch ein
 	// Audiogeraet, an das sie sich haengen koennten.
 	Lights = CreateDefaultSubobject<UWiesbadenCarLightsComponent>(TEXT("Lights"));
-	Lights->SetupAttachment(SceneRoot);
+	Lights->SetupAttachment(VisualRoot);
 
 	EngineAudio = CreateDefaultSubobject<UWiesbadenCarAudioComponent>(TEXT("EngineAudio"));
 	EngineAudio->SetupAttachment(SceneRoot);
 	// Der Kaefer hat den Motor hinten - der Klang kommt von dort.
 	EngineAudio->SetRelativeLocation(FVector(-160.0f, 0.0f, 50.0f));
+
+	TireEffects = CreateDefaultSubobject<UWiesbadenTireEffectsComponent>(TEXT("TireEffects"));
+	TireEffects->SetupAttachment(SceneRoot);
 
 	if (!Cube)
 	{
@@ -262,9 +292,36 @@ AWiesbadenCar::AWiesbadenCar()
 	}
 }
 
+float AWiesbadenCar::ComputeSurfaceGripScale(float RainIntensity)
+{
+	// Nasser Asphalt haelt deutlich weniger als trockener: bis 35 % Gripverlust
+	// bei vollem Niederschlag, linear mit der Naesse. Trocken -> 1,0.
+	const float WetGripLoss = 0.35f;
+	const float Rain = FMath::Clamp(RainIntensity, 0.0f, 1.0f);
+	return FMath::Clamp(1.0f - WetGripLoss * Rain, 0.1f, 1.0f);
+}
+
 void AWiesbadenCar::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Pro Instanz geaenderte Bodenfreiheit nachziehen (Konstruktor kennt nur
+	// den Vorgabewert): die sichtbaren Teile stehen immer auf der Fahrbahn.
+	if (VisualRoot)
+	{
+		VisualRoot->SetRelativeLocation(FVector(0.0f, 0.0f, -GroundClearanceCm));
+	}
+
+	// Dev-Override der Belags-Griffigkeit: -WbSurfaceGrip=0.5 erzwingt einen festen
+	// Wert (Test/Debug, Vorrang vor dem Wetter). Ohne das Flag kommt der Grip zur
+	// Laufzeit aus der Wetter-Naesse (ComputeSurfaceGripScale).
+	float GripArg = 1.0f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("WbSurfaceGrip="), GripArg))
+	{
+		SurfaceGripOverride = FMath::Clamp(GripArg, 0.1f, 1.0f);
+		bSurfaceGripOverridden = true;
+		UE_LOG(LogWbVehicles, Log, TEXT("WbDev: Belags-Griffigkeit fest auf %.2f (Override)."), SurfaceGripOverride);
+	}
 
 	// Herbie-Lackierung - NUR fuer das Spielerauto.
 	//
@@ -422,6 +479,38 @@ void AWiesbadenCar::UpdateLightsAndAudio(const FWiesbadenVehiclePhysicsOutput& O
 	{
 		EngineAudio->SetEngineState(Output.EngineRpm, ThrottleInput, Output.SpeedKmh);
 	}
+
+	// Traktions-Flags fuer die HUD-Kontrollleuchte spiegeln - reine Anzeige,
+	// keine Wirkung auf die Fahrt (das HUD liest sie ueber die Steuernaht).
+	bLastWheelSpin = Output.bWheelSpin;
+	bLastWheelLock = Output.bWheelLock;
+
+	// Reifen-Effekte: den Schlupf-Zustand nur KONSUMIEREN (keine Physikaenderung).
+	// Welche Raeder Gummi lassen: beim Blockieren alle vier, beim Radspin die
+	// angetriebenen (hinten), beim Drift ebenfalls das kommende Heck.
+	if (TireEffects)
+	{
+		TArray<FVector> Marks;
+		const float WheelRadiusCm = VehiclePhysics.WheelRadiusM * 100.0f;
+		auto Contact = [WheelRadiusCm](const UStaticMeshComponent* Wheel) -> FVector
+		{
+			return Wheel->GetComponentLocation() - FVector(0.0f, 0.0f, WheelRadiusCm);
+		};
+		if (Output.bWheelLock && FrontLeftWheel && FrontRightWheel && RearLeftWheel && RearRightWheel)
+		{
+			Marks = { Contact(FrontLeftWheel), Contact(FrontRightWheel),
+				Contact(RearLeftWheel), Contact(RearRightWheel) };
+		}
+		else if ((Output.bWheelSpin || FMath::Abs(Output.SlipAngleDeg) > 8.0f)
+			&& RearLeftWheel && RearRightWheel)
+		{
+			Marks = { Contact(RearLeftWheel), Contact(RearRightWheel) };
+		}
+
+		const FVector TravelDir = GetActorForwardVector() * FMath::Sign(Output.ForwardSpeedMetersPerS);
+		TireEffects->UpdateTireEffects(
+			Output.bWheelSpin, Output.bWheelLock, Output.SlipAngleDeg, Output.SpeedKmh, Marks, TravelDir);
+	}
 }
 
 void AWiesbadenCar::PossessedBy(AController* NewController)
@@ -468,7 +557,13 @@ int32 AWiesbadenCar::GetGear() const
 
 float AWiesbadenCar::GetEngineRpm() const
 {
-	return VehiclePhysics.EngineRpm;
+	// Angezeigte Drehzahl = Basis + Radspin-Flare: beim Durchdrehen dreht der
+	// Motor hoch, waehrend die Fahrt kaum zunimmt (siehe WheelSpinFlare). Die
+	// interne EngineRpm (Schalten/Drehmoment) bleibt davon unberuehrt.
+	return FMath::Clamp(
+		VehiclePhysics.EngineRpm + VehiclePhysics.WheelSpinFlare,
+		VehiclePhysics.Powertrain.IdleRpm * 0.5f,
+		VehiclePhysics.Powertrain.MaxRpm * 1.15f);
 }
 
 float AWiesbadenCar::GetAnalogAxis(const FKey& Key)
@@ -585,6 +680,25 @@ float AWiesbadenCar::AdvanceFallSpeedCmS(float CurrentCmS, float GravityCmS2, fl
 	return FMath::Min(Next, 20000.0f);
 }
 
+void AWiesbadenCar::ComputeBodyTilt(
+	float LongAccelMs2, float LatAccelMs2,
+	float PitchPerMs2, float RollPerMs2,
+	float MaxPitchDeg, float MaxRollDeg,
+	float Response, float Dt,
+	float& InOutPitchDeg, float& InOutRollDeg)
+{
+	// Ziel-Neigung aus den Beschleunigungen, an den Anschlag geklemmt.
+	const float TargetPitch = FMath::Clamp(LongAccelMs2 * PitchPerMs2, -MaxPitchDeg, MaxPitchDeg);
+	const float TargetRoll = FMath::Clamp(LatAccelMs2 * RollPerMs2, -MaxRollDeg, MaxRollDeg);
+
+	// Exponentielle Glaettung, rahmenratenunabhaengig: die Federung braucht
+	// einen Moment, bis die Karosserie steht - ein sofortiger Sprung saehe
+	// nach Ruck statt nach Masse aus.
+	const float Alpha = 1.0f - FMath::Exp(-FMath::Max(Response, 0.0f) * FMath::Max(Dt, 0.0f));
+	InOutPitchDeg = FMath::Lerp(InOutPitchDeg, TargetPitch, Alpha);
+	InOutRollDeg = FMath::Lerp(InOutRollDeg, TargetRoll, Alpha);
+}
+
 void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 {
 	FWiesbadenVehiclePhysicsInput Input;
@@ -599,12 +713,48 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 		: (IsKeyDown(EKeys::SpaceBar) || IsKeyDown(EKeys::Gamepad_FaceButton_Right));
 	Input.bReverseRequested = bReverseRequested;
 
+	// Belags-Griffigkeit aus der WELT: der Dev-Override hat Vorrang (Messfahrten),
+	// sonst kommt der Wert aus der Wetter-Naesse des City-Subsystems - bei Regen
+	// sinkt der Grip, ganz ohne Kommandozeile. Nur ABFRAGEN, nicht rechnen: die
+	// Physik bleibt unveraendert.
+	if (bSurfaceGripOverridden)
+	{
+		Input.SurfaceGripScale = SurfaceGripOverride;
+	}
+	else if (const UWorld* CarWorld = GetWorld())
+	{
+		float Rain = 0.0f;
+		if (const UWiesbadenCitySubsystem* City = CarWorld->GetSubsystem<UWiesbadenCitySubsystem>())
+		{
+			Rain = City->GetWeatherState().Intensity.Rain;
+		}
+		Input.SurfaceGripScale = ComputeSurfaceGripScale(Rain);
+	}
+
 	FWiesbadenVehiclePhysicsOutput Output;
 	VehiclePhysics.Tick(Input, DeltaSeconds, Output);
 
 	// Licht und Klang direkt aus dem Physikergebnis speisen, damit Bremslicht
 	// und Motordrehzahl im selben Frame stimmen wie die Bewegung.
 	UpdateLightsAndAudio(Output);
+
+	// Gewichtsverlagerung: die Karosserie nickt und wankt aus den
+	// Beschleunigungen. Querbeschleunigung = v * Gierrate (Zentripetalanteil).
+	// Rein visuell an der BodyMesh - die Raeder haengen an SceneRoot und
+	// bleiben am Boden, die Actor-Kollision bleibt unberuehrt.
+	const float LateralAccelMs2 = Output.ForwardSpeedMetersPerS * Output.YawRateRadPerS;
+	ComputeBodyTilt(
+		Output.ForwardAccelerationMetersPerS2, LateralAccelMs2,
+		BodyPitchPerMeterPerS2, BodyRollPerMeterPerS2,
+		BodyMaxPitchDeg, BodyMaxRollDeg, BodyTiltResponse, DeltaSeconds,
+		BodyPitchDeg, BodyRollDeg);
+	if (BodyMesh)
+	{
+		// Neigung im FAHRZEUG-Rahmen VOR die Grundausrichtung des Meshes legen
+		// (Quat-Reihenfolge: erst kippen, dann die Mesh-Eigenorientierung).
+		const FQuat Tilt = FRotator(BodyPitchDeg, 0.0f, BodyRollDeg).Quaternion();
+		BodyMesh->SetRelativeRotation(Tilt * BodyBaseRotation.Quaternion());
+	}
 
 	// Geschwindigkeit (m/s) -> Weltbewegung (cm/s) entlang der Fahrzeug-X-Achse.
 	const FVector Forward = GetActorForwardVector();
@@ -766,10 +916,42 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 			}
 		}
 
+		// ZUSAMMENSTOSS MIT EINEM VERKEHRSAUTO: kein Anprall an eine Wand,
+		// sondern ein Stoss nach Impulserhaltung - das Verkehrsauto wird
+		// verschoben und gedreht (sein Fahrer bremst und faehrt danach
+		// weiter), das Spielerauto verliert genau den abgegebenen Impuls.
+		bool bTrafficImpact = false;
+		if (const AActor* HitActor = MoveHit.GetActor())
+		{
+			const UTrafficVehicleSpawnerComponent* Traffic =
+				HitActor->FindComponentByClass<UTrafficVehicleSpawnerComponent>();
+			const int32 TrafficId = Traffic ? Traffic->FindVehicleIdForProxy(MoveHit.GetComponent()) : INDEX_NONE;
+			UWiesbadenCitySubsystem* City = (TrafficId != INDEX_NONE && GetWorld())
+				? GetWorld()->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+			if (City)
+			{
+				const FVector PlayerVelocity = Forward * SpeedCmPerS + Right * LateralCmPerS;
+				FVector PlayerDeltaV;
+				if (City->TrafficSimulation.ApplyPlayerImpact(TrafficId, MoveHit.ImpactPoint,
+					-MoveHit.ImpactNormal, PlayerVelocity, VehiclePhysics.Powertrain.MassKg, PlayerDeltaV))
+				{
+					VehiclePhysics.SpeedMetersPerS += static_cast<float>(FVector::DotProduct(PlayerDeltaV, Forward) / MetersToCm);
+					VehiclePhysics.LateralVelocityMetersPerS += static_cast<float>(FVector::DotProduct(PlayerDeltaV, Right) / MetersToCm);
+					bTrafficImpact = true;
+					UE_LOG(LogWbVehicles, Log,
+						TEXT("Zusammenstoss mit Verkehrsauto #%d bei %.0f km/h: Spielerauto %+.0f km/h."),
+						TrafficId, PlayerVelocity.Size() * 0.036, FVector::DotProduct(PlayerDeltaV, Forward) * 0.036);
+				}
+			}
+		}
+
 		// Anprall kostet Tempo, streifen kaum: der Verlust richtet sich danach,
 		// wie frontal die Wand getroffen wurde.
-		const float Frontal = FMath::Abs(FVector::DotProduct(Forward, MoveHit.Normal));
-		VehiclePhysics.SpeedMetersPerS *= FMath::Lerp(0.98f, 0.25f, Frontal);
+		if (!bTrafficImpact)
+		{
+			const float Frontal = FMath::Abs(FVector::DotProduct(Forward, MoveHit.Normal));
+			VehiclePhysics.SpeedMetersPerS *= FMath::Lerp(0.98f, 0.25f, Frontal);
+		}
 	}
 
 	// Fussgaenger ueberfahren.
@@ -791,6 +973,14 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 			if (Hit > 0)
 			{
 				UE_LOG(LogWbVehicles, Log, TEXT("Ueberfahren: %d Fussgaenger."), Hit);
+				City->PlayPedestrianBurstSound(Front);
+				// Jedes Ueberfahren ist eine Tat ins Fahndungskonto - sonst
+				// wuerde die Polizei nur auf Schuesse reagieren, nicht auf
+				// den drastischsten Fall.
+				for (int32 HitIndex = 0; HitIndex < Hit; ++HitIndex)
+				{
+					City->ReportCrime(EWiesbadenCrimeEvent::PedestrianDowned);
+				}
 			}
 		}
 	}
@@ -928,10 +1118,10 @@ void AWiesbadenCar::UpdateWheels(float DeltaSeconds)
 	// Lenkeinschlag der Vorderraeder (visuell, aus dem Physik-Modul).
 	const float SteerDegrees = SteeringInput * VehiclePhysics.MaxSteerAngleDeg;
 
-	FrontLeftWheel->SetRelativeRotation(FRotator(WheelRotationPitch, SteerDegrees, 0.0f));
-	FrontRightWheel->SetRelativeRotation(FRotator(WheelRotationPitch, SteerDegrees, 0.0f));
-	RearLeftWheel->SetRelativeRotation(FRotator(WheelRotationPitch, 0.0f, 0.0f));
-	RearRightWheel->SetRelativeRotation(FRotator(WheelRotationPitch, 0.0f, 0.0f));
+	FrontLeftWheel->SetRelativeRotation(WheelVisualRotation(WheelRotationPitch, SteerDegrees, true));
+	FrontRightWheel->SetRelativeRotation(WheelVisualRotation(WheelRotationPitch, SteerDegrees, false));
+	RearLeftWheel->SetRelativeRotation(WheelVisualRotation(WheelRotationPitch, 0.0f, true));
+	RearRightWheel->SetRelativeRotation(WheelVisualRotation(WheelRotationPitch, 0.0f, false));
 }
 
 bool AWiesbadenCar::SweepVehicle(const FVector& Delta, FHitResult& OutHit) const

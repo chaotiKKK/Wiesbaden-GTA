@@ -17,7 +17,7 @@ denselben Bildern.
 | 13 | [Stadtverkehr und Passanten](#13-stadtverkehr-und-passanten) | 18.–26.09. | fertig |
 | 12 | [Ampeln mit echten Signalprogrammen](#12-ampeln-mit-echten-signalprogrammen) | 16.–26.09. | Fußgänger queren noch nicht |
 | 11 | [Dennos Laden: Café, Friseur und Lieferungen](#11-dennos-laden-café-friseur-und-lieferungen) | 24.–26.09. | fertig |
-| 10 | [Sebbo-Hauptsitz](#10-sebbo-hauptsitz) | 20.–26.09. | Innenräume offen |
+| 10 | [Sebbo-Hauptsitz](#10-sebbo-hauptsitz) | 20.–27.09. | Türen öffnen noch nicht |
 | 9 | [Straßen, Gehwege und Markierungen](#9-straßen-gehwege-und-markierungen) | 07.–26.09. | Zebrastreifen offen |
 | 8 | [Wiesbaden aus amtlichen Daten](#8-wiesbaden-aus-amtlichen-daten) | 01.–26.09. | Dachformen offen |
 | 7 | [Ka-52-Hubschrauber](#7-ka-52-hubschrauber) | 01.–26.09. | Cockpit in Arbeit |
@@ -26,7 +26,7 @@ denselben Bildern.
 | 4 | [Der Käfer: echte Fahrphysik](#4-der-käfer-echte-fahrphysik) | 01.–24.09. | fertig |
 | 3 | [Ton: Mischpult und echte Aufnahmen](#3-ton-mischpult-und-echte-aufnahmen) | 07.–25.09. | fertig |
 | 2 | [Nerobergbahn](#2-nerobergbahn) | 04.–17.09. | fertig |
-| 1 | [Wahrzeichen](#1-wahrzeichen) | 07.–26.09. | Shuttle-Denkmal offen |
+| 1 | [Wahrzeichen](#1-wahrzeichen) | 07.–26.09. | fertig |
 
 ---
 
@@ -105,15 +105,26 @@ und die Kundinnen Iris und Mira warten an ihrer Haustür.
 
 ## 10. Sebbo-Hauptsitz
 
-*20.–26.09.2026*
+*20.–27.09.2026*
 
 Ein 60 m hoher Glasturm an der Galileistraße mit 15 Stockwerken, begehbarem
-Treppenhaus und Landeplatz auf dem Dach – erreichbar mit dem Auto, zu Fuß oder
-mit dem Hubschrauber. *Noch offen:* Innenräume, Türen und Beleuchtung.
+Treppenhaus, Aufzug und Landeplatz auf dem Dach – erreichbar mit dem Auto, zu
+Fuß oder mit dem Hubschrauber. Das Dach trägt Antennenschüssel, Masten und das
+leuchtende SEBBO-Logo. Der Aufzug fährt bis zur 14. Etage und öffnet dort seine
+Türen; das Treppenhaus führt über alle Geschosse hinauf. Innen ist jede Etage
+ausgebaut: Möbel, Türen und eine Beleuchtung, die dem Blick folgt. *Noch
+offen:* Die Türen der Räume sind noch Deko und öffnen nicht, und nachts
+scheint das Innenlicht noch nicht durch die Glasfassade – von außen sieht
+man die dunklen Scheiben.
 
 | | |
 |---|---|
 | ![Der Turm](meilensteine/bilder/10-hq-turm.jpg) | ![SEBBO auf dem Dach](meilensteine/bilder/10-hq-logo.jpg) |
+| ![Der Turm bei Einbruch der Dunkelheit](meilensteine/bilder/10-hq-turm-nacht.jpg) | ![Die Glasfassade in der Dämmerung](meilensteine/bilder/10-hq-fassade.jpg) |
+
+| | | |
+|---|---|---|
+| ![Das Treppenhaus, Blick nach unten von der fünften Etage](meilensteine/bilder/10-hq-treppenhaus.jpg) | ![Der Etagenflur in der dritten Etage](meilensteine/bilder/10-hq-etagenflur.jpg) | ![Die Spielfigur im Treppenhaus](meilensteine/bilder/10-hq-figur-oben.jpg) |
 
 ---
 
@@ -232,10 +243,8 @@ Kurbel am Wasserschieber bedienen.
 *07.–26.09.2026*
 
 Markante Bauwerke sind eigens nachgebaut: die Marktkirche, die
-Russisch-Orthodoxe Kirche und das LuisenForum als Brücke über die Schwalbacher
-Straße. *Noch offen:* das Space-Shuttle-Denkmal am Jagdschloss Platte – das
-Modell steht noch schief und halb in einem Gebäude und ist deshalb noch nicht
-im Spiel.
+Russisch-Orthodoxe Kirche, das LuisenForum als Brücke über die Schwalbacher
+Straße und ein Space-Shuttle-Denkmal am Jagdschloss Platte.
 
 | | | |
 |---|---|---|

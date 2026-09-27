@@ -38,11 +38,16 @@ $Json   = Join-Path $LogDir "WbHealth.json"
 if (-not (Test-Path $Exe))  { Write-Host "ABBRUCH: Editor nicht gefunden: $Exe"; exit 2 }
 if (-not (Test-Path $Proj)) { Write-Host "ABBRUCH: Projekt nicht gefunden: $Proj"; exit 2 }
 
+# Engine-Lock fuer die ganze Sitzung (Tools\engine_run_lock.ps1). Ohne ihn
+# wuerde ein paralleler Gate-/Bake-Lauf genau diesen Editor beenden.
+& "$PSScriptRoot\engine_run_lock.ps1" -Modus Nehmen -Name health_check
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 Write-Host "=== Health-Check WiesbadenReal (nur WbHealth-Gate) ==="
 
-# Laufende Editoren beenden, damit die Sitzung sauber startet.
-Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Seconds 2
+# Laufende Editoren und ZenServer beenden, damit die Sitzung sauber startet.
+& "$PSScriptRoot\cleanup_unreal_processes.cmd"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Zeitstempel VOR dem Start: nur eine danach geschriebene WbHealth.json zaehlt
 # (die alte wird bewusst nicht geloescht, sondern per LastWriteTime abgegrenzt).

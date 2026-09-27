@@ -11,15 +11,17 @@
 #include "Materials/MaterialInterface.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 #include "Vehicles/WiesbadenLegacyHelicopter.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
 
 /**
- * Das ALTE Heli-Modell als Standstueck neben dem Spielerheli.
+ * Der ZWEITE fliegbare Hubschrauber - altes Modell, dieselbe Flugmechanik.
  *
- * Geprueft werden die vier Dinge, die am alten Modell tatsaechlich gemessen
- * werden mussten und die man im Spiel nicht als Fehler sieht: die Mesh-Pfade
- * (ein Tippfehler laesst nur ein leeres Standstueck stehen), die Mastachse
- * (ohne die gemessenen Nabenversaetze kreisen die Rotoren neben dem Mast), die
- * Hoehen (345 / 300 cm) und die Materialien (Rumpf-Tarnung, dunkle Rotoren).
+ * Geprueft werden die Dinge, die man im Spiel nicht als Fehler SIEHT: dass er
+ * ueberhaupt ein Fluggeraet ist (als blosser Actor liess er sich nie
+ * uebernehmen), dass er den Spieler beim Aufstellen nicht an sich reisst, die
+ * Mesh-Pfade (ein Tippfehler laesst nur einen leeren Rumpf stehen), die
+ * Mastachse (ohne die gemessenen Nabenversaetze kreisen die Rotoren neben dem
+ * Mast), die Hoehen (345 / 300 cm) und die Lackierung.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLegacyHelicopterModelTest,
 	"WiesbadenReal.Vehicles.LegacyHelicopterModell",
@@ -34,9 +36,22 @@ bool FLegacyHelicopterModelTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// Ein Standstueck darf nicht ticken - sonst laufen Rotordrehzahl, Schwerkraft
-	// oder Audio darauf an, und es bewegt sich irgendwann von selbst.
-	TestFalse(TEXT("Standstueck tickt nicht"), CDO->PrimaryActorTick.bCanEverTick);
+	// -- Fliegbar ------------------------------------------------------------
+	//
+	// Hier stand das Gegenteil: "Ein Standstueck darf nicht ticken". Genau
+	// daran lag es - ohne Tick keine Flugmechanik, und als AActor statt Pawn
+	// konnte ihn ohnehin niemand uebernehmen. FindNearbyVehicle sucht Pawns.
+	TestTrue(TEXT("ist ein Hubschrauber, kein Standstueck"),
+		CDO->IsA<AWiesbadenHelicopter>());
+	TestTrue(TEXT("tickt - sonst gibt es keine Flugmechanik"),
+		CDO->PrimaryActorTick.bCanEverTick);
+
+	// Aber er darf sich den Spieler NICHT selbst nehmen. Die Basisklasse steht
+	// auf Player0; bliebe das stehen, risse der zweite Hubschrauber den
+	// Spieler beim Aufstellen aus dem Auto - man startete in der Luft.
+	TestEqual(TEXT("uebernimmt den Spieler nicht von selbst"),
+		static_cast<int32>(CDO->AutoPossessPlayer.GetValue()),
+		static_cast<int32>(EAutoReceiveInput::Disabled));
 
 	// -- Netze ---------------------------------------------------------------
 	UStaticMeshComponent* Fuselage = CDO->GetFuselageMesh();
@@ -54,6 +69,39 @@ bool FLegacyHelicopterModelTest::RunTest(const FString& Parameters)
 		return true;
 	}
 	TestEqual(TEXT("Rumpfnetz"), Body->GetName(), FString(TEXT("SM_HeliBody")));
+
+	// Die Kabine erbte den Rumpf-Faktor 14,5 (38-m-Kasten, 27.09.2026): im
+	// Actor-Raum muss sie Ka-52-Groesse haben, das Cockpit-Auge umschliessen
+	// und im Rumpf liegen.
+	UStaticMeshComponent* Kabine = CDO->GetCockpitMesh();
+	if (Kabine && Kabine->GetStaticMesh())
+	{
+		const FBox KabineAktor = Kabine->GetStaticMesh()->GetBoundingBox()
+			.TransformBy(Kabine->GetRelativeTransform() * Fuselage->GetRelativeTransform());
+		const FBox RumpfAktor = Body->GetBoundingBox().TransformBy(Fuselage->GetRelativeTransform());
+		const FVector Groesse = KabineAktor.GetSize();
+		AddInfo(FString::Printf(TEXT("Kabine %s, Rumpf %s (Actor-Raum)"),
+			*KabineAktor.ToString(), *RumpfAktor.ToString()));
+		TestTrue(FString::Printf(TEXT("Kabine %.0f x %.0f x %.0f cm (erwartet Laenge 230..300, Breite 120..220, Hoehe < 250)"),
+			Groesse.X, Groesse.Y, Groesse.Z),
+			Groesse.X > 230.0 && Groesse.X < 300.0 && Groesse.Y > 120.0 && Groesse.Y < 220.0 && Groesse.Z < 250.0);
+		if (const UWiesbadenVehicleCameraComponent* Kamera = CDO->GetVehicleCamera())
+		{
+			const FVector Augen = Kamera->GetRelativeLocation() + Kamera->CockpitOffset;
+			TestTrue(FString::Printf(TEXT("Cockpit-Auge %s in der Kabine"), *Augen.ToString()),
+				KabineAktor.IsInsideOrOn(Augen));
+		}
+		TestTrue(TEXT("Kabine liegt im Rumpf"), RumpfAktor.ExpandBy(10.0).IsInsideOrOn(KabineAktor));
+		// Der Kasten allein sagt nicht "unsichtbar von aussen": die Nase
+		// verjuengt sich, und die Seitenwaende ragten im Bild heraus. Darum
+		// sieht die Kabine nur der eigene Pilot, und erst im Cockpit (Tick).
+		TestTrue(TEXT("Kabine nur fuer den Piloten und anfangs verborgen"),
+			Kabine->bOnlyOwnerSee && !Kabine->GetVisibleFlag());
+	}
+	else
+	{
+		AddError(TEXT("Keine Kabine am alten Modell"));
+	}
 
 	UStaticMeshComponent* Upper = CDO->GetUpperRotorMesh();
 	UStaticMeshComponent* Lower = CDO->GetLowerRotorMesh();
@@ -74,13 +122,16 @@ bool FLegacyHelicopterModelTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("Rumpf-Material"), Fuselage->GetMaterial(0));
 	if (Fuselage->GetMaterial(0))
 	{
-		TestEqual(TEXT("Rumpf traegt die alte Zell-Tarnung"),
-			Fuselage->GetMaterial(0)->GetName(), FString(TEXT("M_WbHelicopter")));
+		// Eigene Lackierung, nicht die des Ka-52 und nicht der graue
+		// Platzhalter: M_WbHelicopter war eine flache Farbe mit Rauschen,
+		// M_HeliRotorBase das glTF-Standardmaterial des Imports (weiss).
+		TestEqual(TEXT("Rumpf traegt die zivile Lackierung"),
+			Fuselage->GetMaterial(0)->GetName(), FString(TEXT("M_WbHeliCivil")));
 	}
 	if (Upper && Upper->GetMaterial(0))
 	{
-		TestEqual(TEXT("Rotor traegt das Rotor-Material"),
-			Upper->GetMaterial(0)->GetName(), FString(TEXT("M_HeliRotorBase")));
+		TestEqual(TEXT("Rotor traegt das dunkle Rotorblatt-Material"),
+			Upper->GetMaterial(0)->GetName(), FString(TEXT("M_WbHeliRotor")));
 	}
 
 	// -- Mastachse und Nabenhoehen -------------------------------------------

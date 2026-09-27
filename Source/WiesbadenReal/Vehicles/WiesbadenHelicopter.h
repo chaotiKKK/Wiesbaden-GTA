@@ -6,7 +6,9 @@
 #include "GameFramework/Pawn.h"
 #include "InputCoreTypes.h"
 
+#include "Vehicles/WiesbadenHeliGunComponent.h"
 #include "Vehicles/WiesbadenHelicopterAudioComponent.h"
+#include "Vehicles/WiesbadenHeliLightRig.h"
 #include "Vehicles/WiesbadenRotorPhysics.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "Vehicles/WiesbadenVehicleControl.h"
@@ -50,6 +52,115 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void UnPossessed() override;
+
+	/**
+	 * Schaden annehmen - mit Folgen fuer den Flug.
+	 *
+	 * Der Heli hatte bisher kein Leben: Treffer von Fahrzeugen, Fussgaengern
+	 * oder dem eigenen Geschuetz wurden empfangen und ignoriert. Damit war
+	 * "MG-Bordgeschuetz" eine Attrappe, und die Zerstoerung, nach der der
+	 * Auftrag einen Respawn auf dem Helipad verlangt, hatte keinen Ausloeser.
+	 *
+	 * Bei 0 Punkten geht der Hubschrauber in den Absturz: Triebwerk aus,
+	 * Steuerung weg, Rotoren stehen, Licht aus, Rumpf taumelt, und nach
+	 * RespawnDelay steht er wieder auf dem Landeplatz des Sebbotower.
+	 */
+	virtual float TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
+		AController* EventInstigator, AActor* DamageCauser) override;
+
+	/** Trefferpunkte. */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Schaden")
+	float GetHealth() const { return Health; }
+
+	/** Trefferpunkte anteilig (0 = zerstoert, 1 = unversehrt). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Schaden")
+	float GetHealthFraction() const;
+
+	/** Zerstoert? Dann fliegt er nicht mehr. */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Schaden")
+	bool IsDestroyed() const { return bDestroyed; }
+
+	/**
+	 * Sofort wieder auf dem Landeplatz des Sebbotower aufsetzen.
+	 *
+	 * Auch ohne Zerstoerung aufrufbar: damit laesst sich der Anflug pruefen,
+	 * ohne den Hubschrauber erst abschiessen zu muessen.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Heli|Schaden")
+	bool RespawnOnTowerHelipad();
+
+	/**
+	 * Stellt den Hubschrauber DistanzMeter vor einen Zielpunkt und peilt ihn an.
+	 *
+	 * Aufnahmewerkzeug, kein Spielverhalten: damit zeigt die Muendung auf ein
+	 * bestimmtes Bauwerk (am 26.09.2026 ein Zeltdach), statt nur "nach vorn".
+	 * Die Höhe kommt über eine Bodenspur - ein geratenes Z landete sonst im
+	 * Erdreich oder in der Luft.
+	 *
+	 * X/Y = Weltkoordinaten des Ziels (cm), HoeheUeberBodenCm = Zielpunkt über
+	 * dem dortigen Boden (First des Dachs), DistanzMeter = Abstand der
+	 * Schwebeposition. Der Abflug erfolgt aus Sueden, damit die Nase nach Norden
+	 * zeigt und die Kamera dahinter die Muendung vor dem Ziel sieht.
+	 */
+	bool AimAtWorldTarget(float Xcm, float Ycm, float HoeheUeberBodenCm,
+		float DistanzMeter);
+
+	/** Sekunden bis zum Wiederaufsetzen nach der Zerstoerung (-1 = keins). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Schaden")
+	float GetRespawnCountdown() const { return RespawnCountdown; }
+
+	/** Geraet: Lichtbastel (Positionslichter, Strobe, Landeslicht, 2 Scheinwerfer). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Geraet")
+	UWiesbadenHeliLightRig* GetLightRig() const { return LightRig; }
+
+	/** Geraet: Bordgeschuetz. */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Geraet")
+	UWiesbadenHeliGunComponent* GetGun() const { return Gun; }
+
+	/** Rumpfgehaeuse (traegt Modelldrehung, Massstab und Lage). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Geraet")
+	UStaticMeshComponent* GetFuselageMesh() const { return FuselageMesh; }
+
+	/** Kabinen-Innenraum: haengt am Rumpf, damit er dessen Drehung erbt. */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Geraet")
+	UStaticMeshComponent* GetCockpitMesh() const { return CockpitMesh; }
+
+
+	/**
+	 * Fahrzeugkamera. Sie haengt am SceneRoot, NICHT am Rumpf - darum wird
+	 * ihr CockpitOffset im Actorraum addiert. Der Test braucht sie, um den
+	 * Augpunkt gegen die Kabine zu messen.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Geraet")
+	UWiesbadenVehicleCameraComponent* GetVehicleCamera() const { return VehicleCamera; }
+
+	/** Flugsound-Komponente (Rotor, Triebwerk, Wind). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Geraet")
+	UWiesbadenHelicopterAudioComponent* GetHelicopterAudio() const { return HelicopterAudio; }
+
+	/** Nabe des oberen Koaxialrotors. */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Geraet")
+	USceneComponent* GetMainRotorHub() const { return MainRotorHub; }
+
+	/** Radscheibe des oberen Koaxialrotors (traegt den Achsversatz). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Geraet")
+	UStaticMeshComponent* GetMainRotorBlade() const { return MainRotorBlade; }
+
+	/** Radscheibe des unteren Koaxialrotors. */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Geraet")
+	UStaticMeshComponent* GetLowerRotorBlade() const { return LowerRotorBlade; }
+
+	/** Nabe des unteren Koaxialrotors. */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|Geraet")
+	USceneComponent* GetLowerRotorHub() const { return LowerRotorHub; }
+
+	/** Suchscheinwerfer schalten. */
+	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Heli|Geraet")
+	void SetSearchlights(bool bOn);
+
+	/** Landeslicht schalten. */
+	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Heli|Geraet")
+	void SetLandingLight(bool bOn);
 
 	/** Umschalten der Kamera (Forward an die Fahrzeug-Kamera-Komponente). */
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Heli")
@@ -297,6 +408,39 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Heli|Physik", meta = (ClampMin = "0.0"))
 	float MinGroundClearanceCm = 40.0f;
 
+	// -- Geraet: Licht, Scheinwerfer, Bordgeschuetz -------------------------
+
+	/**
+	 * Entfernung (cm), auf die das Bordgeschuetz zielt (200 m).
+	 *
+	 * Das Geschuetz bekommt einen Punkt in dieser Entfernung auf der Blick-
+	 * achse, nicht den Blickwinkel selbst: bei 2 km Zieldistanz faellt der
+	 * Zielpunkt in die Nase, und alle Winkel zwischen Muendung und Ziel
+	 * liegen dann unter der Wahrnehmungsschwelle - der Turm schiene still.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Heli|Geraet", meta = (ClampMin = "1000.0"))
+	float ZielDistanzCm = 20000.0f;
+
+	/** Entfernung (cm) des Punktes, auf den die Suchscheinwerfer zeigen. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Heli|Geraet", meta = (ClampMin = "100.0"))
+	float LichtDistanzCm = 5000.0f;
+
+	/** Trefferpunkte, bevor der Hubschrauber abstuerzt. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Heli|Schaden", meta = (ClampMin = "1.0"))
+	float MaxHealth = 900.0f;
+
+	/** Sekunden zwischen Absturz und Wiederaufsetzen auf dem Landeplatz. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Heli|Schaden", meta = (ClampMin = "0.0"))
+	float RespawnDelay = 8.0f;
+
+	/** Wie viele Grad je Sekunde der abgestuerzte Rumpf taumelt. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Heli|Schaden", meta = (ClampMin = "0.0"))
+	float CrashTumbleDegPerSec = 74.0f;
+
+	/** Wie schnell der Rumpf beim Absturz absinkt (cm/s). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Heli|Schaden", meta = (ClampMin = "0.0"))
+	float CrashSinkCmPerSec = 520.0f;
+
 	/** Rotor-Physik-Modul (Lift, Collective, Zyklik, Heckrotor, Autorotation). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Heli|Rotor")
 	FWiesbadenRotorPhysics RotorPhysics;
@@ -309,6 +453,54 @@ public:
 	 * Vollausschlag nicht mehr erreichbar.
 	 */
 	static float ApplyStickShaping(float RawAxis, float Deadzone, float Expo);
+
+	/**
+	 * Delta-Rotation der beiden Koaxialrotoren fuer einen Zeitschritt.
+	 *
+	 * Aus der Rechnung gemacht, damit der Test pruefen kann, was die
+	 * Forderung sagt - gleicher Betrag, entgegengesetztes Vorzeichen. Die
+	 * Naben selbst drehen ueber AddLocalRotation um ihre eigene
+	 * Komponentenachse; dass diese Achse die Rotorstange ist, prueft
+	 * Ka52Ausstattung an den VERTEXEN des Assets, nicht an
+	 * Component-Positionen (die lagen auch dann bei 0,0,0, wenn die
+	 * Scheibe 1,8 m daneben sitzt).
+	 */
+	static void ComputeCoaxialRotorRotation(
+		float MainRotorRpm, float DeltaSeconds, FRotator& OutUpper, FRotator& OutLower);
+
+	/**
+	 * Versatz, mit dem ein Rotor-Component auf die Rotorstangenachse (0, 0)
+	 * im Modellraum zu legen ist.
+	 *
+	 * DER EINZIGE Ort, an dem die Achse der beiden Koaxialrotoren gesetzt
+	 * wird. Beide Scheiben laufen durch dieselbe Funktion; der Mesh-Drehpunkt
+	 * ist gemessen (Tools/ka52_rotorachse.py, Saved/Diagnose/ka52/
+	 * rotorachse.txt), der Versatz dreht ihn mit der Modelldrehung zurueck.
+	 * Der Hub-Node bleibt unveraendert, ebenso der Gegenlauf und der
+	 * Ho henabstand von 118,5 cm.
+	 */
+	static FVector ComputeRotorMountOffset(
+		const FVector& MeshDrehpunktCm, const FRotator& ModelYaw, float HubHeightCm);
+
+	/**
+	 * Gemessener Drehpunkt einer Radscheibe im Modellraum des Assets, cm.
+	 *
+	 * BEWIESENE WERTE, keine Schaetzung. Quelle ist die Datei, aus der UE das
+	 * Asset importiert hat (Content/Data/Raw/Ka52/ka52_ue.fbx, 208 009 bzw.
+	 * 221 119 Vertex), gemessen mit Tools/ka52_rotorachse.py ueber die
+	 * 3-fach-Rotationssymmetrie, Beleg in Saved/Diagnose/ka52/
+	 * rotorachse_fbx.txt (Restfehler 4,2 bzw. 6,3 mm gegen 375 mm an der
+	 * Kontrollstelle).
+	 *
+	 * Oeffentlich, weil der Automationstest dieselben Zahlen braucht: prueft
+	 * man nur die Geometrie des Assets, misst man den Ersatzdatensatz (Nanite,
+	 * 773 Dreiecke) und nicht das Flugmodell. Der Test vergleicht deshalb
+	 * beides - die Rechnung exakt, die Geometrie mit der Aufloesung, die
+	 * dieser Datensatz hergibt.
+	 *
+	 * @param bUnten true = untere Scheibe des Koaxialpaars.
+	 */
+	static FVector GetRotorDrehpunktCm(bool bUnten);
 
 	/**
 	 * Achse mit getrennten Raten fuer Aufbau und Ruecklauf nachfuehren.
@@ -342,6 +534,19 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Heli")
 	UStaticMeshComponent* FuselageMesh = nullptr;
+
+	/**
+	 * Sitzschalen, Pulte, Knueppel: die Kabine, die es im Rumpf-Asset nicht
+	 * gibt (das Modell ist eine AUSSENansicht).
+	 *
+	 * Haengt am Rumpf und nicht am Szenenwurzel, damit Kabine, Rumpf und
+	 * Rotoren sich Massstab und Gierdrehung teilen statt sie zu fuehren.
+	 * Ausdruecklich NICHT bei AddCockpitHiddenMesh: die Kamera blendet den
+	 * Rumpf aus, um in die Kabine sehen zu koennen - die Kabine selbst
+	 * muss dabei sichtbar bleiben, sonst sitzt der Pilot im Nichts.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Heli")
+	UStaticMeshComponent* CockpitMesh = nullptr;
 
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Heli")
 	UStaticMeshComponent* TailBoomMesh = nullptr;
@@ -394,6 +599,20 @@ protected:
 	/** Phase fuer das leichte Pulsieren der Staubscheibe. */
 	float DustPhase = 0.0f;
 
+	/**
+	 * Lichtbastel: Positionslichter, Stroboskop, Landlicht, 2 Suchscheinwerfer.
+	 *
+	 * Sie traegt dieselbe Modelldrehung wie Rumpf und Rotoren (SetModel-
+	 * Transform im Konstruktor). Ohne diese Uebergabe saeßen die Leuchten an
+	 * einer anderen Stelle als die Koerper, die sie beleuchten sollen.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Heli|Geraet")
+	UWiesbadenHeliLightRig* LightRig = nullptr;
+
+	/** Bordgeschuetz (30 mm) auf dem Steuerbord-Pylon. */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Heli|Geraet")
+	UWiesbadenHeliGunComponent* Gun = nullptr;
+
 	/** Generische Fahrzeug-Kamera (Follow/Orbit/Cockpit). */
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Heli")
 	UWiesbadenVehicleCameraComponent* VehicleCamera = nullptr;
@@ -416,11 +635,35 @@ private:
 	 * Sekunden 126 m ueber Grund und war vom Startplatz aus nicht mehr zu
 	 * sehen.
 	 */
+	/**
+	 * Eingaben fuer Geraet und Waffe auslesen (getrennt vom Flug, damit
+	 * die Steuerung nicht in einem Block von 200 Zeilen verschwindet).
+	 */
+	void ReadDeviceInput(float DeltaSeconds);
+
+	/** Absturz: Rumpf taumeln, sinken, Rotation stehen lassen. */
+	void UpdateCrash(float DeltaSeconds);
+
+	/** Wiederaufsetzen: Ort suchen, setzen, Zustand zuruecksetzen. */
+	bool PlaceOnTowerHelipad();
+
 	void ParkOnGround();
 	void UpdateRotors(float DeltaSeconds);
 	void UpdateAudio(float DeltaSeconds);
 
 	bool IsKeyDown(const FKey& Key);
+
+	/**
+	 * Meldet den Zustand der Kabinenhuelle, sobald sich der Kameramodus
+	 * aendert. Am 26.09.2026 war im Cockpitbild keine Kabine zu sehen, ohne
+	 * dass das Log eine Ursache nannte - "nie gezeichnet" und "an anderer
+	 * Stelle" sehen im Bild gleich aus.
+	 */
+	void MeldeKabine();
+
+	/** Merker fuer MeldeKabine: letzter gemeldeter Kameramodus. */
+	EWiesbadenVehicleCameraMode KameraModusMerker = EWiesbadenVehicleCameraMode::Follow;
+
 
 	/** Analogwert einer Achse (Gamepad-Stick oder Trigger), 0 ohne Controller. */
 	float GetAnalogAxis(const FKey& Key);
@@ -440,6 +683,21 @@ private:
 
 	bool bEngineToggleHeld = false;
 	bool bGrounded = false;
+
+	// -- Schaden -------------------------------------------------------------
+	// Health steht hier und nicht im Rotorphysik-Modul: das Modul rechnet
+	// Flug, der Pawn weiss, wann er tot ist.
+	float Health = 900.0f;
+	bool bDestroyed = false;
+	float RespawnCountdown = -1.0f;
+	float CrashYawRate = 0.0f;
+	float CrashRollRate = 0.0f;
+
+	// Geraet: Flanken, damit ein gehaltener Schalter nicht im Frame
+	// mehrfach umschaltet.
+	bool bSearchlightToggleHeld = false;
+	bool bLandingLightToggleHeld = false;
+	bool bTriggerHeld = false;
 
 	// Boden-Cache: ApplyGroundConstraint fuellt ihn einmal pro Frame; der
 	// visuelle Pfad (GetAltitudeMeters, Downwash-Staub) liest ihn, statt eigene

@@ -263,12 +263,42 @@ void AWiesbadenCityChunk::BeginPlay()
 		RegionAssetSpawner->SpawnRegionAssets(Layout);
 	}
 
-	// Nach dem Instanz-Aufbau neu verankern: SpawnRegionAssets legt die
+	// Nach dem Instanz-Aufbau verankern: SpawnRegionAssets legt die
 	// Varianten-Komponenten (Trees_01..) NEU an - im Konstruktor sitzen sie
 	// am Actor-Ursprung, und genau dieser Ursprungspunkt war die 3x4-km-
 	// Bounds-Falle. Auch leere Zellen (0 Regionsobjekte) brauchen den
 	// Aufruf, weil ihre Basis-HISMs aus der Karte leer und am Ursprung sind.
-	AnchorStreamingBounds();
+	//
+	// Der gespeicherte Anker genuegt und ist der Normalfall: OnRegister hat
+	// beim Stream-in schon alles an seinen Platz gesetzt. Nur eine Zelle OHNE
+	// gespeicherten Anker (alte Karte vor diesem Fix) rechnet ihn neu - und
+	// das nur im Editor, denn beim Stream-in im Spiel ist die Zellgeometrie
+	// gar nicht geladen und CalcBounds lieferte dann Muell.
+	if (bHasStreamingAnchor && !StreamingAnchorCm.ContainsNaN())
+	{
+		ApplyStreamingAnchor();
+	}
+#if WITH_EDITOR
+	else
+	{
+		AnchorStreamingBounds();
+	}
+#endif
+}
+
+void AWiesbadenCityChunk::PostRegisterAllComponents()
+{
+	Super::PostRegisterAllComponents();
+
+	// Der Anker steht im Paket, die Komponenten-Transforms koennen im
+	// gespeicherten Zustand falsch sein (siehe Kommentar in der Header-
+	// Deklaration). Deshalb wird hier nichts gemessen, sondern der
+	// gespeicherte Wert aufgespielt - bei jedem Laden, im Editor wie im
+	// Spiel, beim Stream-in genauso wie beim Kartenoeffnen.
+	if (bHasStreamingAnchor && !StreamingAnchorCm.ContainsNaN())
+	{
+		ApplyStreamingAnchor();
+	}
 }
 
 void AWiesbadenCityChunk::AnchorStreamingBounds()
@@ -351,14 +381,32 @@ void AWiesbadenCityChunk::AnchorStreamingBounds()
 		return;
 	}
 
+	// Als Property speichern, BEVOR die Komponenten angefasst werden. Der
+	// Anker ist das Einzige, was das Speichern zuverlaessig ueberlebt: eine
+	// Komponenten-Transform ist ein relatives Delta (siehe OnRegister), ein
+	// FVector im Actor-Paket nicht.
 	Modify(true);
+	StreamingAnchorCm = Anchor;
+	bHasStreamingAnchor = true;
 
+	ApplyStreamingAnchor();
+}
+
+void AWiesbadenCityChunk::ApplyStreamingAnchor()
+{
 	// Mesh-Komponenten: volle Geometrie steckt in WELT-Koordinaten, ihre
 	// Komponente gehoert daher an die Actor-Position (Identitaet). Das Pin
 	// ist noetig, weil SetRegionAssets VOR dem Section-Aufbau laeuft und
 	// dort noch leere Meshes an den Asset-Schwerpunkt gezogen haette - die
 	// danach erzeugten Sections wuerden verschoben rendern. Leere Meshes
 	// dagegen an den Inhalt; nur sie tragen Punkt-Bounds.
+	//
+	// Wichtig: immer SetWorldLocation. Der Actor steht per Bauplan auf
+	// (0,0,0), deshalb ist Welt gleich relativ - und nur so bleibt der
+	// Aufruf idempotent. Ein SetRelativeLocation(Anchor) auf einem
+	// Actor am Ursprung schriebe den Weltanker als Delta in die Karte; der
+	// naechste Aufruf addierte ihn ein zweites Mal.
+	const FVector CellContent = StreamingAnchorCm;
 	for (UProceduralMeshComponent* Mesh : { RoadMesh, BuildingMesh })
 	{
 		if (!Mesh)
@@ -371,7 +419,7 @@ void AWiesbadenCityChunk::AnchorStreamingBounds()
 		}
 		else
 		{
-			Mesh->SetWorldLocation(Anchor);
+			Mesh->SetWorldLocation(CellContent);
 		}
 		Mesh->MarkRenderStateDirty();
 	}
@@ -389,13 +437,13 @@ void AWiesbadenCityChunk::AnchorStreamingBounds()
 		}
 		else
 		{
-			SM->SetWorldLocation(Anchor);
+			SM->SetWorldLocation(CellContent);
 		}
 		SM->MarkRenderStateDirty();
 	}
 	if (RegionAssetSpawner)
 	{
-		RegionAssetSpawner->AnchorEmptyInstanceComponents(Anchor);
+		RegionAssetSpawner->AnchorEmptyInstanceComponents(CellContent);
 	}
 }
 

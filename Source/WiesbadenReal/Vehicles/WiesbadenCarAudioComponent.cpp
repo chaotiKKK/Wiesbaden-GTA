@@ -4,10 +4,14 @@
 
 #include "WiesbadenReal.h"
 
+#include "Audio/WiesbadenAudioPropagation.h"
 #include "Audio/WiesbadenAudioSubsystem.h"
 #include "Components/AudioComponent.h"
+#include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
 #include "Sound/SoundBase.h"
 #include "Sound/SoundWaveProcedural.h"
+#include "UObject/UObjectGlobals.h"
 
 namespace
 {
@@ -68,17 +72,40 @@ void UWiesbadenCarAudioComponent::CreateAudioSource()
 	// nullptr, falls die Mix-Assets fehlen -> dann eben ohne Bus (kein Fehler).
 	EngineAudio->SoundClassOverride = UWiesbadenAudioSubsystem::LoadBusSoundClass(EWbAudioBus::Vehicle);
 
-	// Raeumlich: der Motor sitzt beim Kaefer hinten, und beim Vorbeifahren
-	// soll der Klang von dort kommen.
-	EngineAudio->bAllowSpatialization = true;
+	// Raeumlich UND mit Ausbreitung: Distanzkurve (weit = Motor), Occlusion und
+	// Hall-Send stecken im Propagation-Setup bzw. dessen Attenuation-Asset.
 	EngineAudio->SetVolumeMultiplier(FMath::Clamp(MasterGain, 0.0f, 1.0f));
+	WiesbadenAudioPropagation::ConfigureSource(EngineAudio, EWbAudioRange::Far);
 
-	if (EngineSound)
+	// Reihenfolge: explizit zugewiesenes Asset, dann die ECHTE Aufnahme
+	// (Nutzerwunsch 2026-09: den Synth-Klang ersetzen), dann das MetaSound
+	// MS_EngineBoxer, zuletzt die C++-Synthese.
+	USoundBase* Sound = EngineSound;
+	if (!Sound)
+	{
+		Sound = LoadObject<USoundBase>(nullptr,
+			TEXT("/Game/Audio/Samples/A_EngineGasolineSmall.A_EngineGasolineSmall"));
+		if (Sound)
+		{
+			UE_LOG(LogWbVehicles, Log, TEXT("Motorsound: Aufnahme 'Small gasoline engine' statt Synth."));
+		}
+	}
+	if (!Sound)
+	{
+		Sound = LoadObject<USoundBase>(nullptr,
+			*WiesbadenAudioPropagation::EngineMetaSoundPath());
+		if (Sound)
+		{
+			bMetaSound = true;
+		}
+	}
+
+	if (Sound)
 	{
 		bProcedural = false;
-		EngineAudio->SetSound(EngineSound);
+		EngineAudio->SetSound(Sound);
 		EngineAudio->Play();
-		UE_LOG(LogWbVehicles, Log, TEXT("Motorsound: Asset '%s' wird verwendet."), *EngineSound->GetName());
+		UE_LOG(LogWbVehicles, Log, TEXT("Motorsound: Asset '%s' wird verwendet."), *Sound->GetName());
 		return;
 	}
 
@@ -182,17 +209,50 @@ void UWiesbadenCarAudioComponent::TickComponent(
 		return;
 	}
 
+	// MetaSound-Bruecke: dieselben Parameter wie die C++-Synthese fahren die
+	// MetaSound-Layer (Rpm, Throttle, SpeedKmh, EngineRunning, Horn).
+	for (const TPair<FName, float>& Pair : WiesbadenAudioPropagation::EngineParamPairs(AudioParams))
+	{
+		EngineAudio->SetFloatParameter(Pair.Key, Pair.Value);
+	}
+
+	// Doppler aus der Relativbewegung von Quelle und Hoerer (Spieler-Pawn).
+	AActor* Listener = nullptr;
+	if (UWorld* World = GetWorld())
+	{
+		if (APlayerController* PC = World->GetFirstPlayerController())
+		{
+			Listener = PC->GetPawn();
+		}
+	}
+	const float Doppler = WiesbadenAudioPropagation::ComputeDopplerForActors(GetOwner(), Listener);
+
 	if (bProcedural)
 	{
+		EngineAudio->SetPitchMultiplier(Doppler);
 		PushProceduralAudio();
 		return;
 	}
 
-	// Asset-Betrieb: Tonhoehe und Lautstaerke folgen Drehzahl und Last.
-	const float Pitch = FMath::Clamp(AudioParams.EngineRpm / FMath::Max(1.0f, IdleRpm * 3.0f), 0.4f, 2.5f);
-	EngineAudio->SetPitchMultiplier(Pitch);
+	if (bMetaSound)
+	{
+		// Im MetaSound regeln Rpm/Throttle/EngineRunning die Layer selbst
+		// (EngineParamPairs oben) - hier wuerde eine zweite Tonhoehen-
+		// Modulation doppelt greifen. Nur Doppler und Gesamtlautstaerke.
+		EngineAudio->SetPitchMultiplier(Doppler);
+		EngineAudio->SetVolumeMultiplier(FMath::Clamp(MasterGain, 0.0f, 1.0f));
+		return;
+	}
+
+	// Asset-Betrieb (echte Aufnahme): Tonhoehe folgt der Drehzahl SANFT
+	// (Leerlauf = 1,0, Volllast ~1,25) - ein starker Pitch-Sweep klingt nach
+	// Kassettendeck, die Aufnahme lebt von ihrem eigenen Klang. Die Last
+	// steuert zusaetzlich die Lautstaerke (Gassen zwischen Drehzahl und Pegel).
+	const float Pitch = FMath::Clamp(1.0f + (AudioParams.EngineRpm - IdleRpm)
+		/ FMath::Max(1.0f, IdleRpm * 4.0f), 0.9f, 1.3f);
+	EngineAudio->SetPitchMultiplier(Pitch * Doppler);
 	EngineAudio->SetVolumeMultiplier(
 		AudioParams.bEngineRunning
-			? FMath::Clamp(MasterGain, 0.0f, 1.0f) * (0.4f + 0.6f * AudioParams.Throttle)
+			? FMath::Clamp(MasterGain, 0.0f, 1.0f) * (0.55f + 0.45f * AudioParams.Throttle)
 			: 0.0f);
 }

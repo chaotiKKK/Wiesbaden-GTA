@@ -4,6 +4,7 @@
 
 #include "GIS/WiesbadenTrafficLights.h"
 #include "GIS/WiesbadenTrafficSimulation.h"
+#include "World/TrafficVehicleSpawnerComponent.h"
 
 namespace
 {
@@ -310,7 +311,11 @@ bool FTrafficGraphFollowTest::RunTest(const FString& Parameters)
 		{
 			Sim.Tick(1.0f);
 		}
-		TestTrue(TEXT("Sackgassen-Netz: Fahrzeuge werden entfernt"), Sim.Report.TotalRemovedCount >= 20);
+		// Seit dem vorausschauenden Folgen (25.09.) mit realistischer Zeitluecke
+		// ~1,7 s (~2100 Fz/h je Spur, echte Kapazitaet): 17 in 40 s. Vorher
+		// 0,67 s Abstand bei 50 km/h (5400 Fz/h, physikalisch unmoeglich): >= 20.
+		TestTrue(FString::Printf(TEXT("Sackgassen-Netz: Fahrzeuge werden entfernt (%d)"), Sim.Report.TotalRemovedCount),
+			Sim.Report.TotalRemovedCount >= 12);
 		TestTrue(TEXT("Sackgassen-Netz: Bestand gedeckelt"), Sim.Report.ActiveVehicleCount < 100);
 	}
 
@@ -332,8 +337,13 @@ bool FTrafficHeadwayTest::RunTest(const FString& Parameters)
 	Segment.LengthCm = 50000.0;
 	LongNetwork.Segments.Add(Segment);
 
+	// Geprueft wird die EXAKTE Ein-Tick-Regel - seit dem vorausschauenden Folgen
+	// (Traffic.Fahrbild) die Notbremse darunter. Darum hier das alte Fahrbild;
+	// unten die Gegenprobe, dass das neue nie schneller faehrt als sie erlaubt.
+	FWiesbadenTrafficSettings ExactSettings = MakeSettings(0.0f);
+	ExactSettings.bSmoothDriving = false;
 	FWiesbadenTrafficSimulation Sim;
-	Sim.Initialize(LongNetwork, MakeSettings(0.0f));
+	Sim.Initialize(LongNetwork, ExactSettings);
 
 	// Leader: langsam (300 cm/s) bei 40000; Follower bei 39300 (Luecke 700 = MinGap);
 	// Dritter weitere 1300 cm dahinter -> Safe-Tempo 300 + 600 = 900.
@@ -371,6 +381,20 @@ bool FTrafficHeadwayTest::RunTest(const FString& Parameters)
 		FMath::Abs(Sim.Vehicles[1].SpeedCmS - 300.0) < 0.5);
 	TestTrue(TEXT("Dritter mit Luecke 1300: Safe-Tempo 900"),
 		FMath::Abs(Sim.Vehicles[2].SpeedCmS - 900.0) < 0.5);
+
+	// Gegenprobe mit vorausschauendem Folgen: nie schneller als die Notbremse.
+	{
+		FWiesbadenTrafficSimulation Smooth;
+		Smooth.Initialize(LongNetwork, MakeSettings(0.0f));
+		Smooth.Vehicles.Add(Leader);
+		Smooth.Vehicles.Add(Follower);
+		Smooth.Vehicles.Add(Third);
+		Smooth.Tick(1.0f);
+		TestTrue(FString::Printf(TEXT("vorausschauend: Follower %.0f <= 300"), Smooth.Vehicles[1].SpeedCmS),
+			Smooth.Vehicles[1].SpeedCmS <= 300.5);
+		TestTrue(FString::Printf(TEXT("vorausschauend: Dritter %.0f <= 900"), Smooth.Vehicles[2].SpeedCmS),
+			Smooth.Vehicles[2].SpeedCmS <= 900.5);
+	}
 
 	for (int32 t = 0; t < 5; ++t)
 	{
@@ -804,11 +828,14 @@ bool FTrafficRedLightStopTest::RunTest(const FString& Parameters)
 	Simulation.Initialize(Network, MakeSettings(0.0f));
 	Simulation.SetTrafficLightSystem(&Lights);
 
-	// Fahrzeug kurz vor dem Spurende (= vor der Haltelinie) einsetzen.
+	// Fahrzeug AN der Haltelinie einsetzen (halber Meter dahinter). Die
+	// Haltelinie liegt je Zufahrt aus der Knotengeometrie (GetStopDistanceCm);
+	// wer schon darueber hinaus ist und faehrt, raeumt bei Rot - siehe unten.
+	const double AtLine = Network.Lanes[0].LengthCm - Simulation.GetStopDistanceCm(0) + 50.0;
 	FTrafficVehicle Vehicle;
 	Vehicle.LaneId = 0;
 	Vehicle.bOnLane = true;
-	Vehicle.DistanceCm = Network.Lanes[0].LengthCm - 50.0;
+	Vehicle.DistanceCm = AtLine;
 	Vehicle.SpeedCmS = 500.0;
 
 	// DesiredSpeedCmS MUSS mitgesetzt werden: der Kolonnen-Durchgang schreibt
@@ -834,7 +861,7 @@ bool FTrafficRedLightStopTest::RunTest(const FString& Parameters)
 			break;
 		}
 
-		Simulation.Vehicles[0].DistanceCm = Network.Lanes[0].LengthCm - 50.0;
+		Simulation.Vehicles[0].DistanceCm = AtLine;
 		Simulation.Vehicles[0].SpeedCmS = 500.0;
 		Simulation.Vehicles[0].DesiredSpeedCmS = 500.0;
 		Simulation.Vehicles[0].bOnLane = true;
@@ -855,6 +882,30 @@ bool FTrafficRedLightStopTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("Bei Rot wird das Fahrzeug gehalten"), bSawHeldAtRed);
 	TestTrue(TEXT("Bei Gruen faehrt es weiter"), bSawMovingAtGreen);
+
+	// Schon UEBER der Haltelinie (50 cm vor dem Spurende), als es rot wird:
+	// in Fahrt wird geraeumt, stehend bleibt es stehen. Frueher blieb auch der
+	// Fahrende stehen - mit der Front im Querweg bis zur naechsten Gruenphase.
+	{
+		int32 Guard = 0;
+		while (Lights.IsConnectionGreen(0) && Guard++ < 300)
+		{
+			Lights.Tick(0.1f);
+		}
+		if (TestFalse(TEXT("Testvorbereitung: rot"), Lights.IsConnectionGreen(0)) && Simulation.Vehicles.Num() > 0)
+		{
+			FTrafficVehicle& V = Simulation.Vehicles[0];
+			V.bOnLane = true;
+			V.LaneId = 0;
+			V.DistanceCm = Network.Lanes[0].LengthCm - 50.0;
+			V.SpeedCmS = 500.0;
+			V.DesiredSpeedCmS = 500.0;
+			V.bWasHeldAtRed = false;
+			Simulation.Tick(0.02f);
+			TestTrue(TEXT("Ueber der Linie in Fahrt: raeumt bei Rot"),
+				Simulation.Vehicles.Num() > 0 && (Simulation.Vehicles[0].SpeedCmS > 0.0 || !Simulation.Vehicles[0].bOnLane));
+		}
+	}
 	TestTrue(TEXT("Zaehler meldet gehaltene Fahrzeuge"), Simulation.GetVehiclesHeldAtRed() >= 0);
 
 	// Gegenprobe: OHNE gesetztes Ampelsystem darf NICHTS halten - genau dieser
@@ -1229,6 +1280,102 @@ bool FTrafficMergeStackingTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficJunctionExitRoomTest,
+	"WiesbadenReal.Traffic.KreuzungsausfahrtFrei",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Blockierfreihaltung: wer hinter der Kreuzung keinen Platz fuer sich UND die
+ * Mindestluecke hat, bleibt vor der Kreuzung.
+ *
+ * Im Spiel steckten an belebten Ecken Wartende im Heck eines Fahrzeugs, das
+ * 2-4 m in der Querstrasse stand. Die alte Regel liess einfahren, sobald das
+ * hinterste Fahrzeug der Zielspur 480 cm hinter deren Anfang stand - die
+ * Folgeregel haelt aber 700 cm Mittenabstand. Wer bei 600 cm einfuhr, blieb
+ * nach 1 m auf der Verbindung stehen, mitten im Knoten.
+ */
+bool FTrafficJunctionExitRoomTest::RunTest(const FString& Parameters)
+{
+	FRoadNetwork Network = MakeNetwork();   // Spur 0 -> Verbindung 0 (Knoten 42) -> Spur 1
+	// Querstrom durch denselben Knoten: Spur 3 -> Verbindung 1 -> Spur 4, schneidet
+	// Verbindung 0 bei x = 102,5 m. Erst damit ist Verbindung 0 ein Kreuzungsweg.
+	Network.Lanes.Add(MakeSimLane(3, { FVector(10250.0, -5000.0, 0.0), FVector(10250.0, -300.0, 0.0) }));
+	Network.Lanes.Add(MakeSimLane(4, { FVector(10250.0, 300.0, 0.0), FVector(10250.0, 5000.0, 0.0) }));
+	FLaneConnection Cross;
+	Cross.FromLaneId = 3;
+	Cross.ToLaneId = 4;
+	Cross.IntersectionNodeId = 42;
+	Cross.TurnType = ETurnType::Through;
+	Cross.bRestricted = false;
+	Cross.ConnectionPath = { FVector(10250.0, -300.0, 0.0), FVector(10250.0, 300.0, 0.0) };
+	Network.Connections.Add(Cross);
+
+	struct FResult { bool bEntered = false; bool bOnConnectionAtEnd = false; double RemainingCm = 0.0; };
+	const auto Run = [](const FRoadNetwork& Net, bool bStrict)
+	{
+		FWiesbadenTrafficSettings Settings = MakeSettings(0.0f);
+		Settings.bStrictJunctionClearance = bStrict;
+		FWiesbadenTrafficSimulation Sim;
+		Sim.Initialize(Net, Settings);
+
+		// Steht 6 m hinter dem Anfang der Zielspur: mehr als 480, weniger als
+		// Mindestluecke + halbe Laenge.
+		FTrafficVehicle Blocker;
+		Blocker.VehicleId = 1;
+		Blocker.LaneId = 1;
+		Blocker.bOnLane = true;
+		Blocker.DistanceCm = 600.0;
+		Blocker.SpeedCmS = 0.0;
+		Blocker.DesiredSpeedCmS = 0.0;
+		Sim.Vehicles.Add(Blocker);
+
+		FTrafficVehicle Approaching;
+		Approaching.VehicleId = 2;
+		Approaching.LaneId = 0;
+		Approaching.bOnLane = true;
+		Approaching.DistanceCm = 8000.0;
+		Approaching.SpeedCmS = 800.0;
+		Approaching.DesiredSpeedCmS = 1000.0;
+		Sim.Vehicles.Add(Approaching);
+
+		FResult Result;
+		for (int32 Step = 0; Step < 150; ++Step)
+		{
+			Sim.Tick(0.1f);
+			for (const FTrafficVehicle& V : Sim.Vehicles)
+			{
+				if (V.VehicleId == 2)
+				{
+					Result.bEntered |= !V.bOnLane;
+					Result.bOnConnectionAtEnd = !V.bOnLane;
+					Result.RemainingCm = V.bOnLane ? Net.Lanes[0].LengthCm - V.DistanceCm : 0.0;
+				}
+			}
+		}
+		return Result;
+	};
+
+	const FResult Strict = Run(Network, true);
+	TestFalse(TEXT("streng: faehrt nicht in die Kreuzung"), Strict.bEntered);
+	TestTrue(FString::Printf(TEXT("streng: wartet an der Haltelinie (%.0f cm vor dem Spurende)"), Strict.RemainingCm),
+		Strict.RemainingCm < 1000.0);
+
+	// Gegenprobe mit der alten Regel: faehrt ein und bleibt IM Knoten stehen.
+	const FResult Old = Run(Network, false);
+	TestTrue(TEXT("alte Regel: faehrt ein"), Old.bEntered);
+	TestTrue(TEXT("alte Regel: steht am Ende auf der Kreuzungsverbindung"), Old.bOnConnectionAtEnd);
+
+	// Stossstelle einer zerteilten Strasse: dieselbe Geometrie, aber der
+	// Querstrom gehoert zu denselben zwei Abschnitten (Spurwechsel). Dort
+	// bleibt es bei 480 cm - streng verlangt, liess eine 8,9 m kurze
+	// Folgespur nur noch ein Fahrzeug zugleich hinein.
+	FRoadNetwork Joint = Network;
+	Joint.Lanes[3].SegmentId = 0;
+	Joint.Lanes[4].SegmentId = 1;
+	const FResult JointResult = Run(Joint, true);
+	TestTrue(TEXT("Stossstelle: faehrt wie bisher ein"), JointResult.bEntered);
+	return true;
+}
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficClassShareTest,
 	"WiesbadenReal.Traffic.Klassenverteilung",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
@@ -1325,5 +1472,429 @@ bool FTrafficClassShareTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Dieselbe Eingabe liefert dieselbe Wahl"), bStable);
 	}
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficServiceRoadTest,
+	"WiesbadenReal.Traffic.KeineParkplatzRunden",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficServiceRoadTest::RunTest(const FString& Parameters)
+{
+	// Gemeldet 26.09.2026: Fahrzeuge kreisten auf Parkflaechen und blockierten
+	// sich. Gemessen im Spiel: 36-46 von 206 Fahrzeugen auf Service-Wegen
+	// (Parkplatzgassen, Zufahrten), ein Drittel der Steher stand dort.
+	//
+	// Netz: Wohnstrasse 0 verzweigt an Knoten 42 in Service-Weg 1 und
+	// Wohnstrasse 2. SegmentId == LaneId == Array-Index.
+	auto Netz = [](EOSMHighwayType Abzweig1, EOSMHighwayType Abzweig2, bool bZweiterAbzweig)
+	{
+		FRoadNetwork Network;
+		Network.Lanes.Add(MakeSimLane(0, { FVector(0.0, 0.0, 0.0), FVector(3000.0, 0.0, 0.0) }));
+		Network.Lanes.Add(MakeSimLane(1, { FVector(3200.0, 200.0, 0.0), FVector(3200.0, 20000.0, 0.0) }));
+		Network.Lanes.Add(MakeSimLane(2, { FVector(3200.0, 0.0, 0.0), FVector(23000.0, 0.0, 0.0) }));
+		const EOSMHighwayType Typen[3] = { EOSMHighwayType::Residential, Abzweig1, Abzweig2 };
+		for (int32 i = 0; i < 3; ++i)
+		{
+			FRoadSegment Segment;
+			Segment.SegmentId = i;
+			Segment.HighwayType = Typen[i];
+			Segment.LengthCm = Network.Lanes[i].LengthCm;
+			Network.Segments.Add(Segment);
+		}
+		for (int32 Ziel = 1; Ziel <= (bZweiterAbzweig ? 2 : 1); ++Ziel)
+		{
+			FLaneConnection Connection;
+			Connection.FromLaneId = 0;
+			Connection.ToLaneId = Ziel;
+			Connection.IntersectionNodeId = 42;
+			Connection.TurnType = Ziel == 1 ? ETurnType::Left : ETurnType::Through;
+			Connection.bRestricted = false;
+			Connection.ConnectionPath = { FVector(3000.0, 0.0, 0.0), Network.Lanes[Ziel].Centerline[0] };
+			Network.Connections.Add(Connection);
+		}
+		return Network;
+	};
+	auto Fahre = [](const FRoadNetwork& Network, int32& AufLane1, int32& Gesamt, int32& Eingesetzt1)
+	{
+		FWiesbadenTrafficSimulation Sim;
+		Sim.Initialize(Network, MakeSettings(1.0f));
+		AufLane1 = 0;
+		Gesamt = 0;
+		Eingesetzt1 = 0;
+		TSet<int32> Gesehen;
+		for (int32 Step = 0; Step < 400; ++Step)
+		{
+			Sim.Tick(0.1f);
+			for (const FTrafficVehicle& V : Sim.Vehicles)
+			{
+				if (!Gesehen.Contains(V.VehicleId))
+				{
+					Gesehen.Add(V.VehicleId);
+					Eingesetzt1 += (V.bOnLane && V.LaneId == 1) ? 1 : 0;
+				}
+				AufLane1 += (V.bOnLane && V.LaneId == 1) ? 1 : 0;
+				++Gesamt;
+			}
+		}
+	};
+
+	// 1) Mit Wahl: niemand setzt in der Parkplatzgasse ein oder biegt hinein.
+	{
+		int32 AufLane1, Gesamt, Eingesetzt1;
+		Fahre(Netz(EOSMHighwayType::Service, EOSMHighwayType::Residential, true), AufLane1, Gesamt, Eingesetzt1);
+		TestTrue(FString::Printf(TEXT("Es fuhr ueberhaupt Verkehr (%d Fahrzeug-Bilder)"), Gesamt), Gesamt > 100);
+		TestEqual(TEXT("Kein Fahrzeug setzt auf dem Service-Weg ein"), Eingesetzt1, 0);
+		TestEqual(TEXT("Kein Fahrzeug biegt in den Service-Weg, wenn die Wohnstrasse weitergeht"), AufLane1, 0);
+	}
+	// Gegenprobe: ist der Abzweig eine Wohnstrasse, faehrt dort auch Verkehr -
+	// der Test sieht also, wenn die Wahl den Abzweig nimmt.
+	{
+		int32 AufLane1, Gesamt, Eingesetzt1;
+		Fahre(Netz(EOSMHighwayType::Residential, EOSMHighwayType::Residential, true), AufLane1, Gesamt, Eingesetzt1);
+		TestTrue(FString::Printf(TEXT("Gegenprobe: Wohnstrassen-Abzweig wird befahren (%d)"), AufLane1), AufLane1 > 0);
+	}
+	// 2) Ohne Wahl: ist der Service-Weg die EINZIGE Fortsetzung, geht es dort weiter.
+	{
+		int32 AufLane1, Gesamt, Eingesetzt1;
+		Fahre(Netz(EOSMHighwayType::Service, EOSMHighwayType::Residential, false), AufLane1, Gesamt, Eingesetzt1);
+		TestTrue(FString::Printf(TEXT("Einzige Fortsetzung Service-Weg wird genommen (%d)"), AufLane1), AufLane1 > 0);
+	}
+	// 3) Ein Netz nur aus Service-Wegen bekommt weiter Verkehr (Rueckfall).
+	{
+		int32 AufLane1, Gesamt, Eingesetzt1;
+		FRoadNetwork NurService = Netz(EOSMHighwayType::Service, EOSMHighwayType::Service, true);
+		NurService.Segments[0].HighwayType = EOSMHighwayType::Service;
+		Fahre(NurService, AufLane1, Gesamt, Eingesetzt1);
+		TestTrue(FString::Printf(TEXT("Nur Service-Wege: trotzdem Verkehr (%d)"), Gesamt), Gesamt > 100);
+	}
+	TestTrue(TEXT("Service ist kein Durchgangsnetz"),
+		!FWiesbadenTrafficSimulation::IsThroughTrafficClass(EOSMHighwayType::Service));
+	TestTrue(TEXT("Wohnstrasse ist Durchgangsnetz"),
+		FWiesbadenTrafficSimulation::IsThroughTrafficClass(EOSMHighwayType::Residential));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficDeadEndTurnaroundTest,
+	"WiesbadenReal.Traffic.WendenInSackgassen",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficDeadEndTurnaroundTest::RunTest(const FString& Parameters)
+{
+	// Frueher wartete ein Fahrzeug am Sackgassenende, solange es jemand sah,
+	// und verschwand dann - am Garagenhof standen so mehrere Autos dauerhaft
+	// in der Zufahrt vor dem Spieler (26.09.2026). Jetzt wendet es.
+	//
+	// Netz (Links von Fahrtrichtung +X ist -Y, Rechtsverkehr):
+	//   Spur 0: Abschnitt 1 vorwaerts (0,0)->(5000,0), Sackgasse
+	//   Spur 1: Abschnitt 1 rueckwaerts (5000,-300)->(0,-300), Gegenspur
+	//   Spur 2: Zufahrt zur Kreuzung 7 bei (10000,0)
+	//   Spur 3: einspurige Hofzufahrt ab Kreuzung 7, Sackgasse
+	//   Spur 4: Weiterfahrt ab Kreuzung 7
+	auto Spur = [](int32 Id, int32 Abschnitt, ELaneDirection Richtung, FVector A, FVector B)
+	{
+		FRoadLane L = MakeSimLane(Id, { A, B }, 30.0);
+		L.SegmentId = Abschnitt;
+		L.Direction = Richtung;
+		return L;
+	};
+	auto Netz = [&Spur]()
+	{
+		FRoadNetwork N;
+		N.Lanes.Add(Spur(0, 1, ELaneDirection::Forward, FVector(0, 0, 0), FVector(5000, 0, 0)));
+		N.Lanes.Add(Spur(1, 1, ELaneDirection::Backward, FVector(5000, -300, 0), FVector(0, -300, 0)));
+		N.Lanes.Add(Spur(2, 2, ELaneDirection::Forward, FVector(8000, 0, 0), FVector(9900, 0, 0)));
+		N.Lanes.Add(Spur(3, 3, ELaneDirection::Forward, FVector(10000, 100, 0), FVector(10000, 3000, 0)));
+		N.Lanes.Add(Spur(4, 4, ELaneDirection::Forward, FVector(10100, 0, 0), FVector(13000, 0, 0)));
+		for (int32 i = 0; i < 5; ++i)
+		{
+			FRoadSegment S;
+			S.SegmentId = i;
+			S.HighwayType = EOSMHighwayType::Residential;
+			N.Segments.Add(S);
+		}
+		for (const int32 Ziel : { 3, 4 })
+		{
+			FLaneConnection C;
+			C.FromLaneId = 2;
+			C.ToLaneId = Ziel;
+			C.IntersectionNodeId = 7;
+			C.TurnType = Ziel == 3 ? ETurnType::Right : ETurnType::Through;
+			C.ConnectionPath = { FVector(9900, 0, 0), N.Lanes[Ziel].Centerline[0] };
+			N.Connections.Add(C);
+		}
+		FRoadIntersection K;
+		K.NodeId = 7;
+		K.Location = FVector(10000, 0, 0);
+		N.Intersections.Add(K);
+		return N;
+	};
+
+	FRoadNetwork N = Netz();
+	const int32 AlteSpuren = N.Lanes.Num();
+	int32 Rueck = 0;
+	const int32 Schleifen = FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(N, &Rueck);
+	// Sackgassen: 0 und 1 (gegenseitig), 3 (Hofzufahrt), 4 (Netzrand) - 2 hat Nachfolger.
+	TestEqual(TEXT("Wendeschleifen an allen vier Spurenden"), Schleifen, 4);
+	TestEqual(TEXT("Rueckspuren fuer die zwei einspurigen Enden"), Rueck, 2);
+
+	const FLaneConnection* Wende0 = N.Connections.FindByPredicate([](const FLaneConnection& C)
+		{ return C.FromLaneId == 0 && C.TurnType == ETurnType::UTurn; });
+	if (TestNotNull(TEXT("Spur 0 wendet"), Wende0))
+	{
+		TestEqual(TEXT("... auf ihre Gegenspur"), Wende0->ToLaneId, 1);
+		TestTrue(TEXT("... als nachtraeglich markiert"), Wende0->bAddedTurnaround);
+		TestTrue(TEXT("Schleife beginnt am Spurende"), FVector::Dist(Wende0->ConnectionPath[0], FVector(5000, 0, 0)) < 1.0);
+		TestTrue(TEXT("... endet am Anfang der Gegenspur"), FVector::Dist(Wende0->ConnectionPath.Last(), FVector(5000, -300, 0)) < 1.0);
+		double Weitest = 0.0;
+		for (const FVector& P : Wende0->ConnectionPath) { Weitest = FMath::Max(Weitest, P.X); }
+		TestTrue(FString::Printf(TEXT("... und laeuft hinter dem Spurende herum (%.0f cm)"), Weitest - 5000.0), Weitest > 5200.0);
+	}
+
+	// Hofzufahrt: Rueckspur (gespiegelt) + Anschluss an die Kreuzung.
+	const FLaneConnection* Wende3 = N.Connections.FindByPredicate([](const FLaneConnection& C)
+		{ return C.FromLaneId == 3 && C.TurnType == ETurnType::UTurn; });
+	if (TestNotNull(TEXT("Hofzufahrt wendet"), Wende3))
+	{
+		const int32 R = Wende3->ToLaneId;
+		TestTrue(TEXT("... auf eine NEUE Rueckspur"), R >= AlteSpuren && N.Lanes.IsValidIndex(R));
+		if (N.Lanes.IsValidIndex(R))
+		{
+			TestTrue(TEXT("Rueckspur ist gespiegelt"), FVector::Dist(N.Lanes[R].Centerline.Last(), N.Lanes[3].Centerline[0]) < 1.0);
+			const FLaneConnection* Zurueck = N.Connections.FindByPredicate([R](const FLaneConnection& C)
+				{ return C.FromLaneId == R; });
+			if (TestNotNull(TEXT("Rueckspur fuehrt zurueck in die Kreuzung"), Zurueck))
+			{
+				TestEqual(TEXT("... an Knoten 7"), Zurueck->IntersectionNodeId, static_cast<int64>(7));
+				TestEqual(TEXT("... auf die Weiterfahrt (nicht zurueck in die Zufahrt)"), Zurueck->ToLaneId, 4);
+			}
+		}
+	}
+
+	const int32 Vorher = N.Connections.Num();
+	TestEqual(TEXT("Idempotent: zweiter Aufruf ergaenzt nichts"), FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(N), 0);
+	TestEqual(TEXT("... und laesst das Netz, wie es ist"), N.Connections.Num(), Vorher);
+
+	// In der Simulation: ein Fahrzeug kurz vor dem Ende von Spur 0 wendet und
+	// faehrt auf Spur 1 zurueck. Gegenprobe ohne Ergaenzung: kommt nie dorthin.
+	auto Faehrt = [](const FRoadNetwork& Netz)
+	{
+		FWiesbadenTrafficSimulation Sim;
+		Sim.Initialize(Netz, MakeSettings(0.0f));
+		FTrafficVehicle V;
+		V.VehicleId = 1;
+		V.LaneId = 0;
+		V.bOnLane = true;
+		V.DistanceCm = 4200.0;
+		V.SpeedCmS = 600.0;
+		V.DesiredSpeedCmS = 600.0;
+		Sim.Vehicles.Add(V);
+		for (int32 Schritt = 0; Schritt < 300; ++Schritt)
+		{
+			Sim.Tick(0.1f);
+			for (const FTrafficVehicle& X : Sim.Vehicles)
+			{
+				if (X.VehicleId == 1 && X.bOnLane && X.LaneId == 1) { return true; }
+			}
+		}
+		return false;
+	};
+	TestTrue(TEXT("Fahrzeug wendet und faehrt auf der Gegenspur zurueck"), Faehrt(N));
+	TestFalse(TEXT("Gegenprobe ohne Wendeschleifen: es kommt nie zurueck"), Faehrt(Netz()));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficAvoidDeadEndTest,
+	"WiesbadenReal.Traffic.KeineSackgassenEinfahrt",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficAvoidDeadEndTest::RunTest(const FString& Parameters)
+{
+	// Gemeldet 26.09.2026: am Garagenhof fuhren Autos in die Hofzufahrt
+	// (Sackgasse) und standen bzw. wendeten dort vor dem Spieler.
+	//   Spur 0: Zufahrt zur Kreuzung 9 bei (3100,0)
+	//   Spur 1: Weiterfahrt geradeaus
+	//   Spur 2: Hofzufahrt rechts ab, Sackgasse
+	auto Netz = [](bool bMitWeiterfahrt)
+	{
+		FRoadNetwork N;
+		N.Lanes.Add(MakeSimLane(0, { FVector(0, 0, 0), FVector(3000, 0, 0) }, 30.0));
+		N.Lanes.Add(MakeSimLane(1, { FVector(3200, 0, 0), FVector(20000, 0, 0) }, 30.0));
+		N.Lanes.Add(MakeSimLane(2, { FVector(3100, 100, 0), FVector(3100, 3000, 0) }, 30.0));
+		for (int32 i = 0; i < 3; ++i)
+		{
+			FRoadSegment S;
+			S.SegmentId = i;
+			S.HighwayType = EOSMHighwayType::Residential;
+			N.Segments.Add(S);
+		}
+		for (const int32 Ziel : { 1, 2 })
+		{
+			if (Ziel == 1 && !bMitWeiterfahrt) { continue; }
+			FLaneConnection C;
+			C.FromLaneId = 0;
+			C.ToLaneId = Ziel;
+			C.IntersectionNodeId = 9;
+			C.TurnType = Ziel == 1 ? ETurnType::Through : ETurnType::Right;
+			C.ConnectionPath = { FVector(3000, 0, 0), N.Lanes[Ziel].Centerline[0] };
+			N.Connections.Add(C);
+		}
+		// Ringschluss: die Weiterfahrt fuehrt zurueck auf die Zufahrt - sonst
+		// waere auch sie eine Sackgasse (Netzrand), und ihre Rueckspur haette
+		// an Knoten 9 nur die Hofzufahrt als Fortsetzung.
+		if (bMitWeiterfahrt)
+		{
+			FLaneConnection Ring;
+			Ring.FromLaneId = 1;
+			Ring.ToLaneId = 0;
+			Ring.IntersectionNodeId = 10;
+			Ring.TurnType = ETurnType::UTurn;
+			Ring.ConnectionPath = { FVector(20000, 0, 0), FVector(20000, -5000, 0), FVector(0, -5000, 0), FVector(0, 0, 0) };
+			N.Connections.Add(Ring);
+		}
+		FRoadIntersection K;
+		K.NodeId = 9;
+		K.Location = FVector(3100, 0, 0);
+		N.Intersections.Add(K);
+		FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(N);
+		return N;
+	};
+	// Wie viele verschiedene Fahrzeuge waren je auf der Hofzufahrt?
+	auto InZufahrt = [](const FRoadNetwork& N, bool& bSackgasse)
+	{
+		FWiesbadenTrafficSimulation Sim;
+		Sim.Initialize(N, MakeSettings(1.0f));
+		bSackgasse = Sim.IsDeadEndLane(2);
+		TSet<int32> Drin;
+		for (int32 Schritt = 0; Schritt < 600; ++Schritt)
+		{
+			Sim.Tick(0.1f);
+			for (const FTrafficVehicle& V : Sim.Vehicles)
+			{
+				if (V.bOnLane && V.LaneId == 2) { Drin.Add(V.VehicleId); }
+			}
+		}
+		return Drin.Num();
+	};
+
+	bool bSackgasse = false;
+	const FRoadNetwork MitWeiter = Netz(true);
+	const int32 Drin = InZufahrt(MitWeiter, bSackgasse);
+	TestTrue(TEXT("Hofzufahrt gilt als Sackgasse"), bSackgasse);
+	TestEqual(TEXT("mit Weiterfahrt faehrt KEIN Fahrzeug in die Hofzufahrt"), Drin, 0);
+
+	// Gegenprobe: ist die Zufahrt die EINZIGE Fortsetzung, geht es hinein (und
+	// per Wendeschleife wieder heraus) - die Regel verbietet nichts, sie waehlt.
+	const int32 DrinOhne = InZufahrt(Netz(false), bSackgasse);
+	TestTrue(FString::Printf(TEXT("Gegenprobe: ohne Weiterfahrt fahren Fahrzeuge hinein (%d)"), DrinOhne), DrinOhne > 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficSpawnOutOfViewTest,
+	"WiesbadenReal.Vehicles.Traffic.SpawnOutOfView",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficSpawnOutOfViewTest::RunTest(const FString& Parameters)
+{
+	// Sichtpruefung selbst: Blickkegel, Sichtweite, Nahbereich.
+	const FVector Eye(0.0, 0.0, 0.0);
+	const FVector Look(1.0, 0.0, 0.0);
+	const double Cos = FMath::Cos(FMath::DegreesToRadians(65.0));
+	TestTrue(TEXT("voraus in Sicht"), FWiesbadenTrafficSimulation::IsPointInView(FVector(5000, 1000, 0), Eye, Look, Cos, 55000.0, 1500.0));
+	TestFalse(TEXT("dahinter nicht"), FWiesbadenTrafficSimulation::IsPointInView(FVector(-5000, 0, 0), Eye, Look, Cos, 55000.0, 1500.0));
+	TestFalse(TEXT("jenseits der Sichtweite nicht"), FWiesbadenTrafficSimulation::IsPointInView(FVector(60000, 0, 0), Eye, Look, Cos, 55000.0, 1500.0));
+	TestTrue(TEXT("ganz nah immer"), FWiesbadenTrafficSimulation::IsPointInView(FVector(-1000, 0, 0), Eye, Look, Cos, 55000.0, 1500.0));
+
+	// Gezeichnet wird genau so weit, wie die Simulation "Sicht" rechnet.
+	TestEqual(TEXT("Sichtweite Zeichnen = Simulation"),
+		static_cast<double>(GetDefault<UTrafficVehicleSpawnerComponent>()->CullRadiusMeters),
+		FWiesbadenTrafficSettings().DrawDistanceMeters);
+
+	// Einsetzen: Spur 0 (Start 0,0) und Spur 2 (Start 0,50 m) liegen im Blick
+	// (Kamera bei y = -30 m, Blick +Y), Spur 1 (Start 105 m, 0) seitlich
+	// ausserhalb. In 4 s darf auf 0 und 2 nichts entstehen.
+	{
+		FWiesbadenTrafficSimulation Sim;
+		const FRoadNetwork Network = MakeNetwork();
+		Sim.Initialize(Network, MakeSettings(1.0f));
+		for (int32 i = 0; i < 16; ++i)
+		{
+			Sim.SetObserverView(FVector(0.0, -3000.0, 0.0), FVector(0.0, 1.0, 0.0), 90.0f);
+			Sim.Tick(0.25f);
+		}
+		bool bOnlyHidden = true;
+		for (const FTrafficVehicle& Vehicle : Sim.Vehicles)
+		{
+			bOnlyHidden = bOnlyHidden && !(Vehicle.bOnLane && (Vehicle.LaneId == 0 || Vehicle.LaneId == 2));
+		}
+		TestTrue(TEXT("im Blick entsteht nichts"), bOnlyHidden);
+		TestTrue(TEXT("es entstehen Fahrzeuge ausser Sicht"), Sim.Report.TotalSpawnedCount > 0);
+		TestTrue(FString::Printf(TEXT("verworfene Einsatzorte gezaehlt (%lld)"), Sim.GetLifetimeSpawnsSkippedInView()),
+			Sim.GetLifetimeSpawnsSkippedInView() > 0);
+	}
+	// Gegenprobe: Blick weg (-Y) - dann setzen auch Spur 0 und 2 ein.
+	{
+		FWiesbadenTrafficSimulation Sim;
+		const FRoadNetwork Network = MakeNetwork();
+		Sim.Initialize(Network, MakeSettings(1.0f));
+		TSet<int32> Lanes;
+		for (int32 i = 0; i < 16; ++i)
+		{
+			Sim.SetObserverView(FVector(0.0, -3000.0, 0.0), FVector(0.0, -1.0, 0.0), 90.0f);
+			Sim.Tick(0.25f);
+			for (const FTrafficVehicle& Vehicle : Sim.Vehicles)
+			{
+				Lanes.Add(Vehicle.bOnLane ? Vehicle.LaneId : -1);
+			}
+		}
+		TestTrue(TEXT("Blick weg: auch Spur 0 oder 2 besetzt"), Lanes.Contains(0) || Lanes.Contains(2));
+		TestEqual(TEXT("Blick weg: nichts verworfen"), Sim.GetLifetimeSpawnsSkippedInView(), static_cast<int64>(0));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTrafficDeadEndInViewTest,
+	"WiesbadenReal.Vehicles.Traffic.DeadEndInView",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FTrafficDeadEndInViewTest::RunTest(const FString& Parameters)
+{
+	// Spur 2 ist eine Sackgasse (Ende bei 100 m, 50 m). Ein Fahrzeug faehrt
+	// darauf zu, der Spieler sieht hin: es haelt vor dem Ende und bleibt -
+	// erst als der Spieler wegschaut, verschwindet es.
+	FWiesbadenTrafficSimulation Sim;
+	const FRoadNetwork Network = MakeNetwork();
+	Sim.Initialize(Network, MakeSettings(0.0f));
+	FTrafficVehicle Car;
+	Car.VehicleId = 7;
+	Car.LaneId = 2;
+	Car.bOnLane = true;
+	Car.DistanceCm = 6000.0;
+	Car.DesiredSpeedCmS = 1000.0;
+	Car.SpeedCmS = 1000.0;
+	Sim.Vehicles.Add(Car);
+
+	const FVector Eye(9000.0, 2000.0, 0.0);
+	for (int32 i = 0; i < 100; ++i)   // 10 s
+	{
+		Sim.SetObserverView(Eye, FVector(0.0, 1.0, 0.0), 90.0f);
+		Sim.Tick(0.1f);
+	}
+	if (!TestEqual(TEXT("im Blick: das Fahrzeug bleibt"), Sim.Vehicles.Num(), 1))
+	{
+		return false;
+	}
+	const FTrafficVehicle& Held = Sim.Vehicles[0];
+	TestTrue(FString::Printf(TEXT("steht vor dem Ende (%.0f cm, %.0f cm/s)"), Held.DistanceCm, Held.SpeedCmS),
+		Held.SpeedCmS < 1.0 && Held.DistanceCm < 10000.0 && Held.DistanceCm > 9000.0);
+	TestTrue(FString::Printf(TEXT("die Karosserie steht auch (%.0f cm/s)"), Held.BodySpeedCmS), FMath::Abs(Held.BodySpeedCmS) < 20.0);
+
+	for (int32 i = 0; i < 5; ++i)
+	{
+		Sim.SetObserverView(Eye, FVector(0.0, -1.0, 0.0), 90.0f);   // weggeschaut
+		Sim.Tick(0.1f);
+	}
+	// Ganz nah (15 m) gilt immer als sichtbar - der Spieler steht hier 30 m weg.
+	TestEqual(TEXT("weggeschaut: verschwunden"), Sim.Vehicles.Num(), 0);
 	return true;
 }

@@ -15,6 +15,13 @@ param(
 $ErrorActionPreference = "Continue"
 $hc = Join-Path $PSScriptRoot "health_check.ps1"
 
+# Engine-Lock fuer die MEHRERE Laeufe (Tools\engine_run_lock.ps1). health_check
+# nimmt ihn darunter ebenfalls - reentrant, weil der Besitzer dann ein Vorfahre
+# ist. Waere er nicht gehalten, wuerde ein paralleler Gate-/Bake-Lauf den
+# Health-Editor mitten in der Sitzung beenden.
+& "$PSScriptRoot\engine_run_lock.ps1" -Modus Nehmen -Name health_multi
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 function Wait-PortFree([int]$Port, [int]$MaxSec = 60) {
     for ($w = 0; $w -lt ($MaxSec / 2); $w++) {
         Start-Sleep -Seconds 2
@@ -26,7 +33,8 @@ function Wait-PortFree([int]$Port, [int]$MaxSec = 60) {
 
 for ($i = 1; $i -le $Runs; $i++) {
     Write-Host ("=== MULTI RUN {0} cleanup {1} ===" -f $i, (Get-Date -Format HH:mm:ss))
-    Get-Process UnrealEditor*, zenserver -ErrorAction SilentlyContinue | Stop-Process -Force
+    & "$PSScriptRoot\cleanup_unreal_processes.cmd"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     $free = Wait-PortFree 8558 60
     Write-Host ("  Port 8558 frei: {0}" -f $free)
 

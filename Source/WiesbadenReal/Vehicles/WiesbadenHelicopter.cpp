@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "Vehicles/WiesbadenHelicopter.h"
+#include "HAL/IConsoleManager.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInterface.h"
 
 #include "WiesbadenReal.h"
 
@@ -10,6 +13,8 @@
 #include "Engine/EngineTypes.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"          // TActorIterator: den Sebbotower finden
+#include "World/WiesbadenSebboHq.h"   // Landeplatz des Turms (eine Wahrheit)
 #include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
@@ -80,6 +85,12 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 		TEXT("/Game/Vehicles/Ka52/Rotor_Upper.Rotor_Upper"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> HeliRotorLowerMesh(
 		TEXT("/Game/Vehicles/Ka52/Rotor_Lower.Rotor_Lower"));
+	// Cockpit-Innenraum und Kanone kommen aus der Blender-Pipeline
+	// (Tools/Blender/build_ka52_cockpit.py -> Tools/import_ka52_cockpit.cmd).
+	// Beide Assets tragen erzwungene SM_-Namen, damit der Pfad hier nicht
+	// vom FBX-Meshnamen abhaengt.
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> HeliCockpitMesh(
+		TEXT("/Game/Vehicles/Ka52/SM_Ka52Cockpit.SM_Ka52Cockpit"));
 
 	UStaticMesh* HeliBody = HeliBodyMesh.Succeeded() ? HeliBodyMesh.Object : nullptr;
 	UStaticMesh* HeliRotorUpper = HeliRotorUpperMesh.Succeeded() ? HeliRotorUpperMesh.Object : nullptr;
@@ -104,6 +115,7 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	// 15,6 m (oben) / 16,0 m (unten) - direkt die echten Ka-52-Masse.
 	constexpr float ModelScale = 1.0f;
 
+
 	// Hoehenlage: Der Modell-Ursprung liegt an der Kufenebene (Bounds z 0..295).
 	// Rotor-Naben auf den gemessenen Hub-Positionen des Exports (Pivot z 495 /
 	// 376,5 cm) - die Blattspitzen erreichen damit die Bauhoehe von 5,0 m.
@@ -111,8 +123,48 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	constexpr float UpperRotorHeightCm = 495.0f;
 	constexpr float LowerRotorHeightCm = 376.5f;
 
-	// Gierdrehung, die Modell-+Y auf Welt-+X legt.
-	const FRotator ModelYaw(0.0f, -90.0f, 0.0f);
+	// Drehpunkt der Rotor-Meshes im Modellraum (cm), gegen die
+	// Rotorstangenachse (0, 0) gerechnet.
+	//
+	// GEMESSEN, nicht angenommen (Tools/ka52_rotorachse.py,
+	// Saved/Diagnose/ka52/rotorachse.txt): Der Drehpunkt eines
+	// Dreiblattrotors ist der SCHWERPUNKT seiner Vertexmenge, weil drei
+	// gleiche Blaetter im 120-Grad-Abstand die Menge 3-fach-symmetrisch
+	// machen. Bestaetigt durch zwei unabhaengige Wege und eine Kontrolle:
+	//   - der Schwerpunkt der aeusseren 30 % (Blattspitzen) faellt auf
+	//     4,4 bzw. 9,2 cm;
+	//   - die Punktmenge um 120 Grad gedreht passt mit Median 4,1 mm
+	//     (oben) bzw. 6,7 mm (unten) auf sich selbst zurueck. An der
+	//     Kontrollstelle (Bounding-Box-Mitte) sind es 375 mm - Faktor 92
+	//     bzw. 56. Ein Verfahren, das ueberall "gut" meldet, prueft nichts.
+	//   - unabhaengige Gegenprobe am Rumpf: die Punkte liegen auf der
+	//     Mittelsenkrechten (2,2 bzw. 7,4 cm daneben) bei 41,4 % bzw.
+	//     41,1 % der Rumpflaenge ab der Nase. Das ist die Lage eines
+	//     Hauptmastes; ein Bogenmast waere irgendwo sonst.
+	//
+	// Bis hierher stand im Kommentar "die Rotor-Achse liegt in Mesh-XY
+	// exakt bei (0, 0)". Fuer den oberen Rotor ist das mit 2,6 cm
+	// brauchbar, fuer den unteren mit 5,4 cm nicht. Die frueher notierten
+	// "6,66 cm / 0,83 cm" stammten aus der Mitte der Bounding Box - die
+	// liegt 1,80 m daneben und war als Achse nie brauchbar.
+	const FVector RotorDrehpunktOben = GetRotorDrehpunktCm(false);
+	const FVector RotorDrehpunktUnten = GetRotorDrehpunktCm(true);
+
+	// Gierdrehung des Modells.
+	//
+	// ACHTUNG, RICHTUNG: +90, nicht -90. Das importierte FBX wurde mit echten
+	// Vertexdaten vermessen (Tools/ka52_fbxlage.py, Saved/Diagnose/ka52/
+	// fbxlage.txt): der Heckfinner (am Ende nur 66 cm breit, Oberkante
+	// 295 cm) und das weisse Strobe liegen bei Modell-+Y, die NASE (189 cm
+	// breit, Oberkante nur 160 cm) bei Modell--Y. Der Actor faehrt aber nach
+	// Welt-+X. Mit -90 zeigte damit das Heck nach vorn: der Hubschrauber
+	// flog rueckwaerts. Beweisbild: Saved/Diagnose/ka52/flugrichtung.png
+	// (Nase bei X = -7,1 m mit -90, bei +7,1 m mit +90).
+	//
+	// Nebenbei stimmt dann auch die Seite: Modell-+X (Steuerbord, rotes
+	// Licht) wandert nach Welt-+Y, und +Y ist im Actor-Rechtssystem die
+	// rechte Seite. Rot rechts, gruen links - so, wie es sein muss.
+	const FRotator ModelYaw(0.0f, 90.0f, 0.0f);
 
 
 	// Rumpf.
@@ -132,6 +184,56 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 		FuselageMesh->SetStaticMesh(Cube);
 		FuselageMesh->SetRelativeLocation(FVector(0.0f, 0.0f, 130.0f));
 		FuselageMesh->SetRelativeScale3D(FVector(3.2f, 1.2f, 0.7f));
+	}
+
+	// Cockpit-Innenraum. Das Mesh bringt seine Modellkoordinaten mit (Kabine
+	// Y -500..-231, Z 71..220) und sitzt darum ohne Versatz am Rumpf - es
+	// haengt an FuselageMesh und erbt dessen ModelYaw, Massstab und Lage.
+	CockpitMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CockpitMesh"));
+	CockpitMesh->SetupAttachment(FuselageMesh);
+	CockpitMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	CockpitMesh->SetGenerateOverlapEvents(false);
+	if (HeliCockpitMesh.Succeeded())
+	{
+		CockpitMesh->SetStaticMesh(HeliCockpitMesh.Object);
+
+		// Zweiseitig schalten, sonst sieht der Pilot in die leere Kabine.
+		//
+		// Die Huellle ist geschlossen (0 nicht-gepaarte Kanten) und NICHT
+		// einheitlich gewickelt: vom Pilotenauge aus zeigen 166 der 342
+		// Flaechen vom Auge weg, 130 ihm zu (gemessen am FBX, Blender). Mit
+		// einseitigen Materialien wird der Rest verworfen - sichtbar bleibt
+		// allein die Innenflaeche der gegenueberliegenden Wand, im Bild also
+		// ein flaches graues Band statt Tafel, Sitzen und Rahmen.
+		//
+		// Der Schalter sitzt am UMaterial, nicht an der Instanz. Die vier
+		// Kabinenmaterialien teilen sich ihr Elternmaterial
+		// (FBXLegacyPhongSurfaceMaterial) mit den uebrigen FBX-Teilen des
+		// Hubschraubers; die Umstellung gilt daher fuer alle. Von aussen ist
+		// das gleichwertig, es kostet nur mehr Overdraw.
+		for (int32 Slot = 0; Slot < CockpitMesh->GetNumMaterials(); ++Slot)
+		{
+			UMaterialInterface* Stoff = CockpitMesh->GetMaterial(Slot);
+			UMaterial* Basis = Stoff ? Stoff->GetMaterial() : nullptr;
+			if (Basis && !Basis->TwoSided)
+			{
+				Basis->TwoSided = true;
+				// Shader neu bauen: TwoSided steckt in der Variante. Ohne
+				// diesen Aufruf bleibt die alte, einseitige Variante aktiv
+				// und das Bild zeigt weiterhin nur das graue Band. (Der
+				// direkte Weg CacheResourceShadersForRendering ist in
+				// UMaterial privat; PostEditChangeProperty ist der oeffentliche
+				// und macht genau das.)
+#if WITH_EDITOR
+				Basis->PostEditChange();
+#endif
+			}
+		}
+	}
+	else
+	{
+		UE_LOG(LogWbVehicles, Warning,
+			TEXT("Ka52-Cockpitmesh fehlt - im Cockpit steht man im leeren Rumpf."));
 	}
 
 	// Heckausleger und Flosse gehoeren beim echten Modell zum Rumpf und werden
@@ -175,10 +277,12 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 		MainRotorBlade->SetStaticMesh(HeliRotorUpper);
 		MainRotorBlade->SetRelativeScale3D(FVector(ModelScale));
 		MainRotorBlade->SetRelativeRotation(ModelYaw);
-		// Hub-Hoehe aus der Geometrie heraus: der Mesh-Ursprung liegt am Boden
-		// auf der Achse, also hebt der reine z-Versatz die Geometrie nicht -
-		// sie bleibt am gebakten Ort und dreht sich um die Hub-Achse.
-		MainRotorBlade->SetRelativeLocation(FVector(0.0f, 0.0f, -UpperRotorHeightCm));
+		// Die Korrektur liegt in ComputeRotorMountOffset - dort steht, wie der
+		// gemessene Drehpunkt des Mesh auf die Rotorstangenachse (0, 0) im
+		// Modellraum zu legen ist. Zwei Zeilen, keine Sonderbehandlung fuer einen
+		// der beiden Rotoren; der Hub-Node selbst bleibt unangetastet.
+		MainRotorBlade->SetRelativeLocation(
+			ComputeRotorMountOffset(RotorDrehpunktOben, ModelYaw, UpperRotorHeightCm));
 	}
 	else if (Cube)
 	{
@@ -201,7 +305,8 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 		LowerRotorBlade->SetStaticMesh(HeliRotorLower);
 		LowerRotorBlade->SetRelativeScale3D(FVector(ModelScale));
 		LowerRotorBlade->SetRelativeRotation(ModelYaw);
-		LowerRotorBlade->SetRelativeLocation(FVector(0.0f, 0.0f, -LowerRotorHeightCm));
+		LowerRotorBlade->SetRelativeLocation(
+			ComputeRotorMountOffset(RotorDrehpunktUnten, ModelYaw, LowerRotorHeightCm));
 	}
 	else if (Cube)
 	{
@@ -245,8 +350,11 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	// Zylinder (Durchmesser 100 cm) entsprechend skalieren, flach (2 cm). Sitzt
 	// an der jeweiligen Nabe und blendet mit der Drehzahl ein (Opacity per MID),
 	// waehrend die soliden Blaetter ausblenden.
-	const FVector BlurScaleUpper(15.6f, 15.6f, 0.02f);
-	const FVector BlurScaleLower(16.0f, 16.0f, 0.02f);
+	// Das Blur-Netz ist bewusst ~10 % groesser als der echte Blattkreis (15,6 /
+	// 16,0 m): das Material blendet die Opazitaet schon INNERHALB des Netzrands
+	// auf 0 (runde Kante), sodass die facettierte Zylinderkante nie sichtbar wird.
+	const FVector BlurScaleUpper(17.2f, 17.2f, 0.02f);
+	const FVector BlurScaleLower(17.6f, 17.6f, 0.02f);
 	UpperRotorBlur = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("UpperRotorBlur"));
 	UpperRotorBlur->SetupAttachment(MainRotorHub);
 	UpperRotorBlur->SetRelativeScale3D(BlurScaleUpper);
@@ -294,19 +402,77 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	VehicleCamera->FollowArmLength = 1500.0f;
 	VehicleCamera->FollowPitchOffset = -10.0f;
 
-	// Pilotensitz vorn im Rumpf, Blick nach vorn. Versatz relativ zur
-	// Kamera-Komponente (0,0,130) -> Augpunkt ~ (120, 0, 165). Rumpf und
-	// Heck werden in der Cockpit-Ansicht ausgeblendet (kein Innenraum
-	// modelliert); die Rotoren ueber dem Kopf bleiben sichtbar.
-	VehicleCamera->CockpitOffset = FVector(120.0f, 0.0f, 35.0f);
+	// Pilotensitz vorn im Rumpf, Blick nach vorn.
+	//
+	// Der Augpunkt sitzt an der GEBAUTEN Kabine, nicht an einer geratenen
+	// Zahl. Messung am 26.09.2026, zwei unabhaengige Quellen:
+	//   1. Tools/Blender/build_ka52_cockpit.py, Zeile 409: die Pilotenvorschau
+	//      wurde von (34, -392, 206) gerendert - das ist der Pilotenplatz.
+	//   2. Das importierte Sitzkissen liegt bei X +9..+59, Y -371..-421 cm.
+	// Beide decken sich. Mit ModelYaw +90 (Modell--Y -> Actor-+X) wird daraus
+	// Actor (395, 34, 206) - Aughoehe 133 cm ueber dem Kabinenboden (71),
+	// Kiste 71..220.
+	//
+	// WICHTIG - in welchem Raum steht CockpitOffset? Die Fahrzeugkamera
+	// haengt am SceneRoot, der Cockpit-Socket an ihr, der Rumpf ebenfalls am
+	// SceneRoot ohne Z-Versatz: der Versatz wird also im ACTORraum addiert.
+	// Deshalb stehen hier die GEDREHTEN Werte (395, 34), nicht die
+	// Modellwerte (34, -395). Die Kamerabasis (0, 0, 130) wird genau einmal
+	// abgezogen.
+	//
+	// Am 26.09.2026 lag an dieser Stelle eine Fehldiagnose: man verglich den
+	// Actor-Augpunkt (395, 34, 204) mit der MESH-lokalen Kabinenbox
+	// (X -81..81) und schloss daraus "314 cm davor, in freier Luft". Beide
+	// Angaben stehen in verschiedenen Rahmen. Richtig ist der Vergleich in
+	// einem Rahmen - genau den macht jetzt Ka52GeraetTest ("Augenhoehe ueber
+	// Kabinenboden"), inklusive Asset-Box.
+	VehicleCamera->CockpitOffset = FVector(395.0f, 34.0f, 74.0f);
+	VehicleCamera->CockpitPitch = -7.0f;
 	VehicleCamera->AddCockpitHiddenMesh(FuselageMesh);
 	VehicleCamera->AddCockpitHiddenMesh(TailBoomMesh);
 	VehicleCamera->AddCockpitHiddenMesh(TailFinMesh);
 
-	// Flugsound: prozeduraler Rotor-/Motor-Klang (Asset-Slots liegen bereit).
+	// -- Geraet: Lichtbastel und Bordgeschuetz ------------------------------
+	//
+	// Beide bekommen dieselbe Modelldrehung und denselben Massstab wie
+	// Rumpf und Rotoren. Das ist der Grund, warum es SetModelTransform
+	// gibt: Licht, Waffe und Rumpf teilen sich damit eine Zahl statt je
+	// einer eigenen. Als die Leuchten ueber ihre eigene Kopie der Drehung
+	// verfuegten, saessen sie an der falschen Seite.
+	LightRig = CreateDefaultSubobject<UWiesbadenHeliLightRig>(TEXT("Lichtbastel"));
+	LightRig->SetupAttachment(SceneRoot);
+	LightRig->SetModelTransform(ModelScale, ModelYaw);
+
+	Gun = CreateDefaultSubobject<UWiesbadenHeliGunComponent>(TEXT("Bordgeschoetz"));
+	Gun->SetupAttachment(SceneRoot);
+	Gun->SetModelTransform(ModelScale, ModelYaw);
+
+	// Flugsound: echte Ka-52-Aufnahmen aus Tools/make_ka52_audio.py
+	// (Rotorblatt-Ticken, TV3-117, Fahrtwind). Die prozedurale Synthese in
+	// der Komponente bleibt Rueckfall fuer den Fall, dass die Assets fehlen.
 	HelicopterAudio = CreateDefaultSubobject<UWiesbadenHelicopterAudioComponent>(TEXT("HelicopterAudio"));
 	HelicopterAudio->SetupAttachment(SceneRoot);
 	HelicopterAudio->SetRelativeLocation(FVector(0.0f, 0.0f, 130.0f));
+	{
+		static ConstructorHelpers::FObjectFinder<USoundWave> Ka52RotorSound(
+			TEXT("/Game/Audio/Ka52/S_Ka52_Rotor.S_Ka52_Rotor"));
+		static ConstructorHelpers::FObjectFinder<USoundWave> Ka52EngineSound(
+			TEXT("/Game/Audio/Ka52/S_Ka52_Engine.S_Ka52_Engine"));
+		static ConstructorHelpers::FObjectFinder<USoundWave> Ka52WindSound(
+			TEXT("/Game/Audio/Ka52/S_Ka52_Wind.S_Ka52_Wind"));
+		if (Ka52RotorSound.Succeeded())
+		{
+			HelicopterAudio->RotorSound = Ka52RotorSound.Object;
+		}
+		if (Ka52EngineSound.Succeeded())
+		{
+			HelicopterAudio->EngineSound = Ka52EngineSound.Object;
+		}
+		if (Ka52WindSound.Succeeded())
+		{
+			HelicopterAudio->WindSound = Ka52WindSound.Object;
+		}
+	}
 
 	// Kampfhelikopter-Konfiguration (Ka-52-Stil, Referenz: Mi-35/28/Ka-52/Mi-8):
 	// koaxiale, gegenlaeufige Rotoren (flink, kein Heckrotor-Moment) und ein
@@ -378,11 +544,46 @@ void AWiesbadenHelicopter::Tick(float DeltaSeconds)
 		return;
 	}
 
+	// Konsolen-Schalter fuer die Fahrzeugkamera: wb.HeliKamera (CVar, 0 Folge,
+	// 1 Orbit, 2 Cockpit). Einmalig uebernehmen und danach zuruecksetzen, damit
+	// er die Taste C nicht dauerhaft ueberstimmt. Taste C allein genuegt nicht:
+	// sie erreicht das Spiel nicht zuverlaessig - in einem Lauf blieb der Modus
+	// auf 0 und das Bild war trotzdem als Cockpit beschriftet.
+	if (VehicleCamera)
+	{
+		// Die CVar wird namentlich geholt, nicht verlinkt: sie gehoert dem
+		// PlayerController (dort liegt der Befehl), und ein Include des
+		// IConsoleManagers in einem Fahrzeug-Header waere nur fuer diese
+		// eine Zahl zu viel.
+		if (IConsoleVariable* Konst =
+			IConsoleManager::Get().FindConsoleVariable(TEXT("wb.HeliKamera")))
+		{
+			const int32 Gewuenscht = Konst->GetInt();
+			if (Gewuenscht >= 0
+				&& Gewuenscht != static_cast<int32>(VehicleCamera->GetCameraMode()))
+			{
+				VehicleCamera->SetCameraMode(
+					static_cast<EWiesbadenVehicleCameraMode>(Gewuenscht));
+				// Zuruecksetzen, damit die Taste C spaeter wieder gilt.
+				Konst->Set(-1, ECVF_SetByCode);
+				UE_LOG(LogWbVehicles, Log,
+					TEXT("Ka52: Kameramodus %d aus der Konsole gesetzt."), Gewuenscht);
+			}
+		}
+	}
+
 	ReadInput(DeltaSeconds);
 	ApplyFlightPhysics(DeltaSeconds);
 	UpdateRotors(DeltaSeconds);
 	UpdateVisualEffects(DeltaSeconds);
 	UpdateAudio(DeltaSeconds);
+	// Geraete lesen hier ihre Tasten. AM 26.09.2026 stand ReadDeviceInput
+	// an dieser Stelle nicht: die Funktion war definiert, aber ohne jeden
+	// Aufrufer. Damit hatte das Bordgeschoetz keinen lebenden Abzug - im
+	// Spiel liess sich die Kanone ueberhaupt nicht ausloesen, und ein
+	// Bildbeleg fuer das Muendungsfeuer war damit unmoeglich. Gemessen:
+	// 39 s gehaltener Abzug, 0 Schuesse, kein "Munition leer".
+	ReadDeviceInput(DeltaSeconds);
 }
 
 void AWiesbadenHelicopter::ParkOnGround()
@@ -461,6 +662,49 @@ void AWiesbadenHelicopter::CycleCameraMode()
 	{
 		VehicleCamera->CycleCameraMode();
 	}
+	// Warum ist in der Cockpit-Ansicht keine Kabine zu sehen? Der Augpunkt
+	// liegt nachweislich in der Kabine (Ka52GeraetTest), und sie wird nicht
+	// ausgeblendet - also ist entweder das Mesh gar nicht auf dem Bildschirm
+	// oder es steht nicht dort, wo die Kabine steht. Genau das sagt der
+	// letzte Renderzeitpunkt: 0 heisst "nie gezeichnet".
+	if (CockpitMesh && VehicleCamera)
+	{
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("Kabine: Sichtbar=%d OwnerNoSee=%d versteckt=%d Grenzen %s")
+			TEXT(" zuletztGezeichnet=%d"),
+			CockpitMesh->IsVisible() ? 1 : 0,
+			CockpitMesh->bOwnerNoSee ? 1 : 0,
+			CockpitMesh->bHiddenInGame ? 1 : 0,
+			*CockpitMesh->Bounds.ToString(),
+			CockpitMesh->GetLastRenderTimeOnScreen() > 0.0 ? 1 : 0);
+	}
+}
+
+// Gleiche Diagnose, aber am Ort, an dem die Taste C wirklich ankommt: die
+// Fahrzeugkamera schaltet selbst um, AWiesbadenHelicopter::CycleCameraMode
+// wird dabei nie gerufen. Einmal je Moduswechsel genuegt.
+void AWiesbadenHelicopter::MeldeKabine()
+{
+	if (!CockpitMesh || GetCameraMode() == KameraModusMerker)
+	{
+		return;
+	}
+	KameraModusMerker = GetCameraMode();
+	// Auch der Rumpf mitmelden: im Cockpit-Modus wird er ausgeblendet, und das
+	// ist eine eigene Aussage, die ein Bild allein nicht belegt. "Rumpf
+	// ausgeblendet" wird sonst nur behauptet.
+	const int32 RumpfSichtbar = FuselageMesh && FuselageMesh->IsVisible() ? 1 : 0;
+	const int32 RumpfOwnerNoSee = FuselageMesh && FuselageMesh->bOwnerNoSee ? 1 : 0;
+	UE_LOG(LogWbVehicles, Log,
+		TEXT("Kabine bei Kameramodus %d: Sichtbar=%d OwnerNoSee=%d versteckt=%d")
+		TEXT(" Grenzen %s zuletztGezeichnet=%d | Rumpf: Sichtbar=%d OwnerNoSee=%d"),
+		static_cast<int32>(KameraModusMerker),
+		CockpitMesh->IsVisible() ? 1 : 0,
+		CockpitMesh->bOwnerNoSee ? 1 : 0,
+		CockpitMesh->bHiddenInGame ? 1 : 0,
+		*CockpitMesh->Bounds.ToString(),
+		CockpitMesh->GetLastRenderTimeOnScreen() > 0.0 ? 1 : 0,
+		RumpfSichtbar, RumpfOwnerNoSee);
 }
 
 EWiesbadenVehicleCameraMode AWiesbadenHelicopter::GetCameraMode() const
@@ -565,6 +809,16 @@ FWiesbadenHeliMastSample AWiesbadenHelicopter::SampleRotorMast() const
 		Sample.MainBladeOffsetCm = LateralCm(MainRotorBlade->GetComponentLocation(), MainHub, HubUp);
 		Sample.MainSpinTiltDeg = AngleDeg(MainRotorBlade->GetUpVector(), HubUp);
 		Sample.MainBladeCentreInBodyCm = BladeCentreInBodyCm(MainRotorBlade);
+		// Der Component-Ursprung traegt die Achsenkorrektur, nicht den Drehpunkt.
+		// Der Drehpunkt des Mesh muss also durch die WELT-Transformation des
+		// Components geschickt werden - mit der relativen Drehung allein
+		// gemessen oszilliert der Ausdruck, weil die Nabe mitdreht und ihren
+		// Versatz mitdreht: es kam 2 x Korrektur heraus (5,2 statt 0,0 cm),
+		// weil der Versatz in Weltlage steckt, die Drehung aber nicht.
+		Sample.MainAxisResidualCm = LateralCm(
+			MainRotorBlade->GetComponentTransform().TransformPosition(
+				GetRotorDrehpunktCm(false)),
+			MainHub, HubUp);
 	}
 	if (LowerRotorBlade)
 	{
@@ -572,6 +826,10 @@ FWiesbadenHeliMastSample AWiesbadenHelicopter::SampleRotorMast() const
 		Sample.LowerBladeOffsetCm = LateralCm(LowerRotorBlade->GetComponentLocation(), LowerHub, HubUp);
 		Sample.LowerSpinTiltDeg = AngleDeg(LowerRotorBlade->GetUpVector(), HubUp);
 		Sample.LowerBladeCentreInBodyCm = BladeCentreInBodyCm(LowerRotorBlade);
+		Sample.LowerAxisResidualCm = LateralCm(
+			LowerRotorBlade->GetComponentTransform().TransformPosition(
+				GetRotorDrehpunktCm(true)),
+			LowerHub, HubUp);
 	}
 
 	return Sample;
@@ -800,8 +1058,16 @@ void AWiesbadenHelicopter::ReadInput(float DeltaSeconds)
 	YawInput = AdvanceControlAxis(
 		YawInput, TargetYaw, YawRiseRate, YawReturnRate, DeltaSeconds);
 
-	// Triebwerk an/aus (Flanke auf G oder Y am Gamepad) - erlaubt Autorotationstests.
-	const bool bEnginePressed = IsKeyDown(EKeys::G) || IsKeyDown(EKeys::Gamepad_FaceButton_Top);
+	// Triebwerk an/aus (Flanke auf G oder RB am Gamepad) - erlaubt
+	// Autorotationstests.
+	//
+	// RB, nicht Y: das Ein- und Aussteigen liegt projektweit auf F bzw. Y
+	// (WiesbadenGameMode), und am Hubschrauber war Y damit doppelt belegt -
+	// ein Druck auf Y haette das Triebwerk geschaltet UND den Ausstieg
+	// eingeleitet. RB ist hier frei (die Schultertasten werden am
+	// Hubschrauber sonst nicht gelesen) und folgt demselben Muster wie im
+	// Menue, wo LB/RB Werte verstellen.
+	const bool bEnginePressed = IsKeyDown(EKeys::G) || IsKeyDown(EKeys::Gamepad_RightShoulder);
 	if (bEnginePressed && !bEngineToggleHeld)
 	{
 		bEngineRunning = !bEngineRunning;
@@ -1022,23 +1288,84 @@ void AWiesbadenHelicopter::ApplyGroundConstraint(float DeltaSeconds)
 void AWiesbadenHelicopter::UpdateRotors(float DeltaSeconds)
 {
 	// Rotor-Naben visuell drehen; die Drehzahl kommt aus dem Physik-Modul.
-	// U/min -> deg/s: * 360 / 60 = * 6.
-	const float MainDegPerSec = RotorPhysics.MainRotorRpm * 6.0f;
-	const float TailDegPerSec = RotorPhysics.TailRotorRpm * 6.0f;
+	FRotator Oben;
+	FRotator Unten;
+	ComputeCoaxialRotorRotation(RotorPhysics.MainRotorRpm, DeltaSeconds, Oben, Unten);
 
 	if (MainRotorHub)
 	{
-		MainRotorHub->AddLocalRotation(FRotator(0.0f, MainDegPerSec * DeltaSeconds, 0.0f));
+		MainRotorHub->AddLocalRotation(Oben);
 	}
 	if (LowerRotorHub)
 	{
-		// Gegenlaeufiger unterer Rotor des Koaxial-Paars.
-		LowerRotorHub->AddLocalRotation(FRotator(0.0f, -MainDegPerSec * DeltaSeconds, 0.0f));
+		LowerRotorHub->AddLocalRotation(Unten);
 	}
 	if (TailRotorHub)
 	{
-		TailRotorHub->AddLocalRotation(FRotator(TailDegPerSec * DeltaSeconds, 0.0f, 0.0f));
+		// Heckrotor: U/min -> deg/s: * 360 / 60 = * 6.
+		TailRotorHub->AddLocalRotation(
+			FRotator(RotorPhysics.TailRotorRpm * 6.0f * DeltaSeconds, 0.0f, 0.0f));
 	}
+}
+
+FVector AWiesbadenHelicopter::ComputeRotorMountOffset(
+	const FVector& MeshDrehpunktCm, const FRotator& ModelYaw, float HubHeightCm)
+{
+	// DIE EINE STELLE, an der die Rotoren auf die Rotorstangenachse gelegt
+	// werden. Beide Scheiben gehen durch dieselbe Funktion; es gibt keine
+	// Sonderbehandlung fuer eine der beiden und keinen zweiten Weg, die
+	// Achse zu erreichen.
+	//
+	// Rechnung: Ein Component bildet seine Weltlage als
+	//   Nabe + Versatz + Gier(MeshPunkt) ab
+	// Der Versatz muss also gerade das aufheben, was die Gier aus dem
+	// Drehpunkt des Mesh macht. Deshalb wird der Drehpunkt mit derselben
+	// Gier zurueckgedreht und negiert:
+	//   Versatz.xy = -(Gier * Drehpunkt).xy
+	// Mit ModelYaw +90 ist das (x, y) -> (-y, x) des Modellraums.
+	//
+	// Z bleibt der Hub-Hoehe-Versatz: der Mesh-Ursprung liegt auf der
+	// Kufenebene, die Geometrie muss am gebackenen Platz bleiben und
+	// trotzdem um die Nabe kreisen.
+	const FVector Gedreht = ModelYaw.RotateVector(MeshDrehpunktCm);
+	return FVector(-Gedreht.X, -Gedreht.Y, -HubHeightCm);
+}
+
+FVector AWiesbadenHelicopter::GetRotorDrehpunktCm(bool bUnten)
+{
+	// DIE ZAHLEN DES MODELLS, an einer Stelle.
+	//
+	// Sie stehen in GetRotorDrehpunktCm, damit Constructor und
+	// Automationstest dieselbe Quelle lesen - zwei Abschriften desselben
+	// Messwerts sind zwei Werte, sobald nur einer davon gepflegt wird.
+	//
+	// Gemessen an der Importquelle, nicht am Asset: das Asset traegt Nanite,
+	// seine klassischen LOD-Buffer haben 773 Dreiecke statt 1,9 Millionen,
+	// und die Achse dieses Ersatzdatensatzes liegt 3 bis 5 cm daneben
+	// (gemessen im Test, Saved/Logs/wb_test_ka52.log). Wer den Wert vom
+	// Asset nimmt, korrigiert gegen einen Fehler.
+	//
+	// Beide Scheiben liegen nicht auf (0, 0): die untere 5,4 cm in X. Ohne
+	// Korrektur dreht sie sichtbar um etwas anderes als die obere - daher
+	// ComputeRotorMountOffset, und deshalb diese Zahlen.
+	return bUnten ? FVector(4.92f, -2.06f, 0.0f) : FVector(-0.19f, 2.59f, 0.0f);
+}
+
+void AWiesbadenHelicopter::ComputeCoaxialRotorRotation(
+	float MainRotorRpm, float DeltaSeconds, FRotator& OutUpper, FRotator& OutLower)
+{
+	// Der Ka-52 hat EINEN Mast mit zwei gegenlaeufigen Rotoren. Gefordert
+	// ist nicht "zwei Rotoren", sondern "synchron schnell und gegeneinander":
+	// gleicher Betrag, entgegengesetztes Vorzeichen, gleiche Achse. Beide
+	// Werte entstehen in DIESER Rechnung, damit sie nicht auseinanderlaufen
+	// koennen - zwei unabhaengige Ausdruecke wuerden irgendwann getrennt
+	// gepflegt.
+	//
+	// U/min -> deg/s: * 360 / 60 = * 6.
+	const float MainDegPerSec = FMath::Max(MainRotorRpm, 0.0f) * 6.0f;
+	const float Schritt = MainDegPerSec * DeltaSeconds;
+	OutUpper = FRotator(0.0f, Schritt, 0.0f);
+	OutLower = FRotator(0.0f, -Schritt, 0.0f);
 }
 
 void AWiesbadenHelicopter::UpdateVisualEffects(float DeltaSeconds)
@@ -1059,17 +1386,30 @@ void AWiesbadenHelicopter::UpdateVisualEffects(float DeltaSeconds)
 
 	// Entwickler-Vorschau: -WbHeliSpin dreht den Rotor fuer Screenshots hoch und
 	// setzt das Triebwerk auf laufend, damit sich Rotor-Blur und Downwash auch am
-	// abgestellten Heli beurteilen lassen (im echten Spiel nie gesetzt).
-	static const bool bSpinDemo = FParse::Param(FCommandLine::Get(), TEXT("WbHeliSpin"));
+	// abgestellten Heli beurteilen lassen (im echten Spiel nie gesetzt). Ohne Wert
+	// = 450 U/min (volle Blur-Scheibe); mit Wert (-WbHeliSpin=220) eine feste
+	// Drehzahl, um den Uebergang Blaetter -> Scheibe zu pruefen.
+	static float SpinDemoRpm = 0.0f;
+	static bool bSpinDemoInit = false;
+	if (!bSpinDemoInit)
+	{
+		bSpinDemoInit = true;
+		if (!FParse::Value(FCommandLine::Get(), TEXT("WbHeliSpin="), SpinDemoRpm)
+			&& FParse::Param(FCommandLine::Get(), TEXT("WbHeliSpin")))
+		{
+			SpinDemoRpm = 450.0f;
+		}
+	}
+	const bool bSpinDemo = SpinDemoRpm > 0.0f;
 
 	// --- Rotor-Blur: Scheiben blenden mit der Drehzahl ein ---
-	const float Rpm = bSpinDemo ? 450.0f : RotorPhysics.MainRotorRpm;
+	const float Rpm = bSpinDemo ? SpinDemoRpm : RotorPhysics.MainRotorRpm;
 	const bool bEngineForVfx = bSpinDemo ? true : bEngineRunning;
 	// Unter ~120 U/min sieht man die Blaetter, ab ~360 die volle Scheibe.
 	const float BlurAlpha = FMath::Clamp((Rpm - 120.0f) / 240.0f, 0.0f, 1.0f);
 	if (RotorBlurMID)
 	{
-		RotorBlurMID->SetScalarParameterValue(TEXT("Opacity"), BlurAlpha * 0.33f);
+		RotorBlurMID->SetScalarParameterValue(TEXT("Opacity"), BlurAlpha * 0.70f);
 	}
 	// Solide Blaetter oberhalb 75 % Blur ausblenden - dann traegt die Scheibe das Bild.
 	const bool bBladesVisible = (BlurAlpha < 0.75f);
@@ -1164,4 +1504,347 @@ bool AWiesbadenHelicopter::IsKeyDown(const FKey& Key)
 {
 	const APlayerController* PC = GetHeliController();
 	return PC && PC->IsInputKeyDown(Key);
+}
+
+// ===========================================================================
+// Geraet, Schaden, Absturz und Wiederaufsetzen
+// ===========================================================================
+
+/**
+ * Konsolenschalter wb.HeliFeuer: 1 = Abzug halten, 0 = loslassen.
+ *
+ * Der haelt den Abzug dauerhaft - im Gegensatz zu einer synthetischen
+ * Maustaste, die das Spiel nicht annimmt (am 26.09.2026 vier Wege gefahren,
+ * null Abzugsflanken im Log). Ohne diesen Schalter war das Muendungsfeuer
+ * nicht als Bild zu belegen. Die CVar gehoert dem PlayerController (dort
+ * liegt der Befehl WbHeliFeuer), deshalb wird sie namentlich geholt.
+ */
+static bool IsFireSwitchHeld()
+{
+	const IConsoleVariable* Feuer =
+		IConsoleManager::Get().FindConsoleVariable(TEXT("wb.HeliFeuer"));
+	return Feuer != nullptr && Feuer->GetInt() == 1;
+}
+
+void AWiesbadenHelicopter::ReadDeviceInput(float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+
+	if (!LightRig || !Gun)
+	{
+		return;
+	}
+
+	// -- Bordgeschuetz -------------------------------------------------------
+	// Linke Maustaste, Gamepad RT oder Taste V. Halten feuert in Salven, was
+	// zu einer Kanone passt: 500 Schuss je Minute sind 8,3 Schuss je Sekunde.
+	// V kam dazu, weil sich die Kanone sonst ohne Maus nicht ausloesen
+	// laesst - am 26.09.2026 hat das den Bildbeleg verhindert: in vier
+	// Sitzungen kam ueber synthetische Mausklicks keine Abzugsflanke im
+	// Spiel an, waehrend Tasten ankommen (Logzeile "Ka52-Abzug").
+	const bool bFeuern = IsKeyDown(EKeys::LeftMouseButton)
+		|| IsKeyDown(EKeys::V)
+		|| GetAnalogAxis(EKeys::Gamepad_RightTriggerAxis) > 0.35f
+		|| IsFireSwitchHeld();
+	MeldeKabine();
+	if (bFeuern != bTriggerHeld)
+	{
+		// Flanke loggen. Das Geschuetz selbst schweigt im Normalfall
+		// komplett, und genau daran ist am 26.09.2026 ein Bildbeleg
+		// gescheitert: 39 s LMB gehalten, kein Schuss, kein Logzeichen -
+		// unabhaengig davon, ob der Abzug das Spiel ueberhaupt erreicht.
+		UE_LOG(LogWbVehicles, Log, TEXT("Ka52-Abzug: %s"),
+			bFeuern ? TEXT("gedrueckt") : TEXT("losgelassen"));
+	}
+	Gun->SetTriggerHeld(bFeuern);
+	bTriggerHeld = bFeuern;
+
+	// -- Suchscheinwerfer ----------------------------------------------------
+	// L oder Gamepad D-Pad hoch. Flanke, nicht Pegel: ein gehaltener Schalter
+	// wuerde im Frame mehrfach umschalten.
+	const bool bLicht = IsKeyDown(EKeys::L) || IsKeyDown(EKeys::Gamepad_DPad_Up);
+	if (bLicht && !bSearchlightToggleHeld)
+	{
+		SetSearchlights(!LightRig->AreSearchlightsOn());
+	}
+	bSearchlightToggleHeld = bLicht;
+
+	// -- Landlicht -----------------------------------------------------------
+	const bool bLande = IsKeyDown(EKeys::B) || IsKeyDown(EKeys::Gamepad_DPad_Down);
+	if (bLande && !bLandingLightToggleHeld)
+	{
+		SetLandingLight(!LightRig->IsLandingLightOn());
+	}
+	bLandingLightToggleHeld = bLande;
+
+	// -- Zielen -------------------------------------------------------------
+	// Das Geschuetz folgt dem Blick, nicht einer Taste. Aim(0,0) stellte den
+	// Turm in Ruhelage nach vorn: man konnte den Horizont drehen und der
+	// Schuss ging trotzdem immer geradeaus - auf Zieldistanzen von mehreren
+	// Kilometern ist das der Unterschied zwischen Treffer und Kartoffeln.
+	//
+	// Den Nachlauf macht der Turm selbst (TurmFolgt = 3,2/s); hier wird nur
+	// das Ziel gestellt, nicht die Gier geschrieben.
+	FRotator Blick = GetControlRotation();
+	if (FMath::Abs(Blick.Yaw) > 89.0f)
+	{
+		// Fast senkrechter Blick: die Steuerrotation kippt dabei in eine
+		// sinnlose Gier, die dem Geschuetz eine 90-Grad-Schwenkung aufzwingt.
+		Blick.Yaw = GetActorRotation().Yaw;
+	}
+	Gun->AimAt(GetActorLocation() + Blick.Vector() * ZielDistanzCm);
+
+	// Der Suchscheinwerfer zeigt auf dieselbe Stelle. Bei Nacht ist er das
+	// einzige, was einem sagt, wohin der Schuss geht - er sitzt darum am
+	// Zielpunkt des Geschuetzes und nicht an einer eigenen Taste.
+	LightRig->SetSearchlightTarget(
+		Gun->GetMuzzleLocation() + Gun->GetAimRotation().Vector() * LichtDistanzCm);
+}
+
+void AWiesbadenHelicopter::SetSearchlights(bool bOn)
+{
+	if (LightRig)
+	{
+		LightRig->SetSearchlights(bOn);
+	}
+}
+
+void AWiesbadenHelicopter::SetLandingLight(bool bOn)
+{
+	if (LightRig)
+	{
+		LightRig->SetLandingLight(bOn);
+	}
+}
+
+float AWiesbadenHelicopter::GetHealthFraction() const
+{
+	return MaxHealth > 0.0f ? FMath::Clamp(Health / MaxHealth, 0.0f, 1.0f) : 0.0f;
+}
+
+float AWiesbadenHelicopter::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
+	AController* EventInstigator, AActor* DamageCauser)
+{
+	(void)DamageEvent;
+	(void)EventInstigator;
+	(void)DamageCauser;
+
+	if (bDestroyed || DamageAmount <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	// Nicht unter Null. TakeDamage liefert den tatsaechlich angerichteten
+	// Schaden zurueck - der Rueckgabewert ist damit die ehrliche Groesse und
+	// kein zweiter Ort, an dem der Zustand steht.
+	const float Vorher = Health;
+	Health = FMath::Clamp(Health - DamageAmount, 0.0f, MaxHealth);
+	const float Angewendet = Vorher - Health;
+
+	UE_LOG(LogWbVehicles, Log, TEXT("Ka52 getroffen: %.0f Schaden, noch %.0f von %.0f."),
+		Angewendet, Health, MaxHealth);
+
+	if (Health <= 0.0f)
+	{
+		bDestroyed = true;
+		bEngineRunning = false;
+		RespawnCountdown = RespawnDelay;
+		// Der Rumpf faellt zur getroffenen Seite, nicht in eine Zufalls-
+		// richtung: der Taumel ist die Story des Absturzes.
+		CrashYawRate = FMath::DegreesToRadians(CrashTumbleDegPerSec);
+		CrashRollRate = FMath::DegreesToRadians(CrashTumbleDegPerSec * 0.6f);
+		if (LightRig)
+		{
+			LightRig->SetAllLightsEnabled(false);
+		}
+		if (Gun)
+		{
+			Gun->SetTriggerHeld(false);
+		}
+		UE_LOG(LogWbVehicles, Warning,
+			TEXT("Ka52 zerstoert - Wiederaufsetzen auf dem Landeplatz in %.0f s."),
+			RespawnDelay);
+	}
+	return Angewendet;
+}
+
+void AWiesbadenHelicopter::UpdateCrash(float DeltaSeconds)
+{
+	// Triebwerk aus, Rotoren stehen, Steuerung weg - alles Weitere ist
+	// Schauwerk. Der Rumpf sinkt und taumelt, damit man den Absturz von
+	// aussen sieht, statt dass die Maschine einfach in der Luft stehen
+	// bleibt (dieselbe Fehlerklasse wie bei ParkOnGround).
+	Velocity = FVector(0.0f, 0.0f, -CrashSinkCmPerSec);
+	AngularVelocity = FVector(0.0f, CrashRollRate, CrashYawRate);
+	AddActorWorldOffset(Velocity * DeltaSeconds, false);
+	AddActorWorldRotation(
+		FRotator(0.0f, AngularVelocity.Z, AngularVelocity.Y)
+		* FMath::RadiansToDegrees(DeltaSeconds), false);
+
+	// Auf dem Boden endet das Taumeln: der Rumpf bleibt liegen, bis der
+	// Respawn ihn holt.
+	FHitResult Boden;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbHeliAbsturz), false, this);
+	const FVector Von = GetActorLocation();
+	if (GetWorld() && GetWorld()->LineTraceSingleByChannel(
+		Boden, Von, Von - FVector(0.0f, 0.0f, 4000.0f), ECC_WorldStatic, Params)
+		&& Boden.bBlockingHit)
+	{
+		const float Abstand = FVector::Dist(Von, Boden.ImpactPoint);
+		if (Abstand < 260.0f)
+		{
+			// Knapp ueber der Aufsetzflaeche halten: der Ursprung des
+			// Ka-52 liegt in der Rumpfmitte, nicht an der Kufe.
+			const FVector Aufsetzpunkt = Boden.ImpactPoint + FVector(0.0f, 0.0f, 60.0f);
+			SetActorLocation(Aufsetzpunkt, false, nullptr, ETeleportType::TeleportPhysics);
+			AngularVelocity = FVector::ZeroVector;
+			Velocity = FVector::ZeroVector;
+		}
+	}
+
+	if (RespawnCountdown > 0.0f)
+	{
+		RespawnCountdown -= DeltaSeconds;
+		if (RespawnCountdown <= 0.0f)
+		{
+			RespawnCountdown = -1.0f;
+			RespawnOnTowerHelipad();
+		}
+	}
+}
+
+bool AWiesbadenHelicopter::RespawnOnTowerHelipad()
+{
+	if (!PlaceOnTowerHelipad())
+	{
+		return false;
+	}
+
+	bDestroyed = false;
+	Health = MaxHealth;
+	RespawnCountdown = -1.0f;
+	CrashYawRate = 0.0f;
+	CrashRollRate = 0.0f;
+	Velocity = FVector::ZeroVector;
+	AngularVelocity = FVector::ZeroVector;
+	CollectiveInput = 0.0f;
+	CyclicPitchInput = 0.0f;
+	CyclicRollInput = 0.0f;
+	YawInput = 0.0f;
+	bGrounded = true;
+	bGroundCacheValid = false;
+	bEngineRunning = true;
+
+	if (LightRig)
+	{
+		LightRig->SetAllLightsEnabled(true);
+		LightRig->SetSearchlights(false);
+		LightRig->SetLandingLight(false);
+	}
+	if (Gun)
+	{
+		Gun->Reload();
+	}
+
+	UE_LOG(LogWbVehicles, Log,
+		TEXT("Ka52 wiederaufgesetzt auf dem Landeplatz (%.0f, %.0f, %.0f)."),
+		GetActorLocation().X, GetActorLocation().Y, GetActorLocation().Z);
+	return true;
+}
+
+bool AWiesbadenHelicopter::PlaceOnTowerHelipad()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	// Der Landeplatz gehoert zum Sebbotower, und seine Weltlage rechnet der
+	// Tower selbst (AWiesbadenSebboHq::GetHelipadWorldLocation) - der Heli
+	// fragt ihn nur. Eine eigene Rechnung (Turmfuss + Versatz) waere die
+	// zweite Wahrheit, und die beiden wuerden auseinanderlaufen. Aus genau
+	// diesem Grund darf der Hubschrauber auch NICHT GetActorLocation() des
+	// Towers fragen: der Actor steht im Ursprung, seine Bauteile tragen die
+	// Weltlage.
+	AWiesbadenSebboHq* Turm = nullptr;
+	for (TActorIterator<AWiesbadenSebboHq> It(World); It; ++It)
+	{
+		Turm = *It;
+		break;
+	}
+	if (!Turm)
+	{
+		UE_LOG(LogWbVehicles, Warning,
+			TEXT("Ka52-Reset: kein Sebbotower in der Ebene - bleibe, wo ich bin."));
+		return false;
+	}
+
+	// 120 cm ueber der Aufsetzflaeche: die Kufen stehen nicht auf dem
+	// Hubschrauberursprung, und 0 cm hiesse "im Dach".
+	const FVector Platz = Turm->GetHelipadWorldLocation() + FVector(0.0f, 0.0f, 120.0f);
+
+	// Mit dem Heck zum Ankunftsweg: die Nase zeigt damit vom Turm weg, und
+	// der Hubschrauber kann nach dem Aufsetzen direkt ausrollen.
+	const FRotator Lage(0.0f, Turm->GetActorRotation().Yaw, 0.0f);
+	SetActorLocationAndRotation(Platz, Lage, false, nullptr, ETeleportType::TeleportPhysics);
+	bGroundCacheValid = false;
+	return true;
+}
+
+bool AWiesbadenHelicopter::AimAtWorldTarget(float Xcm, float Ycm,
+	float HoeheUeberBodenCm, float DistanzMeter)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	// Bodenspur am Ziel: HoeheUeberBodenCm bezieht sich auf den Boden, nicht
+	// auf Z=0. Wiesbaden liegt auf Huegeln - ein festes Z landet je nach
+	// Stadtgegend im Erdreich oder in der Luft.
+	float BodenZ = 0.0f;
+	FHitResult Boden;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbHeliZiel), false, this);
+	if (World->LineTraceSingleByChannel(Boden,
+		FVector(Xcm, Ycm, 200000.0f), FVector(Xcm, Ycm, -50000.0f),
+		ECC_WorldStatic, Params))
+	{
+		BodenZ = Boden.ImpactPoint.Z;
+	}
+
+	const FVector Ziel(Xcm, Ycm, BodenZ + HoeheUeberBodenCm);
+
+	// Schwebeposition SuedLICH des Ziels: +Y ist in Unreal suedlich (die Achse
+	// ist linkshaendig, siehe UGeoCoordinateConverter). Dadurch zeigt die Nase
+	// nach Norden - auf das Ziel zu, und die Kamera dahinter sieht die Muendung
+	// vor dem Bauwerk, nicht den Rumpf davor.
+	const float Abstand = FMath::Max(500.0f, DistanzMeter * 100.0f);
+	const FVector Platz(Xcm, Ycm + Abstand, BodenZ + HoeheUeberBodenCm + 600.0f);
+	const FRotator Blick = (Ziel - Platz).Rotation();
+
+	SetActorLocationAndRotation(Platz,
+		FRotator(0.0f, Blick.Yaw, 0.0f), false, nullptr,
+		ETeleportType::TeleportPhysics);
+	bGroundCacheValid = false;
+	bGrounded = false;
+	bEngineRunning = true;
+	Velocity = FVector::ZeroVector;
+	AngularVelocity = FVector::ZeroVector;
+
+	// Das Geschuetz folgt der Control-Rotation, nicht der Actorlage - ohne
+	// diese Zeile zielt die Kanone weiter geradeaus, waehrend der Rumpf auf
+	// das Ziel zeigt (am 26.09.2026 genau so beobachtet).
+	// Nicht "Controller" nennen: der Klassenname hat ein solches Member, und
+	// C4458 (Verdeckung) ist in diesem Projekt ein Fehler.
+	if (AController* Steuermann = GetController())
+	{
+		Steuermann->SetControlRotation(Blick);
+	}
+
+	UE_LOG(LogWbVehicles, Log,
+		TEXT("Ka52-Ziel: schwebe bei (%.0f, %.0f, %.0f), peile (%.0f, %.0f, %.0f) an, Boden %.0f cm."),
+		Platz.X, Platz.Y, Platz.Z, Ziel.X, Ziel.Y, Ziel.Z, BodenZ);
+	return true;
 }

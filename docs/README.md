@@ -10,8 +10,9 @@ Vier Sorten Dokument, nach dem, was du gerade brauchst:
 | Genau NACHSCHLAGEN | **Reference** | informationsorientiert, trocken, vollstaendig |
 | Etwas VERSTEHEN (warum) | **Explanation** | verstaendnisorientiert, Hintergrund |
 
-Was schon laeuft - mit GIFs und Fotos aus dem Spiel - steht ausserhalb dieser
-Ordnung auf der Seite [Meilensteine](meilensteine.md).
+**Was schon laeuft, mit GIFs und Fotos aus dem Spiel:** [Meilensteine](meilensteine.md).
+
+**Das Projekt auf einer Seite (Ziel, Code-Ordner, Agenten-Regeln):** [Projekt-Quicksicht](projekt-quicksicht.md).
 
 ---
 
@@ -45,6 +46,10 @@ Lernreise.*
 - [Stadt-Inhalt in einem frischen Klon holen](reference/stadtinhalt-holen.md)
   - Release-Assets holen, SHA-256 pruefen, entpacken und den gebackenen
     Stadtstand fuer einen frischen Klon verifizieren.
+- [Projekt-Gesamtstand, offene Punkte und Vorschlaege](reference/projekt-gesamtstand.md)
+  - Was je Thema laeuft, was fehlt und welcher Blocker davorsteht - aus
+    Gedaechtnis, AGENTS.md, Spezifikationen und Git-Historie zusammengefuehrt,
+    mit priorisierten Vorschlaegen am Ende.
 
 ## Explanation
 

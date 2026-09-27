@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/HUD.h"
+#include "UI/WiesbadenMenuFlow.h"
 #include "UI/WiesbadenMinimap.h"
 #include "WiesbadenVehicleHUD.generated.h"
 
@@ -15,6 +16,7 @@ class AWiesbadenNerobergbahn;
 class UWiesbadenWorldMapView;
 class UWorld;
 class UWiesbadenCitySubsystem;
+struct FWbOptionRow;
 
 /**
  * Fahrzeug-HUD: Tacho, Drehzahl, Gang und Kontrollleuchten.
@@ -78,6 +80,24 @@ public:
 	static FString FormatHeadlightMode(uint8 Mode);
 
 	/**
+	 * Beschriftung der Traktions-Kontrollleuchte aus den Modell-Flags der
+	 * Fahrphysik - leer, wenn beide aus. Blockieren ("ABS", Bremsen) hat
+	 * Vorrang vor Antriebsschlupf ("ASR", Gas): in der Praxis schliessen sie
+	 * sich aus (nie Gas UND Bremse), die Priorisierung macht die Anzeige aber
+	 * eindeutig. Datenrein/testbar (Vehicles.HUD.TractionTellTale).
+	 */
+	static FString FormatTractionTellTale(bool bWheelSpin, bool bWheelLock);
+
+	/**
+	 * Nachleuchten der Traktions-Leuchte: bei aktivem Schlupf auf HoldSeconds
+	 * gesetzt, sonst um Dt heruntergezaehlt (nie unter 0). Datenrein/testbar.
+	 *
+	 * Ohne das Halten flackerte die Leuchte im ABS-Puls-Takt (bWheelLock
+	 * schaltet mit BrakeAbsPulseHz) und waere als Zustand nicht ablesbar.
+	 */
+	static float AdvanceTellTaleHold(bool bActive, float HoldRemaining, float Dt, float HoldSeconds);
+
+	/**
 	 * Zeilen der Tastenlegende - datenrein, damit sie ohne Welt pruefbar sind.
 	 *
 	 * Die Belegungen selbst stehen an drei Stellen im Code
@@ -98,14 +118,6 @@ public:
 	 */
 	static bool ToggleControlLegendVisible(
 		bool bShown, float ElapsedSeconds, float LegendSeconds);
-
-	/**
-	 * Banner der Erstkontakt-Hilfe - datenrein.
-	 *
-	 * Ohne Untertitel (kein Missionsziel in der Naehe = Normalfall) darf kein
-	 * Gedankenstrich stehenbleiben.
-	 */
-	static FString ComposeFirstRunBanner(const FString& Title, const FString& Subtitle);
 
 	/**
 	 * Waehlt den Handlungshinweis zu Fuss (datenrein, testbar).
@@ -261,19 +273,114 @@ private:
 	/** Zeichnet das Pausemenue mittig. */
 	void DrawPauseMenu(float Width, float Height);
 
+	// -- Intro, Titelbildschirm und Hauptmenue ------------------------------
+	//
+	// Der Titel liegt ueber allem anderen und nimmt die Eingabe an sich. Er
+	// PAUSIERT nicht: die Stadt laeuft hinter ihm weiter, sonst muesste der
+	// Titelbildschirm das Streaming abwarten, und im Automationslauf (der
+	// Befehlzeile enthaelt dann -ExecCmds) erscheint er gar nicht.
+	//
+	// @return true, wenn ein Titelbildschirm offen ist (dann zeichnet der
+	//         Aufrufer ihn und den Rest des HUD nicht).
+	bool UpdateTitleMenu();
+
+	/** Zeichnet Intro, Titel, Hauptmenue, Optionsseite oder Belegung. */
+	void DrawTitleScreen(float Width, float Height);
+
+	/** Baut MenuEntries passend zum aktuellen Bildschirm neu auf. */
+	void RebuildMenuEntries();
+
+	/** Fuehrt den gewaehlten Eintrag aus (Enter / A). */
+	void ActivateMenuEntry();
+
+	/** Die Belegungs-Seite (Tastatur und Xbox-360 nebeneinander). */
+	void DrawBindingPage(float Width, float Height);
+
+	/**
+	 * Text mittig ueber MitteX, bzw. rechtsbuendig mit RechtsX als rechter
+	 * Kante.
+	 *
+	 * Eigene Helfer, weil AHUD::DrawText in UE 5.8 KEINEN
+	 * Ausrichtungsparameter hat (der siebte ist bScalePosition). Werte rechts
+	 * im Kasten und Ueberschriften in der Mitte lassen sich sonst nicht
+	 * setzen - geschweige denn an einer gedachten Spalte ausrichten.
+	 */
+	void DrawTextMittig(const FString& Text, FLinearColor Color, float MitteX, float Y,
+		UFont* Font, float Scale = 1.0f);
+
+	/** Wie DrawTextMittig, aber die Angabe ist die RECHTE Kante. */
+	void DrawTextRechts(const FString& Text, FLinearColor Color, float RechtsX, float Y,
+		UFont* Font, float Scale = 1.0f);
+
+	/**
+	 * Die halbtransparente, halb so grosse Profil-Tafel (Option Profil-Tafel):
+	 * Zeilen aus WbProfilZeilen, Groesse aus WbProfilTafelGroesse
+	 * (UI/WiesbadenProfilOverlay - datenrein, dort getestet).
+	 */
+	void DrawProfilTafel(float X, float Y);
+
+	/** Der Zeiger aus dem linken Stick, mit Halte-Flanke (ein Schritt). */
+	bool StickStep(float Axis, bool& bHeld);
+
 	/** Wertet die Tasten des Pausemenues aus (Escape, Pfeile, Eingabe). */
 	void UpdatePauseMenu();
 
 	/** Fuehrt den gewaehlten Eintrag aus. */
 	void ActivatePauseEntry(int32 Index);
 
-	/** Zeichnet das Ton-Unterfenster (Lautstaerke-Balken je Bus) mittig. */
-	void DrawAudioSettings(float Width, float Height);
+	/** Zeichnet das Optionsfenster (Gruppen, Beschriftung, Wert, Balken). */
+	void DrawOptions(float Width, float Height);
 
-	/** Wertet die Tasten des Ton-Unterfensters aus: Pfeile/W/S waehlen den Bus,
-	 *  Links/Rechts bzw. A/D regeln ihn leiser/lauter. Escape (zurueck) laeuft
-	 *  ueber UpdatePauseMenu. */
-	void UpdateAudioSettings();
+	/** Wertet die Tasten des Optionsfensters aus: Pfeile/W/S waehlen die Zeile,
+	 *  Links/Rechts bzw. A/D verstellen sie. Escape (zurueck) laeuft ueber
+	 *  UpdatePauseMenu. */
+	void UpdateOptions();
+
+	/** Baut die Zeilenliste aus den Systemen, die es GERADE gibt. */
+	void BuildOptionRows(TArray<FWbOptionRow>& OutRows) const;
+
+	/** Das Stadt-Subsystem, wenn es die Welt gerade gibt - sonst nullptr. */
+	class UWiesbadenCitySubsystem* FindCity() const;
+
+	/** Das Mischpult, wenn es die Spielinstanz gerade gibt - sonst nullptr. */
+	class UWiesbadenAudioSubsystem* FindAudio() const;
+
+	/**
+	 * Der aktuelle Wert einer Zeile - gelesen bei dem System, dem er gehoert.
+	 *
+	 * Das Menue haelt keine Kopie (Ausnahme: die Maus-Empfindlichkeit, siehe
+	 * MouseSensitivityFactor). Damit zeigt die Zeile immer, was WIRKLICH
+	 * eingestellt ist, und eine Schreibung, die nicht ankommt, faellt sofort
+	 * auf.
+	 */
+	double ReadOptionValue(const FWbOptionRow& Row) const;
+
+	/** Schreibt einen Wert an sein System und macht ihn dauerhaft. */
+	void WriteOptionValue(const FWbOptionRow& Row, double Value);
+
+	/**
+	 * Ein Schritt nach links (-1) oder rechts (+1), mit Nachweis im Protokoll.
+	 *
+	 * Der WEG fuer BEIDE Fenster, die Werte verstellen: das alte
+	 * Optionsfenster des Pausemenues und die Optionsseite des Hauptmenues.
+	 * Zwei Kopien dieser Rechnung waeren zwei Orte, an denen sich die Meldung
+	 * "gesetzt: ..." unterscheiden koennte.
+	 *
+	 * @return true, wenn sich der Wert tatsaechlich geaendert hat
+	 */
+	bool StepOptionValue(const FWbOptionRow& Row, int32 Richtung);
+
+	/**
+	 * Gespeicherte Optionen anwenden.
+	 *
+	 * Laeuft nicht nur beim Start, sondern im Sekundentakt: Spielfigur und
+	 * Fahrzeugkamera werden beim Ein- und Aussteigen neu erzeugt und haetten
+	 * sonst wieder die eingebaute Empfindlichkeit.
+	 */
+	void ApplyPersistentOptions();
+
+	/** Liest die eigenen Optionen aus den GameUserSettings (einmal beim Start). */
+	void LoadPersistentOptions();
 
 public:
 	/**
@@ -294,7 +401,92 @@ public:
 	/** Lautstaerke (0..1) als Prozenttext, z. B. "75 %". Datenrein/testbar. */
 	static FString FormatVolumePercent(float Slider01);
 
+	/**
+	 * Entwicklerbefehl: Optionsfenster oeffnen oder schliessen (haelt an).
+	 *
+	 * WOFUER: Ohne ihn laesst sich das Menue nur mit der Hand bedienen - ein
+	 * Lauf, der belegen soll, dass eine Einstellung wirkt, koennte sie gar
+	 * nicht erst verstellen. Die Exec-Kette erreicht das HUD, darum sitzt der
+	 * Befehl hier und nicht auf dem PlayerController.
+	 */
+	UFUNCTION(Exec)
+	void WbOptionen();
+
+	/**
+	 * Entwicklerbefehl: eine Zeile des Optionsfensters verstellen.
+	 *
+	 * @param Zeile   Index in der Zeilenliste (0-basiert, wie angezeigt).
+	 * @param Schritte Zahl der Schritte; das Vorzeichen ist die Richtung.
+	 *
+	 * Meldet Vorher/Nachher UND den zurueckgelesenen Wert - eine Einstellung,
+	 * die nicht ankommt, faellt damit im Protokoll auf.
+	 */
+	UFUNCTION(Exec)
+	void WbOption(int32 Zeile, int32 Schritte);
+
+	/**
+	 * Entwicklerbefehl: den Titelbildschirm mit dem Hauptmenue wieder oeffnen.
+	 *
+	 * WOFUER: Das Intro laeuft nur beim ersten Start einer Sitzung. Wer es
+	 * uebersprungen hat, kommt so ohne Neustart zurueck - und ein Lauf, der
+	 * das Hauptmenue belegen soll, muss es ohne Tastatur oeffnen koennen.
+	 *
+	 * @param Bildschirm 0 = Intro, 1 = Titel mit Hauptmenue, 2 = Optionen,
+	 *                   3 = Belegung; 9 = schliessen
+	 */
+	UFUNCTION(Exec)
+	void WbTitel(int32 Bildschirm = 1);
+
+
 private:
+	// -- Titelbildschirm ----------------------------------------------------
+	/** MAX = kein Titelbildschirm; jeder andere Wert liegt ueber dem Spiel. */
+	EWbMenuScreen MenuScreen = EWbMenuScreen::MAX;
+	/** Weltzeit beim Wechsel des Bildschirms - der Intro-Ablauf rechnet damit. */
+	double MenuOpenedAt = 0.0;
+	/** Die Eintraege des aktuellen Bildschirms (Hauptmenu, Gruppe, ...). */
+	TArray<FWbMenuEntry> MenuEntries;
+	/** Die Optionszeilen, zu denen die Eintraege gehoeren (fuer den Wert). */
+	TArray<FWbOptionRow> MenuRows;
+	int32 MenuSelection = 0;
+	/** Welche Optionsgruppe offen ist (Bildschirm Gruppe). */
+	EWbOptionGroup MenuGruppe = EWbOptionGroup::Ton;
+	/** Welcher Kontext in der Belegungs-Seite offen ist. */
+	EWbControlContext MenuBelegung = EWbControlContext::Fahrzeug;
+	/** Einmal-Merker: die Intro-Entscheidung wurde beim Start getroffen. */
+	bool bTitleGeprueft = false;
+	/**
+	 * Soll das Intro beim Start laufen? true = ja.
+	 *
+	 * Bewusst noch KEIN Schalter im Menue: die Entscheidung faellt beim
+	 * Start ueber WiesbadenMenu::ShouldShowIntro, und wer es abschalten
+	 * will, startet mit -WbKeinIntro (oder im Automationslauf, wo es ohnehin
+	 * aus bleibt). Ein Schalter, den man im Menue sucht und nicht findet,
+	 * ist schlechter als keiner - bis er gebaut ist, steht hier der Grund,
+	 * an dem er ansetzen muss.
+	 */
+	bool bIntroGewuenscht = true;
+
+	// Debug-Schalter (Gruppe DEBUG). Sie stehen hier statt im Menue, weil das
+	// Menue sie nur liest: was ein Schalter bewirkt, kann keine Zeile tun, die
+	// einen Wert zurueckgibt.
+	bool bFpsAnzeige = false;
+	bool bStatEinblendung = false;
+	bool bKollisionsOverlay = false;
+
+	// Halte-Flanken der Titeleingabe. Ohne sie wuerde ein gehaltenes Steuer-
+	// kreuz in jedem Bild eine Zeile weiterspringen.
+	bool bTitleHochHeld = false;
+	bool bTitleRunterHeld = false;
+	bool bTitleLinksHeld = false;
+	bool bTitleRechtsHeld = false;
+	bool bTitleEnterHeld = false;
+	bool bTitleZurueckHeld = false;
+	bool bTitleStickHochHeld = false;
+	bool bTitleStickRunterHeld = false;
+	bool bTitleStickLinksHeld = false;
+	bool bTitleStickRechtsHeld = false;
+
 	/** True, solange das Spiel pausiert ist. */
 	bool bPaused = false;
 
@@ -307,11 +499,62 @@ private:
 	/** Ausgewaehlter Eintrag. */
 	int32 PauseSelection = 0;
 
-	/** True, solange das Ton-Unterfenster (Lautstaerke) im Pausemenue offen ist. */
-	bool bAudioSettingsOpen = false;
+	/**
+	 * WAS GERADE UEBER DEM SPIEL LIEGT - ein Zustand, ein Eigentuemer.
+	 *
+	 * Vorher gab es zwei Schalter: `bPaused` entschied, ob Tasten ausgewertet
+	 * werden, `bOptionsOpen`, ob das Optionsfenster gezeichnet wird. Beide
+	 * konnten auseinanderlaufen, und genau das taten sie: ein Fenster war zu
+	 * sehen, waehrend die Pfeiltasten ins Leere gingen. Jetzt entscheidet
+	 * DIESELBE Groesse ueber Zeichnen UND Eingabe - sichtbar heisst damit
+	 * bedienbar, ohne dass jemand daran denken muss.
+	 */
+	enum class EWbPauseView : uint8
+	{
+		Aus,        // nichts liegt ueber dem Spiel
+		Menue,      // Pausemenue
+		Optionen,   // Optionsfenster
+	};
 
-	/** Ausgewaehlte Bus-Zeile im Ton-Unterfenster. */
-	int32 AudioSelection = 0;
+	EWbPauseView PauseView = EWbPauseView::Aus;
+
+	/** Ausgewaehlte Zeile im Optionsfenster. */
+	int32 OptionSelection = 0;
+
+	/**
+	 * Einmal je Oeffnen: die Tastenauswertung hat sich gemeldet.
+	 *
+	 * Das ist der Nachweis der Reparatur. Vorher entschieden zwei Schalter
+	 * ueber Zeichnen und Eingabe; stand das Fenster ohne Pause, lief
+	 * UpdateOptions NIE. Die Zeile im Protokoll sagt, dass es laeuft, solange
+	 * das Fenster zu sehen ist.
+	 */
+	bool bOptionInputAnnounced = false;
+
+	/**
+	 * Maus-Empfindlichkeit als FAKTOR auf die eingebauten Werte (1,00 = wie
+	 * gebaut). Die einzige Zeile, deren Wert das Menue selbst haelt - zu Fuss
+	 * (1,0) und im Fahrzeug (2,2) sind die Grundwerte verschieden, ein
+	 * gemeinsamer absoluter Wert waere fuer eines von beiden falsch.
+	 */
+	float MouseSensitivityFactor = 1.0f;
+
+	/** Naechste Anwendung der gespeicherten Optionen (Weltzeit in Sekunden). */
+	float NextOptionApplyAt = 0.0f;
+
+	/** Einmal-Merker: die gespeicherten Optionen wurden schon gelesen. */
+	bool bOptionsLoaded = false;
+
+	/**
+	 * Gespeicherte Tageszeit: -2 = nichts gespeichert (Weltwert nicht anfassen),
+	 * -1 = Systemzeit, 0..23 = feste Stunde.
+	 *
+	 * Sie wird im Sekundentakt nachgezogen, nicht nur einmal gelesen:
+	 * UWiesbadenCitySubsystem setzt seine Zeitquelle in seinem ERSTEN Takt
+	 * (Latch bTimeOverrideApplied) und ueberschrieb den geladenen Wert dabei.
+	 * Gemessen: eine gespeicherte 22 Uhr kam als heller Tag zurueck.
+	 */
+	float StoredTimeOfDay = -2.0f;
 
 	/** Flankenerkennung der Lautstaerke-Tasten (links/rechts bzw. A/D). */
 	bool bMenuLeftHeld = false;
@@ -371,6 +614,8 @@ private:
 	 * einzelnen Haendler (siehe DescribeNearestMerchantInReach).
 	 */
 	TWeakObjectPtr<AWiesbadenStoreMerchant> CachedFootMerchant;
+	/** Dennos Laden fuer den Annahme-Hinweis (F = Lieferauftrag). */
+	TWeakObjectPtr<class AWiesbadenDennoShop> CachedDennoShop;
 
 	/**
 	 * Nerobergbahn aus demselben Suchlauf.
@@ -404,6 +649,15 @@ private:
 
 	/** Laufzeit seit dem ersten gezeichneten Bild - fuer die Einblenddauer. */
 	float ElapsedSeconds = 0.0f;
+
+	/**
+	 * Nachleucht-Rest der Traktions-/ABS-Kontrollleuchte (s) und die zuletzt
+	 * gezeigte Beschriftung ("ASR"/"ABS"). Zusammen halten sie die Leuchte
+	 * kurz nach dem letzten Schlupf-Frame an, damit sie im ABS-Puls und bei
+	 * kurzem Anfahr-Radspin nicht flackert.
+	 */
+	float TractionTellTaleHold = 0.0f;
+	FString TractionTellTaleLabel;
 
 	/** Einmal-Latch: der Steuerungs-Legenden-Timer wird erst neu gestartet, wenn
 	 *  die Stadt fertig gestreamt ist (sonst verfaellt die Legende waehrend des
@@ -443,23 +697,19 @@ private:
 		float ExpiresAt = -1000.0f;          // world time when the prompt should
 											// stop nagging even if still idle
 		FVector2D ArmWorldPos = FVector2D::ZeroVector; // planar arm position for drift + distance
-		FString Title;                       // e.g. 'Platter Strasse'
-		FString Subtitle;                    // e.g. 'zum Ziel Haltestelle Nerobergbahn 120 m'
 		bool bModeSpecificHintShown = false; // 'W gasen ...' / 'F einsteigen ...' / etc.
 		EFirstRunContext Context = EFirstRunContext::Unknown;
 	};
 
 	FFirstRunPrompt FirstRun;
 
-	bool IsFirstRunPromptArmed() const;
-
 	// --- First-Run-Fuehrung (aus DrawHUD herausgezogen) --------------------
-	// DrawHUD zeichnet, diese Methoden entscheiden: verdienen -> komponieren
-	// -> zeigen -> ehrlich zuruecknehmen.
+	// DrawHUD zeichnet, diese Methoden entscheiden: verdienen -> zeigen ->
+	// ehrlich zuruecknehmen. Gezeigt wird nur noch der Steuerungshinweis;
+	// das Ortsbanner ist ersatzlos entfallen.
 	void UpdateFirstRunOnboarding();
 	void ArmFirstRunPrompt(const UWorld& World,
 		const UWiesbadenCitySubsystem* City, bool bPlayerIdle);
-	void ComposeFirstRunText(const UWorld* HudWorld);
 	void ShowFirstRunContextHintOnce();
 	FString ResolveMerchantCue() const;
 	EFirstRunContext ResolveFirstRunContext() const;
@@ -501,6 +751,23 @@ private:
 	FString MapSearchQuery;
 	/** Halte-Flanke der Umschalt-Taste (Tab), damit ein Druck einmal wirkt. */
 	bool bMapSearchToggleHeld = false;
+
+	// -- Suchfeld, Vorschlaege und Warp -------------------------------------
+	//
+	// Drei Zustaende, die zusammen die Bedienung ergeben: tippen (Query),
+	// Vorschlaege ansehen (MapSuggestions) und dann eine Strasse BESTAETIGT
+	// haben (MapSearchStreet != leer). Erst dann ist der Knopf "Warp to
+	// Location" scharf - vorher wuerde er ins Leere springen.
+	TArray<FString> MapSuggestions;
+	/** Welcher Vorschlag markiert ist (Pfeil hoch/runter). */
+	int32 MapSuggestion = 0;
+	/** Die bestaetigte Strasse - Ziel des Warp. */
+	FString MapSearchStreet;
+	/** Sekunden seit der letzten Vorschlagssuche (das Netz ist gross). */
+	float MapSuggestionAge = 0.0f;
+	/** Halte-Flanken fuer die Tasten des Warp-Knopfes. */
+	bool bWarpKeyHeld = false;
+	bool bMapResetKeyHeld = false;
 
 public:
 	/**

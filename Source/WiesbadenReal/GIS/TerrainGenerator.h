@@ -190,6 +190,10 @@ struct WIESBADENREAL_API FTerrainSitePad
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain", meta = (ClampMin = "100.0"))
 	double RoadSearchRadiusCm = 5000.0;
 
+	/** Leer: naechster Abschnitt. Sonst dieselbe benannte Strasse wie die Zufahrt. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+	FString PreferredStreetName;
+
 	/**
 	 * Hoehe des privaten Bodens ueber dem Plateau (cm).
 	 *
@@ -297,6 +301,15 @@ struct WIESBADENREAL_API FTerrainGenerationSettings
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
 	double RoadFlattenSinkCm = 14.0;
+
+	/**
+	 * Gelaende zuletzt an das Pflaster anschmiegen: die vier Eckpunkte jeder
+	 * Masche unter Fahrbahn, Gehweg und Kreuzungsplatte genau RoadFlattenSinkCm
+	 * unter die naechste Pflasterprobe (FlattenUnderRoads). Abschaltbar nur fuer
+	 * A/B-Vergleiche und die Gegenprobe im Test.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+	bool bConformToPavement = true;
 
 	/** Zusatzbreite um Gebaeudegrundrisse, in cm. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")

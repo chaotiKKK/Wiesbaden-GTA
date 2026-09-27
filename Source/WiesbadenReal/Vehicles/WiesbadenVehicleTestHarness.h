@@ -80,6 +80,7 @@ private:
 	float DriveDuration = 0.0f;   // 0 = inaktiv
 	int32 DriveLastSecond = -1;
 	float DriveStartYaw = 0.0f;
+	bool bDriveReverse = false; // -WbDriveReverse: gleiches Manoever im Rueckwaertsgang.
 
 	// -- Mast-/Kamera-Telemetrie der laufenden Sekunde ---------------------
 	// Summen/Maxima werden je Sekunde geloggt und dann zurueckgesetzt.
@@ -92,6 +93,10 @@ private:
 	float TelMaxLowerHubOffsetCm = 0.0f;
 	float TelMaxMainBladeOffsetCm = 0.0f;
 	float TelMaxLowerBladeOffsetCm = 0.0f;
+
+	/** Groesster Seitenabstand des gedrehten Scheiben-Drehpunkts von der Stange (cm), muss 0 sein. */
+	float TelMaxMainAxisResidualCm = 0.0f;
+	float TelMaxLowerAxisResidualCm = 0.0f;
 	// Blattstern-Mitte (Rumpf-Frame): Summe ueber die Bilder, in denen sich der
 	// Stern WIRKLICH gedreht hat - erst der Mittelwert ist die Sternmitte.
 	FVector TelMainBladeCentreSum = FVector::ZeroVector;

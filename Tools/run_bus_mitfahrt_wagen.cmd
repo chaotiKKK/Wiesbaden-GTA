@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name run_bus_mitfahrt_wagen
+if errorlevel 1 exit /b 1
 rem Beleglauf MITFAHRT auf einem BESTIMMTEN Wagen (-WbBusRideWagon), ohne
 rem Fenster: die Automatik setzt den Fahrgast neben Wagen 601/301 und steigt
 rem ein, sobald der Wagen haelt. Umlauf-Protokoll und Mitfahrt-Zeilen landen

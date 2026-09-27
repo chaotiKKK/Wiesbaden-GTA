@@ -298,8 +298,10 @@ struct WIESBADENREAL_API FRoadSegment
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	double SidewalkWidthCm = 250.0;
 
+	/** Bordsteinhoehe. 4 cm statt 12 (25.09.2026): der hohe Absatz stand im
+	 *  Spiel als "Kante" zwischen Fahrbahn und Gehweg - Nutzerwunsch: weg. */
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
-	double KerbHeightCm = 12.0;
+	double KerbHeightCm = 4.0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	double MaxSpeedKmh = 50.0;
@@ -316,6 +318,20 @@ struct WIESBADENREAL_API FRoadSegment
 
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	bool bIsRoundabout = false;
+
+	/**
+	 * Separat erfasster Fussweg, der im Gehwegstreifen einer Fahrbahn parallel
+	 * laeuft, die ihren Gehweg auf dieser Seite schon selbst erzeugt
+	 * (URoadNetworkGenerator::AlignCompanionFootways). Er bekommt die Hoehe des
+	 * Strassengehwegs, wird aber NICHT als zweites Pflaster gebaut und ebnet das
+	 * Gelaende nicht ein - Fussgaenger duerfen ihn weiter benutzen.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	bool bBegleitweg = false;
+
+	/** Gehweg in OSM getaggt - ohne Tag ist SidewalkType nur die Typ-Vorgabe. */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	bool bSidewalkTagged = false;
 
 	/** OSM-Node am Anfang bzw. Ende des Segments. */
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
@@ -474,6 +490,97 @@ struct WIESBADENREAL_API FRoadIntersection
 	int32 GetArmCount() const { return Arms.Num(); }
 };
 
+/**
+ * Gepflasterte Wendeplatte am Ende einer Sackgasse.
+ *
+ * Deckt die Wendeschleife des Verkehrs (WiesbadenTurnaround::LoopCircle) samt
+ * halber Fahrzeugbreite ab - vorher fuhren wendende Autos ueber die Wiese.
+ * Eine EBENE, die das Laengsgefaelle der Strasse fortsetzt: dieselbe Hoehe
+ * gilt fuer Pflaster, Gelaendeanschmiegen und die Wendeschleife.
+ */
+USTRUCT(BlueprintType)
+struct WIESBADENREAL_API FRoadTurningPlate
+{
+	GENERATED_BODY()
+
+	/** Index des Abschnitts, der hier endet. */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	int32 SegmentIndex = INDEX_NONE;
+
+	/** Spur, die hier ohne Nachfolger endet (Index in FRoadNetwork::Lanes). */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	int32 LaneId = INDEX_NONE;
+
+	/** Mittelpunkt der Platte (= der Wendeschleife), Z auf der Plattenebene. */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	FVector Center = FVector::ZeroVector;
+
+	/** Radius des Pflasters in cm. */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	double RadiusCm = 0.0;
+
+	/** Hoehenaenderung je cm in X und Y (Laengsgefaelle der Strasse). */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	FVector2D Gradient = FVector2D::ZeroVector;
+
+	/** Umriss (konvex, gegen den Uhrzeigersinn) auf der Plattenebene. */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	TArray<FVector> Polygon;
+
+	/** Hoehe der Plattenebene an einem Punkt. */
+	double HeightAt(const FVector2D& P) const
+	{
+		return Center.Z + Gradient.X * (P.X - Center.X) + Gradient.Y * (P.Y - Center.Y);
+	}
+
+	/**
+	 * Als Kreuzungsplatte mit einem Arm - so vermaschen Generator und
+	 * Gelaendeanschmiegen sie mit demselben Code wie Kreuzungen.
+	 */
+	FRoadIntersection AsJunction() const
+	{
+		FRoadIntersection Junction;
+		Junction.Polygon = Polygon;
+		Junction.Location = Center;
+		Junction.RadiusCm = RadiusCm;
+		FIntersectionArm Arm;
+		Arm.SegmentId = SegmentIndex;
+		Junction.Arms.Add(Arm);
+		return Junction;
+	}
+};
+
+namespace WiesbadenTurnaround
+{
+	/** Zuschlag vom Schleifenradius zum Pflasterrand: halbe Fahrzeugbreite + Rand, cm. */
+	constexpr double PlateMarginCm = 130.0;
+
+	/**
+	 * Kreis der Wendeschleife HINTER dem Spurende E (Richtung Dir), durch E und
+	 * - bei zweispurigen Strassen - durch den Start S der Gegenspur. EINE
+	 * Rechnung fuer Verkehr (Schleife) und Generator (Pflaster), sonst fuehre
+	 * die Schleife neben der Platte.
+	 */
+	inline void LoopCircle(const FVector& E, const FVector& Dir, const FVector& S,
+		FVector2D& OutCenter, double& OutRadiusCm)
+	{
+		const FVector2D D = FVector2D(Dir.X, Dir.Y).GetSafeNormal();
+		const FVector2D Links(D.Y, -D.X);
+		const FVector2D E2(E.X, E.Y);
+		const double W = FVector2D::DotProduct(FVector2D(S.X, S.Y) - E2, Links);
+		if (FMath::Abs(W) < 50.0)
+		{
+			// Einspurig (S = E): Kreis mit 4 m Radius, E liegt darauf.
+			OutRadiusCm = 400.0;
+			OutCenter = E2 + D * (OutRadiusCm * 0.9) + Links * (OutRadiusCm * FMath::Sqrt(1.0 - 0.81));
+			return;
+		}
+		OutRadiusCm = FMath::Clamp(FMath::Abs(W) * 0.5 + 150.0, 300.0, 600.0);
+		const double Half = FMath::Clamp(W * 0.5, -OutRadiusCm * 0.95, OutRadiusCm * 0.95);
+		OutCenter = E2 + Links * Half + D * FMath::Sqrt(OutRadiusCm * OutRadiusCm - Half * Half);
+	}
+}
+
 /** Erlaubte Fahrbeziehung von einer Spur auf eine andere ueber eine Kreuzung. */
 USTRUCT(BlueprintType)
 struct WIESBADENREAL_API FLaneConnection
@@ -503,6 +610,15 @@ struct WIESBADENREAL_API FLaneConnection
 	/** True, wenn die Beziehung durch eine OSM-Abbiegevorschrift verboten ist. */
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	bool bRestricted = false;
+
+	/**
+	 * Nachtraeglich fuer den Verkehr ergaenzt (Wenden am Sackgassenende bzw.
+	 * Rueckweg einer einspurigen Sackgasse, FWiesbadenTrafficSimulation::
+	 * AddDeadEndTurnarounds). Ampeln lassen solche Verbindungen aus ihrem
+	 * Signalprogramm - es bleibt, wie es war.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	bool bAddedTurnaround = false;
 };
 
 /**
@@ -529,6 +645,10 @@ struct WIESBADENREAL_API FRoadNetwork
 
 	UPROPERTY(BlueprintReadOnly, Category = "Road")
 	TArray<FLaneConnection> Connections;
+
+	/** Wendeplatten an Sackgassen (je Spur ohne Nachfolger hoechstens eine). */
+	UPROPERTY(BlueprintReadOnly, Category = "Road")
+	TArray<FRoadTurningPlate> TurningPlates;
 
 	/** Nachfolgerliste je Spur: LaneId -> Indizes in Connections. */
 	TMap<int32, TArray<int32>> LaneSuccessors;

@@ -8,6 +8,7 @@
 #include "Core/WiesbadenCityData.h"
 #include "GIS/WiesbadenBuildSummary.h"
 #include "GIS/WiesbadenPedestrianSimulation.h"
+#include "NPC/WiesbadenWanted.h"
 #include "World/WiesbadenHealthReport.h"
 #include "World/WiesbadenFrameProfiler.h"
 #include "World/WiesbadenFallThroughMonitor.h"
@@ -22,6 +23,7 @@ class AWiesbadenStreamingSource;
 class AWiesbadenWorldBuilder;
 class UBuildingCollisionSpawnerComponent;
 class UWiesbadenGameInstance;
+class USoundBase;
 
 /**
  * Per-Welt-Orchestrierung der Stadt (UWorldSubsystem).
@@ -81,6 +83,26 @@ public:
 	 * solange nicht BEIDE Teile Zahlen sind.
 	 */
 	static FWbGotoTarget ParseGotoTarget(const FString& Raw);
+
+	/**
+	 * Zerlegt den Ablaufplan aus `-WbShotSteps=<plan>` (datenrein, testbar).
+	 *
+	 * AUFBE-WERKZEUG, KEIN SPIELVERHALTEN: der Plan sagt einer Aufnahme-
+	 * sitzung nur, was sie in welcher Reihenfolge knipsen soll. Er wird
+	 * ausserhalb von -WbShotWhenReady gelesen und steuert nichts, was ein
+	 * Spielzustand bemerkt.
+	 *
+	 * Schritte: "modus=N" (Fahrzeugkamera 0 Folge, 1 Orbit, 2 Cockpit),
+	 * "hold" (ein Bild aus der aktuellen Sicht), "turm" (Hubschrauber auf
+	 * den markierten Helipad des Sebbotower). Alles andere wird als
+	 * Posenzeile gelesen - derselbe Weg wie bei -WbShotPoseFile.
+	 *
+	 * Warum das Pluszeichen der Trenner ist: FParse::Value haelt den Wert am
+	 * ersten Komma an, aus "modus=2,hold,hold" wurde deshalb "modus=2" und
+	 * die ganze Serie lief als EIN Schritt. Das Pluszeichen umgeht das, ohne
+	 * dass die Schritte Kommas enthalten duerfen.
+	 */
+	static void ParseShotPlan(const FString& Raw, TArray<FString>& OutSteps);
 
 	/**
 	 * Mittelpunkt des LAENGSTEN Segments mit diesem Namen (datenrein, testbar).
@@ -235,8 +257,54 @@ public:
 	/** Gemeldete Aussetzer - gedeckelt, damit eine lange Fahrt das Protokoll nicht flutet. */
 	int32 HitchesReported = 0;
 
+	/** Fahndungskonto (Stufe, Punkte, Grace-Zeit) - FWiesbadenWanted::Step tickt es. */
+	FWiesbadenWantedState WantedState;
+	FWiesbadenWantedParams WantedParams;
+
 	/** Fussgaenger auf den Gehwegen. Laeuft parallel zum Verkehr. */
 	FWiesbadenPedestrianSimulation PedestrianSimulation;
+
+	// -- Fahndungskonto (Polizei) ---------------------------------------------
+
+	/**
+	 * MeldeTat: Ein Verbrechen ins Fahndungskonto buchen.
+	 *
+	 * Rufen die Gewalt-Quellen auf (Waffen-Aufschlag, Explosion, Saegenhieb,
+	 * spaeter: zerstoerte Fahrzeuge, getroffene Beamte). Das Konto lebt hier,
+	 * weil es weltpersistent sein muss - laenger als jeder Pawn/Actor - und
+	 * das Subsystem ohnehin tickt (Abbau dort).
+	 *
+	 * Bewusst KEIN UFUNCTION: der Enum-Typ ist absichtlich nicht reflektiert
+	 * (datenreines Modul wie FWiesbadenPursuer); gerufen wird nur aus C++.
+	 */
+	void ReportCrime(EWiesbadenCrimeEvent Event);
+
+	/** Fahndungsstand (Stufe 0..6) fuer HUD/Blueprint. */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Polizei")
+	int32 GetWantedLevel() const { return WantedState.Level; }
+
+	/** Punktekonto (Diagnose/Tests). */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Polizei")
+	double GetWantedPoints() const { return WantedState.Points; }
+
+	// -- Passanten-Audio (Treffer) ---------------------------------------------
+
+	/**
+	 * Treffer auf einen Fussgaenger hoeren (echte Aufnahme).
+	 *
+	 * Rufen die Gewalt-Quellen, die zugleich melden: Waffen-Aufschlag,
+	 * Explosion, Saegenhieb, Ueberfahren. bHeavy waehlt den lauteren Treffer
+	 * mit Sturz (Explosion, Volltreffer), sonst den weichen; das Zerplatzen
+	 * unter Rad und Saege hat einen eigenen Ton.
+	 *
+	 * Die Samples kommen aus /Game/Audio/Samples und werden beim ersten
+	 * Bedarf geladen und hier gepuffert - derselbe Weg wie beim Schussklang,
+	 * nur an einer Stelle fuer alle Quellen.
+	 */
+	void PlayPedestrianHitSound(const FVector& At, bool bHeavy);
+
+	/** Zerplatzen eines Fussgaengers (Ueberfahren, Saege). */
+	void PlayPedestrianBurstSound(const FVector& At);
 
 	/** Momentaufnahme der Verkehrs-Simulation (HUD/Blueprint). */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Traffic")
@@ -250,6 +318,10 @@ public:
 	 *  Rohzahlen; Interpretation/JSON liegen in FWiesbadenHealthReport). Fuer den
 	 *  WbHealth-Exec und externe Analyse. */
 	FWiesbadenHealthReport BuildHealthReport() const;
+
+	/** Laufende Bildzeit-Mittelwerte des Fenster-Profilers - die Datenquelle
+	 *  der halbtransparenten Profil-Tafel im HUD (WiesbadenProfilOverlay). */
+	FWbFrameReport GetFrameReport() const { return FrameProfiler.Report(); }
 
 	// -- Ereignisse ------------------------------------------------------------
 
@@ -307,6 +379,16 @@ private:
 
 	float PedestrianReportDelay = 0.0f;
 	bool bPedestriansReported = false;
+
+	/** Passanten-Trefferklaenge aus /Game/Audio/Samples (Cache, Uebergang). */
+	UPROPERTY(Transient)
+	USoundBase* PedestrianHitSample = nullptr;
+
+	UPROPERTY(Transient)
+	USoundBase* PedestrianHitHeavySample = nullptr;
+
+	UPROPERTY(Transient)
+	USoundBase* PedestrianBurstSample = nullptr;
 
 	bool bGeometryReported = false;
 
@@ -550,6 +632,13 @@ private:
 	 *         false = noch nicht bereit, im naechsten Tick erneut versuchen.
 	 */
 	bool TryApplyGotoTarget();
+
+public:
+	/** -WbGoto noch einmal ausfuehren - fuer die Figurprobe, die damit den
+	 *  FUSS-Pawn versetzt (beim Start trifft Goto das Auto). */
+	void RepeatGoto() { bGotoApplied = false; GotoWaitSeconds = 0.0f; }
+
+private:
 
 	/**
 	 * Setzt die Ansicht auf eine Kamera ueber dem Spieler (-WbAerial=<Meter>).

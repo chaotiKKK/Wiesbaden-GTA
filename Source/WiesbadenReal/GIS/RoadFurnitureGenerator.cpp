@@ -366,16 +366,11 @@ namespace
 			return false;
 		}
 
-		const FVector2D Delta = Point - Building.FootprintCenterCm;
-		const double Yaw = FMath::DegreesToRadians(static_cast<double>(-Building.FootprintYawDegrees));
-		const double CosYaw = FMath::Cos(Yaw);
-		const double SinYaw = FMath::Sin(Yaw);
-		const FVector2D Local(
-			Delta.X * CosYaw - Delta.Y * SinYaw,
-			Delta.X * SinYaw + Delta.Y * CosYaw);
-
-		return FMath::Abs(Local.X) <= Building.FootprintExtentCm.X
-			&& FMath::Abs(Local.Y) <= Building.FootprintExtentCm.Y;
+		// Eine Pruefung fuer alle: der Platzierungs-Audit rechnet dieselbe
+		// Frage ueber FPolygonUtils - dort wie hier, Bit fuer Bit gleich.
+		return FPolygonUtils::IsInsideRotatedBox2D(
+			Point, Building.FootprintCenterCm,
+			Building.FootprintExtentCm, Building.FootprintYawDegrees);
 	}
 
 	/**
@@ -909,6 +904,70 @@ void URoadFurnitureGenerator::PlaceSigns(
 	}
 }
 
+bool URoadFurnitureGenerator::WantsDelineators(const FRoadSegment& Segment)
+{
+	switch (Segment.HighwayType)
+	{
+	case EOSMHighwayType::Motorway:     case EOSMHighwayType::MotorwayLink:
+	case EOSMHighwayType::Trunk:        case EOSMHighwayType::TrunkLink:
+	case EOSMHighwayType::Primary:      case EOSMHighwayType::PrimaryLink:
+	case EOSMHighwayType::Secondary:    case EOSMHighwayType::SecondaryLink:
+	case EOSMHighwayType::Tertiary:     case EOSMHighwayType::TertiaryLink:
+	case EOSMHighwayType::Unclassified:
+		break;
+	default:
+		return false;
+	}
+	// Ueber 50 km/h kommt bei primary bis unclassified nur aus einem Tag
+	// (maxspeed, maxspeed:type=DE:rural) - ihre Vorgabe ist 50.
+	if (Segment.MaxSpeedKmh <= 50.0)
+	{
+		return false;
+	}
+	// Nur ein getaggter Gehweg an der Fahrbahn zaehlt; einseitig entsteht nur
+	// aus einem Tag (so auch in Bakes ohne bSidewalkTagged).
+	const bool bGehweg = Segment.SidewalkType == EOSMSidewalkType::Left
+		|| Segment.SidewalkType == EOSMSidewalkType::Right
+		|| (Segment.SidewalkType == EOSMSidewalkType::Both && Segment.bSidewalkTagged);
+	return !bGehweg;
+}
+
+int32 URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(
+	const FRoadNetwork& Network, FRoadFurnitureLayout& Layout)
+{
+	TMap<int32, const FRoadSegment*> NachId;
+	for (const FRoadSegment& Segment : Network.Segments)
+	{
+		NachId.Add(Segment.SegmentId, &Segment);
+	}
+	const int32 Vorher = Layout.Delineators.Num();
+	Layout.Delineators.RemoveAllSwap([&NachId](const FDelineatorInstance& Pfosten)
+	{
+		const FRoadSegment* const* Segment = NachId.Find(Pfosten.SegmentId);
+		if (!Segment)
+		{
+			return false;
+		}
+		if (!WantsDelineators(**Segment))
+		{
+			return true;
+		}
+		// Aeltere Bakes fuehrten die Reihe bis in den Knoten: weiter als eine
+		// Pfostenreihe (+1 m) von der gekuerzten Linie heisst "im Knoten".
+		const TArray<FVector>& Linie = (*Segment)->TrimmedCenterline;
+		const FVector P(Pfosten.Location.X, Pfosten.Location.Y, 0.0);
+		double Abstand = TNumericLimits<double>::Max();
+		for (int32 i = 1; i < Linie.Num(); ++i)
+		{
+			Abstand = FMath::Min<double>(Abstand, FMath::PointDistToSegment(P,
+				FVector(Linie[i - 1].X, Linie[i - 1].Y, 0.0), FVector(Linie[i].X, Linie[i].Y, 0.0)));
+		}
+		return Linie.Num() >= 2 && Abstand > (*Segment)->CarriagewayWidthCm * 0.5
+			+ WiesbadenRoadMarkings::DelineatorOffsetFromEdgeCm + 100.0;
+	});
+	return Vorher - Layout.Delineators.Num();
+}
+
 void URoadFurnitureGenerator::PlaceDelineators(
 	const FRoadNetwork& Network,
 	const IHeightSampler* HeightSampler,
@@ -917,7 +976,14 @@ void URoadFurnitureGenerator::PlaceDelineators(
 {
 	for (const FRoadSegment& Segment : Network.Segments)
 	{
-		if (!FOSMTagParser::IsDrivable(Segment.HighwayType) || Segment.Centerline.Num() < 2)
+		if (!WantsDelineators(Segment))
+		{
+			continue;
+		}
+		// Gekuerzte Linie: die volle laeuft bis in den Knoten.
+		const TArray<FVector>& Linie = Segment.TrimmedCenterline.Num() >= 2
+			? Segment.TrimmedCenterline : Segment.Centerline;
+		if (Linie.Num() < 2)
 		{
 			continue;
 		}
@@ -926,7 +992,7 @@ void URoadFurnitureGenerator::PlaceDelineators(
 
 		TArray<FVector> Positions;
 		TArray<FVector> Directions;
-		WalkCenterline(Segment.Centerline, Settings.DelineatorSpacingCm, Positions, Directions);
+		WalkCenterline(Linie, Settings.DelineatorSpacingCm, Positions, Directions);
 
 		for (int32 i = 0; i < Positions.Num(); ++i)
 		{

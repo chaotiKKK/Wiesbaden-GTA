@@ -1,0 +1,20 @@
+{
+  "_zweck": "Die Lieferkunden und Ladengaeste (Tripo-Figuren). Tools/Blender/build_customer_figure.py riggt jede Figur (Skelett + Idle/Walk/Wave/Sit), Tools/import_tripo_figure.py legt sie nach /Game/Assets/People/Kunden/<Name>; das Spiel findet dort jede vollstaendige Figur selbst (WiesbadenCustomerFigures) - eine neue Figur braucht KEINE C++-Aenderung. arme: 'T' = T-Pose (Arme werden gesenkt), 'unten' = Arme haengen schon (Erkennung an der Luecke Arm-Rumpf), 'starr' = Arme am Koerper angeformt (keine Luecke; die Figur geht ohne Armschwung und nickt statt zu winken). schritt_anteil: Schritthoehe als Anteil der Figurhoehe vorgeben (eng anliegende Hose/Kleid: die Suche faende sonst die Oberschenkel-Beruehrung). blick: Blickrichtung der Quelle ('-Y' Tripo-Vorgabe, '+Y' = umgedreht exportiert).",
+  "figuren": {
+    "Iris": {
+      "quelle": "Data/Raw/Kunden/Iris/iris_source.glb",
+      "hoehe_m": 1.66,
+      "dreiecke": 16000,
+      "arme": "T",
+      "arme_aussen_grad": 10.0
+    },
+    "Mira": {
+      "quelle": "Data/Raw/Kunden/Mira/mira_source.glb",
+      "hoehe_m": 1.7,
+      "dreiecke": 16000,
+      "arme": "starr",
+      "schritt_anteil": 0.46,
+      "blick": "+Y"
+    }
+  }
+}

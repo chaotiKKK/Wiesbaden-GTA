@@ -41,13 +41,29 @@ public:
 	int32 GetVisibleCount() const;
 
 	/**
-	 * True, sobald die vier Gangphasen geladen sind und animiert wird.
+	 * Leitet die Kleidung einer Figur DETERMINISTISCH aus ihrem Seed ab
+	 * (datenrein/statisch, testbar: Vehicles.Pedestrian.Clothing): Hemdfarbe und
+	 * Hosenfarbe aus festen Paletten, Hautton als 0..1. Gleicher Seed -> gleiche
+	 * Kleidung; ueber viele Seeds streut es breit ueber die Paletten.
+	 */
+	static void ComputePedestrianColors(
+		int32 Seed, FLinearColor& OutShirt, FLinearColor& OutTrouser, float& OutSkinT);
+
+	/**
+	 * Waehlt den KOERPERTYP (0 schlank, 1 breit, 2 Kind) deterministisch aus dem
+	 * Seed, gewichtet. Datenrein/statisch, testbar (Vehicles.Pedestrian.BodyType):
+	 * gleicher Seed -> gleicher Typ; ueber viele Seeds streut es nach den Gewichten.
+	 */
+	static int32 SelectPedestrianBodyType(int32 Seed);
+
+	/**
+	 * True, sobald alle Koerpertypen x Gangphasen geladen sind und animiert wird.
 	 *
 	 * Bei aktiver Animation liegt der GRUNDPOOL leer und alle Figuren stecken in
-	 * den vier Pose-Pools - GetVisibleCount MUSS dann deren Summe liefern, nicht
+	 * den Pose-Pools - GetVisibleCount MUSS dann deren Summe liefern, nicht
 	 * faelschlich 0 (genau dieser Zaehl-Defekt war schon einmal da).
 	 */
-	bool IsAnimated() const { return PoseInstances.Num() == WalkPoseCount; }
+	bool IsAnimated() const { return PoseInstances.Num() == NumBodyTypes * WalkPoseCount; }
 
 	/** Mesh der Figur. Ohne Zuweisung wird der Engine-Zylinder verwendet. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fussgaenger")
@@ -75,22 +91,23 @@ private:
 	void EnsureMeshAndMaterial();
 
 	/**
-	 * Instanzenpools der vier Gangphasen.
+	 * Instanzenpools KOERPERTYP x GANGPHASE (flach: Pool = Typ*WalkPoseCount +
+	 * Phase). Drei Koerpertypen (schlank, breit, Kind), je vier Standbilder des
+	 * Schrittzyklus. Jede Figur landet im Pool ihres Typs UND ihrer Schrittphase
+	 * und wandert beim Weitergehen durch die Phasen ihres Typs.
 	 *
-	 * Instanzen teilen sich EIN Mesh und lassen sich deshalb nicht einzeln per
-	 * Skelett animieren - das ist der Preis dafuer, dass Dutzende Fussgaenger
-	 * fast nichts kosten. Statt dessen vier Standbilder des Schrittzyklus, je
-	 * eines als eigener Pool. Jede Figur landet in dem Pool, der zu ihrer
-	 * Schrittphase passt, und wandert beim Weitergehen weiter.
-	 *
-	 * Das ist Stop-Motion, kein weicher Uebergang. Bei Fussgaengern in einigen
-	 * Metern Entfernung ist der Unterschied nicht auszumachen.
+	 * Instanzen teilen sich EIN Mesh und lassen sich nicht einzeln per Skelett
+	 * animieren - der Preis dafuer, dass Dutzende Figuren fast nichts kosten. Das
+	 * ist Stop-Motion; in einigen Metern Entfernung faellt es nicht auf.
 	 */
 	UPROPERTY(Transient)
 	TArray<UInstancedStaticMeshComponent*> PoseInstances;
 
 	/** Zahl der Gangphasen - muss zu den importierten Meshes passen. */
 	static constexpr int32 WalkPoseCount = 4;
+
+	/** Zahl der Koerpertypen (schlank, breit, Kind). */
+	static constexpr int32 NumBodyTypes = 3;
 
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fussgaenger")
 	UInstancedStaticMeshComponent* Instances = nullptr;

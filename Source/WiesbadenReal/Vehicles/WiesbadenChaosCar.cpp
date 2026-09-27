@@ -22,6 +22,7 @@
 #include "ChaosVehicleWheel.h"
 #include "Vehicles/WiesbadenChaosWheels.h"
 #include "Vehicles/WiesbadenPowertrainSpec.h"
+#include "World/WiesbadenCitySubsystem.h"
 
 AWiesbadenChaosCar::AWiesbadenChaosCar()
 {
@@ -406,6 +407,49 @@ void AWiesbadenChaosCar::Tick(float DeltaSeconds)
 	else
 	{
 		ReadInput(DeltaSeconds);
+	}
+
+	// Nach dem Steuern: erst jetzt ist die Bewegung dieses Frames belastbar.
+	CheckPedestrianRunOver();
+}
+
+void AWiesbadenChaosCar::CheckPedestrianRunOver()
+{
+	// GetVelocity().Size() ist die WELTgeschwindigkeit des Chassis in cm/s.
+	// GetSpeedKmh() waere die Vorwaertskomponente - seitlich an einem
+	// Passagen vorbeiziehen ist kein Ueberfahren.
+	const float SpeedMetersPerS = GetVelocity().Size() * 0.01f;
+	if (SpeedMetersPerS <= 2.0f)
+	{
+		// Gleiche Schwelle wie am kinematischen Wagen: wer im Stau
+		// vorwaertsrollt, soll nicht nebenbei den Gehweg raeumen.
+		return;
+	}
+
+	UWiesbadenCitySubsystem* City = GetWorld()
+		? GetWorld()->GetSubsystem<UWiesbadenCitySubsystem>()
+		: nullptr;
+	if (!City)
+	{
+		return;
+	}
+
+	// 180 cm vor der Achse, 110 cm Radius - dieselben Masse wie im Wagen,
+	// damit beide Fahrzeuge auf derselben Strecke dieselben Leute treffen.
+	const FVector Front = GetActorLocation() + GetActorForwardVector() * 180.0;
+	const int32 Hit = City->PedestrianSimulation.BurstNear(Front, 110.0);
+	if (Hit <= 0)
+	{
+		return;
+	}
+
+	UE_LOG(LogWbVehicles, Log, TEXT("Ueberfahren: %d Fussgaenger."), Hit);
+	City->PlayPedestrianBurstSound(Front);
+	// Jedes Ueberfahren ist eine Tat ins Fahndungskonto - sonst reagiert
+	// die Polizei nur auf Schuesse, nicht auf den drastischsten Fall.
+	for (int32 HitIndex = 0; HitIndex < Hit; ++HitIndex)
+	{
+		City->ReportCrime(EWiesbadenCrimeEvent::PedestrianDowned);
 	}
 }
 

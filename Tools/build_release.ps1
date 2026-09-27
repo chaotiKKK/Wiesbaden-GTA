@@ -33,13 +33,25 @@
 # stundenlange Release-Build durch (im Playtest so beobachtet).
 [CmdletBinding()]
 param(
-    [string]$Root = "C:\freebuff\WiesbadenReal_Sicherung",
+    # Leer = Ordner ueber dem Projekt (siehe unten, damit das Gate im Worktree dessen Stand prueft).
+    [string]$Root = "",
     [string]$EngineRoot = "C:\Program Files\Epic Games\UE_5.8",
     [switch]$GatesOnly,
     [switch]$Rollback
 )
 
 $ErrorActionPreference = "Stop"
+# Ordner UEBER dem Projekt aus dem Ort dieses Skripts (Tools\ im Projekt) - im
+# RUMPF bestimmt, nicht als Parameter-Vorgabe: mit [CmdletBinding()] ist
+# $PSScriptRoot dort unter PowerShell 5.1 LEER (gemessen 25.09.2026 im
+# Gate-Worktree: "Split-Path: leere Zeichenfolge").
+if (-not $Root) { $Root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
+
+# Remove-Beleg: loeschen und danach NACHPRUEFEN. SilentlyContinue auf einem
+# Beleg, aus dem spaeter gelesen wird, ist die Fehlerklasse, die Gates still
+# gruen macht - die Regel steht in Tools\beleg.ps1.
+. (Join-Path $PSScriptRoot "beleg.ps1")
+
 
 # INSTALLIERTE Engine, NICHT die Kopie unter $Root.
 #
@@ -114,6 +126,18 @@ foreach ($p in @($BuildBat, $CmdExe, $Proj)) {
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Force -Path $LogDir | Out-Null }
 
 $Start = Get-Date
+
+# Nur Editoren DIESES Projektordners beenden - nicht jeden auf dem Rechner.
+# Frueher traf "Get-Process UnrealEditor* | Stop-Process" auch fremde, laufende
+# Arbeit (andere Agenten, offene Editoren); darum wartete der Push-Waechter, bis
+# keiner mehr lief. Im Gate-Worktree (Tools\gate_worktree.py) haelt ohnehin nur
+# der eigene Editor dessen Binaries fest.
+function Stop-ProjectEditors([string]$ProjectFile) {
+    $want = $ProjectFile.Replace('/', '\')
+    Get-CimInstance Win32_Process -Filter "Name LIKE 'UnrealEditor%'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine.Replace('/', '\') -like "*$want*" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
 function Section([int]$Num, [string]$Title) {
     Write-Host ""
     Write-Host ("==== Gate {0}: {1} ====" -f $Num, $Title)
@@ -130,6 +154,19 @@ function Fail([string]$Gate, [string]$Detail, [string]$LogHint) {
 
 Write-Host "======== Release-Pipeline WiesbadenReal ========"
 Write-Host ("Modus: {0}" -f ($(if ($GatesOnly) { "nur Gates 0-3 (-GatesOnly)" } else { "voll inkl. Paketierung" })))
+
+# ---- Engine-Lock ----------------------------------------------------------
+# VOR Gate 0, nicht erst vor Gate 2: Gate 1 beendet mit Stop-ProjectEditors
+# die Editoren DIESES Projektordners - und im Gate-Worktree ist genau dieser
+# Ordner der geteilte Arbeitsplatz zweier Sessions. Am 25.09.2026 hat ein
+# zweiter, paralleler Gate-Lauf genau so den Editor des ersten Laufs abgeschossen
+# (Gate 1 des zweiten, waehrend Gate 2 des ersten lief): der erste Lauf meldete
+# 0 Fehler und "kein Abschluss-Marker". Mit dem Lock von Anfang an bricht der
+# zweite Lauf stattdessen sofort und verstaendlich ab.
+# Freigabe ist nicht noetig - der Lock stirbt mit diesem Prozess; Gate 3
+# (Rauchtest) nimmt ihn darunter reentrant.
+& (Join-Path $PSScriptRoot "engine_run_lock.ps1") -Modus Nehmen -Name build_release
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # ---- Gate 0: Engine-Pfade ------------------------------------------------
 #
@@ -157,8 +194,15 @@ if (Test-Path $EngineCheck) {
 # ---- Gate 1: Kompilieren -------------------------------------------------
 Section 1 "Kompilieren (WiesbadenRealEditor Win64 Development)"
 $BuildLog = Join-Path $LogDir "release_build.log"
-Remove-Item $BuildLog -ErrorAction SilentlyContinue
-Get-Process UnrealEditor* -ErrorAction SilentlyContinue | Stop-Process -Force
+# WEG oder nichts: haelt ein haengender Prozess die alte Log offen (am
+# 27.09.2026 nachgemessen: -Force raeumt das Read-only-Flag, ein offener
+# Handle nicht), schlaegt das Loeschen still fehl, und die "erste Fehler"-
+# Meldung unten zitiert dann den VORLETZTEN Bau. Ein Gate, das den falschen
+# Fehler nennt, ist schlimmer als eins, das gar keinen nennt - man repariert
+# die falsche Stelle.
+Remove-Beleg $BuildLog
+$BuildLaufStart = Get-Date
+Stop-ProjectEditors $Proj
 Start-Sleep -Seconds 2
 # WICHTIG (PS 5.1): UBT schreibt routinemaessig auf stderr (auch bei Warnungen).
 # Unter $ErrorActionPreference='Stop' wuerde eine ueber 2>&1 gepipte stderr-Zeile als
@@ -173,6 +217,11 @@ $ErrorActionPreference = $prevEAP
 if ($LASTEXITCODE -ne 0) {
     $firstErr = (Select-String -Path $BuildLog -Pattern "error [A-Z]|Error:" -SimpleMatch:$false |
         Select-Object -First 3 | ForEach-Object { $_.Line.Trim() }) -join " | "
+    if (-not (Test-Frisch $BuildLog $BuildLaufStart)) {
+        $firstErr = "Log gehoert NICHT zu diesem Lauf - keine Fehlerzeile zitierbar"
+        Write-Host ("  WARNUNG: {0} ist vom {1} - der Build hat sie nicht geschrieben." -f `
+            $BuildLog, (Get-Item $BuildLog -Force -ErrorAction SilentlyContinue).LastWriteTime)
+    }
     Fail "Gate 1 (Kompilieren)" ("Exit {0}. Erste Fehler: {1}" -f $LASTEXITCODE, $firstErr) $BuildLog
 }
 Write-Host "  Gate 1 gruen: kompiliert."
@@ -180,7 +229,21 @@ Write-Host "  Gate 1 gruen: kompiliert."
 # ---- Gate 2: Unit-Tests --------------------------------------------------
 Section 2 "Unit-Tests (Automation RunTests WiesbadenReal)"
 $TestLog = Join-Path $LogDir "release_tests.log"
-Remove-Item $TestLog -ErrorAction SilentlyContinue
+# Loeschen und NACHPRUEFEN. "Remove-Item -ErrorAction SilentlyContinue"
+# schluckt jeden Fehler und laesst die Datei liegen - gemessen mit einem
+# Read-only-Flag und mit dem offenen Handle eines haengenden Editors. Dann
+# waere der Abschluss-Marker unten die Abnahme eines VORRIGEN Laufs, und
+# Gate 2 meldet gruen, ohne einen Test gefahren zu haben. Dieselbe
+# Fehlerklasse wie beim Rauchtest (Tools\smoke_test.ps1) und bei Gate 4.
+Remove-Item $TestLog -Force -ErrorAction SilentlyContinue
+if (Test-Path $TestLog) {
+    try { (Get-Item $TestLog -Force).IsReadOnly = $false } catch { }
+    Remove-Item $TestLog -Force -ErrorAction SilentlyContinue
+}
+if (Test-Path $TestLog) {
+    Fail "Gate 2 (Unit-Tests)" ("Die alte Testlog laesst sich nicht loeschen ({0}). Sie ist schreibgeschuetzt oder von einem haengenden Prozess offen gehalten - erst den beenden, dann erneut." -f $TestLog) $TestLog
+}
+$testLogStart = Get-Date
 # WICHTIG: -ExecCmds MUSS ueber eine .bat mit exakter Quotierung laufen. PowerShell
 # (`& exe -ExecCmds="a b; c"` oder Start-Process -ArgumentList) zerlegt den Wert an
 # Leerzeichen/Semikolon -> der Cmd startet ohne ExecCmds und schreibt kein Log.
@@ -190,12 +253,18 @@ $TestBat = Join-Path $LogDir "release_run_tests.bat"
 "$CmdExe" "$Proj" -ExecCmds="Automation RunTests WiesbadenReal; Quit" -unattended -nop4 -nullrhi -NoSound -stdout -ABSLOG="$TestLog"
 "@ | Set-Content -Path $TestBat -Encoding ASCII
 & cmd /c "`"$TestBat`"" | Out-Null
-$testText = if (Test-Path $TestLog) { Get-Content $TestLog -Raw } else { "" }
+# Aktualitaetsbeweis, nicht nur Vollstaendigkeit: der Abschluss-Marker
+# "TEST COMPLETE. EXIT CODE: 0" steht auch in einem alten, vollstaendigen
+# Log. Nur ein Log, das nach $testLogStart geschrieben wurde, gehoert zu
+# diesem Lauf - eine Sekunde Toleranz fuer die gerundeten Zeitstempel.
+$testLogFresh = (Test-Path $TestLog) -and ((Get-Item $TestLog).LastWriteTime -ge $testLogStart.AddSeconds(-1))
+$testText = if ($testLogFresh) { Get-Content $TestLog -Raw } else { "" }
 $pass = ([regex]::Matches($testText, "Result=\{Success\}")).Count
 $fail = ([regex]::Matches($testText, "Result=\{Fail\}")).Count
 $complete = $testText -match "TEST COMPLETE\. EXIT CODE: 0"
-Write-Host ("  {0} bestanden, {1} fehlgeschlagen, Abschluss-Marker: {2}" -f $pass, $fail, $(if ($complete) { "ja" } else { "NEIN" }))
+Write-Host ("  {0} bestanden, {1} fehlgeschlagen, Abschluss-Marker: {2}, Log aus diesem Lauf: {3}" -f $pass, $fail, $(if ($complete) { "ja" } else { "NEIN" }), $(if ($testLogFresh) { "ja" } else { "NEIN" }))
 if ($fail -gt 0)      { Fail "Gate 2 (Unit-Tests)" ("{0} Test(s) fehlgeschlagen." -f $fail) $TestLog }
+if (-not $testLogFresh) { Fail "Gate 2 (Unit-Tests)" "Keine NEUE Testlog aus diesem Lauf - der Lauf hat nicht gemessen (fehlt, oder vom vorigen Lauf uebernommen?)." $TestLog }
 if ($pass -lt 1)      { Fail "Gate 2 (Unit-Tests)" "Kein Test lief (Registrierung/Build kaputt?)." $TestLog }
 if (-not $complete)   { Fail "Gate 2 (Unit-Tests)" "Kein sauberer Abschluss-Marker (Lauf abgebrochen?)." $TestLog }
 Write-Host "  Gate 2 gruen: alle Unit-Tests bestanden."
@@ -204,7 +273,7 @@ Write-Host "  Gate 2 gruen: alle Unit-Tests bestanden."
 Section 3 "Rauchtest (Tools\smoke_test.ps1)"
 $SmokePs1 = Join-Path $ProjDir "Tools\smoke_test.ps1"
 if (-not (Test-Path $SmokePs1)) { Fail "Gate 3 (Rauchtest)" "smoke_test.ps1 fehlt." "" }
-& powershell -NoProfile -ExecutionPolicy Bypass -File $SmokePs1
+& powershell -NoProfile -ExecutionPolicy Bypass -File $SmokePs1 -Root $Root -EngineRoot $EngineRoot
 if ($LASTEXITCODE -ne 0) {
     Fail "Gate 3 (Rauchtest)" ("Rauchtest Exit {0} - mindestens eine Pruefung durchgefallen." -f $LASTEXITCODE) `
         (Join-Path $LogDir "smoke_heli.log")
@@ -225,7 +294,11 @@ $PackageCmd = Join-Path $ProjDir "package_game.cmd"
 if (-not (Test-Path $PackageCmd)) { Fail "Schritt 4 (Paketieren)" "package_game.cmd fehlt." "" }
 # Vorheriges Paket als Rollback-Ziel sichern, BEVOR das neue es ueberschreibt.
 if (Test-Path $PackageExe) {
-    Remove-Item $PrevPackageDir -Recurse -Force -ErrorAction SilentlyContinue
+    # Auch hier gilt: WEG oder nichts. Bleibt das alte Rollback-Ziel liegen
+    # (offene Datei aus einem laufenden Paket), wandert das neue Paket mit
+    # hinein - dann enthaelt "Package_previous" Alt+Neu und ein Rollback
+    # stellt den ZUSTAND VOR ZWEI Releases wieder her, nicht den vor einem.
+    Remove-Beleg $PrevPackageDir
     Move-Item $PackageDir $PrevPackageDir -Force
     Write-Host "  Vorheriges Paket gesichert -> $PrevPackageDir (fuer 'build_release.cmd -Rollback')."
 }

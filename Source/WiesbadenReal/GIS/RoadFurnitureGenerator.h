@@ -340,7 +340,7 @@ struct WIESBADENREAL_API FRoadFurnitureSettings
 	 * als die Fahrbahn; Markierungen liegen auf der Fahrbahn (ohne Bordstein).
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture", meta = (ClampMin = "0.0"))
-	double KerbHeightCm = 12.0;
+	double KerbHeightCm = 4.0;
 
 	/** Schildunterkante ueber dem Boden (cm). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Furniture", meta = (ClampMin = "0.0"))
@@ -506,6 +506,13 @@ public:
 	 * @return Anzahl der entfernten Objekte.
 	 */
 	static int32 RemoveFurnitureOnCarriageway(
+		const FRoadNetwork& Network, FRoadFurnitureLayout& Layout);
+
+	/** Leitpfosten nur ausserorts: Klasse Autobahn..unclassified, ueber 50 km/h, kein getaggter Gehweg. */
+	static bool WantsDelineators(const FRoadSegment& Segment);
+
+	/** Wendet WantsDelineators auf ein gespeichertes Layout an und entfernt Pfosten im Knoten. */
+	static int32 RemoveDelineatorsAgainstRule(
 		const FRoadNetwork& Network, FRoadFurnitureLayout& Layout);
 
 private:

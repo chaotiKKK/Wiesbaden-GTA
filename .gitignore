@@ -97,3 +97,35 @@ Tools/*_log.txt
 *.result.txt
 *_report.*.json
 *_result.txt
+# Push-/Audit-Protokolle landen als .log.out bzw. push_log.txt im Wurzelverzeichnis
+*.log.out
+push_log.txt
+# Pycache auch in Unterordnern von Tools (bisher nur Tools/__pycache__/)
+Tools/**/__pycache__/
+
+# === Agent-Scratch im Wurzelverzeichnis (Laufzeitnotizen, keine Quellen) ===
+# Die gehoeren nach .planning/ bzw. bleiben lokal; echte Doku liegt unter docs/.
+/findings.md
+/progress.md
+/task_plan.md
+
+# === Leere Karten-Huellen ohne World-Partition-Inhalt ===
+# Eine gebackene Alkis-Karte ist nur eine 13-kB-Shell im .umap; der Inhalt
+# liegt in Content/__ExternalActors__/Maps/<Name> (gitignoriert, 1,9 GB je
+# Karte). Karten OHNE diesen Ordner sind leere Reste aus Wegwerf-Baulaeufen
+# und gehoeren nicht ins Repo. Alkis16/17 sind versioniert, Alkis22/25/26/31
+# haben gebackene External Actors und werden mit committed - die Liste hier
+# also nur fuer die nachweislich leeren Huellen, bewusst namentlich und
+# nicht als Muster, damit eine spaeter gebackene Karte nicht versehentlich
+# ausgeblendet wird.
+Content/Maps/WiesbadenCity_Alkis18.umap
+Content/Maps/WiesbadenCity_Alkis19.umap
+Content/Maps/WiesbadenCity_Alkis20.umap
+Content/Maps/WiesbadenCity_Alkis21.umap
+Content/Maps/WiesbadenCity_Alkis23.umap
+Content/Maps/WiesbadenCity_Alkis24.umap
+
+# === Lokale Ablage fuer Log-/Report-Auswuerfe aus dem Projektstamm (27.09.2026) ===
+# Bewusst nur Archiv/ und nicht *.log global: geloggte Dateien unter Tools/, docs/
+# o.ae. sollen sichtbar bleiben, bis sie committed sind.
+Archiv/

@@ -549,6 +549,14 @@ public:
 	UPROPERTY(VisibleAnywhere, Category = "GIS|Ergebnis")
 	FString LastBuildSummary;
 
+	/**
+	 * Einzeiler des letzten Platzierungs-Audits (Schalter -WbPlacementAudit).
+	 * Leer, wenn der Lauf ohne Audit lief. Steht im Details-Panel und wird vom
+	 * Prueflauf Tools/check_placement.py gelesen.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "GIS|Ergebnis")
+	FString LastPlacementAuditSummary;
+
 	// -- Aktionen ------------------------------------------------------------
 
 	/** Fuehrt die komplette Pipeline aus (Parser -> Generatoren -> Meshes). */
@@ -708,6 +716,18 @@ private:
 	void WriteBuildSummaryToCsv(const FWiesbadenCityData* CityData,
 		const FRoadNetwork* MovedRoadNetwork, const TArray<FGeneratedBuilding>* MovedBuildings,
 		const FRoadFurnitureLayout* MovedFurniture, const FString& Result, double DurationSeconds);
+
+	/**
+	 * Fuehrt den Platzierungs-Audit ueber die fertigen Daten DIESES Laufs aus,
+	 * schreibt placement_report.json und liefert den Einzeiler fuer
+	 * LastPlacementAuditSummary.
+	 *
+	 * Nur mit Schalter -WbPlacementAudit: ein normaler Bake soll weder
+	 * Zusatzarbeit noch zusaetzliche Datei erzeugen. Der Audit zaehlt, wie oft
+	 * die sechs Regeln der Platzierungs-Spec am IST-Stand verletzt werden, und
+	 * aendert am Platzierungsverhalten NICHTS.
+	 */
+	FString RunPlacementAuditFor(const FWiesbadenCityData& Data);
 
 	/** Uebertraegt Strassen-Mesh-Sections auf die Procedural-Mesh-Komponente. */
 	void ApplyRoadMesh(const FRoadMeshData& MeshData);

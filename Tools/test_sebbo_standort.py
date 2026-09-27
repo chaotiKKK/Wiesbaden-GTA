@@ -15,18 +15,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sebbo_standort as st  # noqa: E402
 
-# GEMESSEN am 21.09.2026 auf Karte Alkis17, aus Saved/Logs/WiesbadenReal.log:
-#   LogWbSebboHq: Sebbo-Hauptsitz gebaut bei (-110714, -127729, 10095)
+# GEMESSEN am 25.09.2026 auf Karte Alkis23, aus
+# Saved/Logs/tower_platter_alkis23.log:
+#   LogWbSebboHq: Sebbo-Hauptsitz gebaut bei (-113514, -125729, 10953)
 # Das ist die Stelle, an der die Engine den Turm WIRKLICH gebaut hat. Ein
 # Anker aus derselben Formel waere wertlos - er wuerde nur bestaetigen, dass
 # die Formel sich selbst gleicht.
 #
-# Der Wert hat sich geaendert, weil der Standort sich geaendert hat: der Turm
-# stand in der Wolkenbruch (die Fahrbahn lief 497 cm unter dem Gebaeude
-# durch), und wurde um 8 m zurueckgenommen - siehe SebboHqSite.h. Vorher
-# stand hier (-110985, -128485).
-ENGINE_X_CM = -110714.0
-ENGINE_Y_CM = -127729.0
+# Der neue Standort rueckt die beiden Eingangsanker zur Platter Strasse;
+# die alte Position (-110714, -127729) hatte Zugang zur Wolkenbruch.
+ENGINE_X_CM = -113514.0
+ENGINE_Y_CM = -125729.0
 
 
 class TrifftDieEngineTest(unittest.TestCase):
@@ -66,8 +65,8 @@ class LiestWirklichDieHeaderTest(unittest.TestCase):
         pfad = Path(tempfile.mkdtemp(prefix="wb_site_")) / "SebboHqSite.h"
         pfad.write_text(
             "namespace SebboHqSite\n{\n"
-            "\tinline constexpr double Latitude = %.6f;\n"
-            "\tinline constexpr double Longitude = %.6f;\n"
+            "\tinline constexpr double Latitude = %.9f;\n"
+            "\tinline constexpr double Longitude = %.9f;\n"
             "\tinline constexpr double HeadingDegrees = 250.0;\n}\n" % (lat, lon),
             encoding="utf-8")
         self.addCleanup(lambda: pfad.unlink(missing_ok=True))
@@ -83,7 +82,7 @@ class LiestWirklichDieHeaderTest(unittest.TestCase):
 
     def test_dieselben_werte_ergeben_dieselbe_stelle(self):
         echt = st.standort_cm()
-        kopie = st.standort_cm(site_h=self.schreibe_site(50.093882, 8.224528))
+        kopie = st.standort_cm(site_h=self.schreibe_site(50.093702144, 8.224136765))
         self.assertAlmostEqual(kopie[0], echt[0], delta=1.0)
         self.assertAlmostEqual(kopie[1], echt[1], delta=1.0)
 

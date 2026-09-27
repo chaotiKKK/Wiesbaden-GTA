@@ -1,6 +1,10 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "World/WiesbadenCitySubsystem.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
+#include "Vehicles/WiesbadenTrafficCars.h"
 #include "World/WiesbadenStreamingCost.h"
 
 #include "WiesbadenReal.h"
@@ -14,6 +18,7 @@
 #include "Engine/StaticMesh.h"
 #include "Core/WiesbadenGameInstance.h"
 #include "Core/WiesbadenDevActions.h"
+#include "Core/WiesbadenQuitWatchdog.h"
 #include "World/BuildingCollisionSpawnerComponent.h"
 #include "LandscapeHeightfieldCollisionComponent.h"
 #include "LandscapeProxy.h"
@@ -40,6 +45,7 @@
 #include "Engine/SkyLight.h"
 #include "Components/SkyLightComponent.h"
 #include "World/WiesbadenCityChunk.h"
+#include "World/WiesbadenVisualTuning.h"
 #include "World/WiesbadenStreamingSource.h"
 #include "UnrealClient.h"
 #include "HighResScreenshot.h"
@@ -258,24 +264,45 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 	PPV->bUnbound = true;
 	PPV->Priority = 1.0f;
 
+	// Bildwerte zentral in World/WiesbadenVisualTuning.h (Befund 24.09.2026:
+	// zwei Systeme legten Himmelslicht und Belichtung mit ABWEICHENDEN Werten
+	// an - je nach Aufrufreihenfolge gewann einer).
+	using namespace WiesbadenVisualTuning;
+
 	FPostProcessSettings& S = PPV->Settings;
 	// Belichtung klemmen + leicht abdunkeln (gegen "ueberbelichtet"). Min/Max-
 	// Brightness begrenzen die Auto-Adaption, der negative Bias (in EV) dunkelt ab.
 	S.bOverride_AutoExposureMinBrightness = true;
-	S.AutoExposureMinBrightness = 0.15f;
+	S.AutoExposureMinBrightness = AutoExposureMinBrightness;
 	S.bOverride_AutoExposureMaxBrightness = true;
-	S.AutoExposureMaxBrightness = 1.5f;
+	S.AutoExposureMaxBrightness = AutoExposureMaxBrightness;
 	// Bias war -0.5 gegen "ueberbelichtet". Am Strassenbild zeigte sich das
 	// Gegenteil: die verschatteten Fassaden einer Strassenschlucht saufen fast
 	// schwarz ab. -0.2 nimmt das meiste der aktiven Abdunkelung zurueck (heller,
 	// sonniger Referenz-Look), bleibt aber knapp im Minus gegen Ausbleichen.
 	S.bOverride_AutoExposureBias = true;
-	S.AutoExposureBias = -0.2f;
+	S.AutoExposureBias = AutoExposureBias;
 	// Dezent mehr Kontrast/Saettigung (gegen "flach"). W = Luminanz.
 	S.bOverride_ColorContrast = true;
-	S.ColorContrast = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
+	S.ColorContrast = FVector4(ColorContrast, ColorContrast, ColorContrast, 1.0f);
 	S.bOverride_ColorSaturation = true;
-	S.ColorSaturation = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
+	S.ColorSaturation = FVector4(ColorSaturation, ColorSaturation, ColorSaturation, 1.0f);
+
+	// Cinematic-Feinschliff: kuehle Schatten, warme Lichter (Split-Toning ueber
+	// die Gain-Bereiche Schatten/Lichter - die alten ColorShadow-Tints gibt es
+	// in UE 5.8 nicht mehr); Vignette dezenter als der Engine-Default 0.4;
+	// Bloom nur fuer echte Glanzstellen (hohe Schwelle) - Glanz ohne den
+	// dokumentierten Milchschleier.
+	S.bOverride_ColorGainShadows = true;
+	S.ColorGainShadows = FVector4(ShadowTintR, ShadowTintG, ShadowTintB, 1.0f);
+	S.bOverride_ColorGainHighlights = true;
+	S.ColorGainHighlights = FVector4(HighlightTintR, HighlightTintG, HighlightTintB, 1.0f);
+	S.bOverride_VignetteIntensity = true;
+	S.VignetteIntensity = VignetteIntensity;
+	S.bOverride_BloomIntensity = true;
+	S.BloomIntensity = BloomIntensity;
+	S.bOverride_BloomThreshold = true;
+	S.BloomThreshold = BloomThreshold;
 	// GI-Methode NONE statt Lumen - das war die URSACHE der schwarzen
 	// Schattenfassaden.
 	//
@@ -328,7 +355,7 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 		{
 			Sky->SetMobility(EComponentMobility::Movable);
 			Sky->bRealTimeCapture = true;
-			Sky->SetIntensity(3.2f);
+			Sky->SetIntensity(SkyLightIntensity);
 			++SkiesFilled;
 		}
 	}
@@ -343,7 +370,7 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 			{
 				Comp->SetMobility(EComponentMobility::Movable);
 				Comp->bRealTimeCapture = true;
-				Comp->SetIntensity(3.2f);
+				Comp->SetIntensity(SkyLightIntensity);
 			}
 			++SkiesFilled;
 		}
@@ -354,9 +381,73 @@ void UWiesbadenCitySubsystem::EnsureCinematicLighting(UWorld& World)
 		SunsWithShadows, SkiesFilled);
 }
 
+void UWiesbadenCitySubsystem::ReportCrime(EWiesbadenCrimeEvent Event)
+{
+	const int32 Before = WantedState.Level;
+	WantedState = FWiesbadenWanted::AddEvent(WantedState, WantedParams, Event);
+	if (WantedState.Level != Before)
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("Fahndung: Stufe %d (%.0f Punkte) nach Ereignis %d."),
+			WantedState.Level, WantedState.Points, static_cast<int32>(Event));
+	}
+}
+
+void UWiesbadenCitySubsystem::PlayPedestrianHitSound(const FVector& At, bool bHeavy)
+{
+	USoundBase*& Cache = bHeavy ? PedestrianHitHeavySample : PedestrianHitSample;
+	const TCHAR* Name = bHeavy ? TEXT("A_PedestrianHitHeavy") : TEXT("A_PedestrianHit");
+	if (!Cache)
+	{
+		const FString Path = FString::Printf(TEXT("/Game/Audio/Samples/%s.%s"), Name, Name);
+		Cache = LoadObject<USoundBase>(nullptr, *Path);
+		if (!Cache)
+		{
+			UE_LOG(LogWbVehicles, Warning,
+				TEXT("Passanten-Treffer: Aufnahme '%s' fehlt - der Treffer bleibt stumm."), Name);
+		}
+	}
+	if (!Cache)
+	{
+		return;
+	}
+
+	// Zufalls-Pitch: zwei Treffer kurz nacheinander sollen nicht wie derselbe
+	// Clip klingen (dieselbe Absicht wie bei den Schuss-Samples).
+	UGameplayStatics::SpawnSoundAtLocation(this, Cache, At, FRotator::ZeroRotator,
+		1.0f, FMath::FRandRange(0.94f, 1.06f));
+	UE_LOG(LogWbVehicles, Log, TEXT("Passanten-Treffer: Aufnahme '%s' gespielt."), Name);
+}
+
+void UWiesbadenCitySubsystem::PlayPedestrianBurstSound(const FVector& At)
+{
+	if (!PedestrianBurstSample)
+	{
+		PedestrianBurstSample = LoadObject<USoundBase>(nullptr,
+			TEXT("/Game/Audio/Samples/A_PedestrianBurst.A_PedestrianBurst"));
+		if (!PedestrianBurstSample)
+		{
+			UE_LOG(LogWbVehicles, Warning,
+				TEXT("Ueberfahren: Aufnahme 'A_PedestrianBurst' fehlt - der Treffer bleibt stumm."));
+		}
+	}
+	if (!PedestrianBurstSample)
+	{
+		return;
+	}
+
+	UGameplayStatics::SpawnSoundAtLocation(this, PedestrianBurstSample, At,
+		FRotator::ZeroRotator, 1.0f, FMath::FRandRange(0.92f, 1.08f));
+	UE_LOG(LogWbVehicles, Log, TEXT("Ueberfahren: Aufnahme 'A_PedestrianBurst' gespielt."));
+}
+
 void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	// Fahndungskonto: Abbau nach Grace, Stufe nachziehen. Kostet ein paar
+	// Flops - die Polizei-Reaktion (Spawns/Feuerdisziplin) dockt spaeter an.
+	WantedState = FWiesbadenWanted::Step(WantedState, WantedParams, DeltaTime);
 
 	// Gesamtzeit dieses Subsystems messen.
 	//
@@ -1079,6 +1170,10 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		if (FParse::Value(FCommandLine::Get(), TEXT("WbQuitAfter="), QuitAfterSeconds)
 			&& QuitAfterSeconds > 0.0f)
 		{
+			// Zombie-Schutz: meldet dem Watchdog, dass der Spiel-Strang laeuft.
+			// Haelt er an (GPU-Stall), beendet der Watchdog den Prozess hart,
+			// statt dass der Messlauf als Zombie Lock und DLL haelt.
+			FWiesbadenQuitWatchdog::NotifyTick();
 			QuitAfterElapsed += DeltaTime;
 			if (QuitAfterElapsed > QuitAfterSeconds)
 			{
@@ -1087,6 +1182,8 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 
 				// Durchfall-Test-Ergebnis sichern, bevor der Prozess endet.
 				WriteFallThroughSummary();
+
+				FWiesbadenQuitWatchdog::NotifyExitRequested(TEXT("-WbQuitAfter"));
 
 				if (UWorld* QuitWorld = GetWorld())
 				{
@@ -1274,11 +1371,41 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 						Overlap.OnlyBodies, Overlap.NarrowestLaneCm, Overlap.MaxBodyOffsetCm,
 						Overlap.SameSegmentLanes, Overlap.CrossSegmentLanes,
 						Overlap.MinLaneRailDistanceCm);
+					UE_LOG(LogWbTraffic, Log,
+						TEXT("Fahrzeuge ineinander: davon %d an Kreuzungen, %d nur mit echter Typgroesse (Einheitsbox frei), %d auf verschiedenen Ebenen (Bruecke)."),
+						Overlap.AtJunction, Overlap.OnlyRealSize, Overlap.DifferentLevels);
+					for (const FString& Sample : Overlap.Samples)
+					{
+						UE_LOG(LogWbTraffic, Log, TEXT("  Paar: %s"), *Sample);
+					}
 				}
 				else
 				{
 					UE_LOG(LogWbTraffic, Log, TEXT("Fahrzeuge ineinander: keine."));
 				}
+			}
+
+			// Fahrbild: Lenkzappeln, Rutschen, Schraeglage, Schwanken,
+			// unfahrbare Sollbremsungen, Spurwechsel im Stau - je Fahrzeug-Minute.
+			{
+				const FWiesbadenTrafficSimulation::FMotionQuality M = TrafficSimulation.TakeMotionQuality();
+				const double AllMin = FMath::Max(M.AllSeconds / 60.0, 1e-6);
+				const double DriveMin = FMath::Max(M.DrivingSeconds / 60.0, 1e-6);
+				const double AllS = FMath::Max(M.AllSeconds, 1e-6);
+				const double DriveS = FMath::Max(M.DrivingSeconds, 1e-6);
+				UE_LOG(LogWbTraffic, Log,
+					TEXT("Fahrbild: %.0f Fz-min (%.0f in Fahrt); Lenk-Richtungswechsel %.1f je Fz-min in Fahrt; ")
+					TEXT("seitliches Nachziehen %.1f cm je Fz-s; Gier-Abweichung RMS %.1f Grad, schraeg im Stand %.1f %%; ")
+					TEXT("Seitenversatz RMS %.0f cm; Wanken RMS %.2f, Nicken RMS %.2f Grad; ")
+					TEXT("Soll-Bremsungen ueber 8 m/s2: %.1f je Fz-min (max %.0f m/s2); Spurwechsel %.2f je Fz-min, davon %d von %d im Stau."),
+					M.AllSeconds / 60.0, M.DrivingSeconds / 60.0,
+					M.SteerReversals / DriveMin,
+					M.SlideCm / AllS,
+					FMath::Sqrt(M.YawErrSqDegS / AllS), 100.0 * M.StandYawBad / AllS,
+					FMath::Sqrt(M.OffsetSqCmS / AllS),
+					FMath::Sqrt(M.RollSqDegS / DriveS), FMath::Sqrt(M.PitchSqDegS / DriveS),
+					M.HardSollBrakes / AllMin, M.MaxSollDecelCmS2 / 100.0,
+					M.LaneChanges / AllMin, M.LaneChangesSlow, M.LaneChanges);
 			}
 
 			// Warum NICHT gewechselt wird. Die blosse Zahl der Spurwechsel
@@ -1388,14 +1515,21 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			// Fahrspur blockiert.
 			if (FParse::Param(FCommandLine::Get(), TEXT("WbStauLog")))
 			{
+				int32 AufService = 0;
+				int32 Gesamt = 0;
+				TrafficSimulation.CountVehiclesOnServiceRoads(AufService, Gesamt);
+				UE_LOG(LogWbTraffic, Log, TEXT("  Auf Service-Wegen (Parkplatz/Zufahrt): %d von %d Fahrzeugen."),
+					AufService, Gesamt);
 				TArray<FWiesbadenTrafficSimulation::FStalledVehicle> Stalled;
 				TrafficSimulation.CollectStalledVehicles(10, Stalled);
 				for (const FWiesbadenTrafficSimulation::FStalledVehicle& S : Stalled)
 				{
 					UE_LOG(LogWbTraffic, Log,
-						TEXT("  Steher %d auf Spur %d bei (%.0f, %.0f): %.0f von %.0f km/h, ")
+						TEXT("  Steher %d auf Spur %d (%s) bei (%.0f, %.0f): %.0f von %.0f km/h, ")
 						TEXT("Spieler %.1f m, Vordermann %.1f m, Rot=%d, Fortsetzung=%d."),
-						S.VehicleId, S.LaneId, S.Location.X, S.Location.Y,
+						S.VehicleId, S.LaneId,
+						*StaticEnum<EOSMHighwayType>()->GetNameStringByValue(static_cast<int64>(S.HighwayType)),
+						S.Location.X, S.Location.Y,
 						S.SpeedCmS * 0.036, S.DesiredSpeedCmS * 0.036,
 						S.PlayerDistanceCm >= 0.0 ? S.PlayerDistanceCm * 0.01 : -1.0,
 						S.AheadDistanceCm >= 0.0 ? S.AheadDistanceCm * 0.01 : -1.0,
@@ -1457,7 +1591,10 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 			FVector ViewLocation = FVector::ZeroVector;
 			FRotator ViewRotation = FRotator::ZeroRotator;
 			PC->GetPlayerViewPoint(ViewLocation, ViewRotation);
-			TrafficSimulation.SetObserverLocation(ViewLocation);
+			// Mit Blickrichtung: was der Spieler sehen koennte, entsteht und
+			// verschwindet nicht (Einsetzen und Sackgassen nur ausser Sicht).
+			const float Fov = PC->PlayerCameraManager ? PC->PlayerCameraManager->GetFOVAngle() : 90.0f;
+			TrafficSimulation.SetObserverView(ViewLocation, ViewRotation.Vector(), Fov);
 			PedestrianSimulation.SetObserverLocation(ViewLocation);
 
 			// Das Spielerfahrzeug als Hindernis melden, damit der Verkehr
@@ -1494,6 +1631,18 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		TrafficLightSystem.Tick(DeltaTime);
 		const double TrafficStart = FPlatformTime::Seconds();
 		TrafficSimulation.Tick(DeltaTime);
+		// -WbAmpelSpur=<Spur>: Schlangenprobe je Gruenphase (StepQueueProbe).
+		static const int32 AmpelSpur = []()
+		{
+			int32 Spur = INDEX_NONE;
+			FParse::Value(FCommandLine::Get(), TEXT("WbAmpelSpur="), Spur);
+			return Spur;
+		}();
+		if (AmpelSpur != INDEX_NONE)
+		{
+			TrafficSimulation.SetQueueProbeLane(AmpelSpur);
+			TrafficSimulation.StepQueueProbe(DeltaTime);
+		}
 		const double PedestrianStart = FPlatformTime::Seconds();
 		PedestrianSimulation.Tick(DeltaTime);
 		const double End = FPlatformTime::Seconds();
@@ -1579,6 +1728,43 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					TrafficSimulation.GetDensity(), R.TrafficVehiclesVisible,
 					LaneKm, TrafficSimulation.GetNearbyLaneCount(),
 					LaneKm > 0.0 ? R.ActiveVehicles / LaneKm : 0.0);
+				// Nicht vor den Augen des Spielers: verworfene Einsatzorte und
+				// Wartende an Sackgassen (seit Start) - jede Zahl > 0 ist ein
+				// Fahrzeug, das sonst im Bild aufgetaucht bzw. verschwunden waere.
+				UE_LOG(LogWbTraffic, Log,
+					TEXT("Verkehr ausser Sicht: %lld Einsatzorte in Sicht verworfen, %lld Sackgassen-Halte, %d warten gerade."),
+					TrafficSimulation.GetLifetimeSpawnsSkippedInView(), TrafficSimulation.GetLifetimeDeadEndWaits(),
+					TrafficSimulation.Report.WaitingAtDeadEnd);
+
+				// Fahrphysik belegen: das Fahrzeug naechst der Kamera mit Gang,
+				// Drehzahl, Einschlag und Radwinkel - Werte, die nur die Physik liefert.
+				if (const APlayerController* ViewPC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+				{
+					FVector Eye;
+					FRotator EyeRotation;
+					ViewPC->GetPlayerViewPoint(Eye, EyeRotation);
+					const FTrafficVehicle* Nearest = nullptr;
+					double Best = TNumericLimits<double>::Max();
+					for (const FTrafficVehicle& V : TrafficSimulation.Vehicles)
+					{
+						const double D = FVector::DistSquared2D(V.BodyLocation, Eye);
+						if (V.bPhysicsInitialized && V.BodySpeedCmS > 100.0 && D < Best)
+						{
+							Best = D;
+							Nearest = &V;
+						}
+					}
+					if (Nearest)
+					{
+						const TArray<FWbTrafficCarType>& CarTypes = WiesbadenTrafficCars::Types();
+						UE_LOG(LogWbTraffic, Log,
+							TEXT("Verkehr Fahrphysik: %s %d in %.0f m - %.0f km/h (Soll %.0f), Gang %d, %.0f U/min, Einschlag %.1f Grad, Rad %.2f rad, Nicken %.1f / Wanken %.1f Grad."),
+							CarTypes[FMath::Clamp(Nearest->TypeIndex, 0, CarTypes.Num() - 1)].Name, Nearest->VehicleId,
+							FMath::Sqrt(Best) / 100.0, Nearest->BodySpeedCmS * 0.036, Nearest->SpeedCmS * 0.036,
+							Nearest->Physics.Gear, Nearest->Physics.EngineRpm, FMath::RadiansToDegrees(Nearest->SteerAngleRad),
+							Nearest->WheelSpinRad, Nearest->BodyPitchDeg, Nearest->BodyRollDeg);
+					}
+				}
 			}
 			else
 			{
@@ -1939,6 +2125,37 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 					}
 				}
 
+				// -WbShotSteps=<plan> ist der Ablaufplan EINER Sitzung:
+				// eine plusgetrennte Liste aus "modus=N" (Fahrzeugkamera:
+				// 0 Folge, 1 Orbit, 2 Cockpit), "hold" (ein Bild aus der
+				// aktuellen Sicht) und "turm" (Hubschrauber auf den Helipad
+				// des Sebbotower setzen). AUFBE-WERKZEUG, kein Spielverhalten.
+				//
+				// Warum das noetig war: je Sitzung war genau EIN Bild moeglich,
+				// die Kamera liess sich nur per Taste C umschalten (die nicht
+				// zuverlaessig ankommt), und der Muendungsfeuer der 2A42 ist
+				// 55 ms von je 120 ms an - ein Zufallstreffer ist kein Beleg.
+				// Der Plan erlaubt damit in einer Sitzung: Cockpit, dann eine
+				// Salve Bilder waehrend des Dauerfeuers, dann der Helipad.
+				if (ShotPoseLines.Num() == 0)
+				{
+					FString Plan;
+					if (FParse::Value(FCommandLine::Get(), TEXT("WbShotSteps="), Plan))
+					{
+						TArray<FString> Schritte;
+						ParseShotPlan(Plan, Schritte);
+						ShotPoseLines.Append(Schritte);
+						FParse::Value(FCommandLine::Get(), TEXT("WbShotGap="), ShotPoseSettle);
+						if (ShotPoseSettle <= 0.0f)
+						{
+							ShotPoseSettle = 0.7f;
+						}
+						UE_LOG(LogWbStreaming, Log,
+							TEXT("WbShotWhenReady: Ablaufplan mit %d Schritten (Abstand %.2f s): %s"),
+							ShotPoseLines.Num(), ShotPoseSettle, *Plan);
+					}
+				}
+
 				FParse::Value(FCommandLine::Get(), TEXT("WbPoseSettle="), ShotPoseSettle);
 				ShotPoseIndex = 0;
 				bShotCapturing = false;
@@ -2027,6 +2244,7 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		if (ScreenshotQuitDelay <= 0.0f)
 		{
 			ScreenshotQuitDelay = -1.0f;
+			FWiesbadenQuitWatchdog::NotifyExitRequested(TEXT("ScreenshotQuit"));
 			FPlatformMisc::RequestExit(false);
 		}
 	}
@@ -3582,6 +3800,29 @@ UWiesbadenCitySubsystem::FWbGotoTarget UWiesbadenCitySubsystem::ParseGotoTarget(
 	return Target;
 }
 
+void UWiesbadenCitySubsystem::ParseShotPlan(const FString& Raw,
+	TArray<FString>& OutSteps)
+{
+	// Trenner ist das Pluszeichen: FParse::Value haelt den Wert am ersten
+	// Komma an, aus "modus=2,hold,hold" wurde dadurch "modus=2" - und die
+	// ganze Serie lief als EIN Schritt. Das Pluszeichen umgeht das, ohne
+	// dass die Schritte selbst Kommas enthalten duerfen.
+	FString Plan = Raw.TrimStartAndEnd();
+	Plan.ReplaceInline(TEXT("+"), TEXT(","));
+
+	TArray<FString> Schritte;
+	Plan.ParseIntoArray(Schritte, TEXT(","), false);
+	for (const FString& Roh : Schritte)
+	{
+		const FString Schritt = Roh.TrimStartAndEnd();
+		// Leere Eintraege ("modus=2++hold") sind Tippfehler, keine Schritte.
+		if (!Schritt.IsEmpty())
+		{
+			OutSteps.Add(Schritt);
+		}
+	}
+}
+
 bool UWiesbadenCitySubsystem::FindStreetLocation(const FRoadNetwork& Network,
 	const FString& Name, FVector2D& OutLocationCm, double& OutLengthCm)
 {
@@ -3744,9 +3985,13 @@ bool UWiesbadenCitySubsystem::TryApplyGotoTarget()
 
 	// Blickrichtung optional mitgeben. Die Kamera haengt am Pawn und folgt ihm
 	// ohnehin - das hier richtet sie aus, damit das Bild nicht zufaellig steht.
+	// Auch den Pawn selbst drehen: sonst behielt ein Fahrzeug die Gier vom
+	// Startplatz (Garagenhof 116 Grad), und ein Fahrlauf mit WbDrive fuhr
+	// schraeg ins naechste Haus statt die gewuenschte Strasse entlang.
 	float GotoYaw = 0.0f;
 	if (FParse::Value(FCommandLine::Get(), TEXT("WbGotoYaw="), GotoYaw))
 	{
+		Pawn->SetActorRotation(FRotator(0.0f, GotoYaw, 0.0f), ETeleportType::TeleportPhysics);
 		PC->SetControlRotation(FRotator(0.0f, GotoYaw, 0.0f));
 	}
 
@@ -4053,6 +4298,136 @@ void UWiesbadenCitySubsystem::ApplyShotPose(const FString& PoseLine)
 	// "Hoehe_m, AtX_cm, AtY_cm, Yaw, Pitch, Vorwaerts_m, LookYaw, LookPitch"
 	// Fehlende/leere Felder = Default. AtX UND AtY noetig fuer einen absoluten
 	// Zielort; sonst ueber dem Spieler.
+	const FString Schritt = PoseLine.TrimStartAndEnd();
+
+	// "hold": Bild aus der aktuellen Sicht, Kamera unveraendert. Damit laesst
+	// sich eine Bilderserie fahren, ohne je eine Pose zu rechnen.
+	if (Schritt.Equals(TEXT("hold"), ESearchCase::IgnoreCase))
+	{
+		return;
+	}
+
+	// "modus=N": Fahrzeugkamera des besessenen Hubschraubers umstellen. Ueber
+	// die CVar, damit der Weg derselbe ist wie beim Befehl WbHeliKamera - und
+	// damit die Umschaltung auch dann greift, wenn sie vor der Uebernahme
+	// eintrifft.
+	if (Schritt.StartsWith(TEXT("modus="), ESearchCase::IgnoreCase))
+	{
+		const int32 Modus = FCString::Atoi(*Schritt.Mid(6));
+		if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			// Mit Leerzeichen, NICHT "=": die Gleich-Form kommt bei CVars nicht
+			// durch, das Kommando bleibt wirkungslos (gemessen am 26.09.2026).
+			PC->ConsoleCommand(FString::Printf(TEXT("wb.HeliKamera %d"), Modus), true);
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("WbShotWhenReady: Schritt - Fahrzeugkamera auf Modus %d."), Modus);
+		}
+		return;
+	}
+
+	// "feuer" / "feuer-aus": Bordabzug halten bzw. loesen. Der Schritt
+	// braucht keinen synthetischen Tastendruck - der haelt nicht, weil UEs
+	// Eingabestapel ereignisgesteuert ist (am 26.09.2026 vier Wege, null
+	// Abzugsflanken). Zwischen "feuer" und "feuer-aus" liegen dann die
+	// Bilder, auf denen das Muendungsfeuer zu sehen sein soll.
+	if (Schritt.Equals(TEXT("feuer"), ESearchCase::IgnoreCase)
+		|| Schritt.Equals(TEXT("feuer-aus"), ESearchCase::IgnoreCase))
+	{
+		if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			const bool bHalten = Schritt.Equals(TEXT("feuer"), ESearchCase::IgnoreCase);
+			PC->ConsoleCommand(bHalten ? TEXT("WbHeliFeuer 1") : TEXT("WbHeliFeuer 0"), true);
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("WbShotWhenReady: Schritt - Bordabzug %s."),
+				bHalten ? TEXT("halten") : TEXT("loesen"));
+		}
+		return;
+	}
+
+	// "waffe=N" / "ego=N": den Fuss-Pawn fuer Aufnahmen einrichten (z.B. die
+	// Waffen-Mesh-Kontrolle). Wie bei "modus=" ueber die Konsole - und ueber
+	// die SERIE verteilt statt ueber -ExecCmds, weil der beim Start laeuft,
+	// bevor der Pawn existiert (deshalb blieb WbFussWaffe dort wirkungslos).
+	if (Schritt.StartsWith(TEXT("waffe="), ESearchCase::IgnoreCase)
+		|| Schritt.StartsWith(TEXT("ego="), ESearchCase::IgnoreCase))
+	{
+		if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			if (Schritt.StartsWith(TEXT("waffe="), ESearchCase::IgnoreCase))
+			{
+				const int32 Index = FCString::Atoi(*Schritt.Mid(6));
+				PC->ConsoleCommand(FString::Printf(TEXT("WbFussWaffe %d"), Index), true);
+				UE_LOG(LogWbStreaming, Log,
+					TEXT("WbShotWhenReady: Schritt - Fusswaffe %d."), Index);
+			}
+			else
+			{
+				const int32 Ansicht = FCString::Atoi(*Schritt.Mid(4));
+				PC->ConsoleCommand(FString::Printf(TEXT("WbFussAnsicht %d"), Ansicht), true);
+				UE_LOG(LogWbStreaming, Log,
+					TEXT("WbShotWhenReady: Schritt - Fussansicht %d (1 = Ego)."), Ansicht);
+			}
+		}
+		return;
+	}
+
+	// "ziel,Xcm,Ycm,HoeheUeberBodenCm,DistanzMeter": den Hubschrauber vor ein
+	// Bauwerk stellen und es anpeilen. Gehoert VOR "feuer" - sonst zeigt die
+	// Kanone "nach vorn" und der Schuss trifft nichts Bestimmtes. Steht in
+	// der Posendatei, weil der Wert Kommas traegt (die Kommandozeile wuerde
+	// FParse::Value am ersten Komma abschneiden).
+	if (Schritt.StartsWith(TEXT("ziel,"), ESearchCase::IgnoreCase))
+	{
+		TArray<FString> Felder;
+		Schritt.ParseIntoArray(Felder, TEXT(","), false);
+		// Felder[0] ist "ziel", danach vier Zahlen.
+		if (Felder.Num() >= 5)
+		{
+			if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+			{
+				PC->ConsoleCommand(FString::Printf(TEXT("WbHeliZiel %s %s %s %s"),
+					*Felder[1].TrimStartAndEnd(), *Felder[2].TrimStartAndEnd(),
+					*Felder[3].TrimStartAndEnd(), *Felder[4].TrimStartAndEnd()), true);
+				UE_LOG(LogWbStreaming, Log,
+					TEXT("WbShotWhenReady: Schritt - Ziel (%s, %s) bei Hoehe %s cm, Abstand %s m."),
+					*Felder[1].TrimStartAndEnd(), *Felder[2].TrimStartAndEnd(),
+					*Felder[3].TrimStartAndEnd(), *Felder[4].TrimStartAndEnd());
+			}
+		}
+		return;
+	}
+
+	// "licht" / "licht-aus": beide Suchscheinwerfer. Ohne Schalter muesste
+	// man Taste L druecken, und Tasten erreichen das Spiel in einer
+	// Aufnahmesitzung nicht zuverlaessig.
+	if (Schritt.Equals(TEXT("licht"), ESearchCase::IgnoreCase)
+		|| Schritt.Equals(TEXT("licht-aus"), ESearchCase::IgnoreCase))
+	{
+		if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			const bool bAn = Schritt.Equals(TEXT("licht"), ESearchCase::IgnoreCase);
+			PC->ConsoleCommand(bAn ? TEXT("WbHeliLicht 1") : TEXT("WbHeliLicht 0"), true);
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("WbShotWhenReady: Schritt - Suchscheinwerfer %s."),
+				bAn ? TEXT("an") : TEXT("aus"));
+		}
+		return;
+	}
+
+	// "turm": den Hubschrauber auf den markierten Helipad des Sebbotower
+	// setzen. Ohne diesen Schritt zeigt das Bild eine Wiese - der Startpunkt
+	// des normalen Spiels liegt nicht auf dem Turmdach.
+	if (Schritt.Equals(TEXT("turm"), ESearchCase::IgnoreCase))
+	{
+		if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			PC->ConsoleCommand(TEXT("WbHeliTurm"), true);
+			UE_LOG(LogWbStreaming, Log,
+				TEXT("WbShotWhenReady: Schritt - Hubschrauber auf den Turm-Helipad."));
+		}
+		return;
+	}
+
 	TArray<FString> Fields;
 	PoseLine.ParseIntoArray(Fields, TEXT(","), false);
 
@@ -4271,9 +4646,39 @@ void UWiesbadenCitySubsystem::InitializeCity()
 						Builder->TrafficSettings.VehiclesPerLaneKm);
 				}
 
+				// Messwerkzeug: -WbHaltelinienAlt = pauschale Haltelinie
+				// (350 cm vor dem Spurende) wie vor dem 25.09. - A/B gegen die
+				// Haltelinien aus der Knotengeometrie.
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbHaltelinienAlt")))
+				{
+					TrafficSettings.bGeometricStopLines = false;
+					UE_LOG(LogWbTraffic, Log, TEXT("-WbHaltelinienAlt: pauschale Haltelinie."));
+				}
+
+				// Messwerkzeug: -WbFahrbildAlt = exakte Abstandsregel ohne
+				// Vorausschau, Spurwechsel als Sprung, Halt erst an der Linie -
+				// A/B gegen das vorausschauende Fahren (25.09.).
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbFahrbildAlt")))
+				{
+					TrafficSettings.bSmoothDriving = false;
+					UE_LOG(LogWbTraffic, Log, TEXT("-WbFahrbildAlt: altes Fahrbild."));
+				}
+
 				// Messwerkzeug: -WbOhneKreuzungsregel schaltet die
 				// Kreuzungskonflikte ab, damit ihre Wirkung im selben Lauf und
 				// auf derselben Karte gemessen werden kann.
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbKreuzungAlt")))
+				{
+					TrafficSettings.bStrictJunctionClearance = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbKreuzungAlt: alte Kreuzungsfreihaltung (480 cm, Zielspur ohne Haltelinienabstand; nur zum Messen)."));
+				}
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbSackgassenErlaubt")))
+				{
+					TrafficSettings.bAvoidDeadEnds = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbSackgassenErlaubt: Verkehr faehrt wieder in Sackgassen (nur zum Messen)."));
+				}
 				if (FParse::Param(FCommandLine::Get(), TEXT("WbOhneKreuzungsregel")))
 				{
 					TrafficSettings.bJunctionConflicts = false;
@@ -4281,6 +4686,28 @@ void UWiesbadenCitySubsystem::InitializeCity()
 						TEXT("-WbOhneKreuzungsregel: Kreuzungskonflikte AUS (nur zum Messen)."));
 				}
 
+				// Messwerkzeug: -WbVerkehrKinematisch faehrt die Karosserien mit dem
+				// alten kinematischen Einspurmodell statt der Spielerphysik - fuer
+				// den A/B-Vergleich am selben Ort.
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbVerkehrKinematisch")))
+				{
+					TrafficSettings.bPhysicsBodies = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbVerkehrKinematisch: Verkehr ohne Fahrphysik (nur zum Messen)."));
+				}
+
+				// Wenden am Sackgassenende: Wendeschleifen und Rueckspuren VOR dem
+				// Verkehr (und vor den Ampeln, die dasselbe Netz lesen) ergaenzen.
+				// -WbOhneWenden: altes Verhalten (warten, unbeobachtet verschwinden).
+				if (!FParse::Param(FCommandLine::Get(), TEXT("WbOhneWenden")))
+				{
+					int32 Rueckspuren = 0;
+					const int32 Schleifen = FWiesbadenTrafficSimulation::AddDeadEndTurnarounds(
+						Builder->RoadNetwork, &Rueckspuren);
+					UE_LOG(LogWbTraffic, Log,
+						TEXT("Sackgassen: %d Wendeschleifen, davon %d mit eigener Rueckspur (einspurige Zufahrten)."),
+						Schleifen, Rueckspuren);
+				}
 				TrafficSimulation.Initialize(Builder->RoadNetwork, TrafficSettings);
 				// -WbStauKarte: Fluss je Strasse mitschreiben. VOR Initialize
 				// setzen waere zwecklos - Initialize raeumt die Messwerte auf.
@@ -4306,6 +4733,14 @@ void UWiesbadenCitySubsystem::InitializeCity()
 					LightSettings.bConflictFreeGroups = false;
 					UE_LOG(LogWbTraffic, Warning,
 						TEXT("-WbOhneKonfliktgruppen: Freigabegruppen NICHT konfliktfrei (nur zum Messen)."));
+				}
+				// A/B: -WbGeschuetzteLinks stellt die alte Regel her (jeder
+				// Linksabbieger bekommt seine eigene, kurze Phase).
+				if (FParse::Param(FCommandLine::Get(), TEXT("WbGeschuetzteLinks")))
+				{
+					LightSettings.bPermissiveLeftOnSharedLanes = false;
+					UE_LOG(LogWbTraffic, Warning,
+						TEXT("-WbGeschuetzteLinks: Linksabbieger auf gemischten Spuren wieder mit eigener Phase (nur zum Messen)."));
 				}
 				// Die beiden Hebel der Gruppenbildung, einzeln abschaltbar, damit
 				// sich ihr Anteil am Fluss TRENNEN laesst. Ohne getrennte
@@ -4373,6 +4808,9 @@ void UWiesbadenCitySubsystem::InitializeCity()
 				if (BuildingCollision && Builder->Buildings.Num() > 0)
 				{
 					BuildingCollision->SetBuildings(Builder->Buildings);
+					// Kaesten, die ueber Fahrbahnen reichen (Ueberbauung LuisenForum,
+					// L-Grundrisse an Ecken), an der Strasse abschneiden.
+					BuildingCollision->ClipAgainstRoads(Builder->RoadNetwork);
 					UE_LOG(LogWbCore, Log,
 						TEXT("Gebaeude-Kollision: %d Grundrisse uebernommen."),
 						Builder->Buildings.Num());

@@ -120,6 +120,10 @@ struct WIESBADENREAL_API FRoadAccessOverride
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access", meta = (ClampMin = "100.0"))
 	double SearchRadiusCm = 5000.0;
 
+	/** Leer: naechster Abschnitt. Sonst nur diese Strasse; kein stiller Rueckfall auf einen Weg. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access")
+	FString PreferredStreetName;
+
 	/** Breite der abgesenkten Bordsteinstelle fuer Fahrzeuge. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Access", meta = (ClampMin = "100.0"))
 	double GarageWidthCm = 700.0;
@@ -197,6 +201,23 @@ struct WIESBADENREAL_API FRoadGenerationSettings
 	int32 SmoothingIterations = 2;
 
 	/**
+	 * Halbe Fensterbreite in cm, ueber die das Laengsprofil ebenerdiger
+	 * Strassen geglaettet wird (robuste Gerade je Punkt, siehe
+	 * SmoothLongitudinalProfile). 0 schaltet die Glaettung ab. 10 m entfernen
+	 * die gemessene 8-m-Delle bei jedem Punktabstand; eine echte Wanne mit
+	 * 300 m Halbmesser aendert sich um hoechstens 6 cm.
+	 *
+	 * WARUM: Die Fahrbahnhoehe wird punktweise aus dem Gelaenderaster
+	 * (7,81 m) abgetastet. Ein einzelner zu tiefer DEM-Punkt direkt an der
+	 * Strasse ergab an der Emser Strasse eine V-Delle von 90 cm auf 8 m
+	 * (6300 -> 6217 -> 6307 cm). Das Raster kann ein so schmales V nicht
+	 * abbilden: zwischen den Stuetzpunkten stand das Gras ueber der Fahrbahn
+	 * (im Spiel ein gruener Fleck quer ueber beide Spuren).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
+	double ProfileSmoothingHalfWindowCm = 1000.0;
+
+	/**
 	 * Hoehe der Fahrbahndecke ueber dem Terrain in cm.
 	 *
 	 * Hier standen 8 cm - zu wenig. Das Landscape loest mit 7,81 m je Quad
@@ -222,6 +243,14 @@ struct WIESBADENREAL_API FRoadGenerationSettings
 	/** Hoehe der Markierungen ueber der Fahrbahn in cm. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
 	double MarkingOffsetCm = 1.5;
+
+	/**
+	 * Gepflasterte Wendeplatte an jeder Sackgasse (Spur ohne Nachfolger). Sie
+	 * deckt die Wendeschleife des Verkehrs ab - ohne sie fuhren wendende Autos
+	 * ueber die Wiese. Siehe FRoadTurningPlate.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
+	bool bGenerateTurningPlates = true;
 
 	/** Zusaetzlicher Kreuzungsradius ueber die Armbreiten hinaus, in cm. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
@@ -450,6 +479,42 @@ public:
 	static FResolvedRoadAccess ResolveRoadAccess(
 		const FRoadNetwork& Network, const FRoadAccessOverride& Override);
 
+	/**
+	 * Separat erfasste Fusswege, die im Gehwegstreifen einer Fahrbahn parallel
+	 * laufen, auf die Hoehe dieses Gehwegs legen (Fahrbahnhoehe + Bordstein).
+	 * Hat die Fahrbahn ihren Gehweg auf dieser Seite schon selbst, wird der
+	 * Fussweg als Begleitweg markiert (FRoadSegment::bBegleitweg): kein zweites
+	 * Pflaster, keine eigene Gelaende-Einebnung.
+	 *
+	 * WARUM: An der Emser Strasse (Hanglage) lag der OSM-Fussweg 0,8-1,1 m neben
+	 * dem erzeugten Gehweg, aber fast 2 m tiefer (auf seiner eigenen
+	 * Gelaendehoehe). Er wurde als zweiter Gehweg gebaut ("Gehwege
+	 * uebereinander") und gewann bei der Einebnung die Rasterpunkte - der
+	 * Strassengehweg schwebte bis 2,5 m ueber dem Gras bzw. steckte bergseitig
+	 * darin (gemessen mit Tools/gelaende_probe.py).
+	 *
+	 * Muss nach der Hoehenprojektion und vor den Kreuzungsplatten laufen.
+	 * @return Zahl der markierten Begleitwege.
+	 */
+	static int32 AlignCompanionFootways(FRoadNetwork& Network, bool bSidewalksGenerated,
+		int32* OutRaisedSegments = nullptr);
+
+	/**
+	 * Laengsprofil einer ebenerdigen Strasse glaetten: je Punkt eine robuste
+	 * Gerade durch das Fenster +-HalfWindowCm (Median der Einzelsteigungen,
+	 * Median der bereinigten Hoehen) - entfernt schmale Dellen und Hoecker aus
+	 * dem Hoehenmodell, laesst ein Gefaelle exakt stehen -, danach ein Mittel
+	 * ueber die halbe Breite.
+	 * Die Segmentenden bleiben unveraendert und die Wirkung waechst ueber
+	 * HalfWindowCm auf - so passen die Enden benachbarter Segmente an den
+	 * Knoten weiter aufeinander. TrimmedCenterline erhaelt dieselbe Aenderung
+	 * (ueber ihre Bogenposition auf der Centerline interpoliert).
+	 * Segmente kuerzer als 2 * HalfWindowCm bleiben unberuehrt.
+	 * @return groesste Hoehenaenderung in cm.
+	 */
+	static double SmoothLongitudinalProfile(TArray<FVector>& Centerline, TArray<FVector>& TrimmedCenterline,
+		double HalfWindowCm);
+
 	/** Bordsteinhoehe an einem Meshpunkt; nur die konfigurierte Gehwegseite wird abgesenkt. */
 	static double GetRoadAccessKerbHeightCm(const FResolvedRoadAccess& Access,
 		int32 SegmentId, double SideSign, const FVector2D& KerbPointCm, double DefaultHeightCm);
@@ -494,6 +559,9 @@ private:
 		int32& OutRestrictedCount) const;
 
 	/** Wertet type=restriction-Relationen aus (Abbiegeverbote). */
+	/** Wendeplatten an allen Spuren ohne Nachfolger (nach ConnectLanes). */
+	void BuildTurningPlates(FRoadNetwork& Network) const;
+
 	void CollectTurnRestrictions(
 		const FOSMDataSet& DataSet,
 		TSet<TPair<int64, int64>>& OutForbiddenWayPairs) const;

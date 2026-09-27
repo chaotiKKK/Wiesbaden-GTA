@@ -1,4 +1,6 @@
 @echo off
+call "%~dp0engine_run_lock.cmd" -Modus Start -Name run_automation_test
+if errorlevel 1 exit /b 1
 REM Automation-Tests headless fahren. Ausgabe nach Saved\Logs\wb_test_<Log>.log -
 REM dort steht am Ende die Automation-Zusammenfassung ("TEST COMPLETE. EXIT CODE").
 REM

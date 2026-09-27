@@ -6,7 +6,6 @@
 #include "GameFramework/Pawn.h"
 #include "WiesbadenFootPawn.generated.h"
 
-class UAnimSequence;
 class UCameraComponent;
 class UCapsuleComponent;
 class USkeletalMeshComponent;
@@ -14,6 +13,7 @@ class USpringArmComponent;
 class USpotLightComponent;
 class UStaticMeshComponent;
 class UWiesbadenCarAudioComponent;
+class UWiesbadenSebboFigureComponent;
 class UWiesbadenWeaponComponent;
 
 /**
@@ -45,13 +45,16 @@ public:
 	 * angehaengten Fahrgast in jedem Bild wieder auf das Gelaende ziehen -
 	 * die Bahn fuehre ohne ihn ab.
 	 */
-	void SetRiding(bool bInRiding) { bRiding = bInRiding; }
+	void SetRiding(bool bInRiding);
 
 	/** Faehrt der Spieler gerade mit? Seit es ZWEI Bus-Actoren gibt (Linie 6 und
 	 *  Linie 3), muss der Einstieg fragen, ob schon jemand den Fahrgast hat:
 	 *  beide Actors sehen denselben Tastendruck und haetten sich sonst beide
 	 *  denselben Pawn angehaengt (jeder mit eigenem Anker). */
 	bool IsRiding() const { return bRiding; }
+
+	/** Geduckt? (Taste X / rechter Stick gedrueckt; bleibt unter niedriger Decke.) */
+	bool IsCrouched() const { return bCrouched; }
 
 	// -- Gesundheit ---------------------------------------------------------
 	/**
@@ -91,6 +94,17 @@ public:
 	/** Laufgeschwindigkeit bei gehaltener Umschalttaste, in km/h. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fuss", meta = (ClampMin = "1.0"))
 	float SprintSpeedKmh = 16.0f;
+
+	/** Tempo geduckt in km/h (kein Sprint, kein Sprung). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fuss", meta = (ClampMin = "0.5"))
+	float CrouchSpeedKmh = 3.5f;
+
+	/**
+	 * Halbe Kapselhoehe geduckt in cm (stehend 90). Die Duck-Clips sind 1,25 bis
+	 * 1,36 m hoch - 70 laesst den Kopf in der Kapsel.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fuss", meta = (ClampMin = "40.0"))
+	float CrouchHalfHeightCm = 70.0f;
 
 	/** Drehgeschwindigkeit ueber die Pfeiltasten in Grad je Sekunde. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fuss", meta = (ClampMin = "10.0"))
@@ -156,9 +170,77 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fuss", meta = (ClampMin = "1.0"))
 	float FallThresholdCm = 45.0f;
 
-	/** Zeit zwischen zwei Schuessen in Sekunden (Feuerrate). */
+	/** Zeit zwischen zwei Schuessen in Sekunden (Feuerrate). Wird beim
+	 *  Waffenwechsel aus der Tabelle gesetzt; der Wert hier ist der Rueckfall. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "0.02"))
 	float FireIntervalSeconds = 0.12f;
+
+	/**
+	 * Ego-Modus: C schaltet Schulterkamera <-> Erste-Person.
+	 *
+	 * In der Ego-Ansicht sitzt die Kamera auf Augenhoehe im Kopf, die Figur
+	 * (Koerper/Kopf/Skelett) blendet sich fuer den Traeger aus, und die Waffe
+	 * wandert in Kameranaehe - die Shooter-Ueblichkeit: Man sieht die Waffe,
+	 * nicht den eigenen Ruecken.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "30.0"))
+	float EgoArmLengthCm = 0.0f;
+
+	/** Schulter-Abstand der Kamera im Ego-Modus (leicht rechts versetzt). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "0.0", ClampMax = "40.0"))
+	float EgoShoulderOffsetCm = 18.0f;
+
+	/** Armlaenge der Schulterkamera in cm (stand frueher fest 300 im Code). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "0.0"))
+	float ShoulderArmLengthCm = 300.0f;
+
+	// -- Zielen (ADS) & Mausrad ---------------------------------------------
+
+	/**
+	 * Zoom-Stufe je Mausradklick im Zielmodus. Die OBERGRENZE steht pro
+	 * Waffe in der Spec-Tabelle (AdsZoomMax): ein Scharfschuetzengewehr zoomt
+	 * weiter als eine Schrotflinte - zwei Stellen sollen nicht ueber dieselbe
+	 * Zahl bestimmen.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "0.05"))
+	float AdsZoomStep = 0.25f;
+
+	/** Armlaenge im Zielmodus als Anteil der normalen (Kamera rueckt heran). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Waffe", meta = (ClampMin = "0.1", ClampMax = "1.0"))
+	float AdsArmLengthScale = 0.55f;
+
+	/** Zielt der Spieler gerade (rechte Maustaste gehalten)? (HUD, Pruefung.) */
+	bool IsAiming() const { return bAiming; }
+
+	/**
+	 * Zoom-Stufe im Zielmodus (1 = kein Zoom). Pruef-Zugang: das D-Pad
+	 * ist am Gamepad der Mausrad-Weg, und im Zielmodus entscheidet
+	 * RouteMausrad genau auf diese Stufe. Ohne den Zugang laesst sich am
+	 * laufenden Spiel nicht unterscheiden, ob das D-Pad den Zoom, die
+	 * Waffenwahl oder gar nichts getroffen hat.
+	 */
+	float GetAdsZoomLevel() const { return AdsZoomLevel; }
+
+	/** Waffe waehlen (Tasten 1-8 + Mausrad); rueckwaerts zaehlt als Abwahl. */
+	void SelectWeapon(int32 Index);
+
+	/** Schaltet Schulter-/Ego-Ansicht um (Taste C, Flankenerkennung). */
+	void ToggleEgoCamera();
+
+	/** Ansicht abfragen/setzen (Dev-Exec, HUD); Setzen wendet sofort an. */
+	bool IsEgoCamera() const { return bEgoCamera; }
+
+	/** Laeuft gerade der Kettensaege-Modus (Slot 9)? (Pruef-Lauf, HUD.) */
+	bool IsUsingChainsaw() const { return bUsesChainsaw; }
+
+	void SetEgoCamera(bool bInEgo)
+	{
+		if (bInEgo != bEgoCamera)
+		{
+			bEgoCamera = bInEgo;
+			ApplyCameraMode();
+		}
+	}
 
 	/** Oeffnungswinkel der Handlampe in Grad. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Figur", meta = (ClampMin = "5.0", ClampMax = "80.0"))
@@ -191,20 +273,18 @@ public:
 	UStaticMeshComponent* BodyMesh = nullptr;
 
 	/**
-	 * Die animierte Spielfigur (SK_Sebbo).
-	 *
-	 * Sobald das Skelett-Modell vorliegt, uebernimmt sie: Gehen wird als
-	 * Schrittzyklus abgespielt, und statt der Pistole schwingt Sebbo die
-	 * Kettensaege. Das statische BodyMesh bleibt als Rueckfall bestehen.
+	 * Die animierte Spielfigur (SK_Sebbo) - besitzt Clips und Clip-Wahl; der
+	 * Pawn meldet ihr nur Tempo, Luft, Mitfahrt, Blick und Gesundheit. Das
+	 * statische BodyMesh bleibt als Rueckfall.
 	 */
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Figur")
-	USkeletalMeshComponent* FigureMesh = nullptr;
+	UWiesbadenSebboFigureComponent* FigureMesh = nullptr;
 
 	/** Kettensaegen-Klang: der Fahrzeug-Synthesizer als Zweitakter. */
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Figur")
 	UWiesbadenCarAudioComponent* SawAudio = nullptr;
 
-	/** Dauer eines Saegehiebs in Sekunden (Laenge von Sebbo_Swing). */
+	/** Dauer eines Nahkampfhiebs in Sekunden (mit A_Sebbo_Kick: dessen Laenge). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Nahkampf", meta = (ClampMin = "0.1"))
 	float SwingSeconds = 0.7f;
 
@@ -223,13 +303,6 @@ public:
 	/** Wie lange ein getroffener Fussgaenger liegen bleibt, in Sekunden. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Nahkampf", meta = (ClampMin = "0.5"))
 	float PedestrianDownSeconds = 12.0f;
-
-	/**
-	 * Gehtempo, fuer das der Schrittzyklus einmal je Sekunde laeuft (m/s).
-	 * Schnelleres Gehen beschleunigt die Bewegung im selben Verhaeltnis.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Figur", meta = (ClampMin = "0.1"))
-	float WalkAnimSpeedMps = 1.67f;
 
 	/** Kopf der Figur. */
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Figur")
@@ -252,8 +325,32 @@ private:
 	/** Gibt einen Schuss ab (zielt aus der Kamera). */
 	void FireWeapon();
 
+	/** Uebernimmt Kameraposition, Sichtbarkeiten und Waffenlage je Modus. */
+	void ApplyCameraMode();
+
+	/** Tasten 1-8 abfragen und Waffe umschalten (Flanken je Taste). */
+	void PollWeaponKeys(const APlayerController* PC);
+
+	/**
+	 * Zielen und Mausrad: rechte Maustaste gehalten = ADS (Zoom, halbe
+	 * Streuung); im Zielmodus zoomt das Mausrad, sonst wechselt es die Waffe.
+	 */
+	void PollAimAndWheel(const APlayerController* PC);
+
+	/** Wendet den Zielzustand an: Kamera-Zoom, Armlaenge, Streuung. */
+	void ApplyAimState();
+
 	/** Haelt die Figur auf dem Boden. */
 	void FollowGround(float DeltaSeconds);
+
+	/**
+	 * Ducken/Aufstehen: Kapsel kuerzen bzw. verlaengern, die Fuesse bleiben am
+	 * Boden (Actor sinkt/steigt um die Differenz, die Figur rueckt nach).
+	 */
+	void SetCrouched(bool bInCrouched);
+
+	/** Ist ueber der geduckten Kapsel Platz zum Aufstehen? */
+	bool HasRoomToStand() const;
 
 	/**
 	 * Versucht, ein blockierendes Hindernis hinaufzusteigen.
@@ -268,7 +365,7 @@ private:
 	/** Fuehrt den Treffer des laufenden Hiebs aus (Kugel-Sweep nach vorn). */
 	void DoMeleeHit();
 
-	/** Waehlt Idle oder Walk nach dem tatsaechlichen Tempo. */
+	/** Meldet der Figur Tempo, Luft, Mitfahrt, Blick und Gesundheit. */
 	void UpdateFigure(float DeltaSeconds, float SpeedMps);
 
 	/** Restzeit bis zum naechsten moeglichen Schuss. */
@@ -289,22 +386,51 @@ private:
 	/** Flankenerkennung der Sprungtaste. */
 	bool bJumpKeyHeld = false;
 
+	/** Flanken der Gamepad-Schultertasten (Waffenwechsel RB/LB). */
+	bool bWaffeVorHeld = false;
+	bool bWaffeZurueckHeld = false;
+
+	/** Flanken des D-Pads hoch/runter (Klicks wie das Mausrad). */
+	bool bPadUpHeld = false;
+	bool bPadDownHeld = false;
+
+	/** Bodenabfrage: Ort nach der letzten und Restzeit der Versetz-Schonfrist. */
+	FVector LastGroundCheckLocation = FVector(0.0, 0.0, -1e9);
+	float TeleportGraceSeconds = 0.0f;
+
+	/** Geduckt? Und die halbe Kapselhoehe im Stehen (aus dem Konstruktor). */
+	bool bCrouched = false;
+	float StandingHalfHeightCm = 90.0f;
+
 	/** True, solange der Spieler in der Nerobergbahn mitfaehrt. */
 	bool bRiding = false;
+
+	/** Ego-Modus aktiv (C umgeschaltet)? Start: Schulterkamera wie bisher. */
+	bool bEgoCamera = false;
+
+	/** Flankenerkennung der C-Taste. */
+	bool bEgoKeyHeld = false;
+
+	/** Zuletzt gehaltene Zifferntasten 1-8 (Flanken je Taste). */
+	bool WeaponKeyHeld[8] = {};
+
+	/** Grund-FOV der Kamera in Grad - gemerkt beim Start, ADS teilt es. */
+	float BaseCameraFOV = 90.0f;
+
+	/** Aktueller Zoomfaktor im Zielmodus (1.0 = kein Zoom). */
+	float AdsZoomLevel = 1.0f;
+
+	/** Zielmodus aktiv (rechte Maustaste gehalten)? */
+	bool bAiming = false;
+
+	/** Angehaeuftes Mausrad-Signal: die Achse meldet ein Delta je Bild. */
+	float WheelAccumulator = 0.0f;
 
 	/** Restzeit des laufenden Saegehiebs; 0 = kein Hieb. */
 	float SwingRemaining = 0.0f;
 
 	/** Treffer dieses Hiebs bereits ausgefuehrt? */
 	bool bMeleeHitDone = false;
-
-	/** Bewegungen der Figur. */
-	UPROPERTY(Transient) UAnimSequence* IdleAnim = nullptr;
-	UPROPERTY(Transient) UAnimSequence* WalkAnim = nullptr;
-	UPROPERTY(Transient) UAnimSequence* SwingAnim = nullptr;
-
-	/** Welche Dauerschleife gerade laeuft (0 = keine, 1 = Idle, 2 = Walk). */
-	int32 CurrentLoop = 0;
 
 	/** Standort im letzten Bild - fuer das gemessene Tempo. */
 	FVector PreviousLocation = FVector::ZeroVector;

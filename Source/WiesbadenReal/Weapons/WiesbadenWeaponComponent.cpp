@@ -4,14 +4,26 @@
 
 #include "WiesbadenReal.h"
 
+#include "Weapons/WiesbadenDamageTarget.h"
+#include "Weapons/WiesbadenCutMath.h"
+#include "Weapons/WiesbadenWeaponSpec.h"
+#include "GameFramework/Actor.h"
+#include "World/WiesbadenCitySubsystem.h"
+#include "World/WiesbadenCuttable.h"
+
+#include "Audio/WiesbadenAudioPropagation.h"
 #include "Audio/WiesbadenAudioSubsystem.h"
 #include "Components/AudioComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
+#include "CollisionQueryParams.h"
+#include "Engine/CollisionProfile.h"
+#include "Engine/OverlapResult.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "Materials/MaterialInterface.h"
+#include "Kismet/GameplayStatics.h"
 #include "Sound/SoundWaveProcedural.h"
 
 namespace
@@ -69,6 +81,25 @@ UStaticMeshComponent* UWiesbadenWeaponComponent::AddPart(
 
 void UWiesbadenWeaponComponent::BuildWeaponMesh()
 {
+	// Blender-Mesh zuerst: die acht Waffen-Meshes aus
+	// Tools/Blender/build_weapons.py (SM_Waffe_*) werden importiert und in
+	// der Spec-Tabelle ueber MeshAssetPath zugeordnet. Leer oder nicht
+	// ladbar = die prozedurale Huelle aus Grundkoerpern bleibt: die Waffe
+	// sieht dann schlichter aus, aber spielt.
+	const FWiesbadenWeaponSpec& GeWaffe = WiesbadenWeapons::Spec(WeaponIndex);
+	if (GeWaffe.MeshAssetPath && GeWaffe.MeshAssetPath[0] != 0)
+	{
+		if (AddPart(TEXT("WeaponModel"), GeWaffe.MeshAssetPath,
+			FVector::ZeroVector, FVector(1.0f, 1.0f, 1.0f),
+			FRotator::ZeroRotator, nullptr))
+		{
+			return;
+		}
+		UE_LOG(LogWbVehicles, Warning,
+			TEXT("Waffe %d: Mesh %s nicht ladbar - prozedurale Huelle."),
+			WeaponIndex, GeWaffe.MeshAssetPath);
+	}
+
 	// Masse einer Maschinenpistole, in Zentimetern:
 	//
 	//   Gesamtlaenge etwa 60 cm, Gehaeuse 26 cm, Lauf 20 cm, Magazin 18 cm.
@@ -166,11 +197,45 @@ void UWiesbadenWeaponComponent::SetupAudio()
 	// Mischpult vorbei. nullptr, falls die Mix-Assets fehlen -> dann ohne Bus.
 	ShotAudio->SoundClassOverride = UWiesbadenAudioSubsystem::LoadBusSoundClass(EWbAudioBus::SFX);
 
+	// Ausbreitung: mittlere Distanzkurve (Schuss) inkl. Occlusion + Hall-Send.
+	WiesbadenAudioPropagation::ConfigureSource(ShotAudio, EWbAudioRange::Mid);
+
 	// Dasselbe Verfahren wie beim Motor: eine laufende prozedurale Welle, in
 	// die Abtastwerte geschoben werden. Sie spielt dauerhaft und ist still,
 	// solange nichts eingereiht ist - dadurch klingt der Schuss ohne
 	// Anlaufverzoegerung, die ein Neustart der Quelle mit sich braechte.
+	//
+	// Beide Quellen werden angelegt, NICHT nur eine: der Spieler wechselt
+	// die Waffe waehrend des Spiels, und eine Waffe ohne Sample (Laser,
+	// Cutter) muesste sonst stumm bleiben, nur weil vorher eine Waffe mit
+	// Sample gewaehlt war (am 26.09.2026 genau so gebaut).
 	ShotWave = NewObject<USoundWaveProcedural>(GetOwner(), TEXT("WeaponShotProceduralSound"));
+	if (ShotWave)
+	{
+		ShotWave->NumChannels = 1;
+		ShotWave->SetSampleRate(FMath::Max(GunshotParams.SampleRate, 8000));
+		ShotWave->SampleByteSize = BytesPerSample;
+	}
+
+	// Echte Aufnahme statt Synth (Nutzerwunsch 2026-09): der Pfad steht in
+	// der Spec-Tabelle ZUR Waffe, nicht im Code der Komponente. Ein if/else
+	// ueber den Waffenschlitz vergisst jede neue Waffe - so stand frueher auf
+	// dem Scharfschuetzengewehr und auf dem MG dasselbe Beretta-Sample.
+	const FWiesbadenWeaponSpec& ErsteWaffe = WiesbadenWeapons::Spec(WeaponIndex);
+	if (ErsteWaffe.ShotSoundPath && ErsteWaffe.ShotSoundPath[0] != 0)
+	{
+		if (USoundBase* Sample = LoadObject<USoundBase>(nullptr, ErsteWaffe.ShotSoundPath))
+		{
+			ShotSample = Sample;
+			ShotAudio->SetSound(ShotSample);
+			ShotAudio->bAutoActivate = false;
+			UE_LOG(LogWbVehicles, Log,
+				TEXT("Waffe: Schuss-Sample fuer '%s' aktiviert (Synth als Rueckfall)."),
+				ErsteWaffe.ShortName);
+			return;
+		}
+	}
+
 	if (!ShotWave)
 	{
 		UE_LOG(LogWbVehicles, Warning,
@@ -178,12 +243,11 @@ void UWiesbadenWeaponComponent::SetupAudio()
 		return;
 	}
 
-	ShotWave->NumChannels = 1;
-	ShotWave->SetSampleRate(FMath::Max(GunshotParams.SampleRate, 8000));
-	ShotWave->SampleByteSize = BytesPerSample;
-
 	ShotAudio->SetSound(ShotWave);
 	ShotAudio->Play();
+	UE_LOG(LogWbVehicles, Log,
+		TEXT("Waffe: prozeduraler Schussklang aktiviert (%d Hz, mono) - '%s' hat kein Sample."),
+		GunshotParams.SampleRate, ErsteWaffe.ShortName);
 
 	UE_LOG(LogWbVehicles, Log,
 		TEXT("Waffe: prozeduraler Schussklang aktiviert (%d Hz, mono, %.0f ms je Schuss)."),
@@ -209,8 +273,61 @@ FVector UWiesbadenWeaponComponent::GetMuzzleLocation() const
 	return Muzzle ? Muzzle->GetComponentLocation() : GetComponentLocation();
 }
 
+bool UWiesbadenWeaponComponent::IsValidWeaponIndex(int32 Index)
+{
+	return Index >= 0 && Index < WiesbadenWeapons::Table().Num();
+}
+
+void UWiesbadenWeaponComponent::SetWeaponIndex(int32 InIndex)
+{
+	if (!IsValidWeaponIndex(InIndex) || InIndex == WeaponIndex)
+	{
+		return;
+	}
+	WeaponIndex = InIndex;
+
+	// Fliegende Schuesse der alten Waffe ausklingen lassen: ein MG-Feuerstoss
+	// gehoert zum MG, nicht zur naechstgewaehlten Pistole.
+	LiveShots.Reset();
+
+	// Modell zur neuen Waffe: das alte Geflecht ab, das neue an - sonst
+	// traege jede Waffe dieselbe Huelle (bis 26.09.2026 genau so).
+	for (UStaticMeshComponent* Part : Parts)
+	{
+		if (Part)
+		{
+			Part->DestroyComponent();
+		}
+	}
+	Parts.Reset();
+	BuildWeaponMesh();
+}
+
 void UWiesbadenWeaponComponent::PlayGunshot()
 {
+	// Sample-Pfad: Schussklang je Waffe (Beretta fuer die schnellen Kaliber,
+	// Rifle fuer den Scharfschuetzen), Explosion beim Granatwerfer. Ein
+	// leicht zufaelliger Pitch-Versatz (0,97..1,03) nimmt den Schuessen
+	// die Gleichfoermigkeit, die zwei identische Samples sofort verraten.
+	// Klangprofil aus der Spec-Tabelle: Pfad, Lautstaerke und Pitch-Streuung
+	// gehoeren zur Waffe, nicht zur Komponente.
+	const FWiesbadenWeaponSpec& Waffe = WiesbadenWeapons::Spec(WeaponIndex);
+	if (ShotSample && ShotAudio && Waffe.ShotSoundPath && Waffe.ShotSoundPath[0] != 0)
+	{
+		if (USoundBase* Wanted = LoadObject<USoundBase>(nullptr, Waffe.ShotSoundPath))
+		{
+			ShotSample = Wanted;
+			ShotAudio->SetSound(ShotSample);
+		}
+		const float Jitter = FMath::Max(0.0f, Waffe.ShotPitchJitter);
+		ShotAudio->SetPitchMultiplier(1.0f + FMath::FRandRange(-Jitter, Jitter));
+		ShotAudio->SetVolumeMultiplier(Waffe.ShotVolume);
+		ShotAudio->Play(0.0f);
+		return;
+	}
+
+	// Ohne Sample (Laser, Cutter) bleibt die prozedurale Welle.
+
 	if (!ShotWave)
 	{
 		return;
@@ -239,33 +356,70 @@ void UWiesbadenWeaponComponent::Fire(const FVector& AimStart, const FVector& Aim
 		return;
 	}
 
-	// Streuung: ohne sie landet jeder Schuss auf demselben Punkt, was nach
-	// Laserpointer aussieht statt nach Waffe.
-	FVector Direction = AimDirection.GetSafeNormal();
-	if (SpreadDegrees > 0.0f)
+	// Am Anfang, vor den Waffenarten: so zaehlt der Zaehler jede abgegebene
+	// Waffe - Projektile, Hieb und Plasma-Trennstrahl gleichermassen. Er ist
+	// der Beleg, dass ein Ausloeser wirklich gefeuert hat (das Projektil ist
+	// nach einem Bild verschwunden).
+	++SchussZahl;
+
+	const FWiesbadenWeaponSpec& Spec = WiesbadenWeapons::Spec(WeaponIndex);
+	if (Spec.bMelee)
 	{
-		Direction = FMath::VRandCone(Direction, FMath::DegreesToRadians(SpreadDegrees));
+		// Nahkampf: Schwung-Sweep folgt (Adapter-Test gegen Reach); hier nur
+		// Rueckkopplung - ein sichtbarer Schwung ist Schritt "Ego-Modus".
+		RecoilOffset = -FMath::Abs(RecoilOffsetCm) * 2.0f;
+		PlayGunshot();
+		return;
 	}
 
-	const FVector End = AimStart + Direction * (RangeMeters * 100.0f);
+	if (Spec.bCuts)
+	{
+		// Plasma-Trennen: Strahl aus dem Blick, kein Projektil. Die
+		// Schnittebene kommt aus dem Winkel, den das Mausrad dreht.
+		FireCutBeam(AimStart, AimDirection, Spec);
+		return;
+	}
 
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbWeapon), /*bTraceComplex=*/true);
-	Params.AddIgnoredActor(GetOwner());
+	// Streuung: ohne sie landet jeder Schuss auf demselben Punkt, was nach
+	// Laserpointer aussieht statt nach Waffe.
+	const FVector Up = FVector::UpVector;
+	const FVector Right = FVector::CrossProduct(Up, AimDirection.GetSafeNormal()).GetSafeNormal();
+	const int32 Pellets = FMath::Max(Spec.PelletsPerShot, 1);
+	for (int32 Pellet = 0; Pellet < Pellets; ++Pellet)
+	{
+		FVector Direction = AimDirection.GetSafeNormal();
+		if (SpreadDegrees * SpreadScale > 0.0f)
+		{
+			Direction = FMath::VRandCone(
+				Direction, FMath::DegreesToRadians(SpreadDegrees * SpreadScale));
+		}
 
-	FHitResult Hit;
-	const bool bHit = World->LineTraceSingleByChannel(Hit, AimStart, End, ECC_Visibility, Params);
-	const FVector ImpactPoint = bHit ? Hit.ImpactPoint : End;
+		// Projektil mit echter Flugbahn: Start an der Muendung, Zielrichtung
+		// aus dem Blick - die Flugzeit ist sichtbar (Leuchtspur folgt).
+		FWiesbadenProjectile P;
+		P.Position = GetMuzzleLocation();
+		P.Velocity = Direction * Spec.MuzzleVelocityCmPerS;
+		P.RemainingRangeCm = Spec.RangeCm;
+		P.MassKg = Spec.ProjectileMassKg;
+		P.GravityCmPerS2 = Spec.GravityCmPerS2;
+		P.Damage = Spec.Damage;
+		P.bExplosive = Spec.bExplosive;
+		P.BlastRadiusCm = Spec.BlastRadiusCm;
+		P.BlastDamage = Spec.BlastDamage;
+		P.SelfDamage = Spec.SelfDamage;
 
-	// Die Leuchtspur startet am LAUF, nicht an der Kamera: Sonst entstuende
-	// sie sichtbar im Gesicht des Spielers.
-	FWiesbadenTracer Tracer;
-	Tracer.Start = GetMuzzleLocation();
-	Tracer.End = ImpactPoint;
-	Tracer.Alpha = 0.0f;
+		FWiesbadenTracer Tracer;
+		Tracer.Start = P.Position;
+		Tracer.End = P.Position + Direction * (Spec.RangeCm);
+		Tracer.Alpha = 0.0f;
+		Tracer.Speed = Spec.MuzzleVelocityCmPerS / FMath::Max(Spec.RangeCm, 1.0f);
+		Tracers.Add(Tracer);
 
-	const float DistanceCm = FMath::Max(FVector::Dist(Tracer.Start, Tracer.End), 1.0f);
-	Tracer.Speed = (MuzzleVelocityMetersPerS * 100.0f) / DistanceCm;
-	Tracers.Add(Tracer);
+		FWiesbadenLiveShot Live;
+		Live.Projectile = P;
+		Live.TracerIndex = Tracers.Num() - 1;
+		LiveShots.Add(Live);
+	}
 
 	// Muendungsfeuer und Klang.
 	MuzzleFlashRemaining = MuzzleFlashSeconds;
@@ -276,12 +430,66 @@ void UWiesbadenWeaponComponent::Fire(const FVector& AimStart, const FVector& Aim
 	RecoilOffset = -FMath::Abs(RecoilOffsetCm);
 
 	PlayGunshot();
+}
 
-	if (bHit)
+void UWiesbadenWeaponComponent::RotateCutPlane(float StepDeg)
+{
+	CutPlaneAngleDeg = WiesbadenCutMath::RotateCutPlane(CutPlaneAngleDeg, StepDeg);
+	UE_LOG(LogWbVehicles, Log,
+		TEXT("Plasmacutter: Schnittebene auf %.0f Grad."), CutPlaneAngleDeg);
+}
+
+void UWiesbadenWeaponComponent::FireCutBeam(
+	const FVector& AimStart, const FVector& AimDirection, const FWiesbadenWeaponSpec& Spec)
+{
+	UWorld* World = GetWorld();
+	if (!World)
 	{
-		// Einschlag sichtbar machen.
-		DrawDebugPoint(World, Hit.ImpactPoint, 9.0f, FColor(255, 200, 90), false, 1.2f);
+		return;
 	}
+
+	// Strahl aus dem Blick bis zur Werkzeug-Reichweite. Der Cutter ist ein
+	// Werkzeug: der Strahl trifft sofort, es fliegt nichts.
+	const FVector Dir = AimDirection.GetSafeNormal();
+	const FVector End = AimStart + Dir * Spec.RangeCm;
+
+	FHitResult Hit;
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(WbCutBeam), false, GetOwner());
+	const bool bWorldHit = World->LineTraceSingleByChannel(
+		Hit, AimStart, End, ECC_Visibility, QueryParams);
+	const FVector BeamEnd = bWorldHit ? Hit.ImpactPoint : End;
+
+	// Duenn sichtbar: eine kurze Spur zum Einschlag, ohne Projektilflug.
+	FWiesbadenTracer Tracer;
+	Tracer.Start = GetMuzzleLocation();
+	Tracer.End = BeamEnd;
+	Tracer.Alpha = 0.0f;
+	Tracer.Speed = 6.0f;
+	Tracers.Add(Tracer);
+
+	if (bWorldHit)
+	{
+		if (AWiesbadenCuttable* Cuttable = Cast<AWiesbadenCuttable>(Hit.GetActor()))
+		{
+			const FVector PlaneNormal =
+				WiesbadenCutMath::CutPlaneNormal(Dir, CutPlaneAngleDeg);
+			if (Cuttable->ApplyCut(Hit.ImpactPoint, PlaneNormal))
+			{
+				UE_LOG(LogWbVehicles, Log,
+					TEXT("Plasmacutter: getrennt bei (%.0f, %.0f, %.0f), Ebene %.0f Grad."),
+					Hit.ImpactPoint.X, Hit.ImpactPoint.Y, Hit.ImpactPoint.Z,
+					CutPlaneAngleDeg);
+			}
+		}
+	}
+
+	// Licht und Klang wie beim Schuss - der Energie-Ton kommt aus der Spec.
+	MuzzleFlashRemaining = MuzzleFlashSeconds;
+	if (MuzzleLight)
+	{
+		MuzzleLight->SetIntensity(MuzzleFlashIntensity);
+	}
+	PlayGunshot();
 }
 
 float UWiesbadenWeaponComponent::AdvanceTracerAlpha(float Alpha, float Speed, float DeltaSeconds)
@@ -315,6 +523,9 @@ void UWiesbadenWeaponComponent::TickWeapon(float DeltaSeconds)
 		return;
 	}
 
+	// Projektile zuerst: ihre Aufschlage bestimmen den Leuchtspur-Endpunkt.
+	StepProjectiles(DeltaSeconds);
+
 	// Leuchtspuren weiterfliegen lassen. Gezeichnet wird ein kurzes Stueck
 	// entlang der Bahn, kein Punkt - ein Punkt waere bei 380 m/s nie sichtbar.
 	constexpr float TracerLengthFraction = 0.06f;
@@ -335,6 +546,254 @@ void UWiesbadenWeaponComponent::TickWeapon(float DeltaSeconds)
 		if (Tracer.Alpha >= 1.0f)
 		{
 			Tracers.RemoveAtSwap(Index);
+		}
+	}
+}
+
+void UWiesbadenWeaponComponent::StepProjectiles(float DeltaSeconds)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		LiveShots.Reset();
+		return;
+	}
+
+	for (int32 Index = LiveShots.Num() - 1; Index >= 0; --Index)
+	{
+		const FWiesbadenLiveShot& Live = LiveShots[Index];
+		const FWiesbadenFlightStep StepResult = WiesbadenBallistics::Step(Live.Projectile, DeltaSeconds);
+
+		// Segment-Sweep: Welt zuerst (Complex-Trace gegen alles ausser dem
+		// Schuetzen), dann Ziel-Adapter per Ueberschneidung mit dem Segment.
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(WbProjectile), /*bTraceComplex=*/true);
+		Params.AddIgnoredActor(GetOwner());
+
+		FHitResult WorldHit;
+		const bool bWorldHit = World->LineTraceSingleByChannel(WorldHit,
+			StepResult.SegmentStart, StepResult.SegmentEnd, ECC_Visibility, Params);
+
+		const FVector SweepEnd = bWorldHit ? WorldHit.Location : StepResult.SegmentEnd;
+
+		// Ziel-Adapter: Objekte nahe am Segment finden. Ein Kugel-Overlap am
+		// Segmentende wuerde schnelle Ziele verpassen; darum Segment als Reihe
+		// von Kugeln abtasten (Schritt = Zieldurchmesser-Schaetzung 60 cm).
+		TArray<FOverlapResult> Overlaps;
+		const double SegmentLength = static_cast<double>(FVector::Dist(StepResult.SegmentStart, SweepEnd));
+		const int32 Samples = FMath::Clamp(FMath::CeilToInt(SegmentLength / 60.0), 1, 24);
+		bool bTargetHit = false;
+		AActor* TargetActor = nullptr;
+		UPrimitiveComponent* TargetComponent = nullptr;
+		FVector TargetPoint = FVector::ZeroVector;
+		for (int32 Sample = 0; Sample <= Samples && !bTargetHit; ++Sample)
+		{
+			const FVector Probe = FMath::Lerp(StepResult.SegmentStart, SweepEnd,
+				static_cast<float>(Sample) / Samples);
+			Overlaps.Reset();
+			if (!World->OverlapMultiByObjectType(Overlaps, Probe, FQuat::Identity,
+				FCollisionObjectQueryParams(ECC_Pawn), FCollisionShape::MakeSphere(45.0f), Params))
+			{
+				continue;
+			}
+			for (const FOverlapResult& Overlap : Overlaps)
+			{
+				AActor* Actor = Overlap.GetActor();
+				if (!Actor || Actor == GetOwner())
+				{
+					continue;
+				}
+				if (Actor->Implements<UWiesbadenDamageTarget>())
+				{
+					TargetActor = Actor;
+					TargetComponent = Overlap.Component.Get();
+					TargetPoint = Probe;
+					bTargetHit = true;
+					break;
+				}
+			}
+		}
+
+		if (bTargetHit)
+		{
+			ResolveImpact(TargetActor, TargetComponent, TargetPoint, Live.Projectile);
+			LiveShots.RemoveAtSwap(Index);
+			continue;
+		}
+
+		if (bWorldHit)
+		{
+			// Welt-Aufschlag: Explosivgeschosse detonieren, andere schlagen ein.
+			ResolveImpact(nullptr, nullptr, WorldHit.Location, Live.Projectile);
+			LiveShots.RemoveAtSwap(Index);
+			continue;
+		}
+
+		if (StepResult.bRangeEnd)
+		{
+			// Reichweitenende ohne Treffer: verlogen leise ausblenden.
+			if (Live.Projectile.bExplosive)
+			{
+				ApplyExplosionAt(StepResult.SegmentEnd, Live.Projectile);
+			}
+			LiveShots.RemoveAtSwap(Index);
+			continue;
+		}
+
+		// Weiterfliegen; die Leuchtspur reitet auf dem Projektil: Kopf = neue
+		// Position, sichtbares Stueck = das Bewegungssegment dieses Bilds (bei
+		// Alpha=1 und Speed=0 bleibt der Schwanz am Segmentanfang haengen).
+		LiveShots[Index].Projectile = StepResult.Projectile;
+		if (LiveShots[Index].TracerIndex >= 0 && LiveShots[Index].TracerIndex < Tracers.Num())
+		{
+			FWiesbadenTracer& Tracer = Tracers[LiveShots[Index].TracerIndex];
+			Tracer.Start = StepResult.SegmentStart;
+			Tracer.End = StepResult.SegmentEnd;
+			Tracer.Alpha = 1.0f;
+			Tracer.Speed = 0.0f;
+		}
+	}
+}void UWiesbadenWeaponComponent::ResolveImpact(AActor* HitActor, UPrimitiveComponent* HitComponent,
+	const FVector& ImpactPoint, const FWiesbadenProjectile& P)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	if (P.bExplosive)
+	{
+		ApplyExplosionAt(ImpactPoint, P);
+		return;
+	}
+
+	if (HitActor && HitActor->Implements<UWiesbadenDamageTarget>())
+	{
+		IWiesbadenDamageTarget* Target = Cast<IWiesbadenDamageTarget>(HitActor);
+		if (Target && Target->IsAlive())
+		{
+			const FVector Direction = (ImpactPoint - P.Position).GetSafeNormal();
+			Target->ApplyProjectileHit(P, ImpactPoint, Direction);
+
+			// Impuls: nur gegen Physik-Koerper sinnvoll; Primitive wirft den
+			// Impuls selbst weg, wenn keine Simulation laeuft. Impuls =
+			// Masse * Geschwindigkeit (UE-Einheit kg*cm/s).
+			if (HitComponent && HitComponent->IsAnyRigidBodyAwake())
+			{
+				HitComponent->AddImpulseAtLocation(
+					Direction * P.Velocity.Size() * P.MassKg, ImpactPoint);
+			}
+			ReportPedestrianAndWanted(World, ImpactPoint, P.Damage);
+		}
+	}
+
+	// Einschlag sichtbar machen (wie bisher, jetzt am echten Punkt).
+	DrawDebugPoint(World, ImpactPoint, 9.0f, FColor(255, 200, 90), false, 1.2f);
+}
+
+void UWiesbadenWeaponComponent::ReportPedestrianAndWanted(UWorld* World,
+	const FVector& ImpactPoint, float Damage)
+{
+	// Passanten sind Instanzen OHNE Kollision (PedestrianSpawnerComponent) -
+	// kein Sweep findet sie. Der Adapter fragt die Simulation direkt: im
+	// Umkreis des Aufschlags zu Boden schicken und die Tat ins Konto buchen.
+	if (UWiesbadenCitySubsystem* City = World->GetSubsystem<UWiesbadenCitySubsystem>())
+	{
+		// Treffergenausigkeit ueber Schadenshoehe steuern: starke Munition
+		// trifft den Passanten auch knapp daneben (Kugelradius skaliert).
+		const double StrikeRadius = FMath::Clamp(60.0 + Damage, 70.0, 150.0);
+		const int32 Felled = City->PedestrianSimulation.StrikeNear(
+			ImpactPoint, StrikeRadius, /*DownForSeconds=*/12.0f);
+		if (Felled > 0)
+		{
+			// Mehrere Figuren auf einmal = schwerer Trefferklang.
+			City->PlayPedestrianHitSound(ImpactPoint, Felled > 1);
+		}
+		for (int32 HitIndex = 0; HitIndex < Felled; ++HitIndex)
+		{
+			City->ReportCrime(EWiesbadenCrimeEvent::PedestrianDowned);
+		}
+	}
+}
+
+void UWiesbadenWeaponComponent::ApplyExplosionAt(const FVector& Centre, const FWiesbadenProjectile& P)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// Ziele im Radius ueber Overlap sammeln; Schaden faellt linear zum Rand.
+	TArray<FOverlapResult> Overlaps;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbBlast), false);
+	Params.AddIgnoredActor(GetOwner());
+	if (World->OverlapMultiByObjectType(Overlaps, Centre, FQuat::Identity,
+		FCollisionObjectQueryParams(ECC_Pawn), FCollisionShape::MakeSphere(P.BlastRadiusCm), Params))
+	{
+		TSet<AActor*> Visited;
+		for (const FOverlapResult& Overlap : Overlaps)
+		{
+			AActor* Actor = Overlap.GetActor();
+			if (!Actor || Actor == GetOwner() || Visited.Contains(Actor)
+				|| !Actor->Implements<UWiesbadenDamageTarget>())
+			{
+				continue;
+			}
+			Visited.Add(Actor);
+			if (IWiesbadenDamageTarget* Target = Cast<IWiesbadenDamageTarget>(Actor))
+			{
+				if (Target->IsAlive())
+				{
+					const float Damage = WiesbadenBallistics::BlastDamageAt(
+						Centre, P.BlastRadiusCm, P.BlastDamage, Actor->GetActorLocation());
+					Target->ApplyExplosion(Damage, Centre, P.BlastRadiusCm);
+				}
+			}
+		}
+	}
+
+	// Eigenschaden: der Schuetze nimmt die VOLLLE Blast-Punkte (Entwurf).
+	if (AActor* Owner = GetOwner())
+	{
+		if (Owner->Implements<UWiesbadenDamageTarget>())
+		{
+		const float Self = WiesbadenBallistics::BlastDamageAt(
+			Centre, P.BlastRadiusCm, P.SelfDamage > KINDA_SMALL_NUMBER ? P.SelfDamage : P.BlastDamage,
+			Owner->GetActorLocation());
+			if (Self > 0.0f)
+			{
+				if (IWiesbadenDamageTarget* SelfTarget = Cast<IWiesbadenDamageTarget>(Owner))
+				{
+					SelfTarget->ApplyExplosion(Self, Centre, P.BlastRadiusCm);
+				}
+			}
+		}
+	}
+
+	// Sicht- und Hoer-Rueckkopplung: heller Blitz am Punkt, Explosions-
+	// Aufnahme raeumlich am Ort (auch fuer NPC-Schuetzen hoerbar).
+	DrawDebugPoint(World, Centre, 18.0f, FColor(255, 120, 40), false, 0.6f);
+	DrawDebugSphere(World, Centre, P.BlastRadiusCm, 12, FColor(255, 140, 60), false, 0.5f, 0, 2.0f);
+	if (USoundBase* Boom = LoadObject<USoundBase>(nullptr,
+		TEXT("/Game/Audio/Samples/A_Explosion.A_Explosion")))
+	{
+		UGameplayStatics::SpawnSoundAtLocation(World, Boom, Centre);
+	}
+
+	// Explosion trifft Passanten IMMER radial (der Blast reisst mit), und
+	// jede erfasste Figur ist eine Tat ins Konto.
+	if (UWiesbadenCitySubsystem* City = World->GetSubsystem<UWiesbadenCitySubsystem>())
+	{
+		const int32 Felled = City->PedestrianSimulation.StrikeNear(
+			Centre, P.BlastRadiusCm, /*DownForSeconds=*/12.0f);
+		if (Felled > 0)
+		{
+			City->PlayPedestrianHitSound(Centre, /*bHeavy=*/true);
+		}
+		for (int32 HitIndex = 0; HitIndex < Felled; ++HitIndex)
+		{
+			City->ReportCrime(EWiesbadenCrimeEvent::PedestrianDowned);
 		}
 	}
 }

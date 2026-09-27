@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "Vehicles/WiesbadenCar.h"
+#include "Vehicles/WiesbadenTireEffectsComponent.h"
 #include "Vehicles/WiesbadenVehiclePhysics.h"
 
 namespace
@@ -192,6 +193,26 @@ bool FVehiclePhysicsReverseTest::RunTest(const FString& Parameters)
 		Out.ForwardSpeedMetersPerS >= -Vehicle.ReverseMaxSpeedMetersPerS * 1.01f);
 	TestEqual(TEXT("Gang -1 meldet Rueckwaerts"), Out.Gear, -1);
 
+	// Am Rueckwaerts-Limit mit Vollgas: der Begrenzer nimmt die Anforderung
+	// zurueck, der Wagen haelt sein Tempo OHNE Dauer-Radspin, und die Drehzahl
+	// folgt den Raedern (~3500 U/min bei 29 km/h) statt am Anschlag zu kleben.
+	TestFalse(TEXT("Am Rueckwaerts-Limit kein Dauer-Radspin"), Out.bWheelSpin);
+	TestTrue(FString::Printf(TEXT("Drehzahl am Rueckwaerts-Limit folgt den Raedern (%.0f U/min)"), Out.EngineRpm),
+		Out.EngineRpm > 3000.0f && Out.EngineRpm < 4000.0f);
+
+	// Gas weg: der Radspin-Flare klingt ab, die Drehzahl bleibt aber an die
+	// rollenden Raeder gekoppelt (bei ~25 km/h rund 3000 U/min, nicht 400).
+	In.Throttle = 0.0f;
+	SimulateTo(Vehicle, In, 1.0f, Out);
+	TestTrue(TEXT("Rueckwaerts rollt der Wagen im Schub weiter"),
+		Out.ForwardSpeedMetersPerS < -5.0f);
+	TestTrue(FString::Printf(TEXT("Motor dreht auch rueckwaerts mit den Raedern (%.0f U/min)"), Out.EngineRpm),
+		Out.EngineRpm > 2500.0f && Out.EngineRpm < 3600.0f);
+	In.Brake = 1.0f;
+	SimulateTo(Vehicle, In, 4.0f, Out);
+	TestEqual(TEXT("Rueckwaerts bremsen endet im Stand, nicht in Vorwaertsfahrt"),
+		Out.ForwardSpeedMetersPerS, 0.0f);
+
 	return true;
 }
 
@@ -342,6 +363,322 @@ bool FVehicleFrictionCircleTest::RunTest(const FString& Parameters)
 		FString::Printf(TEXT("Unter Vollbremsung weniger Gierrate (%.3f statt %.3f rad/s)"),
 			BrakeOut.YawRateRadPerS, RollOut.YawRateRadPerS),
 		BrakeOut.YawRateRadPerS < RollOut.YawRateRadPerS);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleLoadTransferTest,
+	"WiesbadenReal.Vehicles.Physics.LoadTransfer",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Laengs-Radlastverlagerung: die Achslasten reagieren auf Gas und Bremse.
+ *
+ * Bremsen kippt Last nach vorn (Anteil steigt), Beschleunigen nach hinten
+ * (Anteil faellt). Ohne diesen Hebel blieb die Kurvenbalance statisch - der
+ * groesste fehlende Beitrag zum glaubwuerdigen Fahrgefuehl. Die uebertragene
+ * Last ist a_x * h / (g * L).
+ */
+bool FVehicleLoadTransferTest::RunTest(const FString& Parameters)
+{
+	constexpr float Static = 0.42f;   // Kaefer hecklastig
+	constexpr float G = 9.81f;
+	constexpr float H = 0.45f;
+	constexpr float L = 2.7f;
+
+	auto Front = [&](float Ax)
+	{
+		return FWiesbadenVehiclePhysics::ComputeDynamicFrontLoadFraction(Static, Ax, G, H, L);
+	};
+
+	// Ohne Laengsbeschleunigung bleibt es beim statischen Anteil.
+	TestTrue(FString::Printf(TEXT("Neutral = statisch (%.3f)"), Front(0.0f)),
+		FMath::IsNearlyEqual(Front(0.0f), Static, 0.001f));
+
+	// Bremsen (a_x < 0) laedt die Vorderachse.
+	const float Braking = Front(-6.0f);
+	TestTrue(FString::Printf(TEXT("Bremsen laedt vorn (%.3f > %.3f)"), Braking, Static),
+		Braking > Static + 0.02f);
+
+	// Beschleunigen (a_x > 0) entlastet die Vorderachse.
+	const float Accel = Front(4.0f);
+	TestTrue(FString::Printf(TEXT("Gas entlastet vorn (%.3f < %.3f)"), Accel, Static),
+		Accel < Static - 0.02f);
+
+	// Betrag stimmt mit a_x * h / (g * L) ueberein.
+	const float Expected = Static - (-6.0f) * H / (G * L);
+	TestTrue(FString::Printf(TEXT("Betrag der Verlagerung (%.3f ~ %.3f)"), Braking, Expected),
+		FMath::IsNearlyEqual(Braking, Expected, 0.005f));
+
+	// Extremwerte werden geklemmt - keine Achse hebt rechnerisch ganz ab.
+	TestTrue(TEXT("Vollbremsung klemmt bei 0,92"),
+		FMath::IsNearlyEqual(Front(-50.0f), 0.92f, 0.001f));
+	TestTrue(TEXT("Vollgas klemmt bei 0,08"),
+		FMath::IsNearlyEqual(Front(50.0f), 0.08f, 0.001f));
+
+	// Im Fahrzeug: Bremsen in eine Kurve bleibt beherrschbar (kein Ausbrechen
+	// durch die entlastete Hinterachse - der Schwimmwinkel bleibt endlich und
+	// begrenzt).
+	FWiesbadenVehiclePhysics Vehicle;
+	Vehicle.Reset();
+	FWiesbadenVehiclePhysicsInput In;
+	In.Throttle = 1.0f;
+	Simulate(Vehicle, In, 6.0f);
+
+	FWiesbadenVehiclePhysicsInput TrailBrake;
+	TrailBrake.Steering = 1.0f;
+	TrailBrake.Brake = 0.6f;
+	FWiesbadenVehiclePhysicsOutput Out;
+	SimulateTo(Vehicle, TrailBrake, 1.5f, Out);
+
+	TestTrue(FString::Printf(TEXT("Trail-Braking bleibt endlich (%.2f Grad)"), Out.SlipAngleDeg),
+		FMath::IsFinite(Out.SlipAngleDeg) && FMath::Abs(Out.SlipAngleDeg) < 45.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleLongitudinalSlipTest,
+	"WiesbadenReal.Vehicles.Physics.LongitudinalSlip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Laengsschlupf / Traktionsverlust: durchdrehende Antriebsraeder beim harten
+ * Anfahren und blockierende Raeder mit gepulster Bremskraft beim starken
+ * Bremsen. Beides ueber Haft-/Gleitreibung mit Hysterese - die letzte grosse
+ * Luecke zwischen "berechenbar" und "glaubwuerdig".
+ */
+bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
+{
+	// -- Reine Kennlinie: Haft-/Gleitreibung mit Hysterese -------------------
+	{
+		const float StaticGrip = 3000.0f;
+		const float KineticGrip = 2000.0f;
+
+		// Haftend, Anforderung unter der Haftgrenze -> voll uebertragen.
+		bool bSlip = false;
+		float F = FWiesbadenVehiclePhysics::ComputeTransmittedLongitudinalForce(2500.0f, StaticGrip, KineticGrip, bSlip);
+		TestTrue(TEXT("Unter Haftgrenze: volle Kraft, kein Schlupf"),
+			!bSlip && FMath::IsNearlyEqual(F, 2500.0f, 0.1f));
+
+		// Ueber der Haftgrenze -> Rutschen beginnt, Grip faellt auf Gleitreibung.
+		F = FWiesbadenVehiclePhysics::ComputeTransmittedLongitudinalForce(3500.0f, StaticGrip, KineticGrip, bSlip);
+		TestTrue(FString::Printf(TEXT("Ueber Haftgrenze: Schlupf, Gleitreibung (%.0f)"), F),
+			bSlip && FMath::IsNearlyEqual(F, 2000.0f, 0.1f));
+
+		// Rutschend, Anforderung zwischen Gleit- und Haftgrenze -> bleibt rutschend.
+		F = FWiesbadenVehiclePhysics::ComputeTransmittedLongitudinalForce(2500.0f, StaticGrip, KineticGrip, bSlip);
+		TestTrue(FString::Printf(TEXT("Rutschend bleibt rutschend, Gleitreibung (%.0f)"), F),
+			bSlip && FMath::IsNearlyEqual(F, 2000.0f, 0.1f));
+
+		// Rutschend, Anforderung unter Gleitgrenze -> greift wieder (Hysterese).
+		F = FWiesbadenVehiclePhysics::ComputeTransmittedLongitudinalForce(1500.0f, StaticGrip, KineticGrip, bSlip);
+		TestTrue(FString::Printf(TEXT("Unter Gleitgrenze: greift wieder (%.0f)"), F),
+			!bSlip && FMath::IsNearlyEqual(F, 1500.0f, 0.1f));
+
+		// Vorzeichen bleibt erhalten (Rueckwaerts/Bremsen).
+		bSlip = false;
+		F = FWiesbadenVehiclePhysics::ComputeTransmittedLongitudinalForce(-3500.0f, StaticGrip, KineticGrip, bSlip);
+		TestTrue(FString::Printf(TEXT("Negatives Vorzeichen bleibt (%.0f)"), F),
+			bSlip && FMath::IsNearlyEqual(F, -2000.0f, 0.1f));
+	}
+
+	// -- Reine Kennlinie: gepulste Bremskraft, nie ueber der Haftgrenze ------
+	{
+		const float StaticGrip = 6000.0f;
+		const float KineticGrip = 4000.0f;
+
+		const float High = FWiesbadenVehiclePhysics::ComputeAbsBrakeCapN(StaticGrip, KineticGrip, HALF_PI);
+		const float Low = FWiesbadenVehiclePhysics::ComputeAbsBrakeCapN(StaticGrip, KineticGrip, -HALF_PI);
+		TestTrue(FString::Printf(TEXT("Puls-Hoch = Haftreibung (%.0f)"), High),
+			FMath::IsNearlyEqual(High, StaticGrip, 1.0f));
+		TestTrue(FString::Printf(TEXT("Puls-Tief = Gleitreibung (%.0f)"), Low),
+			FMath::IsNearlyEqual(Low, KineticGrip, 1.0f));
+
+		// UEber eine volle Periode: nie ueber Haftreibung, Mittel ~ (S+K)/2.
+		float Sum = 0.0f; float MaxCap = 0.0f; const int32 N = 360;
+		for (int32 i = 0; i < N; ++i)
+		{
+			const float Cap = FWiesbadenVehiclePhysics::ComputeAbsBrakeCapN(
+				StaticGrip, KineticGrip, (2.0f * PI * i) / N);
+			Sum += Cap;
+			MaxCap = FMath::Max(MaxCap, Cap);
+		}
+		TestTrue(FString::Printf(TEXT("Bremskraft nie ueber Haftreibung (max %.0f)"), MaxCap),
+			MaxCap <= StaticGrip + 1.0f);
+		TestTrue(FString::Printf(TEXT("Mittel ~ (Haft+Gleit)/2 (%.0f)"), Sum / N),
+			FMath::IsNearlyEqual(Sum / N, 5000.0f, 50.0f));
+	}
+
+	// -- Im Fahrzeug: Anfahren mit Vollgas -> Radspin, verschwindet bei Fahrt -
+	{
+		FWiesbadenVehiclePhysics Vehicle;
+		Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+
+		bool bSpunAtLaunch = false;
+		for (int32 Step = 0; Step < 120; ++Step)   // erste ~1,2 s
+		{
+			Vehicle.Tick(In, VehicleDt, Out);
+			bSpunAtLaunch = bSpunAtLaunch || Out.bWheelSpin;
+		}
+		TestTrue(TEXT("Vollgas-Start dreht die Antriebsraeder durch"), bSpunAtLaunch);
+
+		// Auf Tempo - bei Fahrt reicht das Moment nicht mehr fuer Radspin.
+		Simulate(Vehicle, In, 10.0f);
+		Vehicle.Tick(In, VehicleDt, Out);
+		TestTrue(TEXT("Bei Fahrt kein Radspin mehr"), !Out.bWheelSpin);
+	}
+
+	// -- Blockieren folgt aus der GRIP-Grenze, nicht aus dem Pedalwert -------
+	// Die Bremsanforderung wird gegen den reibungskreis-reduzierten Laengs-Grip
+	// geprueft. Auf der Geraden (keine Querbeschleunigung) steht der volle Grip
+	// mu*g, der ueber der Vollbrems-Anforderung liegt -> kein Block. In der Kurve
+	// verbraucht die Querbeschleunigung Grip, bis er unter die Anforderung faellt
+	// -> Block. Beides unabhaengig vom konkreten BrakeForceN-Wert.
+	{
+		FWiesbadenVehiclePhysics V;   // Kaefer-Standardwerte
+		const float G = V.GravityMetersPerS2;
+		const float FullBrakeDemandN = V.BrakeForceN;
+
+		// Normalbremse ist der ALTE Wert (0,7 g) - keine unangeforderte Aenderung.
+		TestTrue(FString::Printf(TEXT("BrakeForceN auf altem Wert (%.0f N)"), V.BrakeForceN),
+			FMath::IsNearlyEqual(V.BrakeForceN, 5600.0f, 0.5f));
+
+		// Geradeaus: voller Grip mu*g -> Grip-Kraft ueber der Anforderung -> kein Block.
+		const float GripStraightN = V.Powertrain.MassKg *
+			FWiesbadenVehiclePhysics::ComputeAvailableLateralAccel(V.MuTraction, G, 0.0f);
+		TestTrue(FString::Printf(TEXT("Geradeaus: Grip %.0f N > Vollbrems-Anforderung %.0f N (kein Block)"),
+			GripStraightN, FullBrakeDemandN), GripStraightN > FullBrakeDemandN);
+
+		// Zuegige Kurve: Querbeschleunigung zehrt am Grip -> Laengs-Grip < Anforderung.
+		const float ALat = 0.6f * V.MuTraction * G;
+		const float GripCornerN = V.Powertrain.MassKg *
+			FWiesbadenVehiclePhysics::ComputeAvailableLateralAccel(V.MuTraction, G, ALat);
+		TestTrue(FString::Printf(TEXT("In der Kurve: Grip %.0f N < Anforderung %.0f N (Block emergiert)"),
+			GripCornerN, FullBrakeDemandN), GripCornerN < FullBrakeDemandN);
+	}
+
+	// -- Im Fahrzeug: Geradeaus-Vollbremsung blockiert NICHT, stoppt normal ---
+	{
+		FWiesbadenVehiclePhysics Vehicle;
+		Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(Vehicle, In, 10.0f);          // geradeaus auf Tempo (kein Lenken)
+
+		In.Throttle = 0.0f;
+		In.Brake = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+		bool bAnyLock = false;
+		for (int32 Step = 0; Step < 150; ++Step)
+		{
+			Vehicle.Tick(In, VehicleDt, Out);
+			bAnyLock = bAnyLock || Out.bWheelLock;
+		}
+		TestFalse(TEXT("Geradeaus-Vollbremsung blockiert NICHT (0,7 g unter Grip)"), bAnyLock);
+		SimulateTo(Vehicle, In, 8.0f, Out);
+		TestTrue(FString::Printf(TEXT("Geradeaus-Bremsung stoppt (%.2f km/h)"), Out.SpeedKmh), Out.SpeedKmh < 1.0f);
+		TestTrue(TEXT("Keine Rueckwaertsbewegung durch die Bremse"), Out.ForwardSpeedMetersPerS >= 0.0f);
+	}
+
+	// -- Im Fahrzeug: Bremsen in der Kurve -> Blockieren aus der Grip-Grenze --
+	{
+		FWiesbadenVehiclePhysics Vehicle;
+		Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(Vehicle, In, 8.0f);           // Tempo aufbauen
+		In.Steering = 1.0f;
+		Simulate(Vehicle, In, 1.0f);           // in die Kurve (Querbeschleunigung)
+
+		In.Throttle = 0.0f;
+		In.Brake = 1.0f;                        // hart bremsen, weiter eingelenkt
+		FWiesbadenVehiclePhysicsOutput Out;
+		bool bLocked = false;
+		float MinDecel = 0.0f; float MaxDecel = 0.0f; bool bHaveDecel = false;
+		for (int32 Step = 0; Step < 100; ++Step)
+		{
+			Vehicle.Tick(In, VehicleDt, Out);
+			if (Out.bWheelLock)
+			{
+				bLocked = true;
+				const float Decel = Out.ForwardAccelerationMetersPerS2;   // negativ
+				if (!bHaveDecel) { MinDecel = MaxDecel = Decel; bHaveDecel = true; }
+				MinDecel = FMath::Min(MinDecel, Decel);
+				MaxDecel = FMath::Max(MaxDecel, Decel);
+			}
+		}
+		TestTrue(TEXT("Bremsen in der Kurve blockiert (grip-abgeleitet)"), bLocked);
+		// Gepulst: die Verzoegerung schwankt spuerbar (Gleit<->Haft), nicht konstant.
+		TestTrue(FString::Printf(TEXT("Bremsschlupf pulst (Spanne %.2f m/s^2)"), MaxDecel - MinDecel),
+			(MaxDecel - MinDecel) > 0.3f);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleSurfaceGripTest,
+	"WiesbadenReal.Vehicles.Physics.SurfaceGrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Untergrund-abhaengiger Reibbeiwert: ein griffarmer Belag (SurfaceGripScale < 1)
+ * skaliert das effektive mu und wirkt ueber DIESELBE Kopplung wie die
+ * Reifenhaftung - Traktion, Anfahr-Radspin und grip-abgeleitetes Brems-
+ * blockieren setzen frueher/staerker ein.
+ */
+bool FVehicleSurfaceGripTest::RunTest(const FString& Parameters)
+{
+	// -- Anfahren: griffarm dreht mehr durch -> weniger Vortrieb --------------
+	{
+		FWiesbadenVehiclePhysics Dry;   Dry.Reset();
+		FWiesbadenVehiclePhysics Slick; Slick.Reset();
+
+		FWiesbadenVehiclePhysicsInput InDry;   InDry.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsInput InSlick = InDry; InSlick.SurfaceGripScale = 0.4f;
+
+		FWiesbadenVehiclePhysicsOutput OutDry, OutSlick;
+		SimulateTo(Dry, InDry, 2.0f, OutDry);
+		SimulateTo(Slick, InSlick, 2.0f, OutSlick);
+
+		TestTrue(FString::Printf(TEXT("Griffarm: weniger Vortrieb beim Anfahren (%.0f < %.0f km/h)"),
+			OutSlick.SpeedKmh, OutDry.SpeedKmh), OutSlick.SpeedKmh < OutDry.SpeedKmh - 2.0f);
+		// ... und der Radspin haelt auf griffarmem Belag laenger an.
+		TestTrue(TEXT("Griffarm: Antriebsraeder drehen noch durch"), OutSlick.bWheelSpin);
+	}
+
+	// -- Geradeaus-Vollbremsung: trocken haelt, griffarm blockiert -----------
+	{
+		FWiesbadenVehiclePhysics Vehicle; Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput Acc; Acc.Throttle = 1.0f;
+		Simulate(Vehicle, Acc, 8.0f);              // geradeaus auf Tempo
+
+		FWiesbadenVehiclePhysics Slick = Vehicle;  // gleicher Zustand/Tempo
+
+		FWiesbadenVehiclePhysicsInput BrakeDry;  BrakeDry.Brake = 1.0f;  // trocken (1.0)
+		FWiesbadenVehiclePhysicsInput BrakeSlick = BrakeDry; BrakeSlick.SurfaceGripScale = 0.5f;
+
+		FWiesbadenVehiclePhysicsOutput Out;
+		bool bDryLock = false, bSlickLock = false;
+		for (int32 Step = 0; Step < 120; ++Step)
+		{
+			Vehicle.Tick(BrakeDry, VehicleDt, Out);   bDryLock = bDryLock || Out.bWheelLock;
+			Slick.Tick(BrakeSlick, VehicleDt, Out);   bSlickLock = bSlickLock || Out.bWheelLock;
+		}
+		TestFalse(TEXT("Trocken: Geradeaus-Vollbremsung blockiert NICHT"), bDryLock);
+		TestTrue(TEXT("Griffarm: Geradeaus-Vollbremsung blockiert (kuerzerer Grip)"), bSlickLock);
+	}
+
+	// -- Kennlinie: griffarm hat weniger verfuegbaren Laengs-Grip ------------
+	{
+		constexpr float G = 9.81f;
+		const float DryGrip = FWiesbadenVehiclePhysics::ComputeAvailableLateralAccel(0.75f, G, 0.0f);
+		const float SlickGrip = FWiesbadenVehiclePhysics::ComputeAvailableLateralAccel(0.75f * 0.5f, G, 0.0f);
+		TestTrue(FString::Printf(TEXT("Griffarm: kleineres Grip-Budget (%.2f < %.2f)"), SlickGrip, DryGrip),
+			SlickGrip < DryGrip - 0.5f);
+	}
 
 	return true;
 }
@@ -523,6 +860,508 @@ bool FVehicleSlipTest::RunTest(const FString& Parameters)
 	SimulateTo(Vehicle, In, 3.0f, Out);
 	TestTrue(FString::Printf(TEXT("Geradeaus laeuft der Schlupf aus (%.2f Grad)"), Out.SlipAngleDeg),
 		FMath::Abs(Out.SlipAngleDeg) < 2.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleBodyTiltTest,
+	"WiesbadenReal.Vehicles.Physics.BodyTilt",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FVehicleBodyTiltTest::RunTest(const FString& Parameters)
+{
+	// Parameter wie am Fahrzeug voreingestellt.
+	const float PitchPer = 0.35f, RollPer = 0.55f, MaxP = 3.5f, MaxR = 5.0f, Resp = 8.0f;
+
+	auto Settle = [&](float LongA, float LatA, float& P, float& R)
+	{
+		P = 0.0f; R = 0.0f;
+		for (int32 i = 0; i < 200; ++i)
+		{
+			AWiesbadenCar::ComputeBodyTilt(LongA, LatA, PitchPer, RollPer, MaxP, MaxR, Resp, 0.02f, P, R);
+		}
+	};
+
+	// -- Bremsen: Nase taucht (negatives Nicken) --
+	{
+		float P, R; Settle(-6.0f, 0.0f, P, R);
+		TestTrue(FString::Printf(TEXT("Bremsen: Nase taucht (%.2f < 0)"), P), P < -0.5f);
+		TestTrue(TEXT("Bremsen: kein Wanken"), FMath::IsNearlyZero(R, 0.01f));
+	}
+
+	// -- Beschleunigen: Nase hebt sich (positives Nicken) --
+	{
+		float P, R; Settle(3.0f, 0.0f, P, R);
+		TestTrue(FString::Printf(TEXT("Beschleunigen: Nase hebt sich (%.2f > 0)"), P), P > 0.5f);
+	}
+
+	// -- Kurve: Wanken, Richtung folgt der Querbeschleunigung --
+	{
+		float PR, RR, PL, RL;
+		Settle(0.0f, 5.0f, PR, RR);
+		Settle(0.0f, -5.0f, PL, RL);
+		TestTrue(FString::Printf(TEXT("Kurve erzeugt Wanken (%.2f)"), RR), FMath::Abs(RR) > 0.5f);
+		TestTrue(TEXT("Wanken kehrt mit der Querbeschleunigung die Richtung"),
+			FMath::Sign(RR) != FMath::Sign(RL));
+	}
+
+	// -- Anschlag haelt auch bei extremer Beschleunigung --
+	{
+		float P, R; Settle(-50.0f, 50.0f, P, R);
+		TestTrue(FString::Printf(TEXT("Nicken am Anschlag (%.2f ~ -%.1f)"), P, MaxP),
+			FMath::IsNearlyEqual(P, -MaxP, 0.05f));
+		TestTrue(FString::Printf(TEXT("Wanken am Anschlag (%.2f ~ %.1f)"), R, MaxR),
+			FMath::IsNearlyEqual(R, MaxR, 0.05f));
+	}
+
+	// -- Glaettung: kein Sprung im ersten Bild --
+	{
+		float P = 0.0f, R = 0.0f;
+		AWiesbadenCar::ComputeBodyTilt(-6.0f, 0.0f, PitchPer, RollPer, MaxP, MaxR, Resp, 0.016f, P, R);
+		const float Target = -6.0f * PitchPer;   // -2,1
+		TestTrue(FString::Printf(TEXT("Erstes Bild nur ein Bruchteil des Ziels (%.3f vs %.2f)"), P, Target),
+			FMath::Abs(P) < FMath::Abs(Target) * 0.5f);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleTireEffectsTest,
+	"WiesbadenReal.Vehicles.TireEffects",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Reifen-Quietsch-Intensitaet aus dem Schlupf-Zustand (datenrein). Macht die
+ * bisher nur getesteten Flags produktiv: Radspin quietscht auch langsam,
+ * Blockieren/Drift erst mit Fahrt, ruhige Fahrt bleibt still.
+ */
+bool FVehicleTireEffectsTest::RunTest(const FString& Parameters)
+{
+	auto I = [](bool Spin, bool Lock, float SlipDeg, float Kmh)
+	{
+		return UWiesbadenTireEffectsComponent::ComputeSquealIntensity(Spin, Lock, SlipDeg, Kmh);
+	};
+
+	// Ruhige Fahrt: kein Quietschen.
+	TestTrue(TEXT("Kein Schlupf -> still"), FMath::IsNearlyZero(I(false, false, 0.0f, 50.0f)));
+
+	// Radspin quietscht auch bei geringem Tempo (durchdrehendes Rad).
+	TestTrue(TEXT("Radspin quietscht auch langsam"), I(true, false, 0.0f, 5.0f) > 0.5f);
+	// ... sogar im Stand (Burnout).
+	TestTrue(TEXT("Radspin quietscht im Stand"), I(true, false, 0.0f, 0.0f) > 0.5f);
+
+	// Blockieren quietscht mit Fahrt, aber NICHT im Stand (stehendes Rad rutscht nicht).
+	TestTrue(TEXT("Blockieren + Fahrt quietscht"), I(false, true, 0.0f, 50.0f) > 0.5f);
+	TestTrue(TEXT("Blockieren im Stand still"), FMath::IsNearlyZero(I(false, true, 0.0f, 0.0f)));
+
+	// Drift: grosser Schwimmwinkel quietscht, kleiner nicht.
+	TestTrue(TEXT("Grosser Schwimmwinkel quietscht"), I(false, false, 20.0f, 50.0f) > 0.3f);
+	TestTrue(TEXT("Kleiner Schwimmwinkel still"), FMath::IsNearlyZero(I(false, false, 3.0f, 50.0f)));
+
+	// Wertebereich bleibt 0..1.
+	TestTrue(TEXT("Intensitaet in [0,1]"),
+		I(true, true, 45.0f, 120.0f) <= 1.0f && I(true, true, 45.0f, 120.0f) >= 0.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleLockedYawDampingTest,
+	"WiesbadenReal.Vehicles.Physics.LockedYawDamping",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Kurvenbremsung mit blockierten Raedern reisst den Wagen nicht mehr weit herum.
+ * Die Gier-Daempfung wirkt NUR bei blockierten Raedern - sie zaehmt den
+ * ueberschiessenden Dreh, ohne das Blockieren abzuschalten; gerades Bremsen und
+ * normale Kurvenfahrt bleiben unveraendert.
+ */
+bool FVehicleLockedYawDampingTest::RunTest(const FString& Parameters)
+{
+	// -- Kurvenbremsung: aufsummierte Kursaenderung waehrend der Bremsung ------
+	auto RunCornerBrake = [](float DampRate, float& OutHeadingDeg, bool& OutLocked)
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		V.LockedYawDampingRate = DampRate;
+
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(V, In, 8.0f);        // Tempo aufbauen
+		In.Steering = 1.0f;
+		Simulate(V, In, 1.0f);        // in die Kurve (Gier aufbauen)
+
+		In.Throttle = 0.0f;
+		In.Brake = 1.0f;              // hart bremsen, weiter eingelenkt
+		FWiesbadenVehiclePhysicsOutput Out;
+		float Heading = 0.0f;
+		bool bLocked = false;
+		for (int32 Step = 0; Step < 120; ++Step)
+		{
+			V.Tick(In, VehicleDt, Out);
+			Heading += Out.YawRateRadPerS * VehicleDt;
+			bLocked = bLocked || Out.bWheelLock;
+		}
+		OutHeadingDeg = FMath::RadiansToDegrees(Heading);
+		OutLocked = bLocked;
+	};
+
+	float HDamped = 0.0f, HUndamped = 0.0f;
+	bool LDamped = false, LUndamped = false;
+	RunCornerBrake(3.0f, HDamped, LDamped);   // Standard-Daempfung
+	RunCornerBrake(0.0f, HUndamped, LUndamped); // wie vorher (aus)
+
+	// Das Blockieren bleibt in BEIDEN Faellen erhalten (nicht abgeschaltet).
+	TestTrue(TEXT("Blockieren bleibt erhalten (gedaempft)"), LDamped);
+	TestTrue(TEXT("Blockieren bleibt erhalten (ungedaempft)"), LUndamped);
+
+	// Ohne Daempfung bricht der Wagen deutlich aus (Bezugsgroesse).
+	TestTrue(FString::Printf(TEXT("Ungedaempfter Ausbruch ist gross (%.0f Grad)"), HUndamped),
+		FMath::Abs(HUndamped) > 10.0f);
+
+	// Mit Daempfung ist der Dreh spuerbar begrenzt ...
+	TestTrue(FString::Printf(TEXT("Ausbruch gedaempft (%.0f statt %.0f Grad)"), HDamped, HUndamped),
+		FMath::Abs(HDamped) < FMath::Abs(HUndamped) * 0.8f);
+	// ... aber der Lastwechsel ist nicht plattgemacht (etwas Dreh bleibt).
+	TestTrue(FString::Printf(TEXT("Rest-Lastwechsel bleibt (%.1f Grad)"), HDamped),
+		FMath::Abs(HDamped) > 2.0f);
+
+	// -- Gerades Vollbremsen: unveraendert -----------------------------------
+	auto RunStraightBrake = [](float DampRate, float& OutSpeed)
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		V.LockedYawDampingRate = DampRate;
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(V, In, 8.0f);
+		In.Throttle = 0.0f;
+		In.Brake = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+		SimulateTo(V, In, 3.0f, Out);
+		OutSpeed = Out.SpeedKmh;
+	};
+	float S1 = 0.0f, S0 = 0.0f;
+	RunStraightBrake(3.0f, S1);
+	RunStraightBrake(0.0f, S0);
+	TestTrue(TEXT("Gerades Bremsen unveraendert"), FMath::IsNearlyEqual(S1, S0, 0.01f));
+
+	// -- Normale Kurve (Gas, keine Bremse): unveraendert ---------------------
+	auto RunCorner = [](float DampRate, float& OutYaw)
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		V.LockedYawDampingRate = DampRate;
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(V, In, 6.0f);
+		In.Steering = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+		SimulateTo(V, In, 1.5f, Out);
+		OutYaw = Out.YawRateRadPerS;
+	};
+	float Y1 = 0.0f, Y0 = 0.0f;
+	RunCorner(3.0f, Y1);
+	RunCorner(0.0f, Y0);
+	TestTrue(TEXT("Normale Kurve unveraendert (nicht blockiert)"), FMath::IsNearlyEqual(Y1, Y0, 0.001f));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleShiftingTest,
+	"WiesbadenReal.Vehicles.Physics.Shifting",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Hochschalten mit Zugkraftunterbrechung: fuer die Schaltdauer faellt das
+ * Antriebsmoment weg (die Beschleunigung sackt kurz ab) und erholt sich danach.
+ * Ohne Schaltvorgang bleibt alles unveraendert; die Schaltverluste kosten etwas
+ * 0-100-Zeit, die Endgeschwindigkeit bleibt gleich.
+ */
+bool FVehicleShiftingTest::RunTest(const FString& Parameters)
+{
+	// -- Delle beim Hochschalten -------------------------------------------
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();   // Standard: UpshiftDurationSeconds = 0.35 s
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+
+		int32 PrevGear = V.Gear;
+		float AccelBefore = 0.0f;
+		bool bFound = false;
+		for (int32 Step = 0; Step < 600 && !bFound; ++Step)
+		{
+			const float LastAccel = AccelBefore;
+			V.Tick(In, VehicleDt, Out);
+			if (Out.Gear > PrevGear)
+			{
+				// Hochschalten passierte in diesem Tick.
+				TestTrue(TEXT("Schaltunterbrechung wird gesetzt"), V.ShiftTimeRemaining > 0.0f);
+
+				float MinDuring = TNumericLimits<float>::Max();
+				int32 Guard = 0;
+				while (V.ShiftTimeRemaining > 0.0f && Guard++ < 200)
+				{
+					V.Tick(In, VehicleDt, Out);
+					MinDuring = FMath::Min(MinDuring, Out.ForwardAccelerationMetersPerS2);
+				}
+				// In der Schaltpause faellt die Beschleunigung deutlich unter den
+				// Wert davor (kein Antrieb -> nur Widerstaende).
+				TestTrue(FString::Printf(TEXT("Zugkraft-Delle in der Schaltpause (%.2f < %.2f m/s^2)"),
+					MinDuring, LastAccel), MinDuring < LastAccel - 1.0f);
+
+				// Nach der Schaltung greift der neue Gang wieder.
+				for (int32 k = 0; k < 15; ++k) { V.Tick(In, VehicleDt, Out); }
+				TestTrue(FString::Printf(TEXT("Zugkraft erholt sich (%.2f m/s^2)"),
+					Out.ForwardAccelerationMetersPerS2), Out.ForwardAccelerationMetersPerS2 > 0.5f);
+				bFound = true;
+			}
+			else
+			{
+				PrevGear = Out.Gear;
+				AccelBefore = Out.ForwardAccelerationMetersPerS2;
+			}
+		}
+		TestTrue(TEXT("Ein Hochschalten trat auf"), bFound);
+	}
+
+	// -- A/B: Schaltverluste kosten Zeit, Endgeschwindigkeit bleibt gleich --
+	auto RunTo = [](float UpshiftDur, float& OutTimeTo100, float& OutTopKmh)
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		V.UpshiftDurationSeconds = UpshiftDur;
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+		OutTimeTo100 = -1.0f;
+		for (float T = 0.0f; T < 60.0f; T += VehicleDt)
+		{
+			V.Tick(In, VehicleDt, Out);
+			if (OutTimeTo100 < 0.0f && Out.SpeedKmh >= 100.0f) { OutTimeTo100 = T; }
+		}
+		OutTopKmh = Out.SpeedKmh;
+	};
+
+	float T100Shift = 0.0f, TopShift = 0.0f, T100Instant = 0.0f, TopInstant = 0.0f;
+	RunTo(0.35f, T100Shift, TopShift);
+	RunTo(0.0f, T100Instant, TopInstant);
+
+	TestTrue(TEXT("Beide erreichen 100 km/h"), T100Shift > 0.0f && T100Instant > 0.0f);
+	TestTrue(FString::Printf(TEXT("Schalten kostet 0-100-Zeit (%.1f > %.1f s)"), T100Shift, T100Instant),
+		T100Shift > T100Instant + 0.3f);
+	TestTrue(FString::Printf(TEXT("Endgeschwindigkeit unveraendert (%.0f ~ %.0f km/h)"), TopShift, TopInstant),
+		FMath::IsNearlyEqual(TopShift, TopInstant, 1.0f));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleSurfaceGripFromWorldTest,
+	"WiesbadenReal.Vehicles.SurfaceGripFromWorld",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Ableitung Belag/Wetter -> SurfaceGripScale: trocken voller Grip, bei Regen
+ * spuerbar weniger, monoton fallend, nach unten begrenzt. So erlebt der Spieler
+ * den Grip-Effekt aus dem echten Wetter (ohne Dev-Flag).
+ */
+bool FVehicleSurfaceGripFromWorldTest::RunTest(const FString& Parameters)
+{
+	const float Dry = AWiesbadenCar::ComputeSurfaceGripScale(0.0f);
+	const float Half = AWiesbadenCar::ComputeSurfaceGripScale(0.5f);
+	const float Wet = AWiesbadenCar::ComputeSurfaceGripScale(1.0f);
+
+	TestTrue(FString::Printf(TEXT("Trocken = voller Grip (%.2f)"), Dry), FMath::IsNearlyEqual(Dry, 1.0f, 0.001f));
+	TestTrue(FString::Printf(TEXT("Regen senkt den Grip spuerbar (%.2f < 1)"), Wet), Wet < 0.85f);
+	TestTrue(TEXT("Grip faellt monoton mit der Naesse"), Half < Dry && Wet < Half);
+	TestTrue(FString::Printf(TEXT("Grip bleibt fahrbar begrenzt (%.2f >= 0.1)"), Wet), Wet >= 0.1f);
+
+	// Eingaben werden geklemmt (robust gegen ueberzogene Intensitaeten).
+	TestTrue(TEXT("Ueberregen bleibt <= 1 und >= 0.1"),
+		AWiesbadenCar::ComputeSurfaceGripScale(5.0f) >= 0.1f
+		&& AWiesbadenCar::ComputeSurfaceGripScale(-1.0f) <= 1.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleLoadStiffnessTest,
+	"WiesbadenReal.Vehicles.Physics.LoadStiffness",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Lastabhaengige Schraeglaufsteifigkeit: Lastwechsel verschiebt die Kurvenbalance
+ * schon im linearen Bereich pedalabhaengig (Bremsen -> Front-Biss, Gas -> Heck
+ * laedt). A/B ueber MaxStiffnessLoadShift; stationaere Kurve und Geradeaus
+ * bleiben unveraendert, und das Modell bleibt stabil (kein Aufschwingen).
+ */
+bool FVehicleLoadStiffnessTest::RunTest(const FString& Parameters)
+{
+	// Manoever: Tempo aufbauen, moderat einlenken, dann Pedal - Gierrate messen.
+	auto Run = [](float Shift, float AccelSeconds, float Throttle, float Brake,
+		int32 Steps, float& OutYaw, float& OutMaxAbs, bool& OutFinite)
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		V.MaxStiffnessLoadShift = Shift;
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(V, In, AccelSeconds);
+		// Sanft einlenken: die Gierrate bleibt UNTER dem Seitenkraftlimit
+		// (MaxYaw), sonst maskiert die Klemmung die Steifigkeits-Wirkung.
+		In.Steering = 0.25f;
+		Simulate(V, In, 0.5f);
+		In.Throttle = Throttle;
+		In.Brake = Brake;
+		FWiesbadenVehiclePhysicsOutput Out;
+		float MaxAbs = 0.0f;
+		for (int32 i = 0; i < Steps; ++i)
+		{
+			V.Tick(In, VehicleDt, Out);
+			MaxAbs = FMath::Max(MaxAbs, FMath::Abs(Out.YawRateRadPerS));
+		}
+		OutYaw = Out.YawRateRadPerS;
+		OutMaxAbs = MaxAbs;
+		OutFinite = FMath::IsFinite(Out.YawRateRadPerS);
+	};
+
+	float Y = 0.0f, Mx = 0.0f; bool Fin = false;
+	float Y0 = 0.0f;
+
+	// -- Bremsen in der Kurve: mit vs. ohne Lastkopplung messbar verschieden --
+	Run(0.2f, 6.0f, 0.0f, 0.3f, 40, Y, Mx, Fin);
+	Run(0.0f, 6.0f, 0.0f, 0.3f, 40, Y0, Mx, Fin);
+	const float BrakeDiff = Y - Y0;
+	TestTrue(FString::Printf(TEXT("Bremsen verschiebt die Balance (%.4f)"), BrakeDiff),
+		FMath::Abs(BrakeDiff) > 0.002f);
+
+	// -- Gas in der Kurve: verschiebt in die GEGENrichtung (Heck laedt) -------
+	float Yt = 0.0f, Yt0 = 0.0f;
+	Run(0.2f, 6.0f, 1.0f, 0.0f, 40, Yt, Mx, Fin);
+	Run(0.0f, 6.0f, 1.0f, 0.0f, 40, Yt0, Mx, Fin);
+	const float ThrDiff = Yt - Yt0;
+	TestTrue(FString::Printf(TEXT("Gas verschiebt die Balance (%.4f)"), ThrDiff),
+		FMath::Abs(ThrDiff) > 0.002f);
+	TestTrue(FString::Printf(TEXT("Pedalabhaengig: Bremsen vs Gas entgegengesetzt (%.4f / %.4f)"),
+		BrakeDiff, ThrDiff), BrakeDiff * ThrDiff < 0.0f);
+
+	// -- Stationaere Kurve (a_x~0 bei Hoechsttempo): UNVERAENDERT ------------
+	float Ys = 0.0f, Ys0 = 0.0f;
+	Run(0.2f, 14.0f, 1.0f, 0.0f, 100, Ys, Mx, Fin);
+	Run(0.0f, 14.0f, 1.0f, 0.0f, 100, Ys0, Mx, Fin);
+	TestTrue(FString::Printf(TEXT("Stationaere Kurve unveraendert (%.4f ~ %.4f)"), Ys, Ys0),
+		FMath::IsNearlyEqual(Ys, Ys0, 0.01f));
+
+	// -- Geradeaus: unveraendert (keine Seitenkraft, egal welche Steifigkeit) -
+	{
+		FWiesbadenVehiclePhysics A; A.Reset(); A.MaxStiffnessLoadShift = 0.2f;
+		FWiesbadenVehiclePhysics B; B.Reset(); B.MaxStiffnessLoadShift = 0.0f;
+		FWiesbadenVehiclePhysicsInput In; In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput OA, OB;
+		SimulateTo(A, In, 8.0f, OA);
+		SimulateTo(B, In, 8.0f, OB);
+		TestTrue(TEXT("Geradeaus unveraendert (Tempo)"), FMath::IsNearlyEqual(OA.SpeedKmh, OB.SpeedKmh, 0.01f));
+	}
+
+	// -- STABILITAET: hartes Bremsen in der Kurve schwingt nicht auf ---------
+	Run(0.2f, 8.0f, 0.0f, 1.0f, 150, Y, Mx, Fin);
+	TestTrue(TEXT("Gierrate bleibt endlich"), Fin);
+	TestTrue(FString::Printf(TEXT("Kein Aufschwingen (max |Gier| %.2f rad/s)"), Mx), Mx < 3.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleWheelSpinFlareTest,
+	"WiesbadenReal.Vehicles.Physics.WheelSpinFlare",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Drehzahlflare bei Radspin: beim Durchdrehen entkoppeln die Antriebsraeder von
+ * der Strasse, der unbelastete Motor dreht hoch - die ANGEZEIGTE/gehoerte
+ * Drehzahl flart ueber die geschwindigkeitsabgeleitete Basis, waehrend der
+ * Antrieb (Schalten/Drehmoment/Tempo) unberuehrt bleibt.
+ */
+bool FVehicleWheelSpinFlareTest::RunTest(const FString& Parameters)
+{
+	using Phys = FWiesbadenVehiclePhysics;
+
+	// -- Datenreine Kennlinie ------------------------------------------------
+	{
+		constexpr float Max = 2500.0f, Rise = 9000.0f, Decay = 5000.0f, Dt = 0.01f;
+
+		// Spin: der Flare steigt (ein Schritt = Rise*Dt).
+		const float Up1 = Phys::AdvanceWheelSpinFlare(true, 1.0f, 0.0f, Max, Rise, Decay, Dt);
+		TestTrue(TEXT("Spin -> Flare steigt"), Up1 > 0.0f);
+		TestTrue(TEXT("Anstieg = Rate*Dt"), FMath::IsNearlyEqual(Up1, Rise * Dt, 1e-2f));
+
+		// Er klemmt am Ziel (Max*Throttle), nicht darueber.
+		float F = 0.0f;
+		for (int32 i = 0; i < 200; ++i) { F = Phys::AdvanceWheelSpinFlare(true, 1.0f, F, Max, Rise, Decay, Dt); }
+		TestTrue(TEXT("Flare klemmt am Ziel"), FMath::IsNearlyEqual(F, Max, 1.0f));
+
+		// Ohne Spin faellt er auf 0 und klemmt dort (nicht negativ).
+		float D = Max;
+		for (int32 i = 0; i < 400; ++i) { D = Phys::AdvanceWheelSpinFlare(false, 0.0f, D, Max, Rise, Decay, Dt); }
+		TestTrue(TEXT("kein Spin -> Flare faellt auf 0"), D == 0.0f);
+
+		// Gaspedal skaliert das Ziel (halbes Gas -> halber Flare).
+		float H = 0.0f;
+		for (int32 i = 0; i < 200; ++i) { H = Phys::AdvanceWheelSpinFlare(true, 0.5f, H, Max, Rise, Decay, Dt); }
+		TestTrue(TEXT("halbes Gas -> halbes Ziel"), FMath::IsNearlyEqual(H, Max * 0.5f, 1.0f));
+
+		// Ausbrechen schneller als Beruhigen (Rise > Decay).
+		const float StepUp = Phys::AdvanceWheelSpinFlare(true, 1.0f, 1000.0f, Max, Rise, Decay, Dt) - 1000.0f;
+		const float StepDn = 1000.0f - Phys::AdvanceWheelSpinFlare(false, 0.0f, 1000.0f, Max, Rise, Decay, Dt);
+		TestTrue(TEXT("Ausbrechen schneller als Beruhigen"), StepUp > StepDn);
+	}
+
+	// -- Im Fahrzeug: Vollgas-Start flart die AUSGABE ueber die Basis --------
+	{
+		FWiesbadenVehiclePhysics Vehicle; Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput In; In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+
+		bool bFlared = false;
+		for (int32 Step = 0; Step < 60; ++Step)   // ~0,6 s Anfahren
+		{
+			Vehicle.Tick(In, VehicleDt, Out);
+			if (Out.bWheelSpin)
+			{
+				// Ausgabe-Drehzahl liegt beim Spin ueber der internen Basis-Drehzahl.
+				bFlared = bFlared || (Out.EngineRpm > Vehicle.EngineRpm + 50.0f);
+			}
+		}
+		TestTrue(TEXT("Radspin flart die Ausgabe-Drehzahl ueber die Basis"), bFlared);
+		TestTrue(TEXT("Flare-Zustand aktiv"), Vehicle.WheelSpinFlare > 0.0f);
+	}
+
+	// -- Marschfahrt (kein Spin): Ausgabe == Basis, kein Flare ---------------
+	{
+		FWiesbadenVehiclePhysics Vehicle; Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput In; In.Throttle = 1.0f;
+		Simulate(Vehicle, In, 12.0f);   // auf Tempo, kein Radspin mehr
+		FWiesbadenVehiclePhysicsOutput Out;
+		Vehicle.Tick(In, VehicleDt, Out);
+		TestFalse(TEXT("Bei Fahrt kein Radspin"), Out.bWheelSpin);
+		TestTrue(TEXT("Flare abgeklungen"), Vehicle.WheelSpinFlare < 1.0f);
+		TestTrue(TEXT("Ausgabe-Drehzahl = Basis (kein Flare)"),
+			FMath::IsNearlyEqual(Out.EngineRpm, Vehicle.EngineRpm, 1.0f));
+	}
+
+	// -- Der Flare veraendert die FAHRT NICHT (reine Anzeige) ----------------
+	// Zwei identische Laeufe, einer mit Flare (Standard), einer mit MaxFlare = 0.
+	// Tempo UND Gang nach 12 s Vollgas muessen exakt gleich sein.
+	{
+		FWiesbadenVehiclePhysics A; A.Reset();
+		FWiesbadenVehiclePhysics B; B.Reset(); B.MaxWheelSpinFlareRpm = 0.0f;
+		FWiesbadenVehiclePhysicsInput In; In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput OutA, OutB;
+		SimulateTo(A, In, 12.0f, OutA);
+		SimulateTo(B, In, 12.0f, OutB);
+		TestTrue(TEXT("Flare aendert Tempo nicht"),
+			FMath::IsNearlyEqual(OutA.SpeedKmh, OutB.SpeedKmh, 0.01f));
+		TestEqual(TEXT("Flare aendert Gang nicht"), OutA.Gear, OutB.Gear);
+	}
 
 	return true;
 }

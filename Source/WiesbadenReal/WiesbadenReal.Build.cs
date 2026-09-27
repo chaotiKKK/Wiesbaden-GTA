@@ -49,6 +49,7 @@ public class WiesbadenReal : ModuleRules
 		{
 			"Slate",
 			"SlateCore",
+			"AnimationCore",   // SolveTwoBoneIK: Fuss-IK der Spielerfigur
 			"RenderCore",
 			"RHI",
 			"Json",
@@ -60,6 +61,13 @@ public class WiesbadenReal : ModuleRules
 			"GeometryCore",
 			"Landscape",
 			"PhysicsCore",
+			"AudioMixer",
+			"MetasoundGraphCore",
+			"MetasoundFrontend",
+			"MetasoundStandardNodes",
+			"MetasoundEngine",
+			// Kundenfiguren finden (WiesbadenCustomerFigures) - auch im gekochten Spiel.
+			"AssetRegistry",
 		});
 
 		if (Target.bBuildEditor)
@@ -67,7 +75,6 @@ public class WiesbadenReal : ModuleRules
 			PrivateDependencyModuleNames.AddRange(new string[]
 			{
 				"UnrealEd",
-				"AssetRegistry",
 			});
 		}
 

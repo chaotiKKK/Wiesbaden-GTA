@@ -199,10 +199,62 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Chunk")
 	void AnchorStreamingBounds();
 
+	/**
+	 * Wendet den GESPEICHERTEN Anker auf die Komponenten an.
+	 *
+	 * Getrennt von AnchorStreamingBounds, weil beides zwei verschiedene
+	 * Aufgaben sind: jene berechnet den Anker neu (Bau, Re-Bake), diese
+	 * setzt ihn nur um. PostRegisterAllComponents ruft sie bei JEDEM Laden
+	 * und Stream-in, damit die Verankerung nicht davon abhaengt, dass eine
+	 * Komponenten-Transform das Speichern ueberlebt - sie muss es gerade
+	 * NICHT.
+	 *
+	 * Oeffentlich, weil der Regressionstest genau das prueft: Komponenten
+	 * auf den Actor-Ort zuruecksetzen (so, wie ein frisch geladener Actor
+	 * sie aufbauen wuerde) und dann ApplyStreamingAnchor() - danach muessen
+	 * die leeren Komponenten wieder am Zell-Inhalt haengen.
+	 */
+	void ApplyStreamingAnchor();
+
+	/** Gespeicherter Anker der leeren Komponenten (Weltkoordinaten, cm). */
+	FVector GetStreamingAnchor() const { return StreamingAnchorCm; }
+
+	/** True, wenn ein Anker berechnet und gespeichert wurde. */
+	bool HasStreamingAnchor() const { return bHasStreamingAnchor; }
+
 protected:
 	virtual void BeginPlay() override;
+	/**
+	 * Lade-Pfad: bei jedem Stream-in und bei jedem Kartenoeffnen. Der
+	 * Actor-Hook - OnRegister gehoert USceneComponent, nicht AActor.
+	 *
+	 * Genau hier ging die Verankerung verloren: der Anker wurde nur im
+	 * Editor-Lauf gesetzt und blieb auf den Komponenten-Transforms liegen.
+	 * Ein Komponenten-Transform wird RELATIV zum Actor gespeichert, und
+	 * SetWorldLocation auf einem Actor am Ursprung schreibt den
+	 * Weltanker als relatives Delta in die Karte. Beim naechsten Laden
+	 * addiert der Actor (0,0,0) das Delta erneut - die Komponenten landen
+	 * weit ausserhalb ihrer Zelle, der gemessene Zustand nach jedem
+	 * Re-Bake war darum immer wieder "alle Zellen ueber dem Ursprung".
+	 * Der Anker selbst steht jetzt als UPROPERTY im Paket und wird hier
+	 * angewendet.
+	 */
+	virtual void PostRegisterAllComponents() override;
 
 private:
+	/**
+	 * Zellmittelpunkt fuer die LEEREN Komponenten - als Property, nicht als
+	 * Komponenten-Transform. UPROPERTY ohne Transient: ueberlebt Bake und
+	 * Re-Bake, wird von PostRegisterAllComponents und BeginPlay erneut
+	 * angewendet und ist damit unabhaengig vom Speicherpfad der
+	 * Komponenten.
+	 */
+	UPROPERTY()
+	FVector StreamingAnchorCm = FVector::ZeroVector;
+
+	UPROPERTY()
+	bool bHasStreamingAnchor = false;
+
 	/**
 	 * Baeume, Ufer- und Industrie-Objekte dieser Zelle.
 	 *

@@ -306,6 +306,77 @@ int32 UBuildingGenerator::SelectMaterialVariant(const TMap<FName, FString>& Tags
 	return Pick({ { Facade_Plaster, 45 }, { Facade_Sandstone, 35 }, { Facade_Brick, 20 } });
 }
 
+int32 UBuildingGenerator::RoofCoveringIndex(int32 MaterialVariant, EOSMRoofShape Shape,
+	EOSMBuildingType BuildingType, bool bIsLandmark)
+{
+	// Kirchen und Wahrzeichen bekommen eine EIGENE, markante Deckung - nicht die
+	// allgemeine Sandstein->Schiefer-Regel, die sie in der Dachlandschaft
+	// untergehen liesse. Die kupfergruene Patina (verdigris) ist das Wahrzeichen
+	// der Wiesbadener Turmhelme und Kuppeln; Langhaus/Kirchendaecher tragen
+	// schweren, dunklen Schiefer. Der Vorrang steht bewusst VOR der Flachdach-
+	// Regel: viele Kirchen-/Landmarken-Grundrisse haben kein roof:shape-Tag und
+	// gaelten sonst als "flach" und wuerden faelschlich als Zink gedeckt.
+	if (BuildingType == EOSMBuildingType::Church || bIsLandmark)
+	{
+		// Kuppeln und Turmhelme (Kuppel-/Zeltdach) tragen IMMER die kupfergruene
+		// Patina - egal ob Kirche oder buergerliches Wahrzeichen.
+		if (Shape == EOSMRoofShape::Dome || Shape == EOSMRoofShape::Pyramidal)
+		{
+			return 3;   // Kupfergruen/Patina
+		}
+		// Kirchen sind in Wiesbaden mit dunklem Schiefer gedeckt (Marktkirche,
+		// Bergkirche, Ringkirche). Die grossen buergerlichen Wahrzeichen (Kurhaus,
+		// Rathaus, Staatstheater, Thermen ...) dagegen mit kupfergruener Patina.
+		// So heben sich BEIDE klar von der Wohn-Dachlandschaft ab und tragen je
+		// eine ortsgerechte, markante Deckung.
+		if (BuildingType == EOSMBuildingType::Church)
+		{
+			return 4;   // dunkler Schiefer
+		}
+		return 3;       // Nicht-Kirchen-Wahrzeichen -> Kupfergruen
+	}
+
+	// Flachdaecher sind nie gedeckt - Bitumen/Kies/Blech. Als Zink-Grau (2)
+	// dargestellt, unabhaengig von der Fassade: ein flaches Buero- wie ein
+	// flaches Wohnhaus-Dach traegt keine Pfannen.
+	if (Shape == EOSMRoofShape::Flat)
+	{
+		return 2;
+	}
+
+	// Geneigte Daecher folgen der Bauweise (dieselbe Variante wie die Fassade):
+	//   Sandstein  = Gruenderzeit, Civic, Uni       -> Schiefer (historisch)
+	//   Glas/Beton = Buero, Industrie, Parkhaus     -> Zink/Blech
+	//   Rest (Putz/Backstein/Fachwerk = Wohnbau)    -> Terrakotta-Pfanne
+	switch (MaterialVariant)
+	{
+	case Facade_Sandstone:
+		return 1;
+	case Facade_Glass:
+	case Facade_Concrete:
+		return 2;
+	default:
+		return 0;
+	}
+}
+
+uint8 UBuildingGenerator::RoofToneByte(int64 SourceId)
+{
+	// Deterministische, gleichverteilte Tonstufe je Gebaeude aus der OSM-Id.
+	// Eigene Mischung (nicht die der Fassaden-/Deckungswahl in Zeile ~105 und
+	// SelectMaterialVariant), damit der Farbton NICHT mit der gewuerfelten
+	// Fassaden- oder Deckungsart korreliert: zwei gleichtypige Nachbarhaeuser
+	// bekommen unabhaengige Toene. Ganzzahl-Finalizer im Stil von Murmur3 -
+	// benachbarte Ids (typisch fortlaufend im OSM) landen weit auseinander,
+	// die oberen 8 Bit sind am staerksten durchmischt.
+	uint32 H = static_cast<uint32>(SourceId) ^ static_cast<uint32>(static_cast<uint64>(SourceId) >> 32);
+	H *= 0x9E3779B1u;
+	H ^= H >> 15;
+	H *= 0x85EBCA77u;
+	H ^= H >> 13;
+	return static_cast<uint8>(H >> 24);
+}
+
 FString UBuildingGenerator::NormalizeAddressForMatch(const FString& Address)
 {
 	// ToLower ist in UE ASCII-only: Grossbuchstaben-Umlaute (Ae/Oe/Ue) und das
@@ -1068,7 +1139,7 @@ bool UBuildingGenerator::BuildSingleBuilding(
 
 	if (Settings.bGenerateRoofs)
 	{
-		BuildRoof(Ring, Holes, EavesZ, OutBuilding.RoofShape, RoofHeightCm, MaterialVariant, FacadeOverrideKey, Settings.RoofOverhangMeters, *OutMeshData);
+		BuildRoof(Ring, Holes, EavesZ, OutBuilding.RoofShape, RoofHeightCm, MaterialVariant, OutBuilding.BuildingType, OutBuilding.bIsLandmark, SourceId, FacadeOverrideKey, Settings.RoofOverhangMeters, *OutMeshData);
 	}
 
 	return true;
@@ -1200,6 +1271,9 @@ void UBuildingGenerator::BuildRoof(
 	EOSMRoofShape Shape,
 	double RoofHeightCm,
 	int32 MaterialVariant,
+	EOSMBuildingType BuildingType,
+	bool bIsLandmark,
+	int64 SourceId,
 	const FString& FacadeOverrideKey,
 	double RoofOverhangMeters,
 	FBuildingMeshData& OutMeshData) const
@@ -1212,6 +1286,25 @@ void UBuildingGenerator::BuildRoof(
 	const int32 SectionIndex = FindOrAddSection(
 		OutMeshData, EBuildingMeshChannel::Roof, MaterialVariant, FacadeOverrideKey);
 	FBuildingMeshSection& Section = OutMeshData.Sections[SectionIndex];
+
+	// Dachdeckung als Vertexfarbe: R traegt die Deckung (0/51/102/153/204 =
+	// Terrakotta/Schiefer/Zink/Kupfergruen/dunkler Schiefer), damit das
+	// Dachmaterial EINE typgerechte Deckung je Gebaeude liest statt einer
+	// Weltregion zu wuerfeln. Schrittweite 51 = 255/5, sodass fuenf Deckungen
+	// exakt auf ganze Stufen (Index * 0,2) fallen. Der Wert R=255 (Weiss) bleibt
+	// bewusst UNGENUTZT und bedeutet im Material "Legacy" - so bleiben aeltere
+	// Bakes (Dach-Verts = FColor::White) auf der alten Regionswahl und
+	// regredieren nicht.
+	//
+	// G traegt eine deterministische Tonstufe je Gebaeude-Id: das Material
+	// verschiebt damit die Deckungsfarbe leicht (+-~9 %), sodass eine Reihe
+	// gleichtypiger Haeuser nicht identisch wirkt - die DeckungsART (R) bleibt
+	// unberuehrt. Legacy-Bakes tragen G=255; das Material wertet den Ton nur im
+	// Nicht-Legacy-Pfad aus, ein Ton-Byte von 255 in einem neuen Bake bleibt
+	// also folgenlos.
+	const int32 CoveringIndex = RoofCoveringIndex(MaterialVariant, Shape, BuildingType, bIsLandmark);
+	const FColor RoofVertexColor(
+		static_cast<uint8>(CoveringIndex * 51), RoofToneByte(SourceId), 255, 255);
 
 	// Dach-UVs GEBAeUDE-LOKAL statt weltbezogen. Die georeferenzierten
 	// Weltkoordinaten sind in Wiesbaden riesig (Tausende Meter). Als per-Vertex-
@@ -1258,7 +1351,7 @@ void UBuildingGenerator::BuildRoof(
 			Section.Vertices.Add(FVector(Point.X, Point.Y, CapZ));
 			Section.Normals.Add(FVector::UpVector);
 			Section.UVs.Add(RoofUV(Point.X, Point.Y));
-			Section.VertexColors.Add(FColor::White);
+			Section.VertexColors.Add(RoofVertexColor);
 			Section.Tangents.Add(FProcMeshTangent(1.0f, 0.0f, 0.0f));
 		}
 
@@ -1313,7 +1406,7 @@ void UBuildingGenerator::BuildRoof(
 			for (int32 Corner = 0; Corner < 3; ++Corner)
 			{
 				Section.Normals.Add(FaceNormal);
-				Section.VertexColors.Add(FColor::White);
+				Section.VertexColors.Add(RoofVertexColor);
 				Section.Tangents.Add(FProcMeshTangent((VB - VA).GetSafeNormal(), false));
 			}
 
@@ -1486,7 +1579,7 @@ void UBuildingGenerator::BuildRoof(
 		for (int32 Corner = 0; Corner < 4; ++Corner)
 		{
 			Section.Normals.Add(FaceNormal);
-			Section.VertexColors.Add(FColor::White);
+			Section.VertexColors.Add(RoofVertexColor);
 			Section.Tangents.Add(FProcMeshTangent((EaveB - EaveA).GetSafeNormal(), false));
 		}
 

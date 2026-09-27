@@ -26,6 +26,16 @@ class UMaterialInterface;
  * Fahrzeit vom Terminus der jeweiligen Richtung
  * (WiesbadenBusLine::SecondsToStopOnLeg).
  * Sichtbar-only, deterministisch aus der Dienstzeit.
+ *
+ * ESWE-HALTESTELLE (25.09.): je Halte und Fahrtrichtung steht die komplette
+ * Ausstattung im ESWE-Stil (Tools/Blender/make_eswe_haltestelle.py): Wartehalle,
+ * Haltemast mit H-Schild, Namens- und Linienschild, DFI-Stele. Sie steht RECHTS
+ * der Fahrtrichtung hinter der Bordsteinkante - nicht mehr 4,80 m neben der
+ * Linie, wo der haltende Bus selbst steht (LaneOffset 2,20 + Bucht 2,60 m).
+ * Hat die Linie einen eigenen Rueckweg, steht die Gegenrichtung an IHRER Halte
+ * (am Hauptbahnhof auf der anderen Richtungsfahrbahn) statt der Hinweg-Halte
+ * gegenueber. Teilen sich zwei Linien eine Halte, bekommt die zweite nur eine
+ * eigene DFI-Stele und ihre Nummer aufs Linienschild der ersten.
  */
 UCLASS()
 class WIESBADENREAL_API AWiesbadenBusStopMonitor : public AActor
@@ -94,9 +104,38 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Monitor")
 	FString Destination = TEXT("Mainz-Gonsenheim");
 
-	/** Seitlicher Versatz der Saeule von der Trasse nach rechts (auf den Gehweg), cm. */
+	/**
+	 * Abstand der Bordsteinkante von der Linie, rechts der Fahrtrichtung, cm.
+	 * Der haltende Bus steht mit seiner Mitte LaneOffset + Bucht = 480 cm neben
+	 * der Linie, halbe Breite 128 cm, dazu 30 cm Luft: 640. Davon aus steht die
+	 * Ausstattung auf dem Gehweg (Mast 45, Halle 70..230, Stele 50 cm dahinter).
+	 * Liegt dort Bebauung (Boden deutlich hoeher als die Fahrbahn), rueckt die
+	 * Halte in 40-cm-Schritten bis zu 2,40 m naeher an die Fahrbahn.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Monitor", meta = (ClampMin = "0.0"))
-	float SidewalkOffsetCm = 480.0f;
+	float CurbOffsetCm = 640.0f;
+
+	/**
+	 * Eine aufgestellte Haltestelle (Richtung + Ort). Eine zweite Linie mit
+	 * derselben Halte in derselben Richtung stellt keine zweite Halle auf,
+	 * sondern meldet sich hier an (JoinStop).
+	 */
+	struct FStopFurniture
+	{
+		FVector Base = FVector::ZeroVector;   // Bordsteinkante an der Halte (Boden)
+		FVector Dir = FVector::ForwardVector;  // Fahrtrichtung
+		FVector Side = FVector::RightVector;   // vom Bordstein weg (rechts der Fahrt)
+		TArray<FString> Lines;
+		TArray<UTextRenderComponent*> LineTexts;   // Linienschild, beide Seiten
+		int32 DfiCount = 1;
+	};
+
+	/**
+	 * Steht an Base/Dir schon eine Halte (dieses Actors)? Dann Linie anmelden,
+	 * Linienschild ergaenzen und die Stelle fuer die naechste DFI-Stele liefern.
+	 */
+	bool JoinStop(const FVector& Base, const FVector& Dir, const FString& Line,
+		FStopFurniture& OutStop, int32& OutDfiSlot);
 
 private:
 	/** Holt die Linie aus dem gemeinsamen Leser (World/WiesbadenBusLineFile) und
@@ -106,12 +145,14 @@ private:
 	bool ResolveGround(double X, double Y, double& OutZ) const;
 	void BuildMonitors();
 	/**
-	 * Die Saeulen EINER Strassenseite bauen. `bForward` waehlt die Seite (rechts
-	 * der Hinfahrt bzw. gegenueber) und damit Richtung, Zieltext und
-	 * Durchfahrtszeit der Tafel. Je Halte ruft BuildMonitors das zweimal auf.
+	 * Die Haltestellen EINER Fahrtrichtung bauen. `bForward` waehlt die
+	 * Richtung und damit Linie (Hinweg bzw. eigener Rueckweg), Halte, Zieltext
+	 * und Durchfahrtszeit der Tafel. BuildMonitors ruft das je Richtung auf.
 	 */
-	void BuildMonitorsForSide(bool bForward, const TArray<int32>& Indices,
-		const TArray<FString>& Wanted, double SpeedCmS);
+	void BuildMonitorsForSide(bool bForward, const TArray<FString>& Wanted, double SpeedCmS);
+	UStaticMeshComponent* AddPart(UStaticMesh* Mesh, const FVector& Location, const FQuat& Rot);
+	UTextRenderComponent* AddText(const FVector& Location, const FVector& Facing, float Size,
+		const FColor& Color, const FString& Text);
 
 	struct FMonitor
 	{
@@ -121,17 +162,20 @@ private:
 		FString Destination;
 		/** Richtung, deren Durchfahrten diese Saeule ankuendigt. */
 		bool bForward = true;
+		/** Eigener Rueckweg: OffsetSeconds zaehlt bis zur Rueckweg-Halte. */
+		bool bReturnPath = false;
 		double OffsetSeconds = 0.0;   // Fahrzeit ab Terminus bis zu dieser Halte (ihrer Richtung)
-		UTextRenderComponent* Text = nullptr;
+		UTextRenderComponent* Text = nullptr;       // Schirm zur Strasse
+		UTextRenderComponent* TextBack = nullptr;   // Schirm zum Gehweg
 	};
 	TArray<FMonitor> Monitors;
+	TArray<FStopFurniture> Furniture;
 
 	UPROPERTY(Transient) USceneComponent* Root = nullptr;
 	UPROPERTY(Transient) UGeoCoordinateConverter* Converter = nullptr;
-	UPROPERTY(Transient) UStaticMesh* PoleMesh = nullptr;
-	UPROPERTY(Transient) UStaticMesh* PanelMesh = nullptr;
-	UPROPERTY(Transient) UMaterialInterface* PoleMat = nullptr;
-	UPROPERTY(Transient) UMaterialInterface* PanelMat = nullptr;
+	UPROPERTY(Transient) UStaticMesh* ShelterMesh = nullptr;
+	UPROPERTY(Transient) UStaticMesh* MastMesh = nullptr;
+	UPROPERTY(Transient) UStaticMesh* DfiMesh = nullptr;
 	UPROPERTY(Transient) TArray<UStaticMeshComponent*> Parts;
 	UPROPERTY(Transient) TArray<UTextRenderComponent*> Texts;
 
