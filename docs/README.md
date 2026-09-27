@@ -32,6 +32,9 @@ Vier Sorten Dokument, nach dem, was du gerade brauchst:
 - [Das Fahrverhalten per WbDrive testen](how-to/fahrverhalten-testen.md)
   - Fahrprofil ausloesen, Log auswerten (Tempo/Laengsdynamik, Kursaenderung/
     Lenkung, Gangwechsel), Schwellen, Fehlersuche.
+- [Einen Clip direkt aus dem Spiel aufnehmen (-WbClip)](how-to/clip-aufnehmen.md)
+  - Fluessige Clips ohne Bildschirmfilm und ohne freies Fenster: Schalter,
+    Kamera-Pose, Pruefen per clip.json, GIF/MP4 mit `medien.py clip`.
 
 ## Reference
 

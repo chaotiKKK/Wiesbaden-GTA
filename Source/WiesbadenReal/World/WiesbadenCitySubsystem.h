@@ -122,6 +122,10 @@ public:
 	/** True, wenn die Stadt-Geometrie gespawnt wurde (Daten vorhanden). */
 	bool IsCityReady() const { return CityActor != nullptr; }
 
+	/** Setzt die Kamera aus einer Posenzeile (Format wie -WbShotPoseFile) -
+	 *  fuer den Clip-Modus (UWiesbadenClipRecorder, -WbClipPoseFile). */
+	void ApplyClipPose(const FString& PoseLine) { ApplyShotPose(PoseLine); }
+
 	/** True, wenn alle World-Partition-Zellen um die Quellen geladen sind. */
 	bool IsCityStreamingComplete() const { return bStreamingComplete; }
 

@@ -52,6 +52,7 @@ public class WiesbadenReal : ModuleRules
 			"AnimationCore",   // SolveTwoBoneIK: Fuss-IK der Spielerfigur
 			"RenderCore",
 			"RHI",
+			"ImageCore",       // FImageView: Clip-Aufnahme (WiesbadenClipRecorder)
 			"Json",
 			"JsonUtilities",
 			"XmlParser",
