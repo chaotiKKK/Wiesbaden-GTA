@@ -27,7 +27,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import platten_waechter as pw  # noqa: E402
+import platten_waechter as pw
+import vor_dem_commit as vdc  # noqa: E402
 
 WURZEL = Path(__file__).resolve().parent.parent
 
@@ -674,6 +675,119 @@ class ProtokollTest(unittest.TestCase):
                                    return_value=(os.path.normpath(t).lower(),)):
                 pw.reinigen([self.messung(ziel)], wurzel=t)
             self.assertTrue(os.path.exists(pw.protokoll_pfad(t)))
+
+
+class GateVerweisTest(unittest.TestCase):
+    """Der Platten-Hinweis nennt die Handlung, nicht nur eine Zahl.
+
+    GEMESSEN am 27.09.2026: der Hinweis im Commit-Hook sagte
+    "UNTER der Grenze (20 %)" und sonst nichts. Eine Zahl ohne Folge - der
+    Leser weiss nicht, dass gleich der naechste Engine-Start scheitert, und
+    schon gar nicht, wo die zweite Schwelle liegt.
+    """
+
+    def test_gate_grenze_wird_aus_der_ps1_gelesen(self):
+        """NICHT hier wiederholen. Zwei Kopien einer Schwelle fallen
+        auseinander, und dann sagt der Hinweis 10 % an, waehrend das Gate
+        bei 12 % zuschlaegt."""
+        wert = pw.gate_grenze()
+        self.assertIsNotNone(wert, "ps1 nicht lesbar - der Hinweis nennt keine Grenze")
+        self.assertEqual(wert, 10.0)
+        # Und die ps1 muss auch wirklich diese Zahl verwenden.
+        ps1 = os.path.join(pw.WURZEL, "Tools", "engine_run_lock.ps1")
+        with open(ps1, "r", encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("[double]$PlattenGrenze = %s" % wert, text)
+
+    def test_gate_grenze_liefert_none_statt_zu_raten(self):
+        with tempfile.TemporaryDirectory() as t:
+            self.assertIsNone(pw.gate_grenze(t),
+                              "ohne ps1 wird geraten - das waere eine erfundene Zahl")
+
+    def test_handlungsblock_schweigt_bei_genug_platz(self):
+        self.assertIsNone(pw.handlungsblock(50.0), "gesunder Rechner darf nicht schreien")
+
+    def test_handlungsblock_nennt_beide_schwellen_und_den_befehl(self):
+        text = pw.handlungsblock(12.0)
+        self.assertIn("WAS JETZT PASSIERT", text)
+        self.assertIn("MELDET", text)          # ab 20 %
+        self.assertIn("10 %", text)           # Gate ab 10 %
+        self.assertIn("engine_run_lock.ps1", text)
+        self.assertIn("PlattenTrotz", text)   # Notausgang
+
+    def test_handlungsblock_sagt_wenn_es_schon_zu_spaet_ist(self):
+        """Unter der Gate-Grenze ist \"bricht ab\" keine Zukunft mehr, sondern
+        das Jetzt - der Block muss das unterscheiden."""
+        knapp = pw.handlungsblock(6.0)
+        self.assertIn("ABBRICHT JEDER Engine-Start", knapp)
+        self.assertIn("erst aufraeumen, dann bauen", knapp)
+
+    def test_bericht_traegt_den_handlungsblock(self):
+        text = pw.bericht(50 * 1024 ** 3, 500 * 1024 ** 3, 10.0, [])
+        self.assertIn("WAS JETZT PASSIERT", text)
+        # ... und der Bericht wird auch sonst wo verwendet: der
+        # Aufgabenplanungslauf soll die Handlung genauso sehen.
+        self.assertIn("PlattenTrotz", text)
+
+    def test_bericht_ohne_platznot_bleibt_ohne_block(self):
+        text = pw.bericht(300 * 1024 ** 3, 500 * 1024 ** 3, 60.0, [])
+        self.assertNotIn("WAS JETZT PASSIERT", text)
+
+
+class HinweisVerweisTest(unittest.TestCase):
+    """Der Verweis im Commit-Hook: nur bei Platznot, und ohne Buchhaltung."""
+
+    def ausgabe(self, warnung_text):
+        puffer = io.StringIO()
+        with redirect_stdout(puffer):
+            vdc.platten_hinweis()
+        return puffer.getvalue()
+
+    def test_bei_platznot_nennt_er_die_gate_schwelle(self):
+        with mock.patch.object(pw, "warnung", return_value="Plattenwaechter: knapp"):
+            text = self.ausgabe(None)
+        self.assertIn("NAECHSTES", text)
+        self.assertIn("engine_run_lock.ps1", text)
+        self.assertIn("10", text)
+        self.assertIn("PlattenTrotz", text)
+
+    def test_ohne_platznot_kommt_kein_verweis(self):
+        """Der gesunde Fall ist der Normalfall - er darf nicht lauter werden."""
+        with mock.patch.object(pw, "warnung", return_value=None):
+            text = self.ausgabe(None)
+        self.assertNotIn("NAECHSTES", text)
+
+    def test_er_zaehlt_sich_nicht_als_gate(self):
+        """Die fremde LaufDoppel in test_vor_dem_commit.py kennt nur fahre/
+        ueberspringe/bericht. Ein `Lauf` hier wuerde AttributeError werfen -
+        der Hinweis darf nur drucken."""
+        class Doppel:
+            """Kennt absichtlich NUR die drei echten Methoden - wie im
+            fremden Test. Jede zusaetzliche Nutzung faellt hier auf."""
+            def __init__(self):
+                self.aufrufe = []
+
+            def fahre(self, *a, **k):
+                self.aufrufe.append("fahre")
+
+            def ueberspringe(self, *a, **k):
+                self.aufrufe.append("ueberspringe")
+
+            def bericht(self):
+                return 0
+
+        doppel = Doppel()
+        with mock.patch.object(pw, "warnung", return_value="Plattenwaechter: knapp"), \
+             redirect_stdout(io.StringIO()):
+            vdc.platten_hinweis()
+        self.assertEqual(doppel.aufrufe, [], "der Hinweis ging durch den Lauf")
+
+    def test_fehlender_waechter_erzeugt_keinen_absturz(self):
+        """Der Push-Worktree hat nur committete Dateien. Fehlt
+        platten_waechter.py, darf der Hook nicht sterben."""
+        with mock.patch.dict(sys.modules, {"platten_waechter": None}):
+            with redirect_stdout(io.StringIO()):
+                vdc.platten_hinweis()  # darf nicht werfen
 
 
 if __name__ == "__main__":

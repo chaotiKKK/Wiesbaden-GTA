@@ -4957,3 +4957,29 @@ sauberem Baum gruen, bei Bearbeitung rot, und er sagt etwas Falsches aus.
   Kandidatenliste** - dieselbe Zeile, nach der auch entschieden wurde, dass der Pfad
   loeschbar ist, plus die Summe. Eine Begruendung, die nur im Code steht, hilft
   niemandem, wenn es drei Monate spaeter darum geht, warum ein Ordner fehlt.
+
+## Der Platten-Hinweis im Hook nennt die Handlung (27.09.2026)
+- **GEMESSEN vorher: der Hinweis sagte `UNTER der Grenze (20 %)` und sonst nichts.**
+  Eine Zahl ohne Folge - der Leser weiss nicht, dass gleich der naechste
+  Engine-Start scheitert, und schon gar nicht, wo die zweite Schwelle liegt.
+  `Tools\vor_dem_commit.py` haengt jetzt `_gate_verweis()` an: NAECHSTES, die
+  Gate-Schwelle, Exit 4, der Ort (`Tools\engine_run_lock.ps1`) und der Notausgang
+  (`-PlattenTrotz`), dazu der Abstand ("aktuell 36 % frei - bis zum Abbruch
+  noch 26 %").
+- **Die Gate-Schwelle wird aus der ps1 GELESEN (`platten_waechter.gate_grenze`),
+  nicht im Hook wiederholt.** Zwei Kopien einer Schwelle fallen auseinander - und
+  dann sagt der Hinweis 10 % an, waehrend das Gate bei 12 % zuschlaegt. Der
+  Hinweis waere dann nicht nutzlos, sondern irrefuehrend. GEMESSEN: eine ps1 mit
+  12.5 ergibt auch 12.5. Fehlt die Datei (Push-Worktree), kommt `None` und der
+  Verweis nennt keine Zahl, statt eine zu erfinden.
+- **Der Verweis erscheint NUR, wenn ueberhaupt gemeldet wurde.** Im gesunden Fall
+  schweigt der Hook wie bisher - er darf nicht lauter werden. Und er geht
+  weiterhin NICHT durch den `Lauf`: `test_vor_dem_commit.py` (fremde Datei) hat
+  eine `LaufDoppel`, die nur `fahre`/`ueberspringe`/`bericht` kennt, und
+  `test_die_schnelle_stufe_haelt_nur_die_pipeline_gates` verlangt exakt
+  `["Gate 0  Engine-Pfade"]`. `HinweisVerweisTest` hat beides festgenagelt.
+- **Auch der Bericht selbst traegt den Handlungsblock** (`handlungsblock`), damit
+  der Aufgabenplanungslauf dieselbe Handlung sieht. Er unterscheidet die beiden
+  Zonen: zwischen Meldegrenze und Gate heisst es "bricht ab" als ZUKUNFT ("erst
+  aufraeumen, dann bauen"), unter dem Gate ist es das Jetzt ("ABBRICHT JEDER
+  Engine-Start"). GEMESSEN: 12 % und 6 % gegen dieselbe Vorlage.

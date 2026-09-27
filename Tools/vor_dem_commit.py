@@ -611,6 +611,42 @@ def gate0_befehl(dateien):
     return befehl
 
 
+def _gate_verweis():
+    """Ein Verweis aufs Platten-Gate, mit Abstand zur Abbruchschwelle.
+
+    Der Hinweis selbst darf den Commit nicht verhindern - der zeigt nur Platz
+    und Fresser. Dieser Block sagt, was als NAECHSTES passiert, damit die Zahl
+    eine Handlung hat.
+
+    Zweimal abgesichert, weil der Hook nie sterben darf: kein
+    `platten_waechter` (fehlt im Push-Worktree) und keine lesbare ps1 geben
+    beide eine Zeile statt einer Ausnahme.
+    """
+    try:
+        import platten_waechter
+        g = platten_waechter.gate_grenze()
+    except Exception:
+        g = None
+    if g is None:
+        print("      NAECHSTES: unterhalb der Gate-Grenze bricht jeder Engine-Start ab"
+              " (Tools\\engine_run_lock.ps1).", flush=True)
+        return
+    print("      NAECHSTES: unter %.0f %% frei bricht JEDER Engine-Start ab (Exit 4,"
+          % g, flush=True)
+    print("                Tools\\engine_run_lock.ps1 -PlattenGrenze). Notausgang:"
+          " -PlattenTrotz.", flush=True)
+    try:
+        from platten_waechter import platz, WURZEL
+        _frei, _gesamt, _p = platz(WURZEL)
+    except Exception:
+        return
+    try:
+        print("                aktuell %.0f %% frei - bis zum Abbruch noch %.0f %%."
+              % (_p, _p - g), flush=True)
+    except Exception:
+        pass
+
+
 def platten_hinweis(grenze=None):
     """Plattenplatz melden - als HINWEIS, niemals als Gate.
 
@@ -646,6 +682,23 @@ def platten_hinweis(grenze=None):
     if text:
         for zeile in str(text).splitlines():
             print("      %s" % zeile[:200], flush=True)
+    # DER HINWEIS BRAUCHT EINE HANDLUNG (27.09.2026). GEMESSEN: er sagte
+    # "UNTER der Grenze (20 %)" und sonst nichts - eine Zahl ohne Folge. Der
+    # Leser weiss damit nicht, dass gleich der naechste Engine-Start scheitert.
+    # Deshalb der Verweis auf das Gate in Tools\engine_run_lock.ps1, mit dem
+    # ABSTANDSWERT (wie viel noch bis zum Abbruch). Nur wenn ueberhaupt etwas
+    # gemeldet wurde - im gesunden Fall schweigt der Hook weiter.
+    #
+    # Die Gate-Schwelle wird aus der ps1 GELESEN (platten_waechter.gate_grenze)
+    # und nicht hier wiederholt: zwei Kopien einer Schwelle fallen
+    # auseinander, und der Hinweis waere dann irrefuehrend statt nuetzlich.
+    #
+    # Bewusst KEINE Buchhaltung: `test_die_schnelle_stufe_haelt_nur_die_
+    # pipeline_gates` verlangt, dass der Hinweis nicht als Gate zaehlt, und die
+    # fremde LaufDoppel in test_vor_dem_commit.py kennt nur fahre/
+    # ueberspringe/bericht. Hier wird nur gedruckt.
+    if text:
+        _gate_verweis()
 
 
 def gates_fahren(stufe, dateien, thread=None):

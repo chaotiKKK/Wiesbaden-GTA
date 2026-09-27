@@ -46,6 +46,7 @@ Exit-Codes:
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -315,7 +316,79 @@ def _zeilen_block(zeilen, messungen, klasse, titel, hinweis=None):
     zeilen.append("")
 
 
-def bericht(frei, gesamt, prozent, messungen, grenze=GRENZE_PROZENT, laufzeit=0.0):
+# Wo der Engine-Start abbricht. Aus der ps1 GELESEN, nicht hier wiederholt:
+# zwei Kopien einer Schwelle fallen irgendwann auseinander, und dann sagt der
+# Waechter 10 % an, waehrend das Gate bei 12 % zuschlaegt - der Hinweis
+# waere dann nicht nur nutzlos, sondern irrefuehrend. Findet sich die Datei
+# nicht (etwa in einem Worktree ohne die ps1), gilt dieser Ersatzwert.
+GATE_PROZENT_ERSATZ = 10.0
+
+
+def gate_grenze(wurzel=None):
+    """Die Abbruchschwelle des Platten-Gates, in Prozent frei.
+
+    Gelesen aus `Tools/engine_run_lock.ps1` (`[double]$PlattenGrenze = 10.0`).
+    Ein Regex statt eines Imports: die ps1 laeuft nicht unter Python, und ein
+    voller Parser waere fuer eine Zahl ueberdimensioniert. `None`, wenn der
+    Wert nicht lesbar ist - dann bleibt der Hinweis weg, statt eine geratene
+    Zahl zu behaupten.
+    """
+    pfad = os.path.join(wurzel or WURZEL, "Tools", "engine_run_lock.ps1")
+    try:
+        with open(pfad, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return None
+    treffer = re.search(r"\$PlattenGrenze\s*=\s*([0-9]+(?:[.,][0-9]+)?)", text)
+    if not treffer:
+        return None
+    try:
+        return float(treffer.group(1).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def handlungsblock(prozent, grenze=GRENZE_PROZENT, wurzel=None):
+    """Was jetzt konkret passiert - oder None, wenn nichts ansteht.
+
+    Der Bericht sagte bisher nur "UNTER der Grenze (20 %)". Das ist eine Zahl
+    ohne Handlung: sie sagt nicht, dass gleich NAECHSTES ein Engine-Start
+    scheitern soll, und schon gar nicht, wo die zweite Schwelle liegt. Der
+    Block nennt deshalb beide Stufen und den Befehl, mit dem man die Sache
+    angeht.
+
+    Zwei Schwellen, weil zwei Stellen getrennt handeln: der Waechter MELDET
+    ab 20 %, das Gate im Engine-Lock BRICHT AB ab 10 % (gelesen aus der ps1,
+    siehe gate_grenze). Zwischen beiden kann man noch arbeiten.
+    """
+    if not unter_schwelle(prozent, grenze):
+        return None
+    g = gate_grenze(wurzel)
+    zeilen = [
+        "",
+        "WAS JETZT PASSIERT:",
+        "  Ab %.0f %% MELDET der Waechter (dieser Hinweis)." % grenze,
+    ]
+    if g is None:
+        zeilen.append("  Der Engine-Start bricht unter einer zweiten, tieferen Grenze ab -")
+        zeilen.append("  die Zahl steht in Tools\\engine_run_lock.ps1 (PlattenGrenze).")
+    elif prozent < g:
+        zeilen.append("  Unter %.0f %% ABBRICHT JEDER Engine-Start" % g)
+        zeilen.append("  (Tools\\engine_run_lock.ps1 - er endet mit Code 4). Ab jetzt also")
+        zeilen.append("  erst aufraeumen, dann bauen - ein Cook bricht sonst mittendrin ab")
+        zeilen.append("  und laesst unfertige Pakete liegen.")
+    else:
+        zeilen.append("  Ab %.0f %% bricht JEDER Engine-Start ab" % g)
+        zeilen.append("  (Tools\\engine_run_lock.ps1, Exit 4). Bis dahin: Platz schaffen mit")
+        zeilen.append("  Tools\\platten_waechter.cmd --reinigen --trocken")
+    zeilen.append("")
+    zeilen.append("  Notausgang, wenn der Editor zum Aufraeumen gebraucht wird:")
+    zeilen.append("  engine_run_lock.cmd -Modus Start -Name <lauf> -PlattenTrotz")
+    return "\n".join(zeilen)
+
+
+def bericht(frei, gesamt, prozent, messungen, grenze=GRENZE_PROZENT, laufzeit=0.0,
+            wurzel=None):
     """Der Bericht. Reihenfolge: Lage, Fresser, dann die ausdruecklichen
     Nicht-Anfass-Gruppen - die stehen mit im Bild, weil ein Besetzer sonst
     genau die weglisst."""
@@ -351,6 +424,9 @@ def bericht(frei, gesamt, prozent, messungen, grenze=GRENZE_PROZENT, laufzeit=0.
         zeilen.append("Sicher loeschbar: %.1f GB  "
                       "(python Tools/platten_waechter.py --reinigen --trocken)"
                       % gb(loeschbar))
+    block = handlungsblock(prozent, grenze, wurzel)
+    if block:
+        zeilen.append(block)
     return "\n".join(zeilen)
 
 
@@ -372,14 +448,14 @@ def warnung(wurzel=None, grenze=GRENZE_PROZENT, budget=BUDGET_SEKUNDEN,
     roh = cache_laden(wurzel, cache_alter, jetzt)
     if roh and roh.get("messungen"):
         return bericht(frei, gesamt, prozent, roh["messungen"], grenze,
-                       roh.get("laufzeit", 0.0))
+                       roh.get("laufzeit", 0.0), wurzel)
 
     start = time.monotonic()
     messungen = messen(kandidaten(wurzel), budget)
     laufzeit = time.monotonic() - start
     cache_sichern({"zeit": time.time(), "laufzeit": laufzeit, "messungen": messungen},
                   wurzel)
-    return bericht(frei, gesamt, prozent, messungen, grenze, laufzeit)
+    return bericht(frei, gesamt, prozent, messungen, grenze, laufzeit, wurzel)
 
 
 def erlaubte_wurzeln():
