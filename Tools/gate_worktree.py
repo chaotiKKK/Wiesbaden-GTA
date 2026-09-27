@@ -20,6 +20,14 @@ faehrt dort die volle Stufe. Fremde Aenderungen sind dort nicht, fremde
 Editoren gehen ihn nichts an (Gate 1 und Rauchtest beenden nur Editoren
 DIESES Projektordners).
 
+DER STAMMORDNER HAENGT AM HAUPT-ARBEITSORDNER, nicht am aufrufenden Ordner.
+GEMESSEN am 27.09.2026: er wurde aus `projekt.parent` gebildet, und in einem
+verlinkten Worktree ist das dessen Elternordner. Ein Push von dort legte
+`.gate-worktree\.gate-worktree\WiesbadenReal` an - mit 0 verlinkten
+Stadtinhalten, ohne .uproject, und Gate 0 wurde nach 11 Minuten Lauf rot.
+Die Quelle ist jetzt `git worktree list` (erster Eintrag = Hauptordner); ein
+Aufruf aus dem Gate-Worktree selbst wird abgewiesen.
+
 WAS NICHT IN GIT STEHT, ABER GEBRAUCHT WIRD - die gebackene Stadt: die
 World-Partition-Aktoren (26 GB), gebackene Chunks, Bake-Materialien, Rohdaten
 und die Stadtkarten selbst (die Vorgabekarte WiesbadenCity_Alkis22 ist nicht
@@ -90,16 +98,62 @@ def je_baum_einer(shas, baum_von):
     return auswahl
 
 
+def haupt_ordner(projekt):
+    """Der HAUPT-Arbeitsordner des Repos, von wo immer aufgerufen wird.
+
+    GEMESSEN am 27.09.2026: der Stammordner wurde aus `projekt.parent`
+    gebildet, und in einem verlinkten Worktree ist das dessen Elternordner -
+    nicht der des Hauptbaums. Ein Push aus einem Worktree legte deshalb
+    .gate-worktree\\.gate-worktree\\WiesbadenReal an: 0 verlinkte Stadtinhalte,
+    kein .uproject, Gate 0 rot nach 11 Minuten Gate-Lauf.
+
+    Die Quelle ist `git worktree list`: dort stehen die Pfade mit dem
+    ERSTEN Eintrag als Haupt-Arbeitsordner, unabhaengig davon, von wo aus
+    aufgerufen wird. Bewusst NICHT `rev-parse --git-common-dir`: das zeigt im
+    Hauptbaum auf <Projekt>/.git, dessen Elternordner der Projektordner
+    selbst ist - der Stammordner landete dann INNEN im Projekt statt neben
+    ihm. Der Unterschied um eine Ebene ist hier der ganze Fehler.
+    """
+    projekt = Path(projekt)
+    liste = git(projekt, "worktree", "list", "--porcelain")
+    pfade = [z[len("worktree "):].strip() for z in liste.splitlines()
+             if z.startswith("worktree ")]
+    if not pfade:
+        raise RuntimeError("git worktree list lieferte keinen Pfad fuer %s" % projekt)
+    return Path(pfade[0]).resolve()
+
+
 def gate_projekt(projekt):
     """Projektordner im Gate-Worktree (WB_GATE_WORKTREE = anderer Stammordner).
 
     Das Layout <Stamm>\\<Projektname> ist Absicht: build_release.ps1 und
     smoke_test.ps1 rechnen mit -Root = Ordner UEBER dem Projekt.
+
+    Der Stammordner haengt am HAUPT-Arbeitsordner, nicht am aufrufenden
+    Ordner - siehe haupt_ordner() und den Befund vom 27.09.2026.
     """
     projekt = Path(projekt)
     stamm = os.environ.get("WB_GATE_WORKTREE")
-    stamm = Path(stamm) if stamm else projekt.parent / ".gate-worktree"
-    return stamm / projekt.name
+    stamm = Path(stamm) if stamm else haupt_ordner(projekt).parent / ".gate-worktree"
+    return stamm / haupt_ordner(projekt).name
+
+
+def ist_im_gate_worktree(projekt):
+    """Liegt dieser Ordner SELBST schon unter dem Stammordner?
+
+    Das ist die Vorbedingung, an der das Verschachteln sichtbar wird: ruft
+    jemand gate_worktree.py aus dem Gate-Worktree heraus auf, entstuende
+    ein zweiter Ordner darunter. Ein gate_projekt()-Vergleich allein genuegt
+    NICHT - der ergibt fuer den Haupt-Ordner wieder sich selbst.
+
+    Kann der Pfad nicht ermittelt werden (kein Repo, Liste leer), ist die
+    Antwort NEIN: der Wächter darf keinen Push verweigern, weil er selbst
+    nicht nachsehen konnte.
+    """
+    try:
+        return Path(projekt).resolve() == Path(gate_projekt(projekt)).resolve()
+    except (OSError, RuntimeError):
+        return False
 
 
 def waehle_stadtinhalt(ignoriert, unversioniert):
@@ -250,6 +304,17 @@ def pruefen(projekt, sha):
 
 def push_pruefen(projekt, stdin_text):
     """Einstieg fuer den pre-push-Hook: jeden zu pushenden Dateibaum einmal pruefen."""
+    # GEMESSEN am 27.09.2026: ein Push AUS dem Gate-Worktree heraus legte
+    # einen zweiten, verschachtelten Gate-Worktree an. haupt_ordner() macht
+    # das Pfad-Problem zwar unweg, der Aufruf bleibt aber sinnlos: der
+    # Gate-Worktree enthaelt die Stadtinhalte als VERLINKUNG, ein zweiter
+    # Lauf darin prueft nichts Neues und nur durch den Zufall, dass die
+    # Verlinkungen mitwandern. Deshalb wird er hier abgewiesen.
+    if ist_im_gate_worktree(projekt):
+        print("Dieser Ordner IST der Gate-Worktree (%s)." % projekt)
+        print("Ein Push wird aus dem HAUPT-Arbeitsordner gepusht, nicht von hier:")
+        print("  %s" % haupt_ordner(projekt))
+        return 1
     shas = push_shas(stdin_text)
     if not shas:
         print("Nur Loeschungen im Push - nichts zu pruefen.")

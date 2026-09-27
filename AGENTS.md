@@ -4657,3 +4657,28 @@ Ergebnis nach `Saved/Diagnose/ka52/build_test_ergebnis.txt`.
 - **Der Aufnahmefahrer belegt JEDES Bild mit dem Kameramodus aus dem Log**
   (Textdatei neben dem PNG) - ein Follow-Bild mit Cockpit-Titel beweist
   nichts, genau das ist am 26.09.2026 zweimal passiert.
+
+## Der Gate-Worktree haengt am HAUPT-Arbeitsordner, nicht am aufrufenden (27.09.2026)
+
+`gate_worktree.py` legt den Gate-Worktree unter `<Hauptordner>\.gate-worktree\WiesbadenReal`
+an. GEMESSEN am 27.09.2026: der Stammordner wurde aus `projekt.parent` gebildet,
+und in einem verlinkten Worktree ist DAS dessen Elternordner. Ein `git push` aus
+einem Worktree legte deshalb `.gate-worktree\.gate-worktree\WiesbadenReal` an - mit
+**0 verlinkten Stadtinhalten**, ohne `.uproject`, und Gate 0 wurde nach 11 Minuten
+Gate-Lauf rot.
+
+* **Quelle ist `git worktree list --porcelain`, erster Eintrag.** Bewusst NICHT
+  `rev-parse --git-common-dir`: das zeigt im Hauptbaum auf `<Projekt>\.git`, dessen
+  Elternordner der Projektordner selbst ist - der Stammordner landete dann INNEN
+  im Projekt statt neben ihm. Beide Varianten waren zuerst falsch, die um eine
+  Ebene entscheidet hier alles.
+* **Aus dem Gate-Worktree selbst wird der Push abgewiesen** (`ist_im_gate_worktree`),
+  Exit 1 mit dem Wegweiser zum Hauptordner: die Stadtinhalte sind dort Verlinkungen,
+  ein zweiter Lauf darin prueft nichts Neues.
+* **Der Wächter rät nicht.** Kann `haupt_ordner()` den Pfad nicht ermitteln,
+  antwortet `ist_im_gate_worktree` mit NEIN - ein Wächter darf keinen Push
+  verweigern, weil er selbst nicht nachsehen konnte.
+- **MERKREGEL fuer eigene Wegwerf-Worktrees:** nicht aus ihnen pushen. Der
+  Push-Hook setzt `git worktree list` und verlinkt die Stadt in einen Pfad, der
+  neben dem HAUPT-Projekt liegen muss; das ist aus einem Neben-Worktree jetzt
+  zwar richtig, aber der Push-Hook erwartet den Hauptordner.
