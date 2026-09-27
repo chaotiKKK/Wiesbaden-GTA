@@ -220,8 +220,9 @@ Bremsen und neigt sich in Kurven.
 
 Motor, Reifen, Hubschrauber, Durchsagen und Stadtgeräusche laufen über ein
 Mischpult mit eigenen Lautstärkereglern; bei Ansagen wird der Rest leiser.
-Motor, Reifen und Schüsse sind echte Aufnahmen. (Ton lässt sich nicht
-fotografieren.)
+Motor, Reifen und Schüsse sind echte Aufnahmen.
+
+![Das Mischpult im Optionsfenster: sieben Lautstärkeregler](meilensteine/bilder/03-ton-mischpult.jpg)
 
 ---
 
