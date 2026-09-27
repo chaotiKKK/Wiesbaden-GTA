@@ -4986,39 +4986,59 @@ sauberem Baum gruen, bei Bearbeitung rot, und er sagt etwas Falsches aus.
 
 ## Release-Bilder kommen aus dem oeffentlichen Schaufenster (27.09.2026)
 - **Das Spiel-Repo ist privat, also ist JEDER Link dorthin fuer Fremde tot.**
-  GEMESSEN am 27.09.2026 anonym, ohne Token: `.../Wiesbaden-GTA/blob/main/docs/
-  meilensteine/bilder/x.jpg?raw=true` -> **404**, die Release-Seite selbst ->
-  **404**, das Release-Asset unter `/releases/download/<tag>/<name>` -> **404**.
-  Mit Konto ist alles 200. Wer eine Release-Seite mit privaten Bildlinks
-  baut, zeigt Fremden nur Broken-Image-Platzhalter - und bemerkt es nie
-  selbst, weil man mit Konto immer auf 200 laeuft.
+  GEMESSEN am 27.09.2026 anonym, ohne Token: Bild-URL `.../Wiesbaden-GTA/blob/
+  main/docs/meilensteine/bilder/x.jpg?raw=true` -> **404**, die Release-Seite
+  -> **404**, das Release-Asset unter `/releases/download/<tag>/<name>` ->
+  **404** (alle 37, ohne Ausnahme). Mit Konto ist alles 200. Wer eine
+  Release-Seite mit privaten Bildlinks baut, zeigt Fremden nur
+  Broken-Image-Platzhalter - und bemerkt es nie selbst.
 - **OEFFENTLICH sind genau zwei Dinge:** das Schaufenster-Repo
   `chaotiKKK/wiesbaden-real-meilensteine` (PUBLIC) und die Pages-Seite
   `https://chaotikkk.github.io/wiesbaden-real-meilensteine/`. Beide erzeugt
   `Tools/schaufenster.py` aus derselben `docs/meilensteine.md`. Bild-URL:
   `https://raw.githubusercontent.com/chaotiKKK/wiesbaden-real-meilensteine/main/bilder/<name>`
   - GEMESSEN anonym 200 fuer alle 35 Bildlinks aus allen 15 Releases.
-- **Deshalb zeigt `releases_texte_ausrichten.py` dorthin** (Konstanten
-  `OEFFENTLICH` und `SCHaufenster`), und die Fusszeile zeigt aufs Schaufenster
-  statt auf `docs/meilensteine.md`. Das Muster `PRIVAT` bricht den Lauf ab,
-  sobald doch ein `Wiesbaden-GTA`-Link entsteht; es unterscheidet die beiden
-  Aehnlich benannten Repos an einem einzigen Zeichen.
-- **Gate 6 prueft das, statt es zu behaupten** (`Tools/release_abgleich.py`):
-  Release-Text und Bildbasis werden verglichen, UND je Release kommt ein
-  HTTP-HEAD **ohne** Anmeldung dazu. GEMESSEN: 15 s Laufzeit. Ein Netzfehler
-  dabei ist "nicht messbar" (Exit 3) und niemals "in Ordnung".
+- **Bilder anzeigen ist nicht dasselbe wie Bilder herunterladen - und der
+  Download-Weg hing am privaten Repo.** Die Bildlinks im Text zeigen seit dem
+  27.09.2026 auf das Schaufenster, die *Download-Liste* des Releases aber nicht:
+  ein Asset gehoert zum Repo, in dem das Release liegt. Deshalb liegen die 14
+  Meilenstein-Releases als SPIEGEL im oeffentlichen Repo
+  (`Tools/releases_oeffentlich.py`), mit demselben Text und denselben Bildern.
+  GEMESSEN danach: 14 oeffentliche Releases, 35 Assets, **alle 35 anonym
+  HTTP 200**, Release-Seite anonym 200. Das private Release `city-content-alkis16`
+  (Kartendaten) wird bewusst NICHT gespiegelt.
+- **Ein Erzeuger fuer beide Seiten.** `Tools/releases_oeffentlich.py` ruft
+  dieselbe `releases_texte_ausrichten.release_text` auf wie der private
+  Ausrichter - kein zweiter Formatter, der still auseinanderlaufen koennte.
+  Jeder `gh`-Aufruf traegt `--repo`; ohne das waere ein Tippfehler ein
+  Schreibzugriff auf das private Spiel-Repo (festgenagelt in
+  `Tools/test_releases_oeffentlich.py`).
+- **`PRIVAT` bricht den Erzeuger ab**, sobald doch ein `Wiesbaden-GTA`-Link
+  entsteht; es unterscheidet die beiden Aehnlich benannten Repos an einem
+  Zeichen. Die Fusszeile zeigt aufs Schaufenster statt auf `docs/meilensteine.md`.
+- **Gate 6 prueft beides, statt es zu behaupten** (`Tools/release_abgleich.py`):
+  Release-Text und Bildbasis werden verglichen, UND es kommt ein HTTP-HEAD
+  **ohne** Anmeldung dazu - je Release fuer das erste Bild und fuer alle 35
+  oeffentlichen Download-Wege (8 Abrufe nebenlaeufig, GEMESSEN 25 s Laufzeit).
+  Ein Netzfehler dabei ist "nicht messbar" (Exit 3) und niemals "in Ordnung".
 - **FALLE, die Zeit kostete: das Schaufenster kann aelter sein als die Seite.**
   Am 27.09.2026 trug es noch die Bildnamen von vor PR #20 (`12-hq-turm.jpg`
   statt `10-hq-turm.jpg`) - jeder neue oeffentliche Link lieferte 404, obwohl
   im Text kein privater Repo-Name mehr stand. Nach jeder Umbenennung:
   `python Tools/schaufenster.py --ziel <Klon> --ref origin/main`, dort
   committen und pushen, DANN die Release-Texte neu erzeugen.
-- **`--anwenden` loescht mit.** `releases_bilder_ausrichten.py --anwenden`
-  nimmt Assets weg, die auf der geprueften Seite fehlen. Also immer gegen den
-  Stand ausrichten, aus dem die Releases wirklich stammen (`--seite` mit dem
-  Ref-Stand von `origin/main`), nicht gegen den Arbeitszweig - sonst raust es
-  dem Release genau die Bilder, die der Zweig gerade erst hinzufuegt.
-- **Was damit NICHT oeffentlich ist:** der Quellcode, `docs/meilensteine.md`
-  und die Releases selbst. Die Release-Texte tragen jetzt keine Konto-Pflicht
-  mehr, sind aber weiterhin nur im privaten Repo zu sehen. Oeffentlich
-  zaehlt heute allein das Schaufenster.
+- **Nach jedem Merge an den Releases: drei Schritte in dieser Reihenfolge** -
+  `python Tools/releases_bilder_ausrichten.py --anwenden`, `python
+  Tools/releases_texte_ausrichten.py --anwenden`, `python
+  Tools/releases_oeffentlich.py --anwenden`. Die ersten beiden lesen per
+  Vorgabe `origin/main`, NICHT den Arbeitszweig; sonst nehmen sie dem Release
+  genau die Bilder, die der Zweig gerade erst hinzufuegt.
+- **GEMESSEN beim Spiegeln: `gh` bricht mitten im Lauf ab.** Nach acht von
+  vierzehn Releases: `dial tcp ...: connectex`. `Tools/releases_oeffentlich.py`
+  wiederholt deshalb Verbindungsfehler dreimal (5 s, dann 10 s) - ein echter
+  gh-Fehler mit Text in stderr wird NICHT wiederholt. Der Lauf ist ueberhaupt
+  wiederholbar: zweiter Lauf = "passt", nichts passiert.
+- **Was oeffentlich NICHT ist:** der Quellcode, `docs/meilensteine.md` und die
+  Releases des privaten Repos. Die Text- und Asset-Inhalte sind gespiegelt,
+  das Original bleibt privat.
+

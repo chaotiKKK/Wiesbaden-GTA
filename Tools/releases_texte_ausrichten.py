@@ -37,6 +37,11 @@ SEITE = REPO / "docs" / "meilensteine.md"
 # die nur mit Konto funktionieren.
 OEFFENTLICH = "https://raw.githubusercontent.com/chaotiKKK/wiesbaden-real-meilensteine/main"
 SCHaufenSTER = "https://chaotikkk.github.io/wiesbaden-real-meilensteine/"
+# Die MEILENSTEIN-Releases liegen als Spiegel auch im oeffentlichen Repo, weil
+# die Download-Liste im privaten Repo fuer Fremde unsichtbar ist (alle 37
+# Assets lieferten am 27.09.2026 anonym 404). `releases_oeffentlich.py`
+# spiegelt sie dorthin - dieselbe Textfunktion, dieselben Bilder.
+OEFFENTLICHE_RELEASES = "https://github.com/chaotiKKK/wiesbaden-real-meilensteine/releases"
 PRIVAT = re.compile(r"github\.com/chaotiKKK/Wiesbaden-GTA", re.I)
 PFAD = "docs/meilensteine.md"
 
@@ -89,11 +94,19 @@ def abschnitte() -> dict[int, str]:
     return out
 
 
+def download_zeile(num: int) -> str:
+    """Wo es dieselben Bilder zum Herunterladen gibt - ohne GitHub-Konto."""
+    tag = TAGS[num]
+    return (f"\nBilder und GIFs zum Herunterladen, auch ohne GitHub-Konto: "
+            f"{OEFFENTLICHE_RELEASES}/tag/{tag}\n")
+
+
 def release_text(num: int, sha: str) -> str:
     text = (
         f"## {num}. {SEITEN_TITEL[num]}\n\n"
         + abschnitte()[num]
-        + f"\n\n---\n\nStand im Code: {sha} · alle Meilensteine: "
+        + download_zeile(num)
+        + f"\n---\n\nStand im Code: {sha} · alle Meilensteine: "
         + f"[Schaufenster]({SCHaufenSTER})\n"
     )
     if PRIVAT.search(text):

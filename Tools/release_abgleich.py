@@ -38,6 +38,7 @@ Notausgang, wenn GitHub gerade nicht erreichbar ist und es trotzdem raus
 muss: `git push --no-verify` oder `WB_KEINE_GATES=1`.
 """
 import argparse
+import concurrent.futures
 import contextlib
 import difflib
 import json
@@ -250,8 +251,14 @@ def arbeitsvergleich(bilder_arbeit, bilder_main):
 # ---------------------------------------------------------------------------
 
 OEFFENTLICH_BASIS = rta.OEFFENTLICH
+OEFFENTLICHES_REPO = "chaotiKKK/wiesbaden-real-meilensteine"
+OEFFENTLICHE_DOWNLOADS = rta.OEFFENTLICHE_RELEASES
 BILDLINK = re.compile(r"!\[[^\]]*\]\((https?://[^)\s]+)\)")
 PRIVAT = rta.PRIVAT
+# Wie viele Abrufe gleichzeitig. 35 HEADs seriell wuerden den Push um
+# Minuten dehnen; acht nebenlaeufig sind in Sekunden durch und schonen
+# GitHub mehr als ein einzelner Aufrufer in Schleife.
+ABRUFE_PARALLEL = 8
 
 
 def anonym_erreichen(url, sekunden=20):
@@ -360,6 +367,72 @@ def releases_pruefen(text):
     return befunde
 
 
+def spiegel_lesen():
+    """Die Releases des OEFFENTLICHEN Schaufenster-Repos."""
+    roh = gh_json("release", "list", "--limit", "100", "--json", "tagName",
+                  "--repo", OEFFENTLICHES_REPO)
+    if not isinstance(roh, list):
+        raise NichtMessbar("`gh release list` im oeffentlichen Repo lieferte "
+                           "keine Liste")
+    out = {}
+    for eintrag in roh:
+        tag = eintrag.get("tagName")
+        if not tag:
+            continue
+        daten = gh_json("release", "view", tag, "--json", "assets,body",
+                        "--repo", OEFFENTLICHES_REPO)
+        out[tag] = {
+            "assets": [a.get("name", "") for a in (daten.get("assets") or [])],
+            "body": daten.get("body") or "",
+        }
+    return out
+
+
+def spiegel_pruefen(text):
+    """Das oeffentliche Gegenstueck: DER Download-Weg fuer Menschen ohne Konto.
+
+    Warum das ein eigener Block ist: die Bildlinks im Release-Text sind im
+    oeffentlichen Repo (raw.githubusercontent) und damit seit dem 27.09.2026
+    auch ohne Konto abrufbar. Die *Download-Liste* des Releases ist es nicht -
+    sie haengt am Repo, in dem das Release liegt, und das war privat. Also
+    liegen die Meilenstein-Releases als Spiegel im oeffentlichen Schaufenster.
+    Faellt der Spiegel weg, faellt der einzige Weg, an die Bilder als Datei zu
+    kommen - und das faellt nur auf, wenn man ihn wirklich abruft.
+    """
+    _, bilder, _ = seiten_daten(text)
+    befunde = []
+    spiegel = spiegel_lesen()
+
+    downloads = []
+    for num, tag in sorted(rba.TAGS.items()):
+        wollen = bilder.get(num, [])
+        ist = spiegel.get(tag)
+        if ist is None:
+            befunde.append(f"M{num:02d} {tag}: kein oeffentliches Release - "
+                           f"die Bilder sind ohne Konto nicht herunterladbar")
+            continue
+        ist_namen = ist["assets"]
+        for name in wollen:
+            if name not in ist_namen:
+                befunde.append(f"M{num:02d} {tag}: Bild fehlt im oeffentlichen "
+                               f"Release: {name}")
+        for name in [i for i in ist_namen if i not in wollen]:
+            befunde.append(f"M{num:02d} {tag}: Bild im oeffentlichen Release, "
+                           f"nicht auf der Seite: {name}")
+        if PRIVAT.search(ist["body"]):
+            befunde.append(f"{tag}: oeffentliches Release verlinkt ins private Repo")
+        for name in wollen:
+            downloads.append(f"{OEFFENTLICHE_DOWNLOADS}/download/{tag}/{name}")
+
+    if downloads:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=ABRUFE_PARALLEL) as pool:
+            for url, (code, _groesse) in zip(downloads, pool.map(HTTP_LAUF, downloads)):
+                if code != 200:
+                    befunde.append(f"oeffentlicher Download nicht erreichbar "
+                                   f"(HTTP {code}): {url.rsplit('/', 2)[-2:]}")
+    return befunde
+
+
 def oeffentlichkeit_pruefen(vorhanden):
     """Bilder der Releases MUESSEN ohne GitHub-Konto abrufbar sein.
 
@@ -461,19 +534,24 @@ def hauptprogramm(argv=None):
     # --- 3. Die Releases selbst ---------------------------------------------
     try:
         rel_befunde = releases_pruefen(main_text)
+        spiegel_befunde = spiegel_pruefen(main_text)
     except NichtMessbar as grund:
         print(f"\n  Releases nicht abfragbar: {grund}")
         print("  Exit 3 - ausdruecklich NICHT 'alles in Ordnung'. "
               "Notausgang: git push --no-verify")
         return 3
+    rel_befunde = rel_befunde + spiegel_befunde
 
     # --- 4. Was der Arbeitszweig gegenueber der veroeffentlichten Seite hat --
     unterschied = arbeitsvergleich(bilder_arbeit, bilder_main)
     for zeile in unterschied:
         print(zeile)
     if unterschied:
-        print("\n  Nach dem Merge: python Tools/releases_bilder_ausrichten.py --anwenden")
-        print("                   python Tools/releases_texte_ausrichten.py --anwenden")
+        print("\n  Nach dem Merge, in dieser Reihenfolge:")
+        print("    1) python Tools/releases_bilder_ausrichten.py --anwenden")
+        print("    2) python Tools/releases_texte_ausrichten.py --anwenden")
+        print("    3) python Tools/releases_oeffentlich.py --anwenden")
+        print("       (das Schaufenster nur, wenn sich Bildnamen geaendert haben)")
 
     if rel_befunde:
         print("\nRELEASES:")
@@ -482,6 +560,7 @@ def hauptprogramm(argv=None):
         print("\n  Exit 1. Beheben mit:")
         print("    python Tools/releases_bilder_ausrichten.py --anwenden")
         print("    python Tools/releases_texte_ausrichten.py --anwenden")
+        print("    python Tools/releases_oeffentlich.py --anwenden")
         return 1
 
     print("\n  Alles stimmt: Seite, Assets und Texte passen zusammen.")
