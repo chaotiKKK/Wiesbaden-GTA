@@ -1070,12 +1070,25 @@ class ThreadDurchreichungTest(unittest.TestCase):
             os.environ["WB_BESITZ_DATEI"] = alt
 
     def test_der_threadname_kommt_an(self):
+        # GEMESSEN am 27.09.2026, im Push-Gate: dieser Test war im Hauptbaum
+        # gruen und wurde erst beim Push rot, weil dort NICHTS vorgemerkt ist -
+        # hauptprogramm kehrt dann vor gates_fahren zurueck ("Nichts
+        # vorgemerkt - nichts zu pruefen") und der Spion sah nichts.
+        vdc.gestagte_dateien = lambda *a, **k: ["Tools/x.py"]
         vdc.hauptprogramm(["--stufe", "schnell", "--gestaged", "--thread", "ich"])
         self.assertEqual(self.gesehen, ["ich"])
 
     def test_ohne_option_bleibt_es_beim_ermittelten_namen(self):
+        vdc.gestagte_dateien = lambda *a, **k: ["Tools/x.py"]
         vdc.hauptprogramm(["--stufe", "schnell", "--gestaged"])
         self.assertEqual(self.gesehen, [None])
+
+    def test_im_leeren_index_ruft_es_gates_fahren_gar_nicht(self):
+        """Die Rueckkehr bei leerem Index ist gewollt - nur diese Tests
+        hingen daran und waren deshalb im Push-Worktree blind."""
+        vdc.gestagte_dateien = lambda *a, **k: []
+        vdc.hauptprogramm(["--stufe", "schnell", "--gestaged", "--thread", "ich"])
+        self.assertEqual(self.gesehen, [])
 
     def test_der_besitzer_kommt_durch_der_eigenen_option_durch(self):
         """Das Ende der Kette: Option -> gates_fahren -> besitz_gate."""
@@ -1147,12 +1160,18 @@ class BesitzDokuTest(unittest.TestCase):
         vdc.gates_fahren = lambda *a, **k: 1
         alt_lauf = vdc.Lauf
         vdc.Lauf = lambda: _BesitzLaufDoppel()
+        # Wie oben: im Push-Worktree ist der Index leer, dann kehrt
+        # hauptprogramm vor dem Wegweistext zurueck und dieser Test prueft
+        # nichts mehr, ohne zu scheitern. GEMESSEN am 27.09.2026.
+        alt_staged = vdc.gestagte_dateien
+        vdc.gestagte_dateien = lambda *a, **k: ["Tools/x.py"]
         try:
             with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
                 vdc.hauptprogramm(["--stufe", "schnell", "--gestaged"])
         finally:
             vdc.gates_fahren = alt_gates
             vdc.Lauf = alt_lauf
+            vdc.gestagte_dateien = alt_staged
         text = out.getvalue()
         self.assertIn("--besitz-ansprechen", text)
         self.assertIn("git commit -- <nur eigene Dateien>", text)
