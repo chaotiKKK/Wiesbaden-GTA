@@ -194,6 +194,16 @@ function Get-Besitzer([string]$Label) {
 function Sperre-Nehmen([string]$Pfad, [string]$Label, [int]$WarteSekunden) {
     $frist = (Get-Date).AddSeconds([Math]::Max($WarteSekunden, 0))
     $uebernahmen = 0
+    # Ausgabe entzerren (27.09.2026). GEMESSEN: die Schleife unten fragt alle
+    # 2 s ab und meldete JEDES Mal. Bei -WarteSekunden 900 sind das bis zu 450
+    # Zeilen "Lock: belegt durch ... warte auf Freigabe ...", die den
+    # eigentlichen Befund (welcher Lauf, wie lange noch) erschlagen.
+    # Gesperrt wird die WIEDERHOLUNG, nicht die Information: der erste
+    # Eintrag und jeder Wechsel des Besitzers kommen sofort - wer eine
+    # Warteschleife sieht, will wissen, OB es Fortschritt gibt.
+    # gate_worktree.py macht es seit langem genauso (naechste_meldung).
+    $naechsteMeldung = Get-Date
+    $letzterBesitzer = ""
     while ($true) {
         $zustand = Get-LockZustand $Pfad (Get-ProzessKette $PID)
         if ($zustand.Status -eq "Eigen") {
@@ -212,7 +222,14 @@ function Sperre-Nehmen([string]$Pfad, [string]$Label, [int]$WarteSekunden) {
                 Write-Host "Lock: Tools\cleanup_unreal_processes.cmd -SperreIgnorieren."
                 return $ExitBelegt
             }
-            Write-Host ("Lock: belegt durch {0} - warte auf Freigabe ..." -f (Get-LockText $zustand))
+            $besitzer = Get-LockText $zustand
+            $jetzt = Get-Date
+            if ($besitzer -ne $letzterBesitzer -or $jetzt -ge $naechsteMeldung) {
+                $rest = [Math]::Max(($frist - $jetzt).TotalMinutes, 0)
+                Write-Host ("Lock: belegt durch {0} - warte auf Freigabe ({1:N0} min Rest) ..." -f $besitzer, $rest)
+                $naechsteMeldung = $jetzt.AddSeconds(60)
+                $letzterBesitzer = $besitzer
+            }
             Start-Sleep -Seconds 2
             continue
         }
