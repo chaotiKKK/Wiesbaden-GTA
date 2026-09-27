@@ -18,6 +18,13 @@ REM
 REM WARUM -WbGoto: ohne sie bleibt die Zelle ungestreamt, der Turm baut nie
 REM und beide Proben laufen nie an (wie in run_ankunft_probe.cmd begruendet).
 REM
+REM WARUM -WbZuFuss: TickFigurProbe kehrt zurueck, solange der Controller das
+REM Fahrzeug besitzt ("erst aussteigen (-WbZuFuss)", WiesbadenGameMode.cpp).
+REM Am 27.09. blieb der Spieler im Auto (Tempo 0/Rest 12 min) und die Probe
+REM startete nie - der Lauf ohne Nachweis durchlief. Der Ausstieg nach 20 s
+REM setzt die Figur nur ab; die Treppe-Probe versetzt sie danach selbst an
+REM den Treppenfuss.
+REM
 REM Bilder der Figurprobe: Saved\Diagnose\figur_treppe_*.png
 setlocal
 set KARTE=%~1
@@ -29,6 +36,10 @@ if "%QUIT%"=="" set QUIT=720
 
 set PROJ=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\WiesbadenReal.uproject
 set LOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Saved\Logs\wb_innen_%NAME%.log
+REM -abslog sichert die Log-Verbosity-Zeilen ("Start ...", "Wegpunkt N nach",
+REM "OBEN"): der -stdout-Umleitung fehlen Projekt-Logzeilen, nur Warnungen
+REM kommen durch (AGENTS.md "Unreal/Engine-Fallen").
+set FULLLOG=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Saved\Logs\wb_innen_%NAME%_full.log
 set ABLEITER=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal\Tools\sebbo_standort.py
 
 set ZIEL=
@@ -40,7 +51,7 @@ if "%ZIEL%"=="" (
 )
 echo Karte %KARTE%, Ziel %ZIEL%, Abbruch nach %QUIT% s
 
-"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/%KARTE% -game -WbGoto=%ZIEL% -WbLiftProbe "-WbFigurProbe=Treppe" -WbQuitAfter=%QUIT% -windowed -ResX=1280 -ResY=720 -stdout -unattended -nop4 > "%LOG%" 2>&1
+"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" /Game/Maps/%KARTE% -game -WbGoto=%ZIEL% -WbZuFuss=20 -WbLiftProbe "-WbFigurProbe=Treppe" -WbQuitAfter=%QUIT% -windowed -ResX=1280 -ResY=720 -stdout -abslog="%FULLLOG%" -unattended -nop4 > "%LOG%" 2>&1
 echo EXITCODE %ERRORLEVEL% >> "%LOG%"
 call "%~dp0engine_run_lock.cmd" -Modus Freigeben
 endlocal

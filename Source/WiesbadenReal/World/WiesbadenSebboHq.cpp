@@ -50,6 +50,13 @@ namespace
 		case EHqMaterial::Glass:   return TEXT("/Game/Materials/City/M_WbFacade_Glas.M_WbFacade_Glas");
 		case EHqMaterial::Metal:   return TEXT("/Game/Materials/City/M_WbLmSlate.M_WbLmSlate");
 		case EHqMaterial::Marking: return TEXT("/Game/Materials/City/M_WbLmWhite.M_WbLmWhite");
+		// Weisses Leuchtenfeld, NICHT Laternenglas: das Glas-Material ist ein
+		// Reflexions-Material und spiegelte bei Nacht den cyanen Regenhimmel in
+		// grossen Tafeln an der Fassade (gesehen 27.09., WbSeries_000/001).
+		case EHqMaterial::Lamp:    return TEXT("/Game/Materials/City/M_WbLmWhite.M_WbLmWhite");
+		case EHqMaterial::Wood:    return TEXT("/Game/Nerobergbahn/Materials/MI_Nb_NbHolz.MI_Nb_NbHolz");
+		case EHqMaterial::Fabric:  return TEXT("/Game/Nerobergbahn/Materials/MI_Nb_NbCreme.MI_Nb_NbCreme");
+		case EHqMaterial::Plant:   return TEXT("/Game/Materials/City/M_WbTree.M_WbTree");
 		default:                   return TEXT("/Game/Materials/City/M_WbLmWhite.M_WbLmWhite");
 		}
 	}
@@ -138,11 +145,74 @@ bool AWiesbadenSebboHq::ResolveGround(const FVector& WorldXY, double& OutZ) cons
 	return false;
 }
 
+void AWiesbadenSebboHq::UpdateInteriorLights()
+{
+	if (InteriorLights.IsEmpty())
+	{
+		return;
+	}
+
+	// Welche Etage sieht der Spieler gerade? Der BLICKPUNKT zaehlt, nicht der
+	// Pawn: in Messlaeufen filmt die Posen-Serie mit einer freien Kamera, und
+	// eine am Pawn haengende Beleuchtung liess die fotografierten Etagen dunkel
+	// (gesehen 27.09.). Im Spiel sitzt die Kamera ohnehin am Spieler, in der
+	// Figurprobe in der Figur - damit leuchtet ihr beim Aufstieg jede Etage.
+	// Root haengt am Ursprung und alle Teile tragen WELTKoordinaten
+	// (SetWorldLocation wie im Teile-Loop) - darum rechnet hier alles ueber
+	// BuiltBase statt ueber Relative-Transforms, und die Lichter werden per
+	// SetWorldLocation bewegt. Eine Relative-Fassung versetzte die Lichter
+	// beim ersten Etagenwechsel ans Welt-Origo (gesehen 27.09.).
+	double FussZ = Dimensions.SlabCm;
+	bool bBlickGefunden = false;
+	if (const UWorld* World = GetWorld())
+	{
+		if (const APlayerController* PC = World->GetFirstPlayerController())
+		{
+			FVector Blick;
+			FRotator Blickrichtung;
+			PC->GetPlayerViewPoint(Blick, Blickrichtung);
+			FussZ = Blick.Z - BuiltBase.Z;
+			bBlickGefunden = true;
+		}
+	}
+
+	const int32 Floor = FMath::Clamp(
+		FMath::FloorToInt32((FussZ - Dimensions.SlabCm) / Dimensions.FloorHeightCm),
+		0, Dimensions.FloorCount - 1);
+	if (Floor == LastInteriorLightFloor)
+	{
+		return;   // nur beim Etagenwechsel bewegen
+	}
+	LastInteriorLightFloor = Floor;
+
+	// Beweiszeile fuer Messlaeufe: welche Etage leuchtet und warum. Laeuft
+	// beim ERSTEN Aufruf immer (Startwert INDEX_NONE) und danach bei jedem
+	// Etagenwechsel - eine stille Sperre versteckte Fehler zu lange.
+	UE_LOG(LogWbSebboHq, Log, TEXT("Innenlicht auf Etage %d (%s, %.0f m ueber dem Turmfuss)."),
+		Floor, bBlickGefunden ? TEXT("Blickpunkt") : TEXT("ohne Blick, Vorgabe"), FussZ);
+
+	// Drei Zonen der Etage wie in BuildInnenausbau: Lobby, Buerowinkel,
+	// Sitzungswinkel - unmittelbar unter der Geschossdecke.
+	const double Z = Floor * Dimensions.FloorHeightCm + Dimensions.FloorHeightCm - 60.0;
+	static const FVector Zonen[] = {
+		FVector(-1000.0, 56.0, 0.0), FVector(1000.0, 0.0, 0.0), FVector(0.0, 1000.0, 0.0) };
+	for (int32 i = 0; i < InteriorLights.Num() && i < UE_ARRAY_COUNT(Zonen); ++i)
+	{
+		if (InteriorLights[i])
+		{
+			const FRotator Drehung(0.0, HeadingDegrees, 0.0);
+			InteriorLights[i]->SetWorldLocation(
+				BuiltBase + Drehung.RotateVector(FVector(Zonen[i].X, Zonen[i].Y, Z)));
+		}
+	}
+}
+
 void AWiesbadenSebboHq::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	if (bBuilt)
 	{
+		UpdateInteriorLights();
 		// Treppenprobe NACH dem Bauen, nicht im selben Bild (siehe
 		// SecondsSinceBuild): die Kollisionskoerper brauchen einen Takt.
 		if (!bProbed && SecondsSinceBuild >= 0.0f)
@@ -316,6 +386,7 @@ void AWiesbadenSebboHq::Build(const FVector& BaseWorld, const FRotator& BaseYaw)
 	TArray<FHqPart> Teile;
 	SebboHq::BuildShell(Dimensions, Teile);
 	SebboHq::BuildVerticalCore(Dimensions, Teile);
+	SebboHq::BuildInnenausbau(Dimensions, Teile);
 	const FSebboHqArrivalLayout ArrivalLayout =
 		SebboHq::BuildArrivalFacilities(Dimensions, &Anschluss);
 	Teile.Append(ArrivalLayout.Parts);
@@ -366,6 +437,27 @@ void AWiesbadenSebboHq::Build(const FVector& BaseWorld, const FRotator& BaseYaw)
 	// Meshes (frischer Checkout) faellt der Turm nicht aus - die Silhouette
 	// fehlt dann nur, mit Warnung im Log.
 	TArray<SebboHq::FSebboHqDachProp> DachProps;
+	// Innenbeleuchtung: drei Punktlichter statt 45 - sie folgen dem Spieler
+	// in die naechste Etage (UpdateInteriorLights), warmweiss wie Bueros.
+	InteriorLights.SetNum(3);
+	const FLinearColor Innenlicht(1.0f, 0.93f, 0.80f);
+	// DEZENTER als die Leuchturme der Anfahrt: 6000 cd mit der vollen
+	// Volumetric-Streuung der Leitlichter fuehrten in Innenraeumen zu einem
+	// weissen Nebelball (Ego-Bild der Figurprobe, 27.09.).
+	CreateGuidanceLight(InteriorLights[0], TEXT("InnenlichtLobby"),
+		FVector(-1000.0, 56.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 1500.0f, 900.0f);
+	CreateGuidanceLight(InteriorLights[1], TEXT("InnenlichtBuero"),
+		FVector(1000.0, 0.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 1500.0f, 900.0f);
+	CreateGuidanceLight(InteriorLights[2], TEXT("InnenlichtSitzung"),
+		FVector(0.0, 1000.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 1500.0f, 900.0f);
+	for (UPointLightComponent* Licht : InteriorLights)
+	{
+		if (Licht)
+		{
+			Licht->SetVolumetricScatteringIntensity(0.25f);
+		}
+	}
+
 	SebboHq::BuildDachaufbauten(Dimensions, DachProps);
 	for (const SebboHq::FSebboHqDachProp& Prop : DachProps)
 	{

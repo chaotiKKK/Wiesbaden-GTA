@@ -731,3 +731,140 @@ void SebboHq::BuildDachaufbauten(const FSebboHqDimensions& D, TArray<FSebboHqDac
 		OutProps.Add(Logo);
 	}
 }
+
+void SebboHq::BuildInnenausbau(const FSebboHqDimensions& D, TArray<FHqPart>& OutParts)
+{
+	// Vier Zonen je Geschoss, immer gleich (siehe Header): Lobby an der
+	// -X-Kernwand vor den beiden Tueroeffnungen, Schreibtischwinkel zur
+	// Platter Strasse (+X), Sitzungstisch zum +Y-Fenster, Regal und Sofa zum
+	// -Y-Fenster. Dazwischen bleibt ein Ring von mindestens 2 m Gangbreite.
+	//
+	// DIE KERNMASSE STEHEN ZUM ZWEITEN MAL HIER (wie GetStairWalk): Wand 25,
+	// Tuer 110 x 300, Podestdicke 20. Es gilt die Regel aus BuildVerticalCore:
+	// wer diese Zahlen getrennt neu erfindet, baut eine zweite Wahrheit.
+	const double Aussen = D.CoreCm * 0.5;
+	const double Innen = Aussen - 25.0;
+	const double Trennung = 12.5;
+	const double TuerBreite = 110.0;
+	const double TuerHoehe = 300.0;
+	const double PodestDicke = 20.0;
+	const double TrennY = (-Innen + -Trennung) * 0.5;
+	const double PodestMitteY = (TrennY + -Trennung) * 0.5;
+
+	OutParts.Reserve(OutParts.Num() + D.FloorCount * 40);
+
+	for (int32 Floor = 0; Floor < D.FloorCount; ++Floor)
+	{
+		const double Z0 = Floor * D.FloorHeightCm;
+		const double Zboden = Z0 + D.SlabCm;      // Oberkante Geschossdecke
+		const double Z1 = Z0 + D.FloorHeightCm;   // Unterkante der Decke darueber
+		const double TuerZ = Z0 + PodestDicke;    // Oberkante Treppenpodest
+
+		// Bauteil mit der vollen FHqPart-Freiheit (Drehung, Kollision).
+		const auto Bauteil = [&OutParts, Floor](EHqPrimitive Primitive, EHqMaterial Material,
+			const FVector& Center, const FVector& Size, bool bCollide = true,
+			const FRotator& Rotation = FRotator::ZeroRotator)
+		{
+			FHqPart Teil;
+			Teil.Primitive = Primitive;
+			Teil.Material = Material;
+			Teil.CenterCm = Center;
+			Teil.SizeCm = Size;
+			Teil.Floor = Floor;
+			Teil.Rotation = Rotation;
+			Teil.bCollision = bCollide;
+			OutParts.Add(Teil);
+		};
+
+		// --- Beleuchtung: vier flache Panels buendig unter der Decke --------
+		// Leuchtende Laternenglas-Material, ohne Kollision. Dazu spannt der
+		// Actor drei echte Punktlichter, die im Tick dem Spieler in die
+		// naechste Etage folgen (Laternen-Muster der Strassenmoebel).
+		const auto Leuchte = [&Bauteil, Z1](double X, double Y, double SX, double SY)
+		{
+			Bauteil(EHqPrimitive::Box, EHqMaterial::Lamp,
+				FVector(X, Y, Z1 - 4.0), FVector(SX, SY, 8.0), false);
+		};
+		Leuchte(-1000.0, 56.0, 45.0, 320.0);   // Lobby vor beiden Kern-Tueren
+		Leuchte(1000.0, 0.0, 45.0, 300.0);     // Schreibtischwinkel, Platter Strasse
+		Leuchte(0.0, 1000.0, 300.0, 45.0);     // Sitzungswinkel
+		Leuchte(0.0, -1000.0, 300.0, 45.0);    // Regal-/Sofaecke
+
+		// --- Fluchttuer zum Treppenhaus, OFFEN gegen die Wand ---------------
+		// Die Luecke liegt auf der -X-Seite wie in BuildVerticalCore; der
+		// Fluegel schlaegt 90 Grad auf und liegt an der Bueroseite der Wand
+		// neben der Oeffnung (Band an der -Y-Laibung). Die Schacht-Luecke daneben
+		// traegt bereits die Schiebetueren des Aufzugs. Deko ohne Kollision.
+		Bauteil(EHqPrimitive::Box, EHqMaterial::Wood,
+			FVector(-419.0, PodestMitteY - TuerBreite * 0.5 - 52.5, TuerZ + 142.5),
+			FVector(8.0, 105.0, TuerHoehe - 15.0), false);
+		// Klinke: kurzer waagerechter Stab auf Griffhoehe, aus der Fluegelflaeche.
+		Bauteil(EHqPrimitive::Cylinder, EHqMaterial::Metal,
+			FVector(-408.0, PodestMitteY - TuerBreite * 0.5 - 15.0, TuerZ + 105.0),
+			FVector(4.0, 4.0, 14.0), false, FRotator(90.0, 0.0, 0.0));
+
+		// --- Lobby: zwei Baenke an den Wangen, zwei Pflanzkuebel ------------
+		// Die Bankflucht liegt seitlich des Laufwegs von den Kern-Tueren nach
+		// +X (der Mittelgang bleibt frei).
+		for (const double Y : { -330.0, 330.0 })
+		{
+			Bauteil(EHqPrimitive::Box, EHqMaterial::Wood,
+				FVector(-800.0, Y, Zboden + 17.5), FVector(140.0, 40.0, 35.0));
+			Bauteil(EHqPrimitive::Box, EHqMaterial::Fabric,
+				FVector(-800.0, Y, Zboden + 39.0), FVector(150.0, 45.0, 8.0));
+		}
+		for (const double Y : { -600.0, 600.0 })
+		{
+			Bauteil(EHqPrimitive::Cylinder, EHqMaterial::Metal,
+				FVector(-1350.0, Y, Zboden + 20.0), FVector(40.0, 40.0, 40.0));
+			Bauteil(EHqPrimitive::Cylinder, EHqMaterial::Plant,
+				FVector(-1350.0, Y, Zboden + 100.0), FVector(70.0, 70.0, 120.0));
+		}
+
+		// --- Schreibtischwinkel (+X): zwei Plaetze mit Containern und Stuehlen
+		for (const double Y : { -260.0, 260.0 })
+		{
+			Bauteil(EHqPrimitive::Box, EHqMaterial::Wood,
+				FVector(1250.0, Y, Zboden + 75.0), FVector(90.0, 170.0, 6.0));
+			Bauteil(EHqPrimitive::Box, EHqMaterial::Wood,
+				FVector(1250.0, Y - 55.0, Zboden + 35.0), FVector(85.0, 55.0, 70.0));
+			Bauteil(EHqPrimitive::Cylinder, EHqMaterial::Metal,
+				FVector(1140.0, Y, Zboden + 21.0), FVector(8.0, 8.0, 42.0));
+			Bauteil(EHqPrimitive::Box, EHqMaterial::Fabric,
+				FVector(1140.0, Y, Zboden + 45.0), FVector(45.0, 45.0, 6.0));
+			Bauteil(EHqPrimitive::Box, EHqMaterial::Fabric,
+				FVector(1118.0, Y, Zboden + 73.0), FVector(7.0, 45.0, 50.0));
+		}
+
+		// --- Sitzungswinkel (+Y): Tuerk auf einem Sockel, zwei Sessel --------
+		Bauteil(EHqPrimitive::Box, EHqMaterial::Wood,
+			FVector(0.0, 950.0, Zboden + 72.0), FVector(200.0, 110.0, 8.0));
+		Bauteil(EHqPrimitive::Box, EHqMaterial::Metal,
+			FVector(0.0, 950.0, Zboden + 35.0), FVector(40.0, 40.0, 70.0));
+		for (const double X : { -80.0, 80.0 })
+		{
+			Bauteil(EHqPrimitive::Cylinder, EHqMaterial::Metal,
+				FVector(X, 830.0, Zboden + 21.0), FVector(8.0, 8.0, 42.0));
+			Bauteil(EHqPrimitive::Box, EHqMaterial::Fabric,
+				FVector(X, 830.0, Zboden + 45.0), FVector(45.0, 45.0, 6.0));
+			Bauteil(EHqPrimitive::Box, EHqMaterial::Fabric,
+				FVector(X, 808.0, Zboden + 73.0), FVector(45.0, 7.0, 50.0));
+		}
+
+		// --- Regal-/Sofaecke (-Y): Regalwand und Sofa mit Ruecken zur Wand ---
+		for (const double X : { 160.0, 340.0 })
+		{
+			Bauteil(EHqPrimitive::Box, EHqMaterial::Wood,
+				FVector(X, -1350.0, Zboden + 95.0), FVector(8.0, 40.0, 190.0));
+		}
+		for (const double H : { 30.0, 95.0, 160.0 })
+		{
+			Bauteil(EHqPrimitive::Box, EHqMaterial::Wood,
+				FVector(250.0, -1350.0, Zboden + H), FVector(196.0, 40.0, 6.0));
+		}
+		Bauteil(EHqPrimitive::Box, EHqMaterial::Fabric,
+			FVector(-250.0, -1130.0, Zboden + 19.0), FVector(180.0, 70.0, 38.0));
+		Bauteil(EHqPrimitive::Box, EHqMaterial::Fabric,
+			FVector(-250.0, -1159.0, Zboden + 65.0), FVector(180.0, 12.0, 55.0));
+	}
+}

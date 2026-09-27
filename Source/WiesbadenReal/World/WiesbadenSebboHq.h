@@ -185,6 +185,17 @@ private:
 		const FVector& LocalPosition, const FVector& BaseWorld, const FRotator& BaseYaw,
 		const FLinearColor& Color, float Intensity, float Radius);
 
+	/**
+	 * Laesst die drei Innenlichter der Etage des Spielers folgen.
+	 *
+	 * 15 Etagen x drei Zonen waeren 45 dauerhafte Punktlichter - zu viel fuer
+	 * einen Frame. Drei Lichter genuegen, weil der Spieler ohnehin nur eine
+	 * Etage gleichzeitig sieht; die Deckenleuchten des Innenausbaus leuchten
+	 * materialseitig immer. Gleiches Muster wie die Laternen-Leuchten der
+	 * Strassenmoebel.
+	 */
+	void UpdateInteriorLights();
+
 	bool HasCrossTraffic(const FVector& WorldPosition) const;
 
 	UFUNCTION()
@@ -222,6 +233,13 @@ private:
 
 	UPROPERTY(Transient)
 	UPointLightComponent* HelipadGuidanceLight = nullptr;
+
+	/** Begrenzter Punktlicht-Pool fuer die Innenraeume (folgt dem Spieler). */
+	UPROPERTY(Transient)
+	TArray<UPointLightComponent*> InteriorLights;
+
+	/** Zuletzt beleuchtete Etage - nur beim Wechsel neu positionieren. */
+	int32 LastInteriorLightFloor = INDEX_NONE;
 
 	UPROPERTY(VisibleInstanceOnly, Category = "Sebbo HQ|Arrival")
 	ESebboHqArrivalTarget ArrivalTarget = ESebboHqArrivalTarget::None;
