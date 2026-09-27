@@ -4186,7 +4186,15 @@ weil das Log nichts Falsches sagte - es sagte gar nichts.
   ergibt 2 x Korrektur, weil die Nabe mitdreht).
 
 
-### Shell quirks (bash → PowerShell)
+### Bild-Belege statt Behauptungen (Plasmacutter, Gate 4)
+- `Tools/verify_cuttable.cmd` faehrt den Bildlauf UND misst die PNGs (Glut-Anteil, Lage, Blickwinkel aus dem Log). `-NurPruefen` prueft einen vorhandenen Lauf ohne Engine. `Tools/test_verify_cuttable_gate.py` baut acht Fehlerfaelle nach und verlangt, dass das Gate bei jedem ROT wird - **21 gruene Pruefungen allein beweisen nichts**.
+- **Der FootPawn setzt seine Actor-Rotation selbst auf `(0, Yaw, 0)` - Pitch ist dort immer 0.** Eine Kamera an seinem SpringArm kann nicht auf ein Stueck schauen, das unter ihr liegt (`SetControlRotation` hilft auch nicht, der ACharacter zieht die Drehung aus dem Controller und der Tick ueberschreibt danach). Loesung der Bildprobe: **freie Kamera als ViewTarget**.
+- Bildziel nach dem Schnitt ist `GetFallenPiece()`, NICHT die Schnittmitte - das abgefallene Stueck rutscht vom Schnittpunkt weg.
+- `Saved\` ist nicht versioniert: im Commit-Worktree fehlen beim Start der Python-Suiten die Bilder, der Selbsttest ueberspringt dort. Gate 4 laeuft ohnehin **ohne Dateifilter** - im Worktree ist der Commit schon committed, eine aus dem Push-Bereich gebaute Dateiliste ist dort LEER und wurde als "nichts zu tun" gelesen.
+- `waehle_stadtinhalt` verlinkt aus unversionierten Dateien **nur die Stadtkarten**. Die aus Blender importierten Meshes (`Content/Waffen/Cutpieces`) fehlen im Worktree, der Cuttable faellt auf Wuerfel zurueck. Das Bild-Gate haengt nicht daran (gemessen 5,4/13,5/2,8 % statt 16/18/4 % Glueh-Anteil, Grenze 1 %).
+- **Batch: `%errorlevel%` und `%VAR%` INNERHALB eines `if`-Blocks werden VOR der Ausfuehrung expandiert und sind immer leer.** Ohne `setlocal EnableDelayedExpansion` + `!VAR!` meldet jeder erfolgreiche Lauf "abgebrochen". Kosten: ein Gate, das nie gruen werden konnte.
+
+## Shell quirks (bash → PowerShell)
 - Bash expands `$_` inside double quotes — wrap the whole PowerShell call in single quotes: `powershell -NoProfile -Command 'Get-Process python | ...'`.
 - Git Bash `tail -N file1 file2` fails ("option used in invalid context"); tail one file per call.
 

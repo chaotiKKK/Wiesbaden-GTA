@@ -19,10 +19,14 @@
 #include "Misc/Parse.h"
 #include "Vehicles/WiesbadenCarSpawn.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/PointLightComponent.h"
+#include "Camera/CameraComponent.h"
+#include "Camera/CameraActor.h"
 #include "Materials/MaterialInterface.h"
 #include "Vehicles/WiesbadenFootPawn.h"
 #include "Weapons/WiesbadenWeaponSpec.h"
 #include "Weapons/WiesbadenWeaponComponent.h"
+#include "World/WiesbadenCuttable.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "NPC/WiesbadenStoreMerchant.h"
 #include "Missions/WiesbadenMissionSubsystem.h"
@@ -120,6 +124,7 @@ void AWiesbadenGameMode::BeginPlay()
 	bFigurProbe = FParse::Value(FCommandLine::Get(), TEXT("WbFigurProbe="), FigurProbeMode)
 		|| FParse::Param(FCommandLine::Get(), TEXT("WbFigurProbe"));
 	bPadProbe = FParse::Param(FCommandLine::Get(), TEXT("WbPadProbe"));
+	bCutShots = FParse::Param(FCommandLine::Get(), TEXT("WbCutShots"));
 
 	CitySubsystem = GetWorld() ? GetWorld()->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
 	if (!CitySubsystem)
@@ -798,6 +803,10 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 	{
 		TickPadProbe(DeltaSeconds);
 	}
+	if (bCutShots)
+	{
+		TickCutShots(DeltaSeconds);
+	}
 }
 
 void AWiesbadenGameMode::TickFigurProbe(float DeltaSeconds)
@@ -958,8 +967,26 @@ void AWiesbadenGameMode::TickFigurProbe(float DeltaSeconds)
 			// wenn er ein Stueck frueher auf das Austrittspodest getreten ist.
 			const FVector& Ziel = FigurProbeWeg[FigurProbeWegIndex];
 			const bool bLetzter = FigurProbeWegIndex + 1 == FigurProbeWeg.Num();
+			// Erreicht ist ein Wegpunkt auch, wenn die Figur ihn SCHNEIDET: sie
+			// laeuft die Podest-Ecken diagonal ab und beruehrt die gesetzten Punkte
+			// auf wenige Zentimeter nie (gemessen 26.09.2026: Haenger vor Wegpunkt 1,
+			// waehrend die Figur bereits vier Etagen hoeher stieg). Massgeblich ist
+			// darum der Fortschritt auf dem Stueck ZUM NAECHSTEN Punkt - ab 85 Prozent
+			// der Strecke ist der aktuelle Punkt passiert.
+			bool bVorbei = false;
+			if (!bLetzter && FigurProbeWeg.IsValidIndex(FigurProbeWegIndex + 1))
+			{
+				const FVector Stueck = FigurProbeWeg[FigurProbeWegIndex + 1] - Ziel;
+				const FVector Fuesse = Foot->GetActorLocation() - FVector(0.0, 0.0, 90.0);
+				const double Laenge2 = Stueck.SizeSquared();
+				if (Laenge2 > 1.0)
+				{
+					bVorbei = FVector::DotProduct(Fuesse - Ziel, Stueck) / Laenge2 >= 0.85;
+				}
+			}
 			const bool bDa = (FMath::Abs(Dx) <= 4.0f && FMath::Abs(Dy) <= 4.0f)
-				|| (bLetzter && FeetZ >= Ziel.Z - 30.0f);
+				|| (bLetzter && FeetZ >= Ziel.Z - 30.0f)
+				|| bVorbei;
 			// Achsweise wie ein Mensch auf der Treppe: auf Laeufen und Podesten
 			// nur vor/zurueck, seitlich erst ab 20 cm - schraeg gedrueckt schob
 			// das Abgleiten an den Stufenkanten die Figur an die Trennwand, und
@@ -1702,33 +1729,44 @@ void AWiesbadenGameMode::TickPadProbe(float DeltaSeconds)
 			return;
 		}
 
-		const FVector ZumAuto = Auto->GetActorLocation() - Foot->GetActorLocation();
-		const float AbstandCm = ZumAuto.Size();
-		if (AbstandCm > 300.0f)
+		// Endet der Rueckweg, beginnt die Messung: die Schrittuhr wird
+		// zurueckgesetzt. Ohne das bringt der Rueckweg seine 2 s mit, der
+		// Press-Teil gilt als ueberfaellig und der Schritt wertet aus, BEVOR
+		// der Pawn den Druck überhaupt gesehen hat.
+		if (!PadProbeAmAuto)
 		{
-			// Zum Auto drehen und geradeaus laufen. Der Schritt macht das
-			// selbst - der Spieler tut es auch, sonst stuende die Figur
-			// nach dem Laufen an der Strasse und nicht am Auto.
-			Foot->SetActorRotation(FRotator(0.0f, ZumAuto.Rotation().Yaw, 0.0f));
-			SetzeAchse(EKeys::Gamepad_LeftY, true);
-			if (PadProbeStepTime < 4.0f)
+			const FVector ZumAuto = Auto->GetActorLocation() - Foot->GetActorLocation();
+			const float AbstandCm = ZumAuto.Size();
+			if (AbstandCm > 300.0f)
 			{
+				// Zum Auto drehen und geradeaus laufen. Der Schritt macht
+				// das selbst - der Spieler tut es auch, sonst stuende die
+				// Figur nach dem Laufen an der Strasse und nicht am Auto.
+				Foot->SetActorRotation(FRotator(0.0f, ZumAuto.Rotation().Yaw, 0.0f));
+				SetzeAchse(EKeys::Gamepad_LeftY, true);
+				if (PadProbeStepTime < 4.0f)
+				{
+					return;
+				}
+				SetzeAchse(EKeys::Gamepad_LeftY, false);
+				UE_LOG(LogWbVehicles, Warning,
+					TEXT("WbPadProbe: nach 4 s noch %.0f m vom Auto entfernt - X wird "
+						"nicht geprueft."), AbstandCm / 100.0f);
+				Zaehle(false);
+				PadProbeStep = 14;
+				PadProbeStepTime = 0.0f;
 				return;
 			}
+
 			SetzeAchse(EKeys::Gamepad_LeftY, false);
-			UE_LOG(LogWbVehicles, Warning,
-				TEXT("WbPadProbe: nach 4 s noch %.0f m vom Auto entfernt - X wird "
-					"nicht geprueft."), AbstandCm / 100.0f);
-			Zaehle(false);
-			PadProbeStep = 14;
+			PadProbeAmAuto = true;
 			PadProbeStepTime = 0.0f;
+			PadProbeBedingtErreicht = false;
+			UE_LOG(LogWbVehicles, Log,
+				TEXT("WbPadProbe t=%.1f: zurueck am Auto (%.1f m) - X druecken."),
+				T, AbstandCm / 100.0f);
 			return;
 		}
-
-		SetzeAchse(EKeys::Gamepad_LeftY, false);
-		UE_LOG(LogWbVehicles, Log,
-			TEXT("WbPadProbe t=%.1f: zurueck am Auto (%.1f m) - X druecken."),
-			T, AbstandCm / 100.0f);
 
 		if (!PadProbeBedingtErreicht)
 		{
@@ -1753,6 +1791,7 @@ void AWiesbadenGameMode::TickPadProbe(float DeltaSeconds)
 			PC->GetPawn() != Foot ? TEXT("EINSTEIGEN WIRKT") : TEXT("EINSTEIGEN WIRKT NICHT"));
 		Zaehle(PC->GetPawn() != Foot);
 		PadProbeBedingtErreicht = false;
+		PadProbeAmAuto = false;
 		PadProbeStep = 14;
 		PadProbeStepTime = 0.0f;
 		return;
@@ -1786,6 +1825,271 @@ void AWiesbadenGameMode::TickPadProbe(float DeltaSeconds)
 				? TEXT("ALLE GAMEPAD-TASTEN WIRKEN (LT/RT/RB/LB/R3/A/L3/D-Pad/Y/X).")
 				: TEXT("NICHT ALLE GAMEPAD-TASTEN WIRKEN - siehe Schritte oben."));
 		bPadProbe = false;
+	}
+}
+
+void AWiesbadenGameMode::TickCutShots(float DeltaSeconds)
+{
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	AWiesbadenFootPawn* Foot = FootPawn;
+	if (!PC || !Foot || (CutShotsTime <= 0.0f && PC->GetPawn() != Foot))
+	{
+		return;   // erst aussteigen (-WbZuFuss)
+	}
+
+	// Wie die anderen Proben: 8 s Ruhe, die Zellen laden noch nach.
+	CutShotsTime += DeltaSeconds;
+	const float T = CutShotsTime - 8.0f;
+	if (T < 0.0f)
+	{
+		return;
+	}
+
+	// Die Schrittuhr laeuft ab hier fuer ALLE Schritte. Sie stand vorher
+	// nur in Schritt 1 - die Winkel-Schritte warteten dann auf eine Zeit,
+	// die niemand hochgezaehlt hat, und die Folge brach nach dem
+	// Vergleichsbild ab. Genau die Sorte Fehler, die im Log fehlt und im
+	// Bild fehlt: es waren nur ein statt vier Bilder da.
+	CutShotsStepTime += DeltaSeconds;
+
+	// Die Figur wird zur Kamera: Ego-Ansicht blendet den eigenen Koerper aus,
+	// damit das Stueck nicht in der eigenen Brust steckt. Der Spieler-Pawn
+	// bleibt stehen, es wird nur gestellt.
+	//
+	// WICHTIG: die Kamera der Bildprobe ist eine FREIE Kamera (Schritt 0
+	// setzt sie als ViewTarget), nicht die des Pawn. Zwei Fassungen davor
+	// wurde die Pawn-Kamera gestellt und der Blick war trotzdem um 55 bis
+	// 80 Grad daneben - im Bild standen nur Himmel und Strasse. Grund ist
+	// der Pawn-Tick selbst: er setzt die Actor-Rotation jeden Tick auf
+	// (0, Yaw, 0), der Pitch ist dort also immer 0, und die Kamera hängt
+	// am SpringArm genau dieses Actors. Auch SetControlRotation half nicht,
+	// weil der ACharacter die Drehung aus dem Controller zieht und der
+	// Tick danach wieder ueberschreibt. Eine eigene Kamera ist von all
+	// dem nicht betroffen.
+	const auto KameraAuf = [this, PC](const FVector& Von, const FVector& Nach)
+	{
+		const FVector Delta = Nach - Von;
+		const float Waagerecht = FVector(Delta.X, Delta.Y, 0.0f).Size();
+		const float Yaw = FMath::RadiansToDegrees(FMath::Atan2(Delta.Y, Delta.X));
+		// Liegt das Ziel tiefer (Delta.Z < 0), muss die Kamera nach unten
+		// kippen - negative Pitch, ohne Vorzeichenwechsel.
+		const float Pitch = FMath::Clamp(FMath::RadiansToDegrees(
+			FMath::Atan2(Delta.Z, FMath::Max(Waagerecht, 1.0f))), -68.0f, 28.0f);
+		if (AActor* Kamera = CutShotsKamera.Get())
+		{
+			Kamera->SetActorLocation(Von);
+			Kamera->SetActorRotation(FRotator(Pitch, Yaw, 0.0f));
+		}
+		// Nur noch fuer die Protokolllinie (Bildschirmmitte folgt dem
+		// Controller) - die Kamera selbst haengt nicht daran.
+		if (PC)
+		{
+			PC->SetControlRotation(FRotator(Pitch, Yaw, 0.0f));
+		}
+	};
+	// Beim Bild mitprotokollieren, wo die Kamera steht und wohin sie
+	// sieht. Die erste Fassung legte vier Bilder an, in denen KEIN
+	// Trenn-Stueck zu sehen war - Sky und Strasse, sonst nichts. Ohne
+	// diese Zeile waere die Bildfolge "fertig" gewesen und haette
+	// trotzdem nichts belegt.
+	const auto Bild = [this](const TCHAR* Name, const FString& Zusatz,
+		const FVector& Ziel)
+	{
+		const FString Path = FPaths::ProjectSavedDir() / TEXT("Diagnose") / Name + TEXT(".png");
+		FScreenshotRequest::RequestScreenshot(Path, false, false);
+
+		FString Lage = TEXT("keine Kamera");
+		if (const UCameraComponent* Linse = CutShotsLinse.Get())
+		{
+			const FVector Hier = Linse->GetComponentLocation();
+			const FVector Blick = Linse->GetForwardVector();
+			const FVector ZumStueck = (Ziel - Hier).GetSafeNormal();
+			const float Winkel = FMath::RadiansToDegrees(FMath::Acos(
+				FMath::Clamp(FVector::DotProduct(Blick, ZumStueck), -1.0f, 1.0f)));
+			Lage = FString::Printf(
+				TEXT("Kamera (%.0f, %.0f, %.0f), %.0f cm vom Ziel, Blickwinkel %.0f Grad"),
+				Hier.X, Hier.Y, Hier.Z, (Ziel - Hier).Size(), Winkel);
+		}
+		UE_LOG(LogWbVehicles, Log, TEXT("WbCutShots: Bild %s gespeichert. %s | %s"),
+			Name, *Zusatz, *Lage);
+	};
+
+	// Schritt 0: Stueck aufstellen. Etwas vor der Figur, auf dem Boden, mit
+	// der Schnittfuge in Blickhoehe - die Kante soll im Bild sein, nicht
+	// ueber dem Kopf.
+	if (CutShotsStep == 0)
+	{
+		const FVector Basis = Foot->GetActorLocation();
+		const FVector Platz = Basis + Foot->GetActorForwardVector() * 260.0f;
+		AWiesbadenCuttable* Objekt = World->SpawnActor<AWiesbadenCuttable>(
+			AWiesbadenCuttable::StaticClass(), FTransform(FRotator::ZeroRotator, Platz));
+		if (!Objekt)
+		{
+			UE_LOG(LogWbVehicles, Error,
+				TEXT("WbCutShots: Das Trenn-Stueck liess sich nicht aufstellen - "
+					"keine Bilder."));
+			bCutShots = false;
+			return;
+		}
+		CutShotsObjekt = Objekt;
+		// Glueht laenger als im Spiel (6 s), sonst ist der dritte Winkel
+		// schon dunkel. Der Wert steht im Log - das Bild zeigt eine
+		// verlaengerte Glut, nicht die Standardzeit.
+		Objekt->EmberSeconds = 30.0f;
+		CutShotsMitte = Platz + FVector(0.0f, 0.0f, 55.0f);
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbCutShots t=%.1f: Trenn-Stueck bei (%.0f, %.0f, %.0f) aufgestellt, "
+				"Glutzeit %.0f s (Spielwert 6 s)."),
+			T, Platz.X, Platz.Y, Platz.Z, Objekt->EmberSeconds);
+		Foot->SetEgoCamera(true);
+
+		// Freie Kamera als ViewTarget (Begruendung bei KameraAuf).
+		if (AActor* Kamera = World->SpawnActor<AActor>(
+			ACameraActor::StaticClass(), FTransform::Identity))
+		{
+			UCameraComponent* Linse = Kamera->FindComponentByClass<UCameraComponent>();
+			if (Linse)
+			{
+				Linse->SetFieldOfView(75.0f);
+				CutShotsKamera = Kamera;
+				CutShotsLinse = Linse;
+				PC->SetViewTarget(Kamera);
+				UE_LOG(LogWbVehicles, Log,
+					TEXT("WbCutShots: eigene Kamera (FOV %.0f) als ViewTarget gesetzt."),
+					Linse->FieldOfView);
+			}
+			else
+			{
+				UE_LOG(LogWbVehicles, Error,
+					TEXT("WbCutShots: die Kamera hat keine Linsenkomponente - "
+						"die Bildfolge zeigt wieder den Spielblick."));
+			}
+		}
+		CutShotsStep = 1;
+		CutShotsStepTime = 0.0f;
+		return;
+	}
+
+	AWiesbadenCuttable* Objekt = CutShotsObjekt.Get();
+	if (!Objekt)
+	{
+		UE_LOG(LogWbVehicles, Error,
+			TEXT("WbCutShots: Das Trenn-Stueck ist weg (zerstört oder entfernt) - "
+				"die Bildfolge bricht ab."));
+		bCutShots = false;
+		return;
+	}
+
+	// Drei Blickwinkel auf die Schnittfuge: nah an der Kante, schraeg von
+	// oben (zeigt die Fuge als Linie), und weit von der Seite (zeigt das
+	// abgefallene Stueck neben dem Rest).
+	struct FWinkel { FVector Versatz; float HoeheCm; const TCHAR* Bild; const TCHAR* Text; };
+	static const FWinkel Winkel[] = {
+		{ FVector(-85.0, -75.0, 0.0), 35.0,  TEXT("schnitt_01_nah"),
+		  TEXT("nah an der Kante") },
+		{ FVector(75.0, -125.0, 0.0), 150.0, TEXT("schnitt_02_schraeg"),
+		  TEXT("schraeg von oben") },
+		{ FVector(-230.0, -215.0, 0.0), 130.0, TEXT("schnitt_03_weit"),
+		  TEXT("weit von der Seite") },
+	};
+
+	if (CutShotsStep == 1)
+	{
+		// Vergleichsbild VOR dem Schnitt: sonst ist auf den drei Bildern
+		// nicht erkennbar, dass ueberhaupt etwas getrennt wurde.
+		const FWinkel& W = Winkel[0];
+		KameraAuf(CutShotsMitte + W.Versatz + FVector(0.0, 0.0, W.HoeheCm), CutShotsMitte);
+		if (CutShotsStepTime < 1.4f)
+		{
+			return;
+		}
+		CutShotsStepTime = 0.0f;
+		Bild(TEXT("schnitt_00_vorher"), FString::Printf(
+			TEXT("ungeklafft, %s."), W.Text), CutShotsMitte);
+		CutShotsStep = 2;
+		return;
+	}
+
+	if (CutShotsStep == 2)
+	{
+		// Der Schnitt: Ebene durch die Fuge (Z 55 ueber der Actorbasis),
+		// Normale nach oben - damit faellt das untere Stueck, so wie es der
+		// Plasmacutter im Spiel tut (WiesbadenWeaponComponent::FireCutBeam).
+		const bool bGetrennt = Objekt->ApplyCut(
+			CutShotsMitte, FVector(0.0f, 0.0f, 1.0f));
+		bCutShotsGeschnitten = bGetrennt;
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbCutShots t=%.1f: geschnitten = %d, gefallen = %d, Glut an %s."),
+			T, bGetrennt ? 1 : 0,
+			Objekt->GetFallenPiece() == Objekt->GetPieceBelow() ? 1 : 0,
+			Objekt->IsEmberGlowing() ? TEXT("ja") : TEXT("nein"));
+		CutShotsStep = 3;
+		CutShotsStepTime = 0.0f;
+		return;
+	}
+
+	if (CutShotsStep >= 3 && CutShotsStep <= 5)
+	{
+		const int32 Index = CutShotsStep - 3;
+		const FWinkel& W = Winkel[Index];
+
+		// Nach dem Schnitt ist das Bildziel das ABGEFALLENE Stueck, nicht
+		// mehr die Schnittmitte: es rutscht beim Fallen vom Schnittpunkt weg
+		// und liegt am Boden. Auf die alte Mitte gerichtet stand im Nahbild
+		// nur Strasse - 0,17 % Glut statt der geforderten 1 %, gemessen mit
+		// Tools/mess_schnittbilder.py.
+		const FVector Ziel = Objekt->GetFallenPiece()
+			? Objekt->GetFallenPiece()->GetComponentLocation() + FVector(0.0f, 0.0f, 20.0f)
+			: CutShotsMitte;
+
+		const FVector Stand = Ziel + W.Versatz + FVector(0.0f, 0.0f, W.HoeheCm);
+		KameraAuf(Stand, Ziel);
+
+		// Das abgefallene Stueck braucht einen Moment, bis es liegt - ein
+		// Bild mitten im Fallen zeigt nur ein Stueck in der Luft.
+		if (CutShotsStepTime < 1.4f)
+		{
+			return;
+		}
+		CutShotsStepTime = 0.0f;
+
+		const FString Zusatz = FString::Printf(
+			TEXT("%s, Glut noch %.1f s, Licht %.0f Candela, Winkel %s, Bild %s"),
+			W.Text, Objekt->GetEmberRemaining(),
+			Objekt->GetEmberLight() ? Objekt->GetEmberLight()->Intensity : 0.0f,
+			*FString::FromInt(CutShotsStep - 2), W.Bild);
+		Bild(W.Bild, Zusatz, Ziel);
+		CutShotsStep = (CutShotsStep == 5) ? 6 : CutShotsStep + 1;
+		return;
+	}
+
+	// Abschluss: Aufraeumen und Bilanz. Ohne das bliebe das Stueck als
+	// Actor in der Strasse stehen, wenn der Lauf zurueckkommt.
+	if (CutShotsStep == 6)
+	{
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbCutShots: fertig - getrennt %d, Bilder in Saved/Diagnose/schnitt_*.png "
+				"(00 vorher, 01 nah, 02 schraeg, 03 weit)."),
+			bCutShotsGeschnitten ? 1 : 0);
+		if (Objekt)
+		{
+			Objekt->Destroy();
+		}
+		// Die Kamera wieder abgeben, sonst schaut der Rest des Laufs
+		// aus 2 m Entfernung auf die Strasse.
+		if (APlayerController* PC2 = GetWorld()
+			? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			PC2->SetViewTarget(FootPawn);
+		}
+		if (AActor* Kamera = CutShotsKamera.Get())
+		{
+			Kamera->Destroy();
+		}
+		CutShotsKamera.Reset();
+		CutShotsLinse.Reset();
+		bCutShots = false;
 	}
 }
 
