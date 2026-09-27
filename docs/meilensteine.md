@@ -113,12 +113,18 @@ Fuß oder mit dem Hubschrauber. Das Dach trägt Antennenschüssel, Masten und da
 leuchtende SEBBO-Logo. Der Aufzug fährt bis zur 14. Etage und öffnet dort seine
 Türen; das Treppenhaus führt über alle Geschosse hinauf. Innen ist jede Etage
 ausgebaut: Möbel, Türen und eine Beleuchtung, die dem Blick folgt. *Noch
-offen:* Die Türen der Räume sind noch Deko und öffnen nicht.
+offen:* Die Türen der Räume sind noch Deko und öffnen nicht, und nachts
+scheint das Innenlicht noch nicht durch die Glasfassade – von außen sieht
+man die dunklen Scheiben.
 
 | | |
 |---|---|
 | ![Der Turm](meilensteine/bilder/10-hq-turm.jpg) | ![SEBBO auf dem Dach](meilensteine/bilder/10-hq-logo.jpg) |
 | ![Der Turm bei Einbruch der Dunkelheit](meilensteine/bilder/10-hq-turm-nacht.jpg) | ![Die Glasfassade in der Dämmerung](meilensteine/bilder/10-hq-fassade.jpg) |
+
+| | | |
+|---|---|---|
+| ![Das Treppenhaus, Blick nach unten von der fünften Etage](meilensteine/bilder/10-hq-treppenhaus.jpg) | ![Der Etagenflur in der dritten Etage](meilensteine/bilder/10-hq-etagenflur.jpg) | ![Die Spielfigur im Treppenhaus](meilensteine/bilder/10-hq-figur-oben.jpg) |
 
 ---
 
