@@ -44,6 +44,7 @@ Exit-Codes:
     3  Platz UNTER der Grenze - gemeldet, nichts geloescht
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -261,6 +262,19 @@ def cache_pfad(wurzel=None):
     return os.path.join(wurzel or WURZEL, "Saved", "Diagnose", "plattenbericht.json")
 
 
+def kandidaten_signatur():
+    """Fingerabdruck der Kandidatenliste - Muster, Klasse, Grund.
+
+    Aendert sich eines davon, ist der gespeicherte Messstand fuer eine
+    ANDERE Liste gemessen und damit wertlos. Der Grund steht mit dran,
+    weil er im Bericht als Begruendung steht: auch eine neue Begründung
+    bei gleichem Muster ist eine neue Aussage.
+    """
+    return hashlib.sha256(
+        os.linesep.join(sorted("%s|%s|%s" % (m, k, g) for m, k, g in KANDIDATEN))
+        .encode("utf-8")).hexdigest()
+
+
 def cache_laden(wurzel=None, alter=CACHE_AGE_MINUTEN, jetzt=None):
     """Frueheren Messstand laden. `None`, wenn keiner da oder zu alt.
 
@@ -283,6 +297,15 @@ def cache_laden(wurzel=None, alter=CACHE_AGE_MINUTEN, jetzt=None):
     # Zahl. Ein Cache, der eine Regel nicht kennt, ist kein Beweis fuer die
     # Einhaltung dieser Regel.
     if not messung_vollstaendig(roh.get("messungen")):
+        return None
+    # Und derselbe Gedanke fuer die Liste selbst: GEMESSEN am 28.09.2026.
+    # Der Kandidat fuer den Gate-Worktree wurde auf einen existierenden
+    # Ordner umgestellt, der Cache enthielt aber noch die Messung ueber
+    # den alten, nicht existierenden Pfad - der Bericht zeigte deshalb
+    # weiter "0,00 GiB" fuer 3,2 GiB, die real da lagen. Ein Cache, der
+    # nicht weiss, WELCHE Liste er gemessen hat, ist kein Beweis fuer
+    # die heutige Liste.
+    if roh.get("signatur") != kandidaten_signatur():
         return None
     return roh
 
@@ -499,8 +522,18 @@ def warnung(wurzel=None, grenze=GRENZE_PROZENT, budget=BUDGET_SEKUNDEN,
 
 
 def erlaubte_wurzeln():
-    """Wo --reinigen ueberhaupt loeschen darf."""
-    wurzeln = [WURZEL, os.path.expanduser("~"),
+    """Wo --reinigen ueberhaupt loeschen darf.
+
+    Der Gate-Worktree kam am 28.09.2026 hinzu, und zwar ENG: es ist genau
+    sein eigener Projektordner, nicht der Stammordner darum und nicht der
+    Elternordner des Projekts. GEMESSEN: der Kandidat fuer seine
+    Object-Dateien (3,1 GiB) wurde abgewiesen, weil der Pfad neben dem
+    Projekt liegt - die Meldung sprach danach vom laufenden Editor, und
+    das war die falsche Begruendung fuer eine falsche Ablehnung. Genau
+    die Sorte Meldung, die man beim naechsten Mal fuer bare Muendung
+    haelt.
+    """
+    wurzeln = [WURZEL, _gate_worktree_ordner(WURZEL), os.path.expanduser("~"),
                os.environ.get("TEMP", ""), os.environ.get("TMP", "")]
     return tuple(os.path.normpath(w).lower() for w in wurzeln if w)
 
@@ -665,7 +698,7 @@ def reinigen(messungen, trocken=False, protokoll=None, jetzt=None,
             continue
         ziel = os.path.normpath(m["pfad"])
         if not ziel.lower().startswith(erlaubt):
-            abgewiesen.append(m["pfad"])
+            abgewiesen.append("%s (ausserhalb der erlaubten Wurzeln)" % ziel)
             continue
         if not os.path.isdir(ziel):
             continue
@@ -752,7 +785,8 @@ def hauptprogramm(argv=None):
         messungen = messen(kandidaten(), args.budget)
         laufzeit = time.monotonic() - start
         cache_sichern({"zeit": time.time(), "laufzeit": laufzeit,
-                       "messungen": messungen})
+                       "messungen": messungen,
+                       "signatur": kandidaten_signatur()})
 
     klassen = MIT_AUSGABE if args.auch_ausgabe else NUR_LOESCHEN
     print(bericht(frei, gesamt, prozent, messungen, args.schwelle, laufzeit,

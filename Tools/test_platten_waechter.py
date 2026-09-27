@@ -315,6 +315,78 @@ class AusgabeKlasseTest(unittest.TestCase):
             self.assertEqual(geloescht, [pfade[pw.REGENERIERBAR]])
             self.assertTrue(os.path.exists(pfade[pw.REGENERIERBAR]))
 
+    def test_der_gate_worktree_darf_geloescht_werden_sein_stamm_nicht(self):
+        """ENG gefuehrt: sein Projektordner ja, der Stammordner nein.
+
+        Der Stammordner `.gate-worktree` enthaelt die Worktrees ALLER
+        Gate-Laeufe und fremder Threads. Freizugeben hiesse, einem Pfad
+        zu erlauben, aus dem heraus beliebig viel zu loeschen - die genaue
+        Sorte Regel, die das Werkzeug abschafft.
+        """
+        gate = os.path.normpath(pw._gate_worktree_ordner()).lower()
+        stamm = os.path.dirname(gate)
+        wurzeln = pw.erlaubte_wurzeln()
+        self.assertIn(gate, wurzeln, "der Gate-Worktree ist nicht loeschbar")
+        self.assertNotIn(stamm, wurzeln, "der Stammordner ist loeschbar")
+
+    def test_der_gate_worktree_durchlaesst_die_wurzelpruefung(self):
+        """Gegenprobe am echten Pfad - im Trockenlauf, es wird nichts geloescht."""
+        pfad = os.path.normpath(os.path.join(pw._gate_worktree_ordner(), "Intermediate"))
+        # Die Lock-Bremse ist an anderer Stelle getestet, mit Tempordnern. Hier
+        # wird sie abgeschaltet: sonst hiengt der Test daran, ob gerade ein
+        # fremder Gate-Lauf laeuft - der Test darf nicht von der Tagesform
+        # einer anderen Sitzung abhaengen.
+        with mock.patch.object(pw, "engine_lock_aktiv", return_value=False):
+            geloescht, abgewiesen = pw.reinigen(
+                [{"pfad": pfad, "klasse": pw.REGENERIERBAR, "grund": "Test",
+                  "bytes": 1, "dateien": 1, "vollstaendig": True}],
+                trocken=True, klassen=pw.MIT_AUSGABE)
+        self.assertEqual(geloescht, [pfad],
+                         "der Pfad wurde abgewiesen: %r" % (abgewiesen,))
+
+    def test_der_cache_kennt_die_gemessene_kandidatenliste(self):
+        """Ein alter Messstand darf nicht fuer eine neue Liste sprechen.
+
+        GEMESSEN am 28.09.2026: der Kandidat fuer den Gate-Worktree wurde
+        auf einen existierenden Ordner umgestellt, der Cache enthielt aber
+        die Messung ueber den alten. Der Bericht zeigte weiterhin
+        "0,00 GiB" fuer 3,2 GiB, die real da lagen - mit derselben
+        Sorgfalt dargestellt wie eine vollstaendige Zahl.
+        """
+        with tempfile_tmp() as t:
+            os.makedirs(os.path.join(t, "Saved"))
+            messung = [{"pfad": os.path.join(t, "x"), "klasse": pw.LOESCHBAR,
+                        "grund": "g", "bytes": 1, "dateien": 1,
+                        "vollstaendig": True}]
+            pw.cache_sichern({"zeit": time.time(), "laufzeit": 0.1,
+                              "messungen": messung,
+                              "signatur": pw.kandidaten_signatur()}, wurzel=t)
+            self.assertIsNotNone(pw.cache_laden(wurzel=t),
+                                 "ein passend signierter Cache wird verworfen")
+            # Jetzt eine ANDERE Liste - etwa weil ein Kandidat umgestellt
+            # wurde. Der Messstand darf nicht mehr gelten.
+            pw.cache_sichern({"zeit": time.time(), "laufzeit": 0.1,
+                              "messungen": messung,
+                              "signatur": "falsche-signatur"}, wurzel=t)
+            self.assertIsNone(pw.cache_laden(wurzel=t),
+                              "ein Cache einer anderen Kandidatenliste wurde "
+                              "weiterverwendet")
+            # Und ohne Signatur (alte Datei) erst recht nicht.
+            pw.cache_sichern({"zeit": time.time(), "laufzeit": 0.1,
+                              "messungen": messung}, wurzel=t)
+            self.assertIsNone(pw.cache_laden(wurzel=t),
+                              "ein Cache ohne Signatur wurde weiterverwendet")
+
+    def test_die_signatur_aendert_sich_mit_der_liste(self):
+        with mock.patch.object(pw, "KANDIDATEN", list(pw.KANDIDATEN)):
+            vorher = pw.kandidaten_signatur()
+            pw.KANDIDATEN.append((r"{gate}\X", pw.LOESCHBAR, "neu"))
+            self.assertNotEqual(vorher, pw.kandidaten_signatur())
+            pw.KANDIDATEN[-1] = (r"{gate}\X", pw.LOESCHBAR, "anders")
+            self.assertNotEqual(vorher, pw.kandidaten_signatur(),
+                                "auch eine neue Begruendung ist eine neue "
+                                "Aussage - sie steht im Bericht")
+
     def test_der_gate_worktree_wird_vom_richtigen_ordner_gemessen(self):
         """Der Kandidat muss NEBEN dem Projekt liegen, nicht darin.
 
@@ -409,7 +481,8 @@ class CacheTest(unittest.TestCase):
         with tempfile_tmp() as t:
             self.assertIsNone(pw.cache_laden(t))
             pw.cache_sichern({"zeit": 1000, "laufzeit": 1.0,
-                              "messungen": self.MESSUNG}, t)
+                              "messungen": self.MESSUNG,
+                              "signatur": pw.kandidaten_signatur()}, t)
             self.assertIsNotNone(pw.cache_laden(t, jetzt=lambda: 1000 + 60))
 
     def test_leere_messliste_wird_nicht_gecacht(self):
@@ -422,7 +495,8 @@ class CacheTest(unittest.TestCase):
     def test_zu_alt_wird_ignoriert(self):
         with tempfile_tmp() as t:
             pw.cache_sichern({"zeit": 1000, "laufzeit": 1.0,
-                              "messungen": self.MESSUNG}, t)
+                              "messungen": self.MESSUNG,
+                              "signatur": pw.kandidaten_signatur()}, t)
             self.assertIsNone(pw.cache_laden(t, alter=30, jetzt=lambda: 1000 + 3600))
 
     def test_giftiger_cache_wird_verworfen(self):
@@ -443,7 +517,8 @@ class CacheTest(unittest.TestCase):
             # derselbe Cache mit vollstaendiger Messung wird sehr wohl gelesen
             with open(pfad, "w", encoding="utf-8") as f:
                 json.dump({"zeit": 1000, "laufzeit": 1.0,
-                           "messungen": self.MESSUNG}, f)
+                           "messungen": self.MESSUNG,
+                           "signatur": pw.kandidaten_signatur()}, f)
             self.assertIsNotNone(pw.cache_laden(t, jetzt=lambda: 1000 + 60))
 
     def test_kaputter_cache_ist_kein_fehler(self):
