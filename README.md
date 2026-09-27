@@ -15,7 +15,11 @@ GIS-Daten (OpenStreetMap + Copernicus/SRTM-Höhendaten).
 
 Alle 14 Meilensteine mit GIFs und Fotos aus dem Spiel:
 **[docs/meilensteine.md](docs/meilensteine.md)** – dazu je ein
-[Release](https://github.com/chaotiKKK/Wiesbaden-GTA/releases).
+[Release](https://github.com/chaotiKKK/Wiesbaden-GTA/releases). Öffentlich
+(ohne Code) als Schaufenster:
+**[chaotikkk.github.io/wiesbaden-real-meilensteine](https://chaotikkk.github.io/wiesbaden-real-meilensteine/)**
+– aktualisieren mit `python Tools/schaufenster.py --ziel <Klon von chaotiKKK/wiesbaden-real-meilensteine>`,
+dort committen und pushen.
 
 ## 📖 Dokumentation
 
