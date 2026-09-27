@@ -2223,9 +2223,25 @@ void AWiesbadenWorldBuilder::BeginPlay()
 			URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(RoadNetwork, FurnitureLayout);
 		if (OhnePfosten > 0)
 		{
+			// Aufschluesseln, damit die Zahl pruefbar ist: Landstrassen
+			// (primary bis unclassified) gegen Autobahn/Kraftfahrstrasse.
+			TMap<int32, EOSMHighwayType> Klasse;
+			for (const FRoadSegment& Segment : RoadNetwork.Segments)
+			{
+				Klasse.Add(Segment.SegmentId, Segment.HighwayType);
+			}
+			int32 Schnellstrasse = 0;
+			for (const FDelineatorInstance& Pfosten : FurnitureLayout.Delineators)
+			{
+				const EOSMHighwayType* Typ = Klasse.Find(Pfosten.SegmentId);
+				Schnellstrasse += Typ && (*Typ == EOSMHighwayType::Motorway || *Typ == EOSMHighwayType::MotorwayLink
+					|| *Typ == EOSMHighwayType::Trunk || *Typ == EOSMHighwayType::TrunkLink) ? 1 : 0;
+			}
 			UE_LOG(LogWbCore, Log,
-				TEXT("Leitpfosten: %d nach der Ausserorts-Regel entfernt (Stadtstrasse oder Tempo <= 50), %d bleiben."),
-				OhnePfosten, FurnitureLayout.Delineators.Num());
+				TEXT("Leitpfosten: %d nach der Ausserorts-Regel entfernt (innerorts oder im Knoten), %d bleiben - ")
+				TEXT("%d an Landstrassen, %d an Autobahn/Kraftfahrstrasse."),
+				OhnePfosten, FurnitureLayout.Delineators.Num(),
+				FurnitureLayout.Delineators.Num() - Schnellstrasse, Schnellstrasse);
 		}
 
 		UE_LOG(LogWbCore, Log,

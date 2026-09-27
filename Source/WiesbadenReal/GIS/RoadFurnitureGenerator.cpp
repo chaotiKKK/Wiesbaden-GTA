@@ -906,12 +906,58 @@ void URoadFurnitureGenerator::PlaceSigns(
 
 bool URoadFurnitureGenerator::WantsDelineators(const FRoadSegment& Segment)
 {
-	// Ausserorts heisst hier: kein Gehweg UND schneller als Tempo 50. Beides
-	// zusammen, weil keins allein genuegt - Wohnstrassen ohne erfassten
-	// Gehweg sind langsam, und Stadtstrassen mit 50 haben Gehwege.
-	return FOSMTagParser::IsDrivable(Segment.HighwayType)
-		&& Segment.SidewalkType == EOSMSidewalkType::None
-		&& Segment.MaxSpeedKmh > 50.0;
+	// Nur Klassen, die es ausserorts gibt - Wohn-, Spiel- und Erschliessungs-
+	// strassen liegen im Ort, auch wenn sie ungewoehnlich schnell getaggt sind.
+	switch (Segment.HighwayType)
+	{
+	case EOSMHighwayType::Motorway:     case EOSMHighwayType::MotorwayLink:
+	case EOSMHighwayType::Trunk:        case EOSMHighwayType::TrunkLink:
+	case EOSMHighwayType::Primary:      case EOSMHighwayType::PrimaryLink:
+	case EOSMHighwayType::Secondary:    case EOSMHighwayType::SecondaryLink:
+	case EOSMHighwayType::Tertiary:     case EOSMHighwayType::TertiaryLink:
+	case EOSMHighwayType::Unclassified:
+		break;
+	default:
+		return false;
+	}
+
+	// Ausserorts-Signal: Tempo ueber 50 oder ein rural-Tag. Das Tempo ist bei
+	// primary bis unclassified nur dann ueber 50, wenn OSM es sagt (maxspeed,
+	// maxspeed:type, zone:maxspeed - Vorgabe dieser Klassen ist 50); Autobahn
+	// und Kraftfahrstrasse sind schon per Vorgabe schnell.
+	if (Segment.MaxSpeedKmh <= 50.0 && !Segment.bRuralTagged)
+	{
+		return false;
+	}
+
+	// Nur ein GETAGGTER Gehweg an der Fahrbahn spricht dagegen. Die bloss
+	// angenommene Vorgabe "beidseitig" (RoadTypeLibrary) haette 2110 von 2194
+	// secondary-Wegen ausgeschlossen - fast jede Landstrasse. "separate" liegt
+	// abseits der Fahrbahn und sperrt nicht. Links/rechts entsteht nur aus
+	// einem Tag und gilt darum auch in aelteren Bakes (ohne bSidewalkTagged)
+	// als getaggt.
+	const bool bGehwegAnDerFahrbahn = Segment.SidewalkType == EOSMSidewalkType::Left
+		|| Segment.SidewalkType == EOSMSidewalkType::Right
+		|| (Segment.SidewalkType == EOSMSidewalkType::Both && Segment.bSidewalkTagged);
+	return !bGehwegAnDerFahrbahn;
+}
+
+namespace
+{
+	/** Waagrechter Abstand eines Punkts zu einer Linie (cm). */
+	double AbstandZurLinie(const FVector& P, const TArray<FVector>& Linie)
+	{
+		double Best = TNumericLimits<double>::Max();
+		for (int32 i = 1; i < Linie.Num(); ++i)
+		{
+			const FVector2D A(Linie[i - 1]), B(Linie[i]), Q(P);
+			const FVector2D AB = B - A;
+			const double L2 = AB.SizeSquared();
+			const double T = L2 > 0.0 ? FMath::Clamp(FVector2D::DotProduct(Q - A, AB) / L2, 0.0, 1.0) : 0.0;
+			Best = FMath::Min(Best, FVector2D::Distance(Q, A + AB * T));
+		}
+		return Best;
+	}
 }
 
 int32 URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(
@@ -926,8 +972,26 @@ int32 URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(
 	const int32 Vorher = Layout.Delineators.Num();
 	Layout.Delineators.RemoveAllSwap([&NachId](const FDelineatorInstance& Pfosten)
 	{
-		const FRoadSegment* const* Segment = NachId.Find(Pfosten.SegmentId);
-		return Segment && !WantsDelineators(**Segment);
+		const FRoadSegment* const* Gefunden = NachId.Find(Pfosten.SegmentId);
+		if (!Gefunden)
+		{
+			return false;   // ohne Segment laesst sich nichts pruefen
+		}
+		const FRoadSegment& Segment = **Gefunden;
+		if (!WantsDelineators(Segment))
+		{
+			return true;
+		}
+		// Aeltere Bakes setzten die Reihe entlang der UNGEKUERZTEN Linie bis
+		// in den Knoten. Wer weiter als eine Pfostenreihe (halbe Fahrbahn +
+		// Randabstand, 1 m Luft) von der gekuerzten Linie steht, stand dort.
+		if (Segment.TrimmedCenterline.Num() >= 2)
+		{
+			const double Reihe = Segment.CarriagewayWidthCm * 0.5
+				+ WiesbadenRoadMarkings::DelineatorOffsetFromEdgeCm + 100.0;
+			return AbstandZurLinie(Pfosten.Location, Segment.TrimmedCenterline) > Reihe;
+		}
+		return false;
 	});
 	return Vorher - Layout.Delineators.Num();
 }

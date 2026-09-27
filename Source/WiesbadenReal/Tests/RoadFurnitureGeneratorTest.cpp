@@ -407,7 +407,9 @@ bool FRoadFurnitureSurfaceHeightTest::RunTest(const FString& Parameters)
 	FRoadNetwork Network;
 	// Ein Arm ausserorts (Tempo 100, ohne Gehweg): nur er bekommt Leitpfosten,
 	// deren Fusshoehe unten geprueft wird.
-	Network.Segments.Add(MakeSegment(0, 1, 0, { FVector(-5000.0, 0.0, TerrainCm), FVector(0.0, 0.0, TerrainCm) }, 100.0));
+	FRoadSegment Landstrasse = MakeSegment(0, 1, 0, { FVector(-5000.0, 0.0, TerrainCm), FVector(0.0, 0.0, TerrainCm) }, 100.0);
+	Landstrasse.HighwayType = EOSMHighwayType::Secondary;
+	Network.Segments.Add(Landstrasse);
 	Network.Segments.Add(MakeSegment(1, 2, 0, { FVector(5000.0, 0.0, TerrainCm), FVector(0.0, 0.0, TerrainCm) }));
 	Network.Segments.Add(MakeSegment(2, 3, 0, { FVector(0.0, 5000.0, TerrainCm), FVector(0.0, 0.0, TerrainCm) }, 30.0));
 
@@ -487,9 +489,38 @@ bool FRoadFurnitureDelineatorRuleTest::RunTest(const FString& Parameters)
 	Land.HighwayType = EOSMHighwayType::Secondary;
 	TestTrue(TEXT("Landstrasse ohne Gehweg, 100 km/h: ja"), URoadFurnitureGenerator::WantsDelineators(Land));
 
-	FRoadSegment MitGehweg = Land;
-	MitGehweg.SidewalkType = EOSMSidewalkType::Both;
-	TestFalse(TEXT("Mit Gehweg: nein"), URoadFurnitureGenerator::WantsDelineators(MitGehweg));
+	// Die Landstrasse OHNE Gehweg-Tag: die Typ-Vorgabe setzt "beidseitig",
+	// das ist aber nur eine Annahme. Genau daran verloren bis zur Korrektur
+	// 2110 von 2194 secondary-Wegen ihre Pfosten.
+	FRoadSegment LandOhneTag = Land;
+	LandOhneTag.SidewalkType = EOSMSidewalkType::Both;
+	LandOhneTag.bSidewalkTagged = false;
+	TestTrue(TEXT("Landstrasse, 100 km/h, Gehweg nur angenommen: ja"),
+		URoadFurnitureGenerator::WantsDelineators(LandOhneTag));
+
+	FRoadSegment MitGehweg = LandOhneTag;
+	MitGehweg.bSidewalkTagged = true;
+	TestFalse(TEXT("Getaggter Gehweg an der Fahrbahn: nein"), URoadFurnitureGenerator::WantsDelineators(MitGehweg));
+
+	FRoadSegment Einseitig = Land;
+	Einseitig.SidewalkType = EOSMSidewalkType::Right;
+	TestFalse(TEXT("Einseitiger Gehweg (entsteht nur aus einem Tag): nein"),
+		URoadFurnitureGenerator::WantsDelineators(Einseitig));
+
+	FRoadSegment Separat = Land;
+	Separat.SidewalkType = EOSMSidewalkType::Separate;
+	Separat.bSidewalkTagged = true;
+	TestTrue(TEXT("Gehweg separat gemappt (abseits der Fahrbahn): ja"),
+		URoadFurnitureGenerator::WantsDelineators(Separat));
+
+	FRoadSegment RuralTag = Land;
+	RuralTag.MaxSpeedKmh = 50.0;
+	RuralTag.bRuralTagged = true;
+	TestTrue(TEXT("zone:traffic=DE:rural ohne Tempo-Tag: ja"), URoadFurnitureGenerator::WantsDelineators(RuralTag));
+
+	FRoadSegment WohnSchnell = Land;
+	WohnSchnell.HighwayType = EOSMHighwayType::Residential;
+	TestFalse(TEXT("Wohnstrasse, selbst schnell getaggt: nein"), URoadFurnitureGenerator::WantsDelineators(WohnSchnell));
 
 	FRoadSegment Tempo50 = Land;
 	Tempo50.MaxSpeedKmh = 50.0;
@@ -528,16 +559,30 @@ bool FRoadFurnitureDelineatorRuleTest::RunTest(const FString& Parameters)
 		Network.Segments.Add(Stadt);
 		Network.Segments.Add(Land);
 
+		// Die Landstrasse endet gekuerzt bei X = 1000 vor ihrem Knoten bei 0.
+		Network.Segments.Last().TrimmedCenterline = { FVector(1000.0, 0.0, 0.0), FVector(10000.0, 0.0, 0.0) };
+
 		FRoadFurnitureLayout Layout;
-		for (const int32 Id : { 7, 7, 0, 0, 99 })
+		const auto Pfosten = [&Layout](int32 Id, const FVector& Ort)
 		{
 			FDelineatorInstance D;
 			D.SegmentId = Id;
+			D.Location = Ort;
 			Layout.Delineators.Add(D);
-		}
+		};
+		Pfosten(7, FVector(2500.0, 375.0, 0.0));     // Stadt
+		Pfosten(7, FVector(2500.0, -375.0, 0.0));    // Stadt
+		Pfosten(0, FVector(5000.0, 375.0, 0.0));     // Land, am Rand
+		Pfosten(0, FVector(5000.0, -375.0, 0.0));    // Land, am Rand
+		Pfosten(0, FVector(-200.0, 375.0, 0.0));     // Land, alte Reihe im Knoten
+		Pfosten(99, FVector::ZeroVector);            // Segment unbekannt
 		const int32 Entfernt = URoadFurnitureGenerator::RemoveDelineatorsAgainstRule(Network, Layout);
-		TestEqual(TEXT("Die zwei Stadt-Pfosten fallen weg"), Entfernt, 2);
-		TestEqual(TEXT("Land-Pfosten und der ohne bekanntes Segment bleiben"), Layout.Delineators.Num(), 3);
+		TestEqual(TEXT("Zwei Stadt-Pfosten und der im Knoten fallen weg"), Entfernt, 3);
+		TestEqual(TEXT("Land-Pfosten am Rand und der ohne bekanntes Segment bleiben"), Layout.Delineators.Num(), 3);
+		for (const FDelineatorInstance& D : Layout.Delineators)
+		{
+			TestTrue(TEXT("Kein Pfosten im Knoten"), D.Location.X >= 0.0);
+		}
 		for (const FDelineatorInstance& D : Layout.Delineators)
 		{
 			TestNotEqual(TEXT("Kein Stadt-Pfosten mehr"), D.SegmentId, 7);
