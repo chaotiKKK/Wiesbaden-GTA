@@ -96,5 +96,17 @@ bool FWbClipRecorderTest::RunTest(const FString& Parameters)
 			FWbClipSettings::FirstPoseLine(TEXT("# nichts\n")), FString());
 	}
 
+	// -- 7. Die Welt darf den Clip-Schritt nicht deckeln -----------------------
+	{
+		// GEMESSEN am 27.09.2026: 2 fps liefen mit 0,4 statt 0,5 s je Bild -
+		// AWorldSettings::MaxUndilatedFrameTime (0,4 s) klemmt jeden Schritt.
+		TestTrue(TEXT("0,5-s-Schritt hebt die 0,4-s-Grenze darueber"),
+			FWbClipSettings::RequiredMaxFrameTime(0.5, 0.4f) >= 0.5f);
+		TestTrue(TEXT("Zeitraffer 8 bei 10 fps (0,8 s) ebenso"),
+			FWbClipSettings::RequiredMaxFrameTime(0.8, 0.4f) >= 0.8f);
+		TestEqual(TEXT("Ein kleiner Schritt laesst die Grenze, wie sie ist"),
+			FWbClipSettings::RequiredMaxFrameTime(1.0 / 30.0, 0.4f), 0.4f);
+	}
+
 	return true;
 }

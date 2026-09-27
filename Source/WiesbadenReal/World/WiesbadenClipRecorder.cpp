@@ -11,6 +11,7 @@
 #include "Engine/World.h"
 #include "GameFramework/HUD.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/WorldSettings.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProcess.h"
@@ -123,6 +124,14 @@ FString FWbClipSettings::FirstPoseLine(const FString& FileContent)
 		}
 	}
 	return FString();
+}
+
+float FWbClipSettings::RequiredMaxFrameTime(double FixedDeltaSeconds, float CurrentMaxFrameTime)
+{
+	// Ein Promille Luft: FixupDeltaSeconds klemmt mit <=, und float-Rundung
+	// darf den Schritt nicht knapp unter das Soll druecken.
+	const float Needed = static_cast<float>(FixedDeltaSeconds * 1.001);
+	return FMath::Max(CurrentMaxFrameTime, Needed);
 }
 
 // ----------------------------------------------------------------------------
@@ -315,6 +324,15 @@ void UWiesbadenClipRecorder::BeginCapture()
 	FApp::SetFixedDeltaTime(Settings.FixedDeltaSeconds());
 	FApp::SetUseFixedTimeStep(true);
 
+	// Sonst deckelt die Welt jeden Schritt auf MaxUndilatedFrameTime (0,4 s):
+	// langsame Clips und starker Zeitraffer liefen mit falschem Tempo.
+	if (AWorldSettings* WS = World->GetWorldSettings())
+	{
+		PrevMaxUndilatedFrameTime = WS->MaxUndilatedFrameTime;
+		WS->MaxUndilatedFrameTime = FWbClipSettings::RequiredMaxFrameTime(
+			Settings.FixedDeltaSeconds(), WS->MaxUndilatedFrameTime);
+	}
+
 	if (Settings.bHideHud)
 	{
 		if (APlayerController* PC = World->GetFirstPlayerController())
@@ -383,6 +401,18 @@ void UWiesbadenClipRecorder::EndCapture(bool bAbgebrochen)
 
 	FApp::SetUseFixedTimeStep(bPrevFixedTimeStep);
 	FApp::SetFixedDeltaTime(PrevFixedDeltaTime);
+
+	if (PrevMaxUndilatedFrameTime >= 0.0f)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			if (AWorldSettings* WS = World->GetWorldSettings())
+			{
+				WS->MaxUndilatedFrameTime = PrevMaxUndilatedFrameTime;
+			}
+		}
+		PrevMaxUndilatedFrameTime = -1.0f;
+	}
 
 	if (Settings.bHideHud)
 	{

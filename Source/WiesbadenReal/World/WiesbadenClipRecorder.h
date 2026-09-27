@@ -76,6 +76,13 @@ struct WIESBADENREAL_API FWbClipSettings
 
 	/** Erste echte Posenzeile (ohne Leerzeilen und #-Kommentare), sonst leer. */
 	static FString FirstPoseLine(const FString& FileContent);
+
+	/** Obergrenze fuer AWorldSettings::MaxUndilatedFrameTime waehrend der
+	 *  Aufnahme. GEMESSEN am 27.09.2026: die Welt deckelt jeden Schritt auf
+	 *  0,4 s (FixupDeltaSeconds) - ein 2-fps-Clip lief mit 0,4 statt 0,5 s je
+	 *  Bild. Liegt der Clip-Schritt darueber, wird die Grenze knapp darueber
+	 *  gehoben; sonst bleibt sie, wie sie ist. */
+	static float RequiredMaxFrameTime(double FixedDeltaSeconds, float CurrentMaxFrameTime);
 };
 
 UCLASS()
@@ -141,6 +148,7 @@ private:
 	bool bPrevFixedTimeStep = false;
 	double PrevFixedDeltaTime = 0.0;
 	bool bPrevShowHud = true;
+	float PrevMaxUndilatedFrameTime = -1.0f;
 
 	FDelegateHandle CaptureHandle;
 };
