@@ -12,6 +12,8 @@ Vier Sorten Dokument, nach dem, was du gerade brauchst:
 
 **Was schon laeuft, mit GIFs und Fotos aus dem Spiel:** [Meilensteine](meilensteine.md).
 
+**Das Projekt auf einer Seite (Ziel, Code-Ordner, Agenten-Regeln):** [Projekt-Quicksicht](projekt-quicksicht.md).
+
 ---
 
 ## Tutorials
