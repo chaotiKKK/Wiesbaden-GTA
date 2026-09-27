@@ -428,10 +428,16 @@ class KeineNeueStilleLoeschungTest(unittest.TestCase):
                         danach CreateNew beweisen); die andere ist fremde WIP
       build_release.ps1  eine Stelle ($TestLog, Gate 2), aus demselben Branch;
                         im vorigen Test einzeln abgesichert
+      beleg.ps1          ist die VORLAGE selbst: Remove-Beleg loescht zweimal
+                        (einmal direkt, einmal nach dem Read-only-Versuch) und
+                        prueft danach beide Male mit Test-Path, danach exit 3.
+                        Als (einzige) Datei des Wächters selbst darf sie sich
+                        nicht selbst melden - deshalb
+                        test_beleg_ps1_prueft_jede_stelle_folgt_auf_den_abbruch
     """
 
     AUSGENOMMEN = {"Tools/smoke_test.ps1", "Tools/engine_run_lock.ps1",
-                   "Tools/build_release.ps1"}
+                   "Tools/build_release.ps1", "Tools/beleg.ps1"}
 
     def verfolgte_ps1(self):
         # HEAD, NICHT der Index: in diesem Baum wird geteilt gearbeitet, und
@@ -459,6 +465,49 @@ class KeineNeueStilleLoeschungTest(unittest.TestCase):
                          "wird - entweder Remove-Beleg (Tools\\beleg.ps1) oder "
                          "eine Begruendung, warum das hier harmlos ist:\n"
                          + "\n".join(treffer))
+
+    def funktionsende(self, zeilen, ab):
+        """Die Zeile nach der Klammer, die die Funktion schliesst.
+
+        Die schliessende Klammer einer Funktion steht in derer Spalte 0, die
+        einer inneren Bloecke eingerueckt - darauf beruht die Suche.
+        """
+        for m in range(ab, len(zeilen)):
+            if zeilen[m] == "}":
+                return m + 1
+        return len(zeilen)
+
+    def test_beleg_ps1_prueft_jede_stelle_folgt_auf_den_abbruch(self):
+        # Die Ausnahme fuer beleg.ps1 darf keine Blindstelle sein. Die Vorlage
+        # traegt Remove-Item + SilentlyContinue mehrfach - das ist erlaubt,
+        # weil auf JEDE Stelle eine Test-Path-Pruefung folgt und ein nicht
+        # loeschbarer Beleg den Lauf mit exit 3 abbricht. Wird die Vorlage je
+        # "kompakter", faellt dieser Test.
+        zeilen = lies(BELEG_PS1).splitlines()
+        still = [n for n, z in enumerate(zeilen)
+                 if "Remove-Item" in z and "SilentlyContinue" in z
+                 and not z.strip().startswith("#")]
+        self.assertTrue(still,
+                        "Remove-Beleg loescht gar nicht mehr - der Wächter "
+                        "darf die Ausnahme dann nicht mehr brauchen")
+        # Der else-Zweig einer if/else-Loeschung ist derselbe Schritt.
+        schritte = [n for n in still
+                    if not (n > 0 and zeilen[n - 1].strip() == "} else {")]
+        for i, n in enumerate(schritte):
+            # Zwischen zwei Loeschschritten muss immer eine Pruefung liegen,
+            # und nach dem LETZTEN auch - das ist die Regel, nicht eine
+            # Zeilenzahl. Die beiden Aeste eines if/else sind EIN Schritt:
+            # geprueft wird danach, nicht dazwischen. Der letzte Schritt endet
+            # an der Klammer, die Remove-Beleg schliesst - ein Test-Path aus
+            # einer spaeteren Funktion waere sonst eine erfundene Pruefung.
+            ende = schritte[i + 1] if i + 1 < len(schritte) else self.funktionsende(zeilen, n)
+            dazwischen = "\n".join(zeilen[n:ende])
+            with self.subTest(zeile=zeilen[n].strip()):
+                self.assertIn("Test-Path", dazwischen,
+                              "auf diese Loeschung folgt keine Pruefung - "
+                              "das Wegsein waere wieder geglaubt")
+        # Und der Abbruch, auf den sich die Pruefungen berufen.
+        self.assertIn("exit 3", lies(BELEG_PS1))
 
     def test_kein_python_verschluckt_einen_loeschfehler_still(self):
         # "except OSError: pass" ist das SilentlyContinue in Python. Gesucht
