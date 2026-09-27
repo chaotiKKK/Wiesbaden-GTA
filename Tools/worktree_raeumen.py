@@ -198,9 +198,104 @@ def eigene_commits(pfad, haupt):
     return [z for z in eigen.stdout.splitlines() if z.strip()]
 
 
+# ---------------------------------------------------------- Stadtinhalte (4)
+
+def verlinkte_stadtinhalte(pfad, wurzeln=("Content", "Data/Raw")):
+    """Wie viele Verzeichnis-Verbindungen zeigt der Worktree in den Stadt-Wurzeln?
+
+    GEMESSEN am 27.09.2026: `os.path.islink` ist unter Windows KEIN Weg -
+    es meldet eine Junction als ganz normale Datei, mein erster Zaehlversuch
+    kam auf 0 von 28. Richtig ist `FILE_ATTRIBUTE_REPARSE_POINT`, abgefragt
+    ueber PowerShell (AGENTS.md: "ein rekursives Loeschen DURCH eine
+    Verbindung leert den Hauptordner" - dieselbe Technik, nur lesend).
+    """
+    zaehler = ["0"]
+    pfade = "".join("'%s';" % str(Path(pfad) / w) for w in wurzeln if (Path(pfad) / w).exists())
+    if not pfade:
+        return 0
+    befehl = [
+        "powershell", "-NoProfile", "-Command",
+        "$n=0; foreach ($p in @(%s)) { if (Test-Path $p) { "
+        "Get-ChildItem -LiteralPath $p -Recurse -Directory -Force -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint } | "
+        "ForEach-Object { $n++ } } }; Write-Output $n" % pfade,
+    ]
+    try:
+        fertig = subprocess.run(befehl, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        return None            # None = nicht messbar, nicht "0 Verlinkungen"
+    if fertig.returncode != 0:
+        return None
+    text = (fertig.stdout or "").strip().splitlines()
+    if not text or not text[-1].strip().isdigit():
+        return None
+    return int(text[-1].strip())
+
+
+def erwartete_stadtinhalte(haupt):
+    """Wie viele Stadtverzeichnisse wuerde gate_worktree.vorbereiten verlinken?
+
+    Bewusst NICHT ueber einen eigenen Filter: ich frage dieselbe Funktion, die
+    den Gate-Worktree fuellt. Eine zweite Definition hier waere die Einladung,
+    dass die beiden auseinanderlaufen - und die Zahl waere dann nur dekorativ.
+    Laeuft das nicht (kein gate_worktree im Baum), ist die Erwartung None und
+    es wird nichts behauptet.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import gate_worktree as gw
+    except ImportError:
+        return None
+    try:
+        verzeichnisse, _ = gw.stadtinhalt(haupt)
+    except Exception:            # git nicht erreichbar o.ae.
+        return None
+    return len(verzeichnisse)
+
+
+def stadtinhalt_befund(pfad, haupt, zaehlen=None, erwarten=None):
+    """Das Erkennungszeichen: wie vollstaendig haengt die gebackene Stadt dran?
+
+    GEMESSEN am 27.09.2026 am Worktree, den ich leerte: sein Push-Log meldete
+    "0 Stadtinhalte verlinkt, 0 neu" - waehrend der gesunde Gate-Worktree
+    derselben Stunde 28 von 28 zeigte. Genau diese Zahl stand als
+    Erkennungszeichen in dem Thread, zu dem der Worktree gehoerte, und sie
+    steht in keinem anderen Log.
+
+    Die Formulierung "nur einen TEIL verlinkt" ist bewusst zweigeteilt:
+
+      * 0 von n  - der Worktree ist nie am Gate gelaufen, oder jemand hat die
+        Verbindungen geloest. So sah der geklaerte Fall aus.
+      * k von n mit 0 < k < n - ein halb vorbereiteter Worktree. Der gefaehr-
+        lichere Fall, denn er ist im Log nicht als Zahl sichtbar.
+
+    Beides ist eine WARNUNG, kein Abbruch: ein Worktree, der seinen Zweck
+    erreicht hat, soll sich entfernen lassen. Wer die Verlinkungen mit
+    entfernen will, muss sie ohnehin kennen.
+    """
+    ist = (zaehlen or verlinkte_stadtinhalte)(pfad)
+    soll = erwarten if erwarten is not None else erwartete_stadtinhalte(haupt)
+    if ist is None or not soll:
+        return None
+    if ist >= soll:
+        return ("Stadt", "alle %d Stadtinhalte verlinkt - unauffaellig." % soll, False)
+    if ist == 0:
+        return ("Stadt", "0 von %d Stadtinhalten verlinkt. Der Worktree haengt NICHT "
+                         "an der gebackenen Stadt - entweder ist er nie am Gate "
+                         "gewesen, oder die Verbindungen wurden geloest. Gerade "
+                         "GEFAEHRLICH: so sah der Worktree aus, den am 27.09.2026 ein "
+                         "unbefugter `git worktree remove` geleert hat, waehrend sein "
+                         "Push lief." % soll, True)
+    return ("Stadt", "nur %d von %d Stadtinhalten verlinkt - der Worktree ist nur "
+                     "halb am Gate vorbereitet. Beim Entfernen verschwinden diese "
+                     "Verbindungen; der Ordner sieht danach vollstaendig aus, "
+                     "enthaelt aber die gebackene Stadt nicht mehr." % (ist, soll), True)
+
+
 # ------------------------------------------------------------------- Kern
 
-def pruefe(pfad, haupt, eigene_pids=(), umbenennen=True):
+def pruefe(pfad, haupt, eigene_pids=(), umbenennen=True, zaehlen=None, erwarten=None):
     """Darf der Worktree entfernt werden? -> (ok, [(schlagwort, text), ...]).
 
     Wirft `Belegt` fuer einen nachweislich belegten Ordner und `Unklar` fuer
@@ -222,6 +317,7 @@ def pruefe(pfad, haupt, eigene_pids=(), umbenennen=True):
 
     bericht = []
     blockiert = []
+    warnungen = []
 
     # 1. Prozesse mit dem Pfad
     laufende = prozess_mit_pfad(ordner, eigene_pids)
@@ -244,6 +340,14 @@ def pruefe(pfad, haupt, eigene_pids=(), umbenennen=True):
     else:
         bericht.append(("Sperre", "Rename-Probe nicht ausgefuehrt."))
 
+    # 4. Stadtinhalte - WARNUNG, kein Abbruch
+    befund = stadtinhalt_befund(ordner, haupt, zaehlen=zaehlen, erwarten=erwarten)
+    if befund is None:
+        bericht.append(("Stadt", "Verlinkungsstand nicht messbar - dazu wird nichts behauptet."))
+    else:
+        schlagwort, text, warnung = befund
+        (bericht if not warnung else warnungen).append((schlagwort, text))
+
     # 3. Arbeit, die nur hier liegt
     eigen = eigene_commits(ordner, haupt)
     if eigen:
@@ -252,14 +356,15 @@ def pruefe(pfad, haupt, eigene_pids=(), umbenennen=True):
     else:
         bericht.append(("Commit", "jeder Commit liegt auf einem Remote."))
 
-    return (not blockiert), bericht + blockiert
+    return (not blockiert), bericht + warnungen + blockiert
 
 
-def raeumen(pfad, haupt, tun=False, eigene_pids=()):
+def raeumen(pfad, haupt, tun=False, eigene_pids=(), zaehlen=None, erwarten=None):
     """Pruefen und - nur bei freiem Ordner - entfernen. Rueckgabe Exit-Code."""
     ordner = Path(pfad).resolve()
     try:
-        ok, bericht = pruefe(ordner, haupt, eigene_pids=eigene_pids)
+        ok, bericht = pruefe(ordner, haupt, eigene_pids=eigene_pids,
+                             zaehlen=zaehlen, erwarten=erwarten)
     except Belegt as problem:
         print("ABGEBROCHEN: %s" % problem)
         return 2
@@ -271,6 +376,10 @@ def raeumen(pfad, haupt, tun=False, eigene_pids=()):
     if not ok:
         print("\n%s ist in Benutzung - es wurde nichts entfernt." % ordner)
         return 1
+    # WARNUNGEN auch im Erfolgsfall: der Befund "nur ein Teil der Stadt
+    # verlinkt" blockiert nicht, verschwindet aber nicht. Wer ihn nicht liest,
+    # hat spaeter einen Ordner, der vollstaendig aussieht und die gebackene
+    # Stadt nicht mehr enthaelt.
     if not tun:
         print("\n%s ist frei. Mit --tun entfernen." % ordner)
         return 0

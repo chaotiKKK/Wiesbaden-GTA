@@ -237,6 +237,107 @@ class RauschenTest(RepoTest):
             self.assertEqual(wr.raeumen(self.wt, self.haupt, tun=True), 2)
 
 
+class StadtinhaltTest(RepoTest):
+    """Die Verlinkung der gebackenen Stadt - das Erkennungszeichen vom 27.09.
+
+    WICHTIG: Die Zaehlung selbst wird nicht nachgebaut, sondern `zaehlen`
+    bekommt eine Funktion geschenkt. Sonst prueft der Test meine
+    Arithmetik statt der Erkenntnis, und die Arithmetik kann nicht falsch
+    sein. Die echte Messung an einem Gate-Worktree laeuft im
+    `MessungTest` - die braucht das echte Projekt und steht deshalb separat.
+    """
+
+    def _befund(self, ist, soll):
+        return wr.stadtinhalt_befund(self.wt, self.haupt,
+                                     zaehlen=lambda p: ist, erwarten=soll)
+
+    def test_alle_verlinkt_ist_unauffaellig(self):
+        schlagwort, text, warnung = self._befund(28, 28)
+        self.assertFalse(warnung)
+        self.assertIn("28", text)
+
+    def test_null_verlinkt_warnt(self):
+        # Genau die Zahl im Push-Log des Worktrees, den ich leerte.
+        schlagwort, text, warnung = self._befund(0, 28)
+        self.assertTrue(warnung)
+        self.assertIn("0 von 28", text)
+        self.assertEqual(schlagwort, "Stadt")
+
+    def test_null_und_halb_sagen_verschiedenes(self):
+        # GEMESSEN: Sabotiert man `if ist == 0` zu `if ist < 0`, landet die
+        # Null im allgemeinen "nur k von n"-Zweig. Die Warnung bleibt -
+        # nur ihre BEGRUENDUNG geht verloren, und die ist das Eigentliche:
+        # "haengt gar nicht an der Stadt" ist etwas anderes als "halb
+        # vorbereitet". Deshalb unterscheidet der Test die beiden Texte,
+        # nicht nur, dass beide warnen.
+        _, null, _ = self._befund(0, 28)
+        _, halb, _ = self._befund(14, 28)
+        self.assertNotIn("halb", null)
+        self.assertNotIn("0 von", halb)
+        self.assertIn("haengt NICHT", null)
+
+    def test_teilweise_verlinkt_warnt_ebenfalls(self):
+        # Der gefaehrlichere Fall, weil er im Log nicht als Zahl auffaellt.
+        schlagwort, text, warnung = self._befund(14, 28)
+        self.assertTrue(warnung)
+        self.assertIn("14 von 28", text)
+        self.assertIn("halb", text)
+
+    def test_mehr_als_erwartet_ist_kein_fehler(self):
+        # Ein Worktree kann zusaetzliche Verbindungen haben (z.B. eine
+        # Test-Fixture). Das ist kein Grund zu meckern.
+        _, _, warnung = self._befund(35, 28)
+        self.assertFalse(warnung)
+
+    def test_warnung_blockiert_das_entfernen_nicht(self):
+        ok, bericht = wr.pruefe(self.wt, self.haupt, umbenennen=False,
+                                zaehlen=lambda p: 0, erwarten=28)
+        self.assertTrue(ok, "Eine Warnung darf nicht wie ein Fehler behandelt werden: %s" % bericht)
+        self.assertTrue(any("0 von 28" in t for _, t in bericht), bericht)
+
+    def test_warnung_erscheint_im_bericht_auch_ohne_abbruch(self):
+        # Sonst sieht man sie nur, wenn schon etwas anderes rot ist - und
+        # dann ist es zu spaet.
+        ok, bericht = wr.pruefe(self.wt, self.haupt, umbenennen=False,
+                                zaehlen=lambda p: 7, erwarten=28)
+        stadt = [t for k, t in bericht if k == "Stadt"]
+        self.assertEqual(len(stadt), 1, bericht)
+        self.assertIn("7 von 28", stadt[0])
+
+    def test_nicht_messbar_wird_nicht_behauptet(self):
+        # `os.path.islink` erkennt unter Windows keine Junction - mein erster
+        # Zaehlversuch kam auf 0 von 28 und HATTE RECHT, aus dem falschen
+        # Grund. "Nicht messbar" (None) und "0 Verlinkungen" muessen
+        # unterscheidbar bleiben, sonst meldet der Waelter einen Befund, den
+        # er nicht hat.
+        befund = self._befund(None, 28)
+        self.assertIsNone(befund)
+
+    def test_ohne_erwartung_keine_aussage(self):
+        # Ein Projekt ohne die gebackene Stadt hat keine Erwartung - dann
+        # darf der Waelter nicht von 0 Verlinkungen faseln.
+        befund = self._befund(0, None)
+        self.assertIsNone(befund)
+
+    def test_zaehlt_eine_junction_als_verbindung(self):
+        # Die Messung, an der mein erster Versuch scheiterte.
+        quelle = self.haupt / "Content" / "Generated"
+        quelle.mkdir(parents=True)
+        (quelle / "x.txt").write_text("x")
+        ziel = self.wt / "Content" / "Generated"
+        ziel.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(ziel), str(quelle)],
+                       capture_output=True, text=True)
+        if not os.path.isdir(str(ziel)):
+            self.skipTest("mklink /J nicht moeglich")
+        # os.path.islink meldet eine Junction als normale Datei - deshalb
+        # wird ueber FILE_ATTRIBUTE_REPARSE_POINT gezaehlt.
+        self.assertFalse(os.path.islink(str(ziel)), "Voraussetzung: islink ist blind")
+        n = wr.verlinkte_stadtinhalte(self.wt)
+        self.assertIsNotNone(n)
+        self.assertGreaterEqual(n, 1, "Die Junction wurde nicht als Verbindung gezaehlt.")
+
+
 class GegenprobeTest(RepoTest):
     """DER BEWEIS, DASS DIE TESTS NICHT BLIND SIND.
 
