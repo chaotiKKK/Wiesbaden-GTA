@@ -10,6 +10,7 @@ zugelassen, wo es die Messung selbst ist; die Klassen mit `mock.patch`
 ersetzen es, damit kein Test an einem echten Verzeichnis rumniert.
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,31 +33,94 @@ class RepoTest(unittest.TestCase):
     aufgeraeumt werden.
     """
 
+    # GEMESSEN am 27.09.2026: `setUp` baute pro Test ein frisches Repo
+    # auf - init, config, commit, worktree add, init --bare, remote add,
+    # push. Das waren 1,2 s je Test, bei 45 Tests also 53 s - mehr als das
+    # gesamte Fast-Budget des Commit-Hooks (32 s). Deshalb laeuft die
+    # Suite seit dem 27.09.2026 mit, und deshalb wurde das hier geaendert.
+    #
+    # Die Schablone (Repo + Bare-Remote, ein Commit, main auf origin) wird
+    # EINMAL je Klasse gebaut; jeder Test bekommt eine frische KOPIE davon
+    # und legt seinen Worktree selbst an. GEMESSEN: 0,22 s statt 1,2 s,
+    # die Kopie ist funktional gleichwertig (Branch, Remote, Commit und
+    # zwei registrierte Worktrees geprueft).
+    #
+    # WARUM KOPIEREN UND NICHT TEILEN: die Tests loeschen Ordner, nehmen
+    # Eintraege weg und raeumen per `worktree prune`. Ein gemeinsames Repo
+    # waere nach dem ersten Test beschaedigt - und ein Test, der wegen
+    # eines Fremdzustands anders laeuft als in der Freiheit, ist genau
+    # der blinde Test, gegen den diese Gates gebaut sind.
+    _schablone = None
+
+    @classmethod
+    def _klasse_git(cls, *args, cwd=None):
+        """git fuer den Schablonenbau. Als echte Methode, nicht als Lambda:
+        GEMESSEN am 27.09.2026, ein `cls._g = lambda ...` bekommt die
+        gesetzte Klassenattribut-Kette in die Quetschung und bricht in
+        `setUpClass` ab."""
+        return subprocess.run(["git", *args], cwd=str(cwd) if cwd else None,
+                              capture_output=True, text=True,
+                              encoding="utf-8", errors="replace")
+
+    @classmethod
+    def setUpClass(cls):
+        cls._aufraeumen()
+        cls._tmpklasse = tempfile.mkdtemp(prefix="wb_waechter_")
+        cls._schablone = Path(cls._tmpklasse) / "schablone"
+        sch = cls._schablone
+        r = cls._klasse_git("init", "-b", "main", str(sch))
+        if r.returncode != 0 or not sch.is_dir():
+            cls._aufraeumen()
+            raise RuntimeError("git init schlug fehl: %s" % (r.stderr or "").strip())
+        cls._klasse_git("config", "user.email", "t@beispiel.de", cwd=sch)
+        cls._klasse_git("config", "user.name", "Test", cwd=sch)
+        (sch / "AGENTS.md").write_text("Hinweise\n", encoding="utf-8")
+        cls._klasse_git("add", "-A", cwd=sch)
+        cls._klasse_git("commit", "-m", "Grundstand", cwd=sch)
+        # Ein Remote, damit "nur hier liegende Commits" geprueft werden kann.
+        cls._origin = Path(cls._tmpklasse) / "origin.git"
+        cls._klasse_git("init", "--bare", "-b", "main", str(cls._origin))
+        cls._klasse_git("remote", "add", "origin", str(cls._origin), cwd=sch)
+        cls._klasse_git("push", "-u", "origin", "main", cwd=sch)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._aufraeumen()
+
+    @classmethod
+    def _aufraeumen(cls):
+        tmp = getattr(cls, "_tmpklasse", None)
+        cls._tmpklasse = None
+        cls._schablone = None
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def setUp(self):
-        self.tmp = tempfile.mkdtemp()
+        if type(self)._schablone is None:
+            self.skipTest("Die Schablone dieser Klasse wurde nicht gebaut - "
+                          "setUpClass ist fehlgeschlagen.")
+        self.tmp = tempfile.mkdtemp(prefix="wb_waechter_t_")
         self.addCleanup(self._weg)
         self.haupt = Path(self.tmp) / "haupt"
-        self.haupt.mkdir()
-        self._git("init", "-b", "main")
-        self._git("config", "user.email", "t@beispiel.de")
-        self._git("config", "user.name", "Test")
-        (self.haupt / "AGENTS.md").write_text("Hinweise\n")
-        self._git("add", "-A")
-        self._git("commit", "-m", "Grundstand")
+        shutil.copytree(type(self)._schablone, self.haupt)
+        # Der Worktree bleibt pro Test: er ist der Gegenstand, und die
+        # Kopie ist billig, der Worktree-Ausbau der teure Teil (0,2 s).
         self.wt = Path(self.tmp) / "wt"
         self._git("worktree", "add", "-b", "zweig", str(self.wt), "HEAD")
-        # Ein Remote, damit "nur hier liegende Commits" geprueft werden kann.
-        origin = Path(self.tmp) / "origin.git"
-        self._git("init", "--bare", "-b", "main", str(origin))
-        self._git("remote", "add", "origin", str(origin))
-        self._git("push", "-u", "origin", "main")
 
     def addCleanup(self, funktion):
         unittest.TestCase.addCleanup(self, funktion)
 
     def _weg(self):
-        import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def tearDown(self):
+        # Auch bei Rot aufräumen - `addCleanup` laeuft zwar, aber ein
+        # Wegwerf-Repo, das bei einem Fehlschlag liegen bleibt, macht den
+        # NÄCHSTEN Test messbar langsamer. GEMESSEN am 27.09.2026.
+        tmp = getattr(self, "tmp", None)
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def _git(self, *args, cwd=None):
         return subprocess.run(["git", *args], cwd=str(cwd or self.haupt),
@@ -348,7 +412,6 @@ class AdminRestTest(RepoTest):
 
     def _weg_machen(self, pfad):
         """Ordner loeschen, Admin-Eintrag stehen lassen - der Zustand, um den es geht."""
-        import shutil
         shutil.rmtree(pfad, ignore_errors=True)
         self.assertFalse(pfad.exists())
         eintraege = list((self.haupt / ".git" / "worktrees").iterdir())
@@ -503,7 +566,6 @@ class AdminRestTest(RepoTest):
             if args[:2] == ("worktree", "prune"):
                 ordner = Path(self.tmp) / "wt2"
                 self._git("worktree", "add", "-b", "zwei", str(ordner), "HEAD")
-                import shutil
                 shutil.rmtree(ordner, ignore_errors=True)
                 return subprocess.CompletedProcess([], 0, "Removing worktrees/wt2", "")
             return echt(*args, **kwargs)

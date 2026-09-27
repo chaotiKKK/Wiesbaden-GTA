@@ -490,14 +490,37 @@ def gates_fahren(stufe, dateien):
     #
     # Sie laufen weiter, bevor etwas den Rechner verlaesst: der pre-push-Hook
     # faehrt die volle Stufe. Verschoben, nicht gestrichen.
+    #
+    # AUSNAHME: die beiden Wächter-Suiten. GEMESSEN am 27.09.2026, warum sie
+    # trotzdem vor jeden Commit gehoeren - sie sind kein Luxus, sondern der
+    # Nachweis, dass der Wächter selbst noech funktioniert:
+    #   * `test_worktree_raeumen` faehrt `git worktree remove` wirklich aus
+    #     und prueft, dass ein belegter Ordner liegen bleibt. Genau dieser
+    #     Wächter hat im September 1,2 GB eines fremden Pushes geloescht.
+    #   * `test_worktree_zeitstrahl` rechnet die Gate-Zeiten aus echten
+    #     Push-Logs nach. Ein Fehler dort verschiebt die Historie.
+    # Ein Wächter, den nur der Push prüft, ist einen Tag zu spaet.
+    #
+    # KOSTEN (GEMESSEN am 27.09.2026): 39 s + 0,6 s. Die Raeum-Suite
+    # dominate - ihr setUp baute frueher pro Test ein Wegwerf-Repo auf
+    # (1,2 s x 45 = 53 s). Seit dem Umbau auf eine Schablone plus Kopie
+    # sind es 0,25 s pro Test. Die volle Suite bleibt in der schnellen
+    # Stufe draussen - 222 s sind fuer jeden Commit zu viel.
     if stufe == "voll":
         lauf.fahre("Python-Suiten",
                    [sys.executable, "-m", "unittest", "discover",
                     "-s", "Tools", "-p", "test_*.py", "-v"],
                    notiz=suiten_notiz, notiz_zeilen=suiten_notiz_zeilen)
     else:
-        lauf.ueberspringe("Python-Suiten",
-                          "Stufe schnell - sie laufen vor dem Push")
+        # GEMESSEN am 27.09.2026: `python -m unittest test_worktree_raeumen`
+        # aus der Projektwurzel findet das Modul nicht (es liegt in Tools/)
+        # und endet mit "FailedTest ... ERROR" in 0,2 s - also gruendlich
+        # falsch. Zwei `-p`-Laeufe sind darum nicht moeglich, es muss einer
+        # sein, der sein Muster kennt.
+        lauf.fahre("Wächter-Suiten",
+                   [sys.executable, "-m", "unittest", "discover",
+                    "-s", "Tools", "-p", "test_worktree_*.py", "-v"],
+                   notiz=suiten_notiz, notiz_zeilen=suiten_notiz_zeilen)
 
     if braucht_compiler(dateien):
         lauf.fahre("Gate 1  Kompilieren", r"Tools\build_gate1.cmd", shell_cmd=True)

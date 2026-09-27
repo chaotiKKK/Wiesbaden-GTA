@@ -229,12 +229,79 @@ class StufenZuordnungTest(unittest.TestCase):
     def suiten(namen):
         return [n for n in namen if "Python" in n]
 
+    @staticmethod
+    def waechter(namen):
+        return [n for n in namen if "ch" in n and "Suiten" in n]
+
     def test_schnell_faehrt_die_suiten_nicht(self):
         d = self.zuordnung("schnell", ["Tools/x.py"])
         self.assertFalse(self.suiten(d.gefahren),
                          "die Python-Suiten laufen wieder vor jedem Commit")
-        self.assertTrue(self.suiten(d.uebersprungen),
-                        "die Python-Suiten fehlen ganz, statt uebersprungen zu werden")
+        # Sie werden seit dem 27.09.2026 nicht mehr als "uebersprungen"
+        # gemeldet, sondern gar nicht mehr erwaehnt: der Schritt hiess
+        # vorher "Python-Suiten" und hiess jetzt "Wächter-Suiten" - beide
+        # enthalten "Suiten", und der alte Eintrag waere eine Behauptung
+        # ueber einen Schritt, den es in der schnellen Stufe nicht gibt.
+        # GEMESSEN: dieser Test schlug deshalb rot, als die Zuweisung
+        # auf "Wächter-Suiten" umgestellt wurde.
+        self.assertFalse(self.suiten(d.uebersprungen),
+                         "die Python-Suiten stehen als uebersprungen drin, "
+                         "obwohl dieser Schritt in der schnellen Stufe gar "
+                         "nicht vorkommt")
+
+    def test_schnell_faehrt_aber_die_waechter_suiten(self):
+        """GEMESSEN am 27.09.2026: die AUSNAHME von oben.
+
+        Die beiden Waechter-Suiten laufen vor jedem Commit. Sie sind der
+        Nachweis, dass der Waechter selbst noch funktioniert - er hat im
+        September 1,2 GB eines fremden Pushes geloescht, und ein Waechter,
+        den nur der Push prueft, ist einen Tag zu spaet.
+        """
+        d = self.zuordnung("schnell", ["Tools/x.py"])
+        self.assertTrue(self.waechter(d.gefahren),
+                        "die Wächter-Suiten laufen nicht vor jedem Commit")
+        self.assertFalse(self.waechter(d.uebersprungen),
+                         "die Wächter-Suiten fehlen ganz")
+
+    def test_die_waechter_suiten_fahren_ihre_eigenen_dateien(self):
+        """Nur die beiden Wächter-Suiten - nicht aus Versehen die ganze
+        Sammlung (222 s wuerden jeden Commit aufhalten)."""
+        befehle = {}
+
+        class Doppel:
+            def __init__(self):
+                self.ergebnisse = []
+                self.notizen = []
+                self.notiz_zeilen = []
+
+            def fahre(self, name, befehl, **kwargs):
+                befehle[name] = befehl
+                return True
+
+            def ueberspringe(self, name, grund):
+                pass
+
+            def bericht(self):
+                return 0
+
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: Doppel()
+        import gate_worktree
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+                vdc.gates_fahren("schnell", ["Tools/x.py"])
+        finally:
+            vdc.Lauf = alt
+        schritt = [n for n in befehle if "ch" in n and "Suiten" in n]
+        self.assertTrue(schritt, "der Wächter-Schritt lief gar nicht")
+        befehl = befehle[schritt[0]]
+        self.assertIn("test_worktree_*.py", befehl,
+                      "es werden nicht die Wächter-Suiten gefahren")
+        self.assertIn("-v", befehl,
+                      "ohne -v gibt es keine Testnamen fuer den Bericht")
+        # Die ganze Sammlung darf NICHT mitlaufen: 222 s je Commit.
+        self.assertNotIn("test_*.py", [z for z in befehl if z != "test_worktree_*.py"],
+                         "die ganze Sammlung laeuft mit - 222 s je Commit")
 
     def test_voll_faehrt_die_suiten(self):
         d = self.zuordnung("voll", ["Tools/x.py"])
@@ -243,13 +310,19 @@ class StufenZuordnungTest(unittest.TestCase):
         self.assertFalse(self.suiten(d.uebersprungen))
 
     def test_die_schnelle_stufe_haelt_nur_die_pipeline_gates(self):
-        """Gate 0 immer, Gate 1 nur bei C++ - und sonst nichts."""
+        """Gate 0 immer, Gate 1 nur bei C++ - und die Wächter-Suiten.
+
+        Der Name sagt "nur die Pipeline-Gates" und meint das seit dem
+        27.09.2026 nicht mehr ganz woertlich: die Wächter-Suiten kamen
+        dazu. Der Test folgt der Wirklichkeit und sagt es im Namen.
+        """
         ohne = self.zuordnung("schnell", ["Tools/x.py"])
-        self.assertEqual(ohne.gefahren, ["Gate 0  Engine-Pfade"])
+        self.assertEqual(ohne.gefahren, ["Gate 0  Engine-Pfade", "Wächter-Suiten"])
 
         mit = self.zuordnung("schnell", ["Source/X.cpp"])
-        self.assertEqual(len(mit.gefahren), 2)
+        self.assertEqual(len(mit.gefahren), 3)
         self.assertIn("Gate 0  Engine-Pfade", mit.gefahren)
+        self.assertIn("Wächter-Suiten", mit.gefahren)
         self.assertTrue(any("Gate 1" in n for n in mit.gefahren))
 
     def test_die_volle_stufe_laesst_nichts_aus(self):
