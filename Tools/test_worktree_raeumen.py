@@ -338,6 +338,182 @@ class StadtinhaltTest(RepoTest):
         self.assertGreaterEqual(n, 1, "Die Junction wurde nicht als Verbindung gezaehlt.")
 
 
+class AdminRestTest(RepoTest):
+    """Verwaiste Admin-Eintraege - der Ordner ist weg, die Registrierung noch da.
+
+    GEMESSEN am 27.09.2026 im echten Baum: `.git/worktrees/WiesbadenReal1`
+    zeigte auf `Saved/_gate5_worktree/WiesbadenReal`, einen Ordner, den es
+    nicht mehr gibt. `git worktree list` fuehrt ihn als prunable.
+    """
+
+    def _weg_machen(self, pfad):
+        """Ordner loeschen, Admin-Eintrag stehen lassen - der Zustand, um den es geht."""
+        import shutil
+        shutil.rmtree(pfad, ignore_errors=True)
+        self.assertFalse(pfad.exists())
+        eintraege = list((self.haupt / ".git" / "worktrees").iterdir())
+        self.assertTrue(eintraege, "Gegenprobe: es gibt Admin-Eintraege")
+
+    def _detached_worktree_mit_commit(self, ordner):
+        self._git("worktree", "add", "--detach", str(ordner), "HEAD")
+        (ordner / "nur-hier.txt").write_text("Arbeit\n", encoding="utf-8")
+        self._git("add", "-A", cwd=ordner)
+        fertig = self._git("-c", "user.email=t@beispiel.de", "-c", "user.name=Test",
+                           "commit", "-m", "nur im worktree", cwd=ordner)
+        self.assertEqual(fertig.returncode, 0, fertig.stderr)
+        return self._git("rev-parse", "HEAD", cwd=ordner).stdout.strip()
+
+    def test_ein_worktree_der_noch_da_ist_ist_kein_rest(self):
+        # DER Unterschied, um den es geht: der Ordner existiert, es wird
+        # nichts gemeldet - auch dann nicht, wenn git "prunable" sagt.
+        self.assertEqual(wr.admin_reste(self.haupt), [])
+        (self.wt / ".git").unlink()
+        roh = self._git("worktree", "list", "--porcelain").stdout
+        self.assertIn("prunable", roh, "Gegenprobe: git nennt ihn prunable")
+        self.assertTrue(self.wt.is_dir(), "Gegenprobe: der Ordner steht noch")
+        self.assertEqual(wr.admin_reste(self.haupt), [],
+                         "Ein Ordner mit Dateien darin ist kein verwaister Rest.")
+
+    def test_nach_geloeschtem_ordner_wird_er_gefunden(self):
+        self._weg_machen(self.wt)
+        reste = wr.admin_reste(self.haupt)
+        self.assertEqual(len(reste), 1)
+        self.assertEqual(Path(reste[0]["pfad"]).name, self.wt.name)
+
+    def test_der_detached_commit_verhindert_das_raeumen(self):
+        # DER FALL. Ein Commit im DETACHED HEAD haengt am Reflog des
+        # Admin-Eintrags. GEMESSEN: nach `prune` gab es keinen Ref und
+        # keinen Reflog mehr darauf - nur das lose Objekt, weg beim
+        # naechsten gc. Dieser Rest darf NICHT geraeumt werden.
+        ordner = Path(self.tmp) / "detached"
+        sha = self._detached_worktree_mit_commit(ordner)
+        self._weg_machen(ordner)
+        ok, bericht, spuren = wr.pruefe_admin_reste(self.haupt)
+        self.assertFalse(ok, "Ein verwaister Commit darf nicht als frei durchgehen.")
+        self.assertEqual(spuren, [])
+        self.assertIn("verwaist", " ".join(t for _, t in bericht))
+
+    def test_ohne_die_pruefung_waere_der_commit_weg(self):
+        # Gegenprobe zum vorigen Test: `git worktree prune` macht es
+        # tatsaechlich, und danach ist der Commit nicht mehr auffindbar.
+        ordner = Path(self.tmp) / "detached2"
+        sha = self._detached_worktree_mit_commit(ordner)
+        self._weg_machen(ordner)
+        fertig = self._git("worktree", "prune", "-v")
+        self.assertEqual(fertig.returncode, 0, fertig.stderr)
+        refs = self._git("for-each-ref", "--contains", sha).stdout.strip()
+        self.assertEqual(refs, "", "Gegenprobe: nach prune zeigt kein Ref mehr darauf")
+        self.assertIn("verwaist", wr.head_erreichbar(sha, self.haupt)[1],
+                      "Gegenprobe: der Waechter haette es melden muessen")
+
+    def test_ein_branch_commit_darf_geraeumt_werden(self):
+        # Der Gegenfall: der Branch lebt im Haupt-Baum, der Commit bleibt
+        # erreichbar. Hier blockiert der Waechter NICHT - sonst waere er
+        # ein Werkzeug, das nichts tun kann.
+        self._weg_machen(self.wt)
+        ok, bericht, spuren = wr.pruefe_admin_reste(self.haupt)
+        self.assertTrue(ok, " ".join(t for _, t in bericht))
+        self.assertEqual(len(spuren), 1)
+
+    def test_head_auf_einem_remote_ist_frei(self):
+        ordner = Path(self.tmp) / "gepusht"
+        self._git("worktree", "add", "-b", "ferner", str(ordner), "HEAD")
+        (ordner / "f.txt").write_text("x\n", encoding="utf-8")
+        self._git("add", "-A", cwd=ordner)
+        self._git("-c", "user.email=t@beispiel.de", "-c", "user.name=Test",
+                  "commit", "-m", "ins Remote", cwd=ordner)
+        self._git("push", "-u", "origin", "ferner")
+        self._weg_machen(ordner)
+        self.assertTrue(wr.pruefe_admin_reste(self.haupt)[0],
+                        "Alles liegt auf origin - das darf geraeumt werden.")
+
+    def test_ohne_tun_bleibt_alles_stehen(self):
+        self._weg_machen(self.wt)
+        self.assertEqual(wr.raeume_admin_reste(self.haupt, tun=False), 0)
+        self.assertEqual(len(wr.admin_reste(self.haupt)), 1, "Es wurde doch geraeumt.")
+
+    def test_mit_tun_verschwindet_der_eintrag_und_der_branch_bleibt(self):
+        self._weg_machen(self.wt)
+        self.assertEqual(wr.raeume_admin_reste(self.haupt, tun=True), 0)
+        self.assertEqual(wr.admin_reste(self.haupt), [])
+        self.assertIn("zweig", self._git("branch", "--list", "zweig").stdout,
+                      "Der Branch muss im Haupt-Baum weiterleben.")
+
+    def test_ein_gelockter_rest_bleibt_liegen(self):
+        # GEMESSEN: git fasst einen gelockten Eintrag beim prune nicht an.
+        # Der Waechter prueft es selbst - und zwar BEVOR er die Erreichbarkeit
+        # bewertet, denn ein Lock ist eine Absichtserklaerung von jemand.
+        #
+        # REIHENFOLGE (GEMESSEN, sonst scheitert schon `worktree lock`):
+        # `git worktree lock` braucht den ORDNER. Ist er schon weg, endet der
+        # Befehl mit Exit 128 und der Eintrag ist ungelockt - das Loeschen
+        # kommt also zuletzt.
+        self._git("worktree", "lock", "--reason", "Wartet auf Handarbeit", str(self.wt))
+        roh = self._git("worktree", "list", "--porcelain").stdout
+        self.assertIn("locked", roh, "Gegenprobe: der Eintrag ist gelockt")
+        self._weg_machen(self.wt)
+        ok, bericht, spuren = wr.pruefe_admin_reste(self.haupt)
+        self.assertFalse(ok)
+        self.assertEqual(spuren, [])
+        self.assertIn("GELOCKT", " ".join(t for _, t in bericht))
+        # Und er bleibt auch beim echten prune liegen - das Verhalten von
+        # git ist hier die Erwartung, nicht die Behauptung.
+        self.assertEqual(wr.raeume_admin_reste(self.haupt, tun=True), 0)
+        self.assertEqual(len(wr.admin_reste(self.haupt)), 1,
+                         "Ein gelockter Rest wurde geräumt - git fasst ihn nicht an.")
+
+    def test_ein_prozess_auf_dem_pfad_blockiert(self):
+        # Auch wenn der Ordner schon weg ist: ein Prozess, der seinen Pfad
+        # noch in der Kommandozeile fuehrt, arbeitet darauf - er könnte ihn
+        # gleich wieder anlegen.
+        self._weg_machen(self.wt)
+        kind = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(20)",
+                                 str(self.wt / "AGENTS.md")])
+        self.addCleanup(kind.kill)
+        time.sleep(1.5)
+        ok, bericht, spuren = wr.pruefe_admin_reste(self.haupt)
+        if not wr.prozess_mit_pfad(self.wt):
+            self.skipTest("Die Prozessliste nennt den Pfad nicht - nichts zu messen.")
+        self.assertFalse(ok, "Ein laufender Prozess auf dem Pfad muss blockieren.")
+        self.assertEqual(spuren, [])
+
+    def test_ohne_haupt_kein_git_ist_unklar(self):
+        # Kein Repo -> Unklar -> Exit 3, nicht "nichts zu tun".
+        with mock.patch.object(wr, "admin_reste",
+                               side_effect=wr.Unklar("kein Repo")):
+            self.assertEqual(wr.raeume_admin_reste(self.haupt, tun=False), 3)
+
+    def test_ohne_reste_ist_es_nur_ein_satz(self):
+        self.assertEqual(wr.raeume_admin_reste(self.haupt, tun=False), 0)
+        self.assertEqual(wr.raeume_admin_reste(self.haupt, tun=True), 0)
+
+    def test_wenn_prune_neue_reste_erzeugt_wird_das_gemeldet(self):
+        # `prune` nimmt ALLE faelligen Eintraege, auch die, die der
+        # Waechter gar nicht gesehen hat. Erscheint danach etwas Neues, ist
+        # das ein Befund - und kein "Erfolg".
+        #
+        # Nur der `prune`-Aufruf wird ersetzt; die Bestandsabfragen laufen
+        # echt, sonst prueft der Test seinen eigenen Mock.
+        echt = wr._git
+        # Ein freier Rest muss da sein, sonst ruft der Wächter `prune`
+        # gar nicht auf und der Test prueft nichts.
+        self._weg_machen(self.wt)
+
+        def mit_neuem_rest(*args, **kwargs):
+            if args[:2] == ("worktree", "prune"):
+                ordner = Path(self.tmp) / "wt2"
+                self._git("worktree", "add", "-b", "zwei", str(ordner), "HEAD")
+                import shutil
+                shutil.rmtree(ordner, ignore_errors=True)
+                return subprocess.CompletedProcess([], 0, "Removing worktrees/wt2", "")
+            return echt(*args, **kwargs)
+
+        with mock.patch.object(wr, "_git", side_effect=mit_neuem_rest):
+            code = wr.raeume_admin_reste(self.haupt, tun=True)
+        self.assertEqual(code, 1, "Ein fremder Rest wurde mitgenommen und kam nicht zur Sprache.")
+        self.assertTrue(wr.admin_reste(self.haupt), "Gegenprobe: der zweite Rest ist da.")
+
+
 class GegenprobeTest(RepoTest):
     """DER BEWEIS, DASS DIE TESTS NICHT BLIND SIND.
 

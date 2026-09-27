@@ -41,6 +41,37 @@ abbrechen und den Menschen entscheiden lassen.
 
 `--tun` loescht nur bei nachweislich freiem Ordner. Ohne `--tun` wird
 geprueft und nichts angefasst.
+
+    python Tools/worktree_raeumen.py --admin-reste        # nur listen
+    python Tools/worktree_raeumen.py --admin-reste --tun  # und abraeumen
+
+ZWEITE AUFGABE: VERWAISTE ADMIN-EINTRAGE. GEMESSEN am 27.09.2026 im echten
+Baum: `.git/worktrees/WiesbadenReal1` zeigte auf
+`.../WiesbadenReal/Saved/_gate5_worktree/WiesbadenReal`, einen Ordner, den es
+nicht mehr gibt. `git worktree list` fuehrt ihn als `prunable`, und
+`git worktree prune --dry-run` wuerde ihn entfernen.
+
+WARUM DAS EIGENTLICH GEFAEHRLICH IST - und hier wird geraten, wenn man es
+nicht nachmacht. GEMESSEN an einem Wegwerf-Repo:
+
+  * Commit auf einem BRANCH im geloeschten Worktree: der Branch `b4` lebt
+    im Haupt-Baum weiter, `git log b4` zeigt den Commit. `prune` verliert
+    hier nichts.
+  * Commit im DETACHED HEAD: der Commit liegt im Reflog des Admin-Eintrags
+    (`.git/worktrees/<name>/logs/HEAD`) und nirgends sonst. Nach `prune`
+    gibt es KEINEN Ref und KEIN Reflog, der darauf zeigt - nur noch das
+    lose Objekt. Er ist nur ueber die SHA zu finden und beim naechsten
+    `git gc` weg. GEMESSEN: `git for-each-ref --contains <sha>` leer,
+    `git reflog --all` ohne Treffer.
+
+Darum entfernt dieser Waechter einen Admin-Rest NUR, wenn sein HEAD auf
+einem Remote liegt oder von einem Ref im Haupt-Baum erreicht wird. Sonst
+blockiert er - ein Fund wird gemeldet, nicht weggeräumt.
+
+GELOCKTE EINTRAGE FASST GIT SELBST NICHT AN (GEMESSEN: nach `worktree
+lock` appeared der Eintrag nicht mehr in `prune --dry-run`, erst nach
+`unlock` wieder). Der Waechter prueft es trotzdem selbst, statt sich auf
+das Verhalten zu verlassen.
 """
 import argparse
 import json
@@ -166,6 +197,178 @@ def worktree_liste(haupt):
         elif zeile.startswith("branch ") and raus:
             raus[-1][2] = zeile[7:].strip()
     return [tuple(z) for z in raus]
+
+
+def _porzelain_paare(text):
+    """Die Absaetze aus `git worktree list --porcelain` als Liste dicts."""
+    raus, aktuell = [], None
+    for zeile in text.splitlines():
+        if zeile.startswith("worktree "):
+            aktuell = {"pfad": zeile[len("worktree "):].strip(),
+                       "HEAD": "", "branch": "", "locked": False,
+                       "lock_grund": "", "prunable": ""}
+            raus.append(aktuell)
+        elif aktuell is None:
+            continue
+        elif zeile.startswith("HEAD "):
+            aktuell["HEAD"] = zeile[5:].strip()
+        elif zeile.startswith("branch "):
+            aktuell["branch"] = zeile[7:].strip()
+        elif zeile == "locked" or zeile.startswith("locked "):
+            # GEMESSEN am 27.09.2026: `git worktree lock --reason "..."`
+            # schreibt "locked Wartet" in das Porcelain, ohne Begruendung
+            # nur "locked". Wer auf Gleichheit prueft, erkennt einen Lock
+            # mit Grund nicht und raeumt danach genau den Eintrag weg, den
+            # jemand ausdruecklich behalten wollte.
+            aktuell["locked"] = True
+            aktuell["lock_grund"] = zeile[7:].strip()
+        elif zeile.startswith("prunable"):
+            aktuell["prunable"] = zeile[len("prunable"):].strip()
+    return raus
+
+
+def admin_reste(haupt):
+    """Registrierte Worktrees, deren Ordner NICHT (mehr) existiert.
+
+    GEMESSEN: `prunable` heisst bei git "gitdir file points to
+    non-existent location" - der Admin-Eintrag zeigt auf einen Pfad, den es
+    nicht gibt. Wir pruefen das selbst nach, statt dem Wort zu glauben: ein
+    Eintrag mit vorhandenem Ordner wird auch dann nicht als Rest gemeldet,
+    wenn git ihn prunable nennt (gemessen: `.git`-Datei von Hand geloescht,
+    Ordner blieb stehen - da liegen Dateien drin, die nicht weggehoeren).
+
+    Rueckgabe: Liste dicts mit pfad, HEAD, branch, locked, grund.
+    """
+    fertig = _git("worktree", "list", "--porcelain", cwd=str(haupt))
+    if fertig.returncode != 0:
+        raise Unklar("git worktree list: %s" % (fertig.stderr or "").strip())
+    raus = []
+    for eintrag in _porzelain_paare(fertig.stdout):
+        if Path(eintrag["pfad"]).exists():
+            continue
+        raus.append(eintrag)
+    return raus
+
+
+def head_erreichbar(sha, haupt):
+    """Liegt der Commit dieses HEAD auf einem Remote oder zeigt ein Ref darauf?
+
+    Zwei Fragen, zwei Befehle. `--not --remotes` beantwortet die erste
+    (liegt er auf origin?), `for-each-ref --contains` die zweite (gibt es
+    im Haupt-Baum ueberhaupt einen Ref darauf?). Zusammen beantworten sie
+    die Frage, die zaehlt: Wenn ein Commit im Haupt-Baum einen Ref hat,
+    bleibt er erreichbar, auch wenn dieser Admin-Eintrag verschwindet.
+
+    GEMESSEN, warum BEIDE noetig sind: ein Branch-Commit des geloeschten
+    Worktrees lebt im Haupt-Baum weiter, ein detached Commit nicht - und
+    genau der hatte nach `prune` keinen Ref und keinen Reflog mehr.
+    """
+    if not sha:
+        return False, "HEAD des Admin-Eintrags ist nicht lesbar"
+    eigen = _git("log", "--oneline", sha, "--not", "--remotes", cwd=str(haupt))
+    if eigen.returncode != 0:
+        raise Unklar("git log --not: %s" % (eigen.stderr or "").strip())
+    offen = [z for z in eigen.stdout.splitlines() if z.strip()]
+    if not offen:
+        return True, "jeder Commit dieses HEAD liegt auf einem Remote"
+    zeigt = _git("for-each-ref", "--format=%(refname:short)", "--contains", sha,
+                 "refs/heads", "refs/remotes", cwd=str(haupt))
+    if zeigt.returncode != 0:
+        raise Unklar("git for-each-ref: %s" % (zeigt.stderr or "").strip())
+    refs = [z.strip() for z in zeigt.stdout.splitlines() if z.strip()]
+    if refs:
+        return True, "im Haupt-Baum erreichbar ueber %s" % ", ".join(refs[:2])
+    return False, ("%d Commit(s) haengen nur an diesem Eintrag, darunter %s - "
+                   "nach dem Raeumen waeren sie verwaist"
+                   % (len(offen), offen[0][:60]))
+
+
+def pruefe_admin_reste(haupt, eigene_pids=()):
+    """Darf ein Admin-Rest geraeumt werden? -> (ok, bericht, spuren).
+
+    Jeder spur bekommt ihren eigenen Bericht; `ok` gilt nur, wenn ALLE
+    freigegeben sind - `prune` nimmt keinen Teil, also darf der Waechter
+    auch keinen nehmen.
+    """
+    reste = admin_reste(haupt)
+    if not reste:
+        return True, [("Admin", "keine verwaissten Admin-Eintraege.")], []
+    bericht, spuren, blockiert = [], [], []
+    for eintrag in reste:
+        pfad = eintrag["pfad"]
+        if eintrag["locked"]:
+            blockiert.append(eintrag)
+            bericht.append(("Admin", "GELOCKT%s, nicht angefasst: %s"
+                            % (" (%s)" % eintrag["lock_grund"] if eintrag.get("lock_grund") else "",
+                               pfad)))
+            continue
+        # Ein Prozess, dessen Kommandozeile auf den Pfad zeigt, arbeitet
+        # noch damit - moeglich, dass er den Ordner gleich wieder anlegt.
+        if prozess_mit_pfad(Path(pfad), eigene_pids):
+            blockiert.append(eintrag)
+            bericht.append(("Prozess", "Prozess nennt den Pfad, nicht geraeumt: %s" % pfad))
+            continue
+        try:
+            ok, grund = head_erreichbar(eintrag["HEAD"], haupt)
+        except Unklar as problem:
+            blockiert.append(eintrag)
+            bericht.append(("Unklar", "%s (%s)" % (problem, pfad)))
+            continue
+        bericht.append(("Admin", "%s: %s" % (pfad, grund)))
+        if ok:
+            spuren.append(eintrag)
+        else:
+            blockiert.append(eintrag)
+    return (not blockiert), bericht, spuren
+
+
+def raeume_admin_reste(haupt, tun=False, eigene_pids=()):
+    """Verwaiste Admin-Eintraege aufzaehlen - und nur mit --tun abraeumen.
+
+    Entfernt wird ueber `git worktree prune` und NUR wenn danach wieder
+    derselbe Bestand da ist: prune nimmt alle faelligen Eintraege auf
+    einmal, auch die, die dieser Waechter gar nicht gesehen hat. Deshalb
+    wird der Bestand vorher und nachher verglichen - bleibt danach etwas
+    uebrig, das vorher nicht prunable war, ist das ein Befund und keine
+    Erfolgsmeldung.
+    """
+    try:
+        vorher = {e["pfad"] for e in admin_reste(haupt)}
+        ok, bericht, spuren = pruefe_admin_reste(haupt, eigene_pids=eigene_pids)
+    except Unklar as problem:
+        print("ABGEBROCHEN (unklar, im Zweifel nicht loeschen): %s" % problem)
+        return 3
+    for schlagwort, text in bericht:
+        print("[%s] %s" % (schlagwort, text))
+    if not spuren:
+        if ok:
+            print("\nKeine Admin-Reste zum Raeumen.")
+            return 0
+        # Ein Rest, der zu Recht liegen bleibt (gelockt, Commit haengt
+        # dran, Prozess auf dem Pfad), ist kein Fehlschlag des Werkzeugs -
+        # er ist genau das, was der Wächter melden soll. 1 heisst hier
+        # "nichts geraeumt, und das war Absicht", nicht "etwas ist kaputt".
+        print("\nNichts geraeumt - jeder Rest hat einen Grund (siehe oben).")
+        return 0
+    if not tun:
+        print("\n%d Admin-Rest(e) frei. Mit --tun raeumen." % len(spuren))
+        return 0
+    fertig = _git("worktree", "prune", "-v", cwd=str(haupt))
+    ausgabe = ((fertig.stdout or "") + (fertig.stderr or "")).strip()
+    if fertig.returncode != 0:
+        print("git worktree prune: %s" % ausgabe)
+        return 1
+    nachher = {e["pfad"] for e in admin_reste(haupt)}
+    if nachher - vorher:
+        print("ACHTUNG: nach dem Raeumen gibt es NEUE verwaiste Eintraege:")
+        for pfad in sorted(nachher - vorher):
+            print("  %s" % pfad)
+        print("Das war nicht Teil des Auftrags - bitte ansehen.")
+        return 1
+    print("\nAdmin-Reste geraeumt: %d" % len(spuren))
+    for pfad in sorted(e["pfad"] for e in spuren):
+        print("  %s" % pfad)
+    return 0
 
 
 def eigene_commits(pfad, haupt):
@@ -394,9 +597,15 @@ def raeumen(pfad, haupt, tun=False, eigene_pids=(), zaehlen=None, erwarten=None)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Worktree erst entfernen, wenn niemand darin arbeitet")
-    ap.add_argument("pfad", help="Worktree-Ordner")
+    ap.add_argument("pfad", nargs="?", help="Worktree-Ordner")
     ap.add_argument("--tun", action="store_true", help="wirklich entfernen")
+    ap.add_argument("--admin-reste", action="store_true",
+                    help="verwaiste Admin-Eintraege (Ordner weg) aufzaehlen und raeumen")
     ap.add_argument("--haupt", help="Projektordner (Vorgabe: der, in dem dieses Werkzeug liegt)")
     args = ap.parse_args()
-    sys.exit(raeumen(args.pfad, args.haupt or Path(__file__).resolve().parent.parent,
-                     tun=args.tun))
+    haupt = Path(args.haupt) if args.haupt else Path(__file__).resolve().parent.parent
+    if args.admin_reste:
+        sys.exit(raeume_admin_reste(haupt, tun=args.tun))
+    if not args.pfad:
+        ap.error(" entweder ein Worktree-Ordner oder --admin-reste")
+    sys.exit(raeumen(args.pfad, haupt, tun=args.tun))
