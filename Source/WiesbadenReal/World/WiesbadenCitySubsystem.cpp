@@ -18,6 +18,7 @@
 #include "Engine/StaticMesh.h"
 #include "Core/WiesbadenGameInstance.h"
 #include "Core/WiesbadenDevActions.h"
+#include "Core/WiesbadenQuitWatchdog.h"
 #include "World/BuildingCollisionSpawnerComponent.h"
 #include "LandscapeHeightfieldCollisionComponent.h"
 #include "LandscapeProxy.h"
@@ -1169,6 +1170,10 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		if (FParse::Value(FCommandLine::Get(), TEXT("WbQuitAfter="), QuitAfterSeconds)
 			&& QuitAfterSeconds > 0.0f)
 		{
+			// Zombie-Schutz: meldet dem Watchdog, dass der Spiel-Strang laeuft.
+			// Haelt er an (GPU-Stall), beendet der Watchdog den Prozess hart,
+			// statt dass der Messlauf als Zombie Lock und DLL haelt.
+			FWiesbadenQuitWatchdog::NotifyTick();
 			QuitAfterElapsed += DeltaTime;
 			if (QuitAfterElapsed > QuitAfterSeconds)
 			{
@@ -1177,6 +1182,8 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 
 				// Durchfall-Test-Ergebnis sichern, bevor der Prozess endet.
 				WriteFallThroughSummary();
+
+				FWiesbadenQuitWatchdog::NotifyExitRequested(TEXT("-WbQuitAfter"));
 
 				if (UWorld* QuitWorld = GetWorld())
 				{
@@ -2237,6 +2244,7 @@ void UWiesbadenCitySubsystem::Tick(float DeltaTime)
 		if (ScreenshotQuitDelay <= 0.0f)
 		{
 			ScreenshotQuitDelay = -1.0f;
+			FWiesbadenQuitWatchdog::NotifyExitRequested(TEXT("ScreenshotQuit"));
 			FPlatformMisc::RequestExit(false);
 		}
 	}
