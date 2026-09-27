@@ -82,15 +82,81 @@ class StadtinhaltTest(unittest.TestCase):
 
 
 class WorktreeOrtTest(unittest.TestCase):
+    """WO der Gate-Worktree liegt - und warum nicht neben dem AUFRUFENDEN Ordner.
+
+    GEMESSEN am 27.09.2026: der Pfad wurde aus `projekt.parent` gebildet, und
+    in einem verlinkten Worktree ist das dessen Elternordner. Ein Push von
+    dort legte `.gate-worktree\\.gate-worktree\\WiesbadenReal` an - 0 Stadt-
+    inhalte, kein .uproject, Gate 0 nach 11 Minuten rot.
+    """
+
+    def git_liste(self, haupt="C:/x/Sicherung/WiesbadenReal"):
+        """`git worktree list --porcelain` mit dem HAUPTBAUM an erster Stelle.
+
+        Genau das ist die Quelle, aus der haupt_ordner() liest - der erste
+        Eintrag, unabhaengig vom aufrufenden Ordner.
+        """
+        return "worktree %s\nHEAD abc\nbranch refs/heads/wt\n\n" % haupt
+
     def test_neben_dem_projekt_mit_gleichem_namen(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("WB_GATE_WORKTREE", None)
-            ort = gw.gate_projekt(Path("C:/x/Sicherung/WiesbadenReal"))
+            with mock.patch.object(gw, "git", return_value=self.git_liste()):
+                ort = gw.gate_projekt(Path("C:/x/Sicherung/WiesbadenReal"))
         self.assertEqual(ort, Path("C:/x/Sicherung/.gate-worktree/WiesbadenReal"))
 
     def test_eigener_stamm_per_umgebung(self):
         with mock.patch.dict(os.environ, {"WB_GATE_WORKTREE": "D:/gate"}):
-            self.assertEqual(gw.gate_projekt(Path("C:/x/WiesbadenReal")), Path("D:/gate/WiesbadenReal"))
+            with mock.patch.object(gw, "git", return_value=self.git_liste()):
+                self.assertEqual(gw.gate_projekt(Path("C:/x/Sicherung/WiesbadenReal")),
+                                 Path("D:/gate/WiesbadenReal"))
+
+    def test_aus_einem_worktree_entsteht_kein_verschachtelter_pfad(self):
+        """DER BEFUND: derselbe Stammordner, egal von wo aufgerufen."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("WB_GATE_WORKTREE", None)
+            for aufrufer in ("C:/x/Sicherung/WiesbadenReal",
+                             "C:/x/Sicherung/.gate-worktree/WiesbadenReal",
+                             "C:/x/Sicherung/.wt-gate5"):
+                with mock.patch.object(gw, "git", return_value=self.git_liste()):
+                    ort = gw.gate_projekt(Path(aufrufer))
+                self.assertEqual(ort, Path("C:/x/Sicherung/.gate-worktree/WiesbadenReal"),
+                                 aufrufer)
+                self.assertNotIn(".gate-worktree/.gate-worktree",
+                                 str(ort).replace("\\", "/"),
+                                 "verschachtelter Stammordner: %s" % ort)
+
+    def test_haupt_ordner_ist_der_erste_eintrag_der_liste(self):
+        with mock.patch.object(gw, "git", return_value=self.git_liste()):
+            self.assertEqual(gw.haupt_ordner(Path("C:/beliebig/irgendwo")),
+                             Path("C:/x/Sicherung/WiesbadenReal").resolve())
+
+    def test_der_gate_worktree_selbst_wird_abgewiesen(self):
+        """Ein zweiter Lauf darin prueft nichts Neues - die Stadtinhalte sind
+        dort Verlinkungen, keine Kopien."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("WB_GATE_WORKTREE", None)
+            with mock.patch.object(gw, "git", return_value=self.git_liste()):
+                self.assertTrue(gw.ist_im_gate_worktree(
+                    Path("C:/x/Sicherung/.gate-worktree/WiesbadenReal")))
+                self.assertFalse(gw.ist_im_gate_worktree(
+                    Path("C:/x/Sicherung/WiesbadenReal")))
+
+    def test_der_aufruf_aus_dem_gate_worktree_bricht_ab(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("WB_GATE_WORKTREE", None)
+            with mock.patch.object(gw, "git", return_value=self.git_liste()):
+                with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                    code = gw.push_pruefen(
+                        Path("C:/x/Sicherung/.gate-worktree/WiesbadenReal"),
+                        "refs/heads/x " + "0" * 40)
+        self.assertEqual(code, 1)
+        self.assertIn("IST der Gate-Worktree", out.getvalue())
+
+    def test_ohne_worktree_liste_wird_es_nicht_geraten(self):
+        with mock.patch.object(gw, "git", return_value=""):
+            with self.assertRaises(RuntimeError):
+                gw.haupt_ordner(Path("C:/x/Sicherung/WiesbadenReal"))
 
 
 @unittest.skipUnless(os.name == "nt", "Verzeichnis-Verbindungen gibt es nur unter Windows")
