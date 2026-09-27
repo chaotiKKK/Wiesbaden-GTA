@@ -1871,11 +1871,7 @@ void AWiesbadenGameMode::TickCutShots(float DeltaSeconds)
 	{
 		const FVector Delta = Nach - Von;
 		const float Waagerecht = FVector(Delta.X, Delta.Y, 0.0f).Size();
-		// TESTFUECKE (Wegwerf-Commit): die Kamera 80 Grad daneben. Genau
-		// so sah es aus, als die Linse am Pawn-Thread hing - alle vier
-		// "Bild gespeichert"-Zeilen standen im Log, im Bild war nur Himmel
-		// und Strasse. Gate 4 muss diesen Push abweisen.
-		const float Yaw = FMath::RadiansToDegrees(FMath::Atan2(Delta.Y, Delta.X)) + 80.0f;
+		const float Yaw = FMath::RadiansToDegrees(FMath::Atan2(Delta.Y, Delta.X));
 		// Liegt das Ziel tiefer (Delta.Z < 0), muss die Kamera nach unten
 		// kippen - negative Pitch, ohne Vorzeichenwechsel.
 		const float Pitch = FMath::Clamp(FMath::RadiansToDegrees(
