@@ -11,6 +11,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Vehicles/WiesbadenHelicopter.h"
 #include "Vehicles/WiesbadenLegacyHelicopter.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
 
 /**
  * Der ZWEITE fliegbare Hubschrauber - altes Modell, dieselbe Flugmechanik.
@@ -69,10 +70,37 @@ bool FLegacyHelicopterModelTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("Rumpfnetz"), Body->GetName(), FString(TEXT("SM_HeliBody")));
 
-	// Die Ka-52-Kabine erbte den Rumpf-Faktor 14,5 (38-m-Kasten, 27.09.2026).
-	if (UStaticMeshComponent* Kabine = CDO->GetCockpitMesh())
+	// Die Kabine erbte den Rumpf-Faktor 14,5 (38-m-Kasten, 27.09.2026): im
+	// Actor-Raum muss sie Ka-52-Groesse haben, das Cockpit-Auge umschliessen
+	// und im Rumpf liegen.
+	UStaticMeshComponent* Kabine = CDO->GetCockpitMesh();
+	if (Kabine && Kabine->GetStaticMesh())
 	{
-		TestNull(TEXT("Keine Ka-52-Kabine am alten Modell"), Kabine->GetStaticMesh());
+		const FBox KabineAktor = Kabine->GetStaticMesh()->GetBoundingBox()
+			.TransformBy(Kabine->GetRelativeTransform() * Fuselage->GetRelativeTransform());
+		const FBox RumpfAktor = Body->GetBoundingBox().TransformBy(Fuselage->GetRelativeTransform());
+		const FVector Groesse = KabineAktor.GetSize();
+		AddInfo(FString::Printf(TEXT("Kabine %s, Rumpf %s (Actor-Raum)"),
+			*KabineAktor.ToString(), *RumpfAktor.ToString()));
+		TestTrue(FString::Printf(TEXT("Kabine %.0f x %.0f x %.0f cm (erwartet Laenge 230..300, Breite 120..220, Hoehe < 250)"),
+			Groesse.X, Groesse.Y, Groesse.Z),
+			Groesse.X > 230.0 && Groesse.X < 300.0 && Groesse.Y > 120.0 && Groesse.Y < 220.0 && Groesse.Z < 250.0);
+		if (const UWiesbadenVehicleCameraComponent* Kamera = CDO->GetVehicleCamera())
+		{
+			const FVector Augen = Kamera->GetRelativeLocation() + Kamera->CockpitOffset;
+			TestTrue(FString::Printf(TEXT("Cockpit-Auge %s in der Kabine"), *Augen.ToString()),
+				KabineAktor.IsInsideOrOn(Augen));
+		}
+		TestTrue(TEXT("Kabine liegt im Rumpf"), RumpfAktor.ExpandBy(10.0).IsInsideOrOn(KabineAktor));
+		// Der Kasten allein sagt nicht "unsichtbar von aussen": die Nase
+		// verjuengt sich, und die Seitenwaende ragten im Bild heraus. Darum
+		// sieht die Kabine nur der eigene Pilot, und erst im Cockpit (Tick).
+		TestTrue(TEXT("Kabine nur fuer den Piloten und anfangs verborgen"),
+			Kabine->bOnlyOwnerSee && !Kabine->GetVisibleFlag());
+	}
+	else
+	{
+		AddError(TEXT("Keine Kabine am alten Modell"));
 	}
 
 	UStaticMeshComponent* Upper = CDO->GetUpperRotorMesh();

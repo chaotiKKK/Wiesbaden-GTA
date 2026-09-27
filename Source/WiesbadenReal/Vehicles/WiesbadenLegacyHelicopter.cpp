@@ -6,6 +6,7 @@
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
 
 AWiesbadenLegacyHelicopter::AWiesbadenLegacyHelicopter()
 {
@@ -74,9 +75,21 @@ AWiesbadenLegacyHelicopter::AWiesbadenLegacyHelicopter()
 	if (TailFinMesh) { TailFinMesh->SetVisibility(false); }
 	if (TailRotorBlade) { TailRotorBlade->SetVisibility(false); }
 
-	// Keine Ka-52-Kabine: sie haengt an FuselageMesh und erbte dessen Faktor
-	// 14,5 - ein 38-m-Kasten ueber dem Garagenhof (27.09.2026).
-	if (CockpitMesh) { CockpitMesh->SetStaticMesh(nullptr); }
+	// Die Ka-52-Kabine haengt an FuselageMesh und erbte dessen Faktor 14,5 und
+	// Gier -90 - ein 38-m-Kasten ueber dem Garagenhof (27.09.2026). Beides
+	// zurueckgenommen sitzt sie im Actor-Raum wie beim Ka-52 (Massstab 1,
+	// Gier +90), also um das gemeinsame Cockpit-Auge.
+	if (CockpitMesh)
+	{
+		CockpitMesh->SetRelativeScale3D(FVector(1.0f / ModelScale));
+		CockpitMesh->SetRelativeRotation(FRotator(0.0f, 180.0f, 0.0f));
+		// Die schmale Nase dieses Modells umschliesst die 1,6 m breite Kabine
+		// nicht - von aussen ragten Seitenwaende und Hebel heraus. Darum nur
+		// fuer den eigenen Piloten und nur in der Cockpit-Ansicht (Tick), in
+		// der der Rumpf ohnehin ausgeblendet ist.
+		CockpitMesh->SetOnlyOwnerSee(true);
+		CockpitMesh->SetVisibility(false);
+	}
 
 	// -- Koaxiales Rotorpaar --------------------------------------------------
 	// Die Naben sitzen auf den gemessenen Masthoehen des alten Modells, nicht
@@ -139,4 +152,14 @@ AWiesbadenLegacyHelicopter::AWiesbadenLegacyHelicopter()
 	};
 	ScheibeAnpassen(UpperRotorBlur, UpperAsset.Succeeded() ? UpperAsset.Object : nullptr);
 	ScheibeAnpassen(LowerRotorBlur, LowerAsset.Succeeded() ? LowerAsset.Object : nullptr);
+}
+
+void AWiesbadenLegacyHelicopter::Tick(float DeltaSeconds)
+{
+	// Vor Super::Tick, damit die Kabinenmeldung dort den neuen Stand sieht.
+	if (CockpitMesh)
+	{
+		CockpitMesh->SetVisibility(GetCameraMode() == EWiesbadenVehicleCameraMode::Cockpit);
+	}
+	Super::Tick(DeltaSeconds);
 }

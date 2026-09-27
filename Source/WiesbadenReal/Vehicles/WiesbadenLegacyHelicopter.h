@@ -39,6 +39,7 @@ class WIESBADENREAL_API AWiesbadenLegacyHelicopter : public AWiesbadenHelicopter
 
 public:
 	AWiesbadenLegacyHelicopter();
+	virtual void Tick(float DeltaSeconds) override;
 
 	/** Rumpfnetz (fuer Kamera-/Sichtpruefungen und den Test). */
 	UStaticMeshComponent* GetFuselageMesh() const { return FuselageMesh; }
