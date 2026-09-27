@@ -353,6 +353,106 @@ class SchnittbildGateTest(unittest.TestCase):
                           % befehl)
 
 
+class AnkerGateTest(unittest.TestCase):
+    """Gate 5 (Ankerzustand der WP-Karte) - er laeuft bei jedem Push.
+
+    Dasselbe Muster wie Gate 4, mit einer weiteren Falle: der Ankerzustand
+    entsteht in einem BAKE, nicht im Code. Ein Fehler darin ist im Commit
+    unsichtbar - die Datei ist vorhanden, nur falsch - und faellt erst beim
+    Laden der Karte auf, wenn 20 000 leere Komponenten am Kartenursprung
+    stehen. Genau dieser Stand lag wochenlang als "gemessen" da, weil der
+    Lauf die Existenz der Datei mit Erfolg verwechselt hat.
+
+    Deshalb hier dasselbe dreifach abgesichert: der Schritt laeuft, er laeuft
+    OHNE Dateifilter, und er befiehlt genau das Skript, das die Zahl
+    auswertet.
+    """
+
+    class LaufDoppel:
+        def __init__(self):
+            self.gefahren = []
+            self.befehle = {}
+            self.uebersprungen = []
+
+        def fahre(self, name, befehl, *, shell_cmd=False):
+            self.gefahren.append(name)
+            self.befehle[name] = befehl
+            return True
+
+        def ueberspringe(self, name, grund):
+            self.uebersprungen.append(name)
+
+        def bericht(self):
+            return 0
+
+    def zuordnung(self, stufe, dateien):
+        doppel = self.LaufDoppel()
+        alt = vdc.Lauf
+        vdc.Lauf = lambda: doppel
+        import gate_worktree
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+                vdc.gates_fahren(stufe, dateien)
+        finally:
+            vdc.Lauf = alt
+        return doppel
+
+    @staticmethod
+    def gate5(namen):
+        return [n for n in namen if "Gate 5" in n]
+
+    def test_es_faehrt_in_der_vollen_stufe(self):
+        d = self.zuordnung("voll", ["Tools/x.py"])
+        self.assertTrue(self.gate5(d.gefahren),
+                        "Gate 5 laeuft in der vollen Stufe nicht - der "
+                        "Ankerzustand waere beim Push ungeprueft")
+
+    def test_es_faehrt_auch_ohne_stadtbezug(self):
+        """KEIN Dateifilter: ein Push mit nur Werkzeugen prueft ihn trotzdem."""
+        d = self.zuordnung("voll", ["Tools/Doku/x.md", "Config/DefaultEngine.ini"])
+        self.assertTrue(self.gate5(d.gefahren),
+                        "das Gate haengt an einer Dateiliste - im "
+                        "Commit-Worktree ist die haeufig leer")
+
+    def test_es_faehrt_auch_bei_leerer_dateiliste(self):
+        d = self.zuordnung("voll", [])
+        self.assertTrue(self.gate5(d.gefahren),
+                        "eine leere Dateiliste schaltet das Gate ab - im "
+                        "Commit-Worktree ist genau das der Normalfall")
+
+    def test_es_laeuft_in_der_schnellen_stufe_nicht(self):
+        d = self.zuordnung("schnell", ["Source/X.cpp"])
+        self.assertFalse(self.gate5(d.gefahren),
+                         "die Messung startet einen Editor und gehoert nicht "
+                         "vor jeden Commit")
+        self.assertTrue(self.gate5(d.uebersprungen),
+                        "sie muss als uebersprungen sichtbar sein, nicht "
+                        "ersatzlos wegfallen")
+
+    def test_es_befiehlt_sein_eigenes_gate(self):
+        d = self.zuordnung("voll", ["Source/X.cpp"])
+        befehle = [str(b) for name, b in d.befehle.items() if "Gate 5" in name]
+        self.assertTrue(befehle, "kein Befehl fuer Gate 5 aufgezeichnet")
+        for befehl in befehle:
+            self.assertIn("verify_anchor.cmd", befehl,
+                          "Gate 5 faehrt etwas anderes als die Ankerpruefung: %s"
+                          % befehl)
+
+    def test_das_werkzeug_wertet_die_zahl_aus(self):
+        """Der Schritt ist nur so viel wert wie sein Exit-Code.
+
+        Ohne Auswertung der Zahl am Kartenursprung waere Gate 5 eine
+        Ampel ohne Lampe: verify_anchor.cmd endet dann bei 0, sobald die
+        Datei da liegt - auch wenn 20 404 Komponenten am Ursprung stehen.
+        """
+        text = (WURZEL / "Tools" / "verify_anchor.cmd").read_text(
+            encoding="utf-8", errors="replace")
+        self.assertIn("goto :leere_am_ursprung", text,
+                      "verify_anchor.cmd wertet die Zahl der leeren "
+                      "Komponenten am Kartenursprung nicht aus - Gate 5 "
+                      "kann dann einen kaputten Zustand nicht ablehnen")
+
+
 class PushBereichTest(unittest.TestCase):
     """Die Push-Stufe muss den COMMIT-BEREICH beurteilen, nicht den Baum.
 
