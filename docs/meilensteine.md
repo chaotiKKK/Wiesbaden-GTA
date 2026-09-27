@@ -218,10 +218,10 @@ fotografieren.)
 
 *04.–17.09.2026*
 
-![Mitfahrt in der Nerobergbahn](meilensteine/bilder/02-nerobergbahn-mitfahrt.gif)
+![Die beiden Wagen begegnen sich in der Ausweiche (Zeitraffer)](meilensteine/bilder/02-nerobergbahn-ausweiche.gif)
 
 Die historische Standseilbahn fährt auf den Neroberg: Viadukt aus
-Ziegelbögen, blaue Wagen, Stationen mit Fähnchen. Man kann mitfahren und die
+Ziegelbögen, gelbe Wagen, Stationen mit Fähnchen. Man kann mitfahren und die
 Kurbel am Wasserschieber bedienen.
 
 ---
@@ -233,3 +233,7 @@ Kurbel am Wasserschieber bedienen.
 Markante Bauwerke sind eigens nachgebaut: die Marktkirche, die
 Russisch-Orthodoxe Kirche, das LuisenForum als Brücke über die Schwalbacher
 Straße und ein Space-Shuttle-Denkmal am Jagdschloss Platte.
+
+| | | |
+|---|---|---|
+| ![Die Marktkirche über der Innenstadt](meilensteine/bilder/01-wahrzeichen-marktkirche.jpg) | ![Die Russisch-Orthodoxe Kirche auf dem Neroberg](meilensteine/bilder/01-wahrzeichen-russische-kirche.jpg) | ![Das LuisenForum überspannt die Schwalbacher Straße](meilensteine/bilder/01-wahrzeichen-luisenforum.jpg) |
