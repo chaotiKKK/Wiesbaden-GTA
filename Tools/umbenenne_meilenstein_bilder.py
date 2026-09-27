@@ -62,7 +62,9 @@ def main() -> int:
         text = text.replace(f"meilensteine/bilder/{alt}", f"meilensteine/bilder/{neu}")
         subprocess.run(["git", "mv", str(quelle), str(ziel)], cwd=REPO, check=True)
         umbenannt += 1
-    SEITE.write_text(text, encoding="utf-8")
+    # newline="\n": ohne das schreibt Windows CRLF und die ganze Datei
+    # erscheint im Diff als umformatiert.
+    SEITE.write_text(text, encoding="utf-8", newline="\n")
     print(f"{umbenannt} Bilder umbenannt, {len(UMS)} Eintraege in der Seite nachgezogen")
     return 0
 
