@@ -46,10 +46,13 @@ keine Threads.
 
 Der Anspruch steht im gemeinsamen .git-Verzeichnis (`git rev-parse
 --git-common-dir`) - von keinem Commit erfasst, fuer alle Worktrees desselben
-Repos identisch. Enthaelt er Thread, Branch, PID und die Dateimuster; ein
-Muster mit abschliessendem `/` ist ein Praefix, sonst gilt fnmatch. Faellt
-eine vorgemerkte Datei in den Anspruch eines ANDEREN Threads - anderer
-Branch ODER anderer Threadname -, ist Gate B rot und nennt den Thread.
+Repos identisch. Er ist nach THREAD geschluesselt (nicht nach Branch: auf
+einem Wegwerf-Branch arbeiten zwei Threads, und ein Branch-Schluessel liess
+den Anspruch des einen beim Beanspruchen des anderen verschwinden). Er
+enthaelt Thread, Branch, PID und die Dateimuster; ein Muster mit
+abschliessendem `/` ist ein Praefix, sonst gilt fnmatch. Faellt eine
+vorgemerkte Datei in den Anspruch eines ANDEREN Threads, ist Gate B rot und
+nennt den Thread.
 
 Drei Entscheidungen, die nicht selbstlaeufig sind:
 
@@ -231,10 +234,19 @@ def braucht_compiler(dateien):
 # fnmatch-Muster. Fremd ist ein Anspruch, wenn Branch ODER Thread nicht
 # meiner ist - der 27.09.-Fall sass auf demselben Wegwerf-Branch wie der
 # andere Thread, eine reine Branch-Pruefung waere dort gruen gewesen.
+#
+# DER SCHLUESSEL IST DER THREAD, NICHT DER BRANCH (Version 2). GEMESSEN beim
+# Schreiben dieses Gates: die erste Fassung schluesselte die Registry nach
+# Branch, und ein Aufruf von `--besitz-ansprechen` auf `wt-gatetest`
+# ueberschrieb den Anspruch des anderen Threads, der auf DEMSELBEN Wegwerf-
+# Branch sass - es gibt dort zwei Threads, das ist der ganze Punkt. Der
+# Anspruch eines anderen Threads ging dabei lautlos verloren. Version 1 wird
+# beim Lesen stillschweigend in Version 2 ueberfuehrt (Branch als Threadname),
+# weil eine alte Registry niemanden blockieren darf.
 # --------------------------------------------------------------------------
 
 BESITZ_DATEI = "wb_besitz.json"
-BESITZ_VERSION = 1
+BESITZ_VERSION = 2
 
 
 def besitz_pfad():
@@ -274,6 +286,16 @@ def besitz_laden():
         return None, "%s ist unlesbar (%s)" % (pfad, fehler)
     if not isinstance(daten, dict) or not isinstance(daten.get("claims"), dict):
         return None, "%s hat kein Format {'claims': {...}}" % pfad
+    if daten.get("version", 1) < 2:
+        # Version 1 schluesselte nach Branch. Der Branch-Eintrag wird zum
+        # Thread-Eintrag, sonst koennte die Umstellung den Besitz aufheben.
+        alt = {}
+        for branch, anspruch in daten["claims"].items():
+            if not isinstance(anspruch, dict):
+                continue
+            thread = anspruch.get("thread") or branch
+            alt[thread] = dict(anspruch, thread=thread, branch=branch)
+        daten = {"version": BESITZ_VERSION, "claims": alt}
     return daten, None
 
 
@@ -339,11 +361,10 @@ def besitz_treffer(muster, pfad):
 def besitz_konflikte(dateien, registry, eigener_branch, eigener_thread=None):
     """(blockierende Konflikte, Hinweise).
 
-    Konflikt = Datei aus diesem Commit liegt im Muster eines Anspruchs, der
-    einem ANDEREN Thread gehoert. Ein Anspruch zaehlt als fremd, wenn
-
-    * sein Branch nicht der eigene ist, ODER
-    * sein Thread-Name nicht der eigene ist.
+    Die Claims sind nach THREAD geschluesselt. Konflikt = Datei aus diesem
+    Commit liegt im Muster eines Anspruchs, der nicht mir gehoert. Auch ein
+    Anspruch DESSELBEN Threads auf einem anderen Branch zaehlt als fremd -
+    zwei Branches sind nicht dasselbe Arbeitsverzeichnis.
 
     GEMESSEN am 27.09.2026, beim ersten echten Lauf dieses Gates: die Fassung
     mit NUR der Branch-Pruefung meldete `gruen` in genau der Lage, fuer die
@@ -359,19 +380,18 @@ def besitz_konflikte(dateien, registry, eigener_branch, eigener_thread=None):
     prueft gar nichts mehr.
     """
     konflikte, hinweise = [], []
-    for branch, anspruch in sorted((registry.get("claims") or {}).items()):
-        anspruch_thread = anspruch.get("thread") or "?"
-        if branch == eigener_branch and (eigener_thread is None
-                                        or anspruch_thread == eigener_thread):
+    for thread_name, anspruch in sorted((registry.get("claims") or {}).items()):
+        if eigener_thread is not None and thread_name == eigener_thread:
             continue
+        branch = anspruch.get("branch") or "?"
         lebt = prozess_lebt(anspruch.get("pid"))
         treffer = [d for d in (dateien or ())
                    if besitz_treffer(anspruch.get("muster"), d)]
         if not lebt:
             hinweise.append(
-                "Anspruch von '%s' auf '%s' ist verwaist (Prozess %s laeuft "
-                "nicht mehr)%s" % (
-                    anspruch_thread, branch, anspruch.get("pid"),
+                "Anspruch von '%s' (Branch %s) ist verwaist (Prozess %s "
+                "laeuft nicht mehr)%s" % (
+                    thread_name, branch, anspruch.get("pid"),
                     " - %d Datei(en) waeren geschuetzt gewesen" % len(treffer)
                     if treffer else ""))
             continue
@@ -379,7 +399,7 @@ def besitz_konflikte(dateien, registry, eigener_branch, eigener_thread=None):
             konflikte.append({
                 "datei": datei,
                 "branch": branch,
-                "thread": anspruch_thread,
+                "thread": thread_name,
                 "muster": anspruch.get("muster") or [],
                 "gleicher_branch": branch == eigener_branch,
             })
@@ -452,33 +472,34 @@ def besitz_ansprechen(muster, thread=None, branch=None):
     if fehler:
         raise RuntimeError(fehler)
     branch = branch or aktueller_branch()
-    anspruch = (registry.get("claims") or {}).get(branch, {})
+    thread = thread or threadname(branch)
+    anspruch = (registry.get("claims") or {}).get(thread, {})
     alt = set(anspruch.get("muster") or ())
-    registry.setdefault("claims", {})[branch] = {
-        "thread": thread or threadname(branch),
+    registry.setdefault("claims", {})[thread] = {
+        "thread": thread,
+        "branch": branch,
         "pid": os.getpid(),
         "zeit": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "muster": sorted(alt | set(muster or ())),
     }
     pfad = besitz_sichern(registry)
-    print("Branch '%s' (Thread '%s') beansprucht %d Muster in %s"
-          % (branch, registry["claims"][branch]["thread"],
-             len(registry["claims"][branch]["muster"]), pfad))
+    print("Thread '%s' auf Branch '%s' beansprucht %d Muster in %s"
+          % (thread, branch, len(registry["claims"][thread]["muster"]), pfad))
     return 0
 
 
-def besitz_freigeben(branch=None):
+def besitz_freigeben(branch=None, thread=None):
     registry, fehler = besitz_laden()
     if fehler:
         print(fehler)
         return 3
-    branch = branch or aktueller_branch()
-    if branch not in (registry.get("claims") or {}):
-        print("Branch '%s' hat keinen Anspruch - nichts zu tun." % branch)
+    thread = thread or threadname(branch or aktueller_branch())
+    if thread not in (registry.get("claims") or {}):
+        print("Thread '%s' hat keinen Anspruch - nichts zu tun." % thread)
         return 0
-    del registry["claims"][branch]
+    del registry["claims"][thread]
     pfad = besitz_sichern(registry)
-    print("Anspruch fuer '%s' freigegeben (%s)." % (branch, pfad))
+    print("Anspruch von '%s' freigegeben (%s)." % (thread, pfad))
     return 0
 
 
@@ -493,12 +514,13 @@ def besitz_zeigen():
               "  python Tools/vor_dem_commit.py --besitz-ansprechen "
               "Source/WiesbadenReal/World/SebboHq*.cpp Tools/")
         return 0
-    for branch, anspruch in sorted(claims.items()):
+    hier = aktueller_branch()
+    for thread_name, anspruch in sorted(claims.items()):
         lebt = prozess_lebt(anspruch.get("pid"))
-        print("%s  [%s]  Thread=%s  pid=%s  seit %s  %s\n    %s" % (
-            branch, "hier" if branch == aktueller_branch() else "fremd",
-            anspruch.get("thread"), anspruch.get("pid"),
-            anspruch.get("zeit") or "?",
+        print("Thread %s  Branch %s [%s]  pid=%s  seit %s  %s\n    %s" % (
+            thread_name, anspruch.get("branch") or "?",
+            "hier" if anspruch.get("branch") == hier else "fremd",
+            anspruch.get("pid"), anspruch.get("zeit") or "?",
             "aktiv" if lebt else "VERWAIST",
             "\n    ".join(anspruch.get("muster") or ["(keine Muster)"])))
     return 0
@@ -704,7 +726,7 @@ def hauptprogramm(argv=None):
     p.add_argument("--besitz-ansprechen", nargs="*", metavar="MUSTER",
                    help="Dateimuster fuer den aktuellen Branch beanspruchen")
     p.add_argument("--besitz-freigeben", action="store_true",
-                   help="Anspruch des aktuellen Branchs zurueckgeben")
+                   help="Anspruch dieses Threads zurueckgeben")
     a = p.parse_args(argv)
 
     # Verwaltung: die Besitz-Kommandos sind keine Gates und laufen darum
@@ -712,7 +734,7 @@ def hauptprogramm(argv=None):
     if a.besitz_zeigen:
         return besitz_zeigen()
     if a.besitz_freigeben:
-        return besitz_freigeben()
+        return besitz_freigeben(thread=a.thread)
     if a.besitz_ansprechen is not None:
         return besitz_ansprechen(a.besitz_ansprechen, thread=a.thread)
 
