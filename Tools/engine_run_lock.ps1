@@ -13,6 +13,10 @@
 #     lange wie der Lauf, der ihn beansprucht - ohne Freigabepflicht.
 #   * Ein Besitzer, dessen Prozess nicht (mehr) existiert, gilt als VERWAIST:
 #     die Sperre wird uebernommen. Ein abgebrochener Lauf blockiert also nicht.
+#     ACHTUNG, das ist der NORMALZUSTAND nach jedem Lauf: der Besitzer ist der
+#     aufrufende cmd.exe, der nach dem Lauf endet. Die Sperrdatei liegt also
+#     planmaessig da und ist beim naechsten -Modus Status "verwaist". Das ist
+#     kein Fehler und kein fremder Rechner, sondern genau der Entwurf.
 #   * Gehoert der Besitzer zur eigenen Prozesskette (Vater/Sohn desselben Laufs,
 #     z. B. Gate -> smoke_test -> Cleanup), ist die Sperre EIGEN: der Lauf darf
 #     beenden. Reentrant, sonst wuerde sich das Gate selbst blockieren.
@@ -27,7 +31,15 @@
 #   Freigeben Lock loeschen; -Gewalt auch bei LEBENDEM fremdem Besitzer.
 #   Status    Zustand melden, nichts aendern. Exit 3 = fremder Lauf belegt.
 #
-# Exit: 0 = frei/eigen/verwaist/erfolgreich, 3 = Lock durch fremden Lauf belegt.
+# PLATTEN-GATE (27.09.2026)
+#   Ein Engine-Start bricht ab, wenn die Platte unter der Grenze liegt. Wo
+#   dieser Test sitzt und warum ausgerechnet hier - siehe Get-PlateFrei().
+#   Dazu kommt -Modus Status / -Modus Freigeben: die lesen und loeschen nur,
+#   sie starten nichts. Wer sie sperren wuerde, kann auf einer vollen Platte
+#   seinen Lock nicht mehr loesen und sitzt fest.
+#
+# Exit: 0 = frei/eigen/verwaist/erfolgreich, 3 = Lock durch fremden Lauf belegt,
+#       4 = Start abgebrochen, weil zu wenig Plattenplatz frei ist.
 [CmdletBinding()]
 param(
     [ValidateSet("Start", "Nehmen", "Freigeben", "Status")]
@@ -42,11 +54,29 @@ param(
     # Nur fuer Start: Ziele der Bereinigung zeigen, nichts beenden.
     [switch]$DryRun,
     # Nur fuer Freigeben: auch den Lock eines noch lebenden fremden Laufs nehmen.
-    [switch]$Gewalt
+    [switch]$Gewalt,
+    # Abbrechgrenze in Prozent frei fuer Start/Nehmen. 0 schaltet das Gate ab.
+    [double]$PlattenGrenze = 10.0,
+    # Notausgang: auch bei zu wenig Platz starten. Fuer den Fall, dass die
+    # Platte wirklich voll ist und man den Editor braucht, um aufzuräumen.
+    [switch]$PlattenTrotz,
+    # Nur fuer den Selbsttest: freier Platz in GB fest vorgeben, statt das
+    # Dateisystem zu fragen. Ohne diesen Schalter misst der Test die echte
+    # Platte des Rechners - und ein Gruen waere dann Zufall.
+    #
+    # GEMESSEN am 27.09.2026: -1 ist hier KEIN "nicht messbar", sondern der
+    # Wert, der "nicht gesetzt" bedeutet - der Selbsttest mit -PlattenTestGiga
+    # -1 hat darum die echte Platte gemessen und 34 % gemeldet. Fuer den
+    # nicht messbaren Fall gibt es deshalb einen eigenen Schalter.
+    [double]$PlattenTestGiga = -1,
+    # Nur fuer den Selbsttest: so tun, als koenne der Platz nicht gelesen
+    # werden (fehlendes Laufwerk, keine Rechte).
+    [switch]$PlattenTestNichtMessbar
 )
 
 $ErrorActionPreference = "Stop"
 $ExitBelegt = 3
+$ExitPlatte = 4
 
 function Get-LockDatei([string]$Pfad) {
     if ($Pfad) { return $Pfad }
@@ -214,6 +244,75 @@ function Sperre-Nehmen([string]$Pfad, [string]$Label, [int]$WarteSekunden) {
     }
 }
 
+# Freier Plattenplatz in Prozent, oder -1, wenn nicht lesbar.
+function Get-PlateFrei() {
+    if ($PlattenTestNichtMessbar) { return -1 }
+    if ($PlattenTestGiga -ge 0) {
+        # Selbsttest: Festwert. Die Gesamtheit wird aus dem echten Laufwerk
+        # genommen, damit die Prozentzahl im berechenbaren Bereich bleibt.
+        $gdrive = Get-PSDrive -Name ($env:SystemDrive.TrimEnd(':')) -ErrorAction SilentlyContinue
+        if (-not $gdrive) { return -1 }
+        $gesamt = ($gdrive.Used + $gdrive.Free)
+        if ($gesamt -le 0) { return -1 }
+        return ($PlattenTestGiga * 1GB / $gesamt * 100.0)
+    }
+    # Laufwerk des PROJEKTS, nicht das Systemlaufwerk: der Lock ist
+    # maschinenweit, das Projekt nicht. Auf einem zweiten Laufwerk waere
+    # Systemlaufwerk die falsche Zahl.
+    $wurzel = Split-Path -Parent $PSScriptRoot
+    try {
+        $d = [System.IO.DriveInfo]::new((Split-Path -Qualifier $wurzel))
+        if (-not $d.IsReady) { return -1 }
+        if ($d.TotalSize -le 0) { return -1 }
+        return ($d.AvailableFreeSpace / $d.TotalSize * 100.0)
+    } catch {
+        return -1
+    }
+}
+
+# Start abbrechen, wenn zu wenig Platz ist. Gibt Exit 0 zurueck, wenn der Lauf
+# starten darf.
+#
+# WARUM IM LOCK UND NICHT IM COMMIT-HOOK: Tools/vor_dem_commit.py hat den
+# Plattenhinweis ausdruecklich NICHT zum Gate gemacht, mit der richtigen
+# Begruendung - wer Commits verweigert, weil der Rechner voll ist, umgeht das
+# binnen eines Tages mit --no-verify. Fuer den Engine-Start gilt das nicht:
+# ein abgebrochener Cook auf voller Platte schreibt unfertige Pakete, und der
+# naechste Lauf macht es wieder. Das ist ein Fehler an der ARBEIT, nicht am
+# Rechner - dafuer ist ein Gate das richtige Mittel.
+#
+# ZWEI GRUENZEN, NICHT EINE: der Waechter meldet ab 20 % (platten_waechter.
+# py, GRENZE_PROZENT), das Gate bricht erst ab 10 % ab. Zwischen beiden liegt
+# die Zone, in der man noch arbeiten kann - dort wird gemeldet, nicht geblockt.
+function Teste-Plate([int]$ExitCode) {
+    if ($PlattenGrenze -le 0) { return $ExitCode }
+    if ($PlattenTrotz) {
+        Write-Host "Lock: Platten-Gate uebergangen (-PlattenTrotz)."
+        return $ExitCode
+    }
+    $frei = Get-PlateFrei
+    if ($frei -lt 0) {
+        # Nicht messbar heisst NICHT voll. Ein Gate, das im Zweifel blockiert,
+        # ist ein Gate, das irgendwann den Rechner anhaelt - und ein
+        # nicht lesbares Laufwerk ist eher ein Rechteproblem als ein Platzproblem.
+        Write-Host "Lock: Plattenplatz nicht messbar - Start laeuft."
+        return $ExitCode
+    }
+    if ($frei -ge $PlattenGrenze) {
+        Write-Host ("Lock: Platten-Gate gruen ({0:N1} % frei, Grenze {1} %)." -f $frei, $PlattenGrenze)
+        return $ExitCode
+    }
+    Write-Host ""
+    Write-Host ("Lock: ABBRUCH - nur {0:N1} % frei, der Start braucht {1} %." -f $frei, $PlattenGrenze)
+    Write-Host "Lock: ein Editor- oder Cook-Start auf dieser Platte bricht mitten im"
+    Write-Host "Lock: Lauf ab und hinterlaesst unfertige Pakete. Der Waechter zeigt die"
+    Write-Host "Lock: groessten Fresser:  Tools\platten_waechter.cmd --reinigen --trocken"
+    Write-Host "Lock: Notausgang, wenn der Editor zum Aufraeumen gebraucht wird:"
+    Write-Host "Lock:   engine_run_lock.cmd -Modus Start -Name <lauf> -PlattenTrotz"
+    Write-Host ""
+    return $ExitPlatte
+}
+
 function Sperre-Freigeben([string]$Pfad, [bool]$Gewalt) {
     $zustand = Get-LockZustand $Pfad (Get-ProzessKette $PID)
     if ($zustand.Status -eq "Frei") {
@@ -233,7 +332,17 @@ function Sperre-Status([string]$Pfad) {
     $zustand = Get-LockZustand $Pfad (Get-ProzessKette $PID)
     switch ($zustand.Status) {
         "Frei"     { Write-Host ("Lock: frei ({0})." -f $Pfad) }
-        "Verwaist" { Write-Host ("Lock: verwaist - {0} lebt nicht mehr, Sperre wird beim naechsten Lauf uebernommen." -f (Get-LockText $zustand)) }
+        # DER SATZ WAR FALSCH ZUSAMMENGESETZT (27.09.2026). Er lautete
+        # "... {0} lebt nicht mehr" mit Get-LockText als {0} - und der Text
+        # endet auf "Rechner OMENBERT". Daraus las sich woertlich
+        # "Rechner OMENBERT lebt nicht mehr", obwohl OMENBERT laeuft und der
+        # ZURUECKGEBLIEBENE PROZESS stirbt. GEMESSEN mit einer Sperrdatei fuer
+        # die tote PID 999999 auf diesem Rechner. Geprueft, ob die Erkennung
+        # falsch anschlaegt: nein - mit einer Sperrdatei fuer einen LEBENDEN
+        # Prozess meldet derselbe Aufruf "BELEGT durch einen anderen Lauf".
+        # Es war allein der Satz. Das Prädikat gehoert deshalb VOR die
+        # Angaben, und der Prozess wird ausdruecklich beim Namen benannt.
+        "Verwaist" { Write-Host ("Lock: verwaist - der Prozess des Laufs lebt nicht mehr ({0})." -f (Get-LockText $zustand)) }
         "Eigen"    { Write-Host ("Lock: von diesem Lauf gehalten - {0}." -f (Get-LockText $zustand)) }
         "Fremd"    { Write-Host ("Lock: BELEGT durch einen anderen Lauf - {0}." -f (Get-LockText $zustand)) }
     }
@@ -243,10 +352,32 @@ function Sperre-Status([string]$Pfad) {
 
 $lockPfad = Get-LockDatei $LockPfad
 switch ($Modus) {
+    # Status und Freigeben laufen OHNE Platten-Gate. Beide starten nichts: sie
+    # fragen nur ab bzw. loeschen. Ein Gate hier waere die schlimmste denkbare
+    # Stelle - auf einer vollen Platte koennte man den eigenen Lock nicht mehr
+    # loesen, und die Notausgaenge (Freigeben -Gewalt, cleanup -SperreIgnorieren)
+    # waeren ebenfalls blockiert.
     "Status"    { exit (Sperre-Status $lockPfad) }
-    "Nehmen"    { exit (Sperre-Nehmen $lockPfad $Name $WarteSekunden) }
     "Freigeben" { exit (Sperre-Freigeben $lockPfad ([bool]$Gewalt)) }
+    # Nehmen und Start pruefen VOR der Sperre. Wer erst sperrt und dann
+    # abbricht, hinterlaesst eine Sperre, die erst der naechste Lauf als
+    # verwaist weckt - der erste Abbruch wuerde sich also als "Lock belegt"
+    # melden und nicht als Platznot.
+    #
+    # GEMESSEN am 27.09.2026, der Fehler, den die erste Fassung hatte:
+    # `Teste-Plate (Sperre-Nehmen ...)` liest sich richtig, wertet aber BEIDES
+    # aus - Sperre-Nehmen laeuft, legt die Datei an, und Teste-Plate
+    # verwirft danach nur den Rueckgabewert. Der Abbruch hinterlaesst dann
+    # eine Sperrdatei (gemessen: 1 Datei nach Exit 4). Der Test muss deshalb
+    # ZWEI Schritte haben: erst pruefen, dann - nur bei 0 - sperren.
+    "Nehmen"    {
+        $rc = Teste-Plate 0
+        if ($rc -ne 0) { exit $rc }
+        exit (Sperre-Nehmen $lockPfad $Name $WarteSekunden)
+    }
     "Start" {
+        $rc = Teste-Plate 0
+        if ($rc -ne 0) { exit $rc }
         $rc = Sperre-Nehmen $lockPfad $Name $WarteSekunden
         if ($rc -ne 0) { exit $rc }
         if ($DryRun) {

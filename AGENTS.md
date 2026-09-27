@@ -4809,3 +4809,151 @@ sauberem Baum gruen, bei Bearbeitung rot, und er sagt etwas Falsches aus.
 - Beim Verschieben gilt: nur UNGETRACKTE Stamm-Dateien anfassen. Getrackte Skripte
   (`anchor_bounds.cmd` & Co.) bleiben, egal wie alt sie aussehen - fremde Threads
   und alte Loefe rufen sie ueber relative Pfade.
+
+## Plattenplatz: Zen-Deckel, Aufgabenplanung und was beide wirklich kosten (27.09.2026)
+- **`[Zen.AutoLaunch] ExtraArgs` im Projekt-`Config\DefaultEngine.ini` ERSETZT die Liste,
+  sie ergaenzt sie nicht.** Wer nur `--gc-cache-duration-seconds` eintragt, wirft
+  `--http asio` und `--cache-bucket-limit-overwrites` weg - der Editor wartet dann
+  vergeblich auf den lokalen Zen-Dienst. Die vollstaendige Liste aus
+  `Engine\Config\BaseEngine.ini` ist mit kopiert.
+- **Zen hat eine echte Groessen-Obergrenze: `--gc-disksize-softlimit`, und die Einheit
+  sind BYTES.** GEMESSEN an `zenserver.exe --gc-disksize-softlimit=1`: der Log schreibt
+  `0B used, 1B soft limit ... Disk usage GC in 1B`. Nicht Prozent, nicht MB. Das ist
+  die entscheidende Erkenntnis: die Zeit-Frist (`--gc-cache-duration-seconds`, 14 Tage
+  im Auslieferungsstand) begrenzt die Groesse NICHT - wird an einem Tag viel gebaut,
+  waechst der Bestand ueber die Frist hinaus. Beide Werte stehen jetzt in der Ini
+  (7 Tage + 60 GiB).
+- **Gegenprobe beim Start, ohne Datei zu oeffnen:** `Saved\Logs\<lauf>.log` enthaelt die
+  Zeile `LogZenServiceInstance: Display: Launching executable ... args '--port 8558 ...
+  --gc-disksize-softlimit 64424509440 ...'`, und `Zen\Data\logs\zenserver.log` darauf
+  `1.00G used, 60G soft limit`. Steht dort `0B soft limit`, ist die Ini-Zeile nicht
+  angekommen.
+- **`zenserver.exe --help` startet einen ECHTEN Server** (der Aufruf kehrt nicht
+  zurueck) - `--help` mit Timeout und Output-Datei, danach den Prozess beenden. Fuer
+  reine Argumente reicht `grep -a` in der DLL/Binary. `--log-file` gibt es nicht
+  (nur `--abslog`), und ein nicht existierendes Argument beendet den Server sofort mit
+  `Error: Invalid zenserver arguments: Option 'log-file' does not exist`.
+- **Neubauzeit nach dem Leeren, gemessen 27.09.2026:** erster Commandlet-Start baute
+  1,0 GB Zen-Cache in **15 s** auf, der Kartenlauf (Alkis31, 125024 Segmente) auf
+  dem nun gefuellten Cache **67 s**. Das Loeschen des Caches ist also billig - die
+  274 GB waren ein reines Plattenproblem, kein Zeitproblem.
+- **`schtasks /create` laeuft OHNE Windows-Anmeldung durch** (`CREATE_EXIT=0`,
+  `RUN_EXIT=0`), Anmeldemodus "Nur interaktiv": die Aufgabe startet nur bei
+  angemeldetem Benutzer, braucht aber kein Kennwort. `Tools\platten_waechter_eintragen.cmd`
+  legt sie an (taeglich 08:30), `-Entfernen` nimmt sie wieder weg.
+- **Der Aufgabenplanungseintrag darf `--immer` NICHT tragen.** GEMESSEN: mit
+  `--immer` gibt es nie den Rueckgabecode 3, und damit feuert die Warnung nie. Genau
+  das war der Fehler des ersten Entwurfs. Ohne `--immer` schweigt der Waechter bei
+  gesundem Rechner und meldet sich nur bei Platznot.
+- **Eine blockierende Benachrichtigung ist fuer eine unbeaufsichtigte Aufgabe falsch.**
+  `System.Windows.Forms.MessageBox` haelt den Prozess offen, bis jemand auf OK klickt -
+  die Aufgabe stuende endlos als "laeuft". `msg.exe` gibt es auf diesem Rechner nicht
+  (10.0.26200). Richtig ist ein Toast ueber `Windows.UI.Notifications` in einem
+  PowerShell-Kindprozess: asynchron, der Lauf endet nach **1 s** mit Exit 3.
+- **`$t.GetElementsByTagName('text')` ist eine LIVE-Sammlung - das erste
+  `AppendChild` invalidiert sie, der naechste Zugriff wirft "Die Sammlung wurde
+  geaendert". GEMESSEN: derselbe Aufruf scheitert ohne `@(...)` und gelingt mit
+  (`TOAST_FEHLER` -> `TOAST_OK`). Weit gefaehrlicher als der Fehler selbst: der
+  ganze Block steckt in einem `catch {}`, eine kaputte Benachrichtigung faellt
+  also **lautlos** aus und der Wächter meldet trotzdem Exit 3. Alles, was den
+  Nutzer erreichen soll, gehoert im Klartext auf Erfolg geprueft, nicht in einen
+  stillschweigenden catch.
+- **Zwei Berichtsdateien, nicht eine.** `plattenbericht.txt` wird bei JEDEM Lauf
+  ueberschrieben und ist im Normalfall eine Zeile (80 Bytes). Deshalb kopiert der
+  Warnfall seinen Detailbericht nach `plattenbericht_warnung.txt` (2506 Bytes) - ohne
+  das waere der Nachweis einer Platznot nach dem naechsten gesunden Tag weg, also
+  genau dann, wenn man ihn lesen will.
+
+## Platten-Gate: ein Engine-Start bricht bei zu wenig Platz ab (27.09.2026)
+- **Das Gate sitzt in `Tools\engine_run_lock.ps1`, nicht im Commit-Hook.** Der Lock
+  ist der einzige Punkt, den WIRKLICH jeder Engine-Start passiert: 31 der 72
+  `.cmd`-Wrapper rufen ihn, dazu `build_release.ps1` und `gate_worktree.py`. Ein Gate
+  an anderer Stelle liefe an den meisten Starts vorbei.
+- **Zwei Grenzen, absichtlich zwei.** `platten_waechter.py` MELDET ab 20 %
+  (`GRENZE_PROZENT`), das Gate BRICHT AB ab 10 % (`-PlattenGrenze`). Dazwischen liegt
+  die Zone, in der noch gearbeitet werden kann. Nimmt man die Meldegrenze als
+  Abbruchgrenze, sperrt man den Rechner dort - und gewoennt sich an
+  `-PlattenGrenze 0`.
+- **`-Modus Status` und `-Modus Freigeben` haben KEIN Gate.** Sie starten nichts, sie
+  fragen ab bzw. loeschen. Ein Gate dort waere die schlimmste denkbare Stelle: auf
+  einer vollen Platte koennte man den eigenen Lock nicht mehr loesen, und die
+  Notausgaenge (`Freigeben -Gewalt`, `cleanup -SperreIgnorieren`) waeren mit blockiert.
+- **Ein Abbruch darf NICHTS zuruecklassen - und die erste Fassung tat es.**
+  GEMESSEN: `exit (Teste-Plate (Sperre-Nehmen ...))` liest sich richtig, wertet aber
+  BEIDES aus. `Sperre-Nehmen` laeuft, legt die Datei an, und `Teste-Plate` verwirft
+  danach nur den Rueckgabewert: Exit 4, aber die Sperre stand da. Wer sie nicht
+  weckt, sieht den naechsten Lauf als "Lock belegt" statt als Platznot - und raeumt
+  notfalls fremde Editoren weg. Richtig ist ZWEI Schritte: erst pruefen, dann nur bei
+  0 sperren. `PlattenGateTest.test_abbruch_hinterlaesst_keine_sperrdatei` nagelt es fest.
+- **Nicht messbar heisst NICHT voll.** Ein Gate, das im Zweifel blockiert, haelt den
+  Rechner irgendwann an. Ein fehlendes Laufwerk ist eher ein Rechte- als ein
+  Platzproblem - der Start laeuft dann weiter.
+- **Der Selbsttest braucht einen eigenen Schalter fuer "nicht messbar".**
+  `-PlattenTestGiga -1` bedeutet im Skript "nicht gesetzt" (es wird also die ECHTE
+  Platte gemessen - der Test meldete 34 % und pruefte den Zufall). Dafuer gibt es
+  `-PlattenTestNichtMessbar`.
+- **Zwei Notausgaenge, weil ein Gate ohne Ausgang nur im Weg ist:**
+  `-PlattenTrotz` (trotzdem starten, fuer den Fall dass man den Editor zum
+  Aufraeumen braucht) und `-PlattenGrenze 0` (Gate aus). Exit 4 ist der eigene Code
+  des Gate - 3 bleibt "Lock belegt", damit ein Sklick nicht zwei Ursachen verwechselt.
+- **GEMESSEN 27.09.2026, Ablauf des Gate:** `-Modus Start` und `-Modus Nehmen` mit
+  0.5 GB Freiplatz -> Exit 4, keine Sperrdatei, echter maschineller Lock unberuehrt;
+  mit 400 GB -> Exit 0 und Sperre da; `Status`/`Freigeben` auf "vollen" Platten ->
+  Exit 0.
+
+
+## Engine-Lock: `verwaist` heisst nicht, dass der Rechner tot ist (27.09.2026)
+- **Die Meldung war grammatisch falsch und logisch falsch gelesen.** Sie lautete
+  `"Lock: verwaist - {Get-LockText} lebt nicht mehr"`, und `Get-LockText` endet auf
+  `"Rechner OMENBERT"`. Daraus las sich woertlich **`Rechner OMENBERT lebt nicht
+  mehr`** - OMENBERT laeuft, nur der zurueckgebliebene PROZESS war tot. GEMESSEN mit
+  einer Sperrdatei fuer die tote PID 999999 auf diesem Rechner. Nur Zeile 331 hatte
+  ein Praedikat am Textende; die anderen zehn Stellen haengen ein eigenes an.
+- **Die Erkennung war nie kaputt - das musste erst GEMESSEN werden.** Gegenprobe mit
+  einer Sperrdatei fuer einen LEBENDEN Prozess: derselbe Aufruf meldet `BELEGT durch
+  einen anderen Lauf`, nicht `verwaist`. Wer auf die Formulierung hin die Diagnose
+  umbaut, sucht den falschen Fehler. `VerwaistMeldungTest` haelt beide Faelle fest.
+- **`verwaist` ist der NORMALZUSTAND nach jedem Lauf, keine Stoerung.** Der Besitzer
+  ist der aufrufende `cmd.exe`, der nach dem Lauf endet (`Get-Besitzer`). Die
+  Sperrdatei liegt also planmaessig da und ist beim naechsten `-Modus Status`
+  zwangslaeufig verwaist. Das steht jetzt im Kommentarkopf - wer es nicht weiss, liest
+  das als Rechner-Stoerung.
+- **`Host=OMENBERT` in der Sperrdatei ist reiner Ballast.** Es steht drin, wird aber
+  nirgends geprueft - `Get-LockZustand` vergleicht PID und Startzeit, nicht den
+  Rechnernamen. Es wird nur mit ausgegeben, und genau daran ist der Satz gescheitert.
+  (Ein Rechner-Vergleich waere auch sinnlos: die Sperre liegt in %LOCALAPPDATA% und
+  wird nach einem Neustart ohnehin nicht gefunden.)
+
+## Plattenwaechter: jeder Loeschpfad hinterlaesst eine Begruendung (27.09.2026)
+- **Das Loeschprotokoll ist `Saved\Diagnose\loeschprotokoll.jsonl`, angehaengt und
+  JSONL (eine Zeile je Eingriff).** Es wird NIE ueberschrieben. Eine Reportdatei, die
+  jeder Lauf neu schreibt, verliert genau die Historie, die man braucht: "wann hat
+  dieser Waechter eigentlich geloescht".
+- **Zwei Zeilen je Pfad, in dieser Reihenfolge: `absicht` VOR dem Eingriff, `ergebnis`
+  danach.** Die Absicht muss vorher stehen - ein Protokoll, das erst hinterher
+  geschrieben wird, beweist nichts und kann einen abgebrochenen Lauf nicht mehr
+  erklaeren. GEMESSEN: `ProtokollTest.test_absicht_steht_vor_der_ergebniszeile`.
+- **`rmtree` laeuft mit `ignore_errors=True` und SCHLUCKT Fehler.** Das Ergebnis wird
+  deshalb nicht aus dem Rueckgabewert abgeleitet, sondern nachgeprueft
+  (`os.path.exists`). Laege der Ordner noch da, steht `unvollstaendig` mit
+  `weg=false` im Protokoll und der Pfad wird NICHT als geloescht gemeldet. Sonst
+  behauptete das Protokoll "geloescht", und der Ordner laege noch da.
+- **Der Schutz ist jetzt DREIFACH: Klasse, Pfadnormalisierung, Protokoll.** Der
+  dritte Teil heisst: **ohne schreibbares Protokoll wird garnichts geloescht**, und
+  der Pfad wandert nach `abgewiesen`. GEMESSEN: Schreiben nach `Q:\gibt\es\nicht`
+  -> `False` -> `geloescht: []`, Ordner bleibt. `protokoll_schreiben` gibt darum
+  `True/False` zurueck und wird nicht stillschweigend verschluckt.
+- **Die Groesse wird direkt VOR dem Eingriff gemessen**, nicht aus der
+  Kandidatenliste geholt - die ist eine Momentaufnahme von vorher. Im Protokoll steht
+  als `bytes` und `gib`, ausserdem `dateien` und `messung_vollstaendig` (bei
+  unvollstaendiger Messung warnt `loeschreport` ausdruecklich).
+- **GEMESSEN 27.09.2026, Fund beim Testen: die Suite schrieb in das ECHTE Protokoll.**
+  `protokoll_pfad` nimmt darum eine `wurzel`, und `reinigen` reicht sie durch - die
+  Tests laufen mit TEMP-Wurzeln (`tempfile_tmp`) und duerfen dort nichts im echten
+  Projekt anruehren. Drei Eintraege mit tmp-Pfaden standen nach einem Lauf in der
+  echten Datei. **Ein Protokoll, in dem Tests stehen, beweist nichts ueber den
+  Waechter.** `ProtokollTest.test_protokoll_bleibt_im_wurzelverzeichnis_des_aufrufers`
+- **Der lesbare Report (`loeschreport`) nimmt die Begruendung aus der
+  Kandidatenliste** - dieselbe Zeile, nach der auch entschieden wurde, dass der Pfad
+  loeschbar ist, plus die Summe. Eine Begruendung, die nur im Code steht, hilft
+  niemandem, wenn es drei Monate spaeter darum geht, warum ein Ordner fehlt.

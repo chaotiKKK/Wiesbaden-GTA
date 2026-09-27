@@ -8,7 +8,18 @@ REM   engine_run_lock.cmd -Modus Nehmen -Name smoke_test -WarteSekunden 60
 REM   engine_run_lock.cmd -Modus Freigeben [-Gewalt]
 REM   engine_run_lock.cmd -Modus Status
 REM   engine_run_lock.cmd -Modus Start -Name test -DryRun -LockPfad C:\...\test.lock
+REM   engine_run_lock.cmd -Modus Start -Name test -PlattenTrotz
+REM   engine_run_lock.cmd -Modus Start -Name test -PlattenGrenze 0
 REM
-REM Exit 0 = Lock gehalten (bzw. frei), Exit 3 = Lock durch fremden Lauf belegt.
+REM PLATTEN-GATE: -Modus Start und -Modus Nehmen brechen ab, wenn weniger als
+REM 10 Prozent der Projektplatte frei sind (Exit 4). Der Editor- oder
+REM Cook-Start wuerde auf so voller Platte mitten im Lauf abbrechen und
+REM unfertige Pakete hinterlassen. -Modus Status und -Modus Freigeben
+REM pruefen die Platte NICHT - sie starten nichts, und auf einer vollen Platte
+REM muss man seinen Lock noch loskoennen. Notausgaenge: -PlattenTrotz
+REM (trotzdem starten) und -PlattenGrenze 0 (Gate aus).
+REM
+REM Exit 0 = Lock gehalten (bzw. frei), Exit 3 = Lock durch fremden Lauf belegt,
+REM       Exit 4 = Start abgebrochen, zu wenig Plattenplatz.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0engine_run_lock.ps1" %*
 exit /b %ERRORLEVEL%

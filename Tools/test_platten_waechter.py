@@ -165,8 +165,8 @@ class KlassenTest(unittest.TestCase):
 
 
 class ReinigenTest(unittest.TestCase):
-    def messung(self, pfad, klasse):
-        return {"pfad": pfad, "klasse": klasse, "grund": "", "bytes": 10,
+    def messung(self, pfad, klasse, grund=""):
+        return {"pfad": pfad, "klasse": klasse, "grund": grund, "bytes": 10,
                 "dateien": 1, "vollstaendig": True}
 
     def test_nur_cache_wird_geloescht(self):
@@ -183,7 +183,7 @@ class ReinigenTest(unittest.TestCase):
                 self.messung(behalten, pw.EINGABE),
                 self.messung(behalten, pw.GESCHUETZT),
                 self.messung(behalten, pw.REGENERIERBAR),
-            ])
+            ], wurzel=t)
             # Innerhalb des with-Blocks pruefen: danach ist das Tempverzeichnis
             # weg, und die Assertionen wuerden aus dem richtigen Grund bestehen.
             self.assertEqual(geloescht, [ziel])
@@ -194,9 +194,10 @@ class ReinigenTest(unittest.TestCase):
 
     def test_fremder_pfad_wird_abgewiesen(self):
         """Richtig klassifiziert, aber ausserhalb - trotzdem nein."""
-        with mock.patch.object(pw, "erlaubte_wurzeln", return_value=(r"c:\projekt",)):
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(r"c:\projekt",)):
             geloescht, abgewiesen = pw.reinigen(
-                [self.messung(r"C:\Users\HP\.bun\install", pw.LOESCHBAR)])
+                [self.messung(r"C:\Users\HP\.bun\install", pw.LOESCHBAR)], wurzel=t)
         self.assertEqual(geloescht, [])
         self.assertEqual(len(abgewiesen), 1)
 
@@ -205,17 +206,19 @@ class ReinigenTest(unittest.TestCase):
                                                     return_value=(os.path.normpath(t).lower(),)):
             ziel = os.path.join(t, "weg")
             os.makedirs(ziel)
-            geloescht, _ = pw.reinigen([self.messung(ziel, pw.LOESCHBAR)], trocken=True)
+            geloescht, _ = pw.reinigen([self.messung(ziel, pw.LOESCHBAR)],
+                                       trocken=True, wurzel=t)
             self.assertEqual(geloescht, [ziel])
             self.assertTrue(os.path.exists(ziel))
 
     def test_fehlende_ordner_werden_uebersprungen(self):
         """Fehlt der Ordner, ist das kein Fehler - aber auch kein Loeschfall."""
-        with mock.patch.object(pw, "erlaubte_wurzeln", return_value=(r"c:\projekt",)):
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(r"c:\projekt",)):
             geloescht, abgewiesen = pw.reinigen(
-                [self.messung(r"c:\projekt\gibt\es\nicht", pw.LOESCHBAR)])
-        self.assertEqual(geloescht, [])
-        self.assertEqual(abgewiesen, [])
+                [self.messung(r"c:\projekt\gibt\es\nicht", pw.LOESCHBAR)], wurzel=t)
+            self.assertEqual(geloescht, [])
+            self.assertEqual(abgewiesen, [])
 
 
 class BerichtTest(unittest.TestCase):
@@ -533,6 +536,144 @@ class GateAnbindungTest(unittest.TestCase):
              redirect_stdout(io.StringIO()) as out:
             vdc.platten_hinweis()  # darf keine Exception nach aussen geben
         self.assertIn("kaputt", out.getvalue())
+
+
+class ProtokollTest(unittest.TestCase):
+    """Jeder Loeschpfad hinterlaesst eine Begruendung und eine Groesse.
+
+    Der Schutz des Waechters war doppelt (Klasse, Pfadnormalisierung) und ist
+    um das LOESCHPROTOKOLL erweitert: die Absicht wird vor dem Eingriff
+    geschrieben, das Ergebnis danach. Ohne schreibbares Protokoll wird
+    garnichts geloescht.
+    """
+
+    def messung(self, pfad, klasse=pw.LOESCHBAR, grund="weil Cache", bytes_vorher=3 * 1024 ** 3):
+        return {"pfad": pfad, "klasse": klasse, "grund": grund,
+                "bytes": bytes_vorher, "dateien": 7, "vollstaendig": True}
+
+    def cacheordner(self, wurzel, name="weg", bytes_vorher=5):
+        ziel = os.path.join(wurzel, name)
+        os.makedirs(ziel)
+        with open(os.path.join(ziel, "x"), "wb") as f:
+            f.truncate(bytes_vorher)
+        return ziel
+
+    def zeilen(self, wurzel):
+        pfad = os.path.join(wurzel, "Saved", "Diagnose", "loeschprotokoll.jsonl")
+        with open(pfad, "r", encoding="utf-8") as f:
+            return [json.loads(z) for z in f if z.strip()]
+
+    def test_protokoll_waechst_nicht_ueber_den_Lauf_hinweg(self):
+        """Anhaengen, nicht ueberschreiben. Eine Datei, die jeder Lauf neu
+        schreibt, verliert genau die Historie, die man braucht."""
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(os.path.normpath(t).lower(),)):
+            a = self.cacheordner(t, "a")
+            b = self.cacheordner(t, "b")
+            pw.reinigen([self.messung(a, grund="erste")], wurzel=t)
+            nach_eins = len(self.zeilen(t))
+            self.assertGreater(nach_eins, 0)
+            pw.reinigen([self.messung(b, grund="zweite")], wurzel=t)
+            zeilen = self.zeilen(t)
+            self.assertEqual(len(zeilen), nach_eins * 2)
+            self.assertIn("erste", [z["begruendung"] for z in zeilen])
+            self.assertIn("zweite", [z["begruendung"] for z in zeilen])
+
+    def test_absicht_steht_vor_der_ergebniszeile(self):
+        """Die Absicht muss VOR dem Eingriff im Protokoll stehen. Ein
+        Protokoll, das erst nachher geschrieben wird, beweist nichts: genau
+        da kann ein abgebrochener Lauf nicht mehr erklaert werden."""
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(os.path.normpath(t).lower(),)):
+            ziel = self.cacheordner(t)
+            pw.reinigen([self.messung(ziel, grund="DireX-Shadercache")], wurzel=t)
+            phasen = [z["phase"] for z in self.zeilen(t)]
+            self.assertEqual(phasen[0], "absicht")
+            self.assertIn("ergebnis", phasen)
+            self.assertLess(phasen.index("absicht"), phasen.index("ergebnis"))
+
+    def test_jeder_eintrag_traegt_begruendung_und_groesse(self):
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(os.path.normpath(t).lower(),)):
+            ziel = self.cacheordner(t, bytes_vorher=5 * 1024 ** 3)
+            pw.reinigen([self.messung(ziel, grund="npm-Downloadcache")], wurzel=t)
+            zeilen = self.zeilen(t)
+            self.assertTrue(zeilen)
+            for z in zeilen:
+                self.assertTrue(z["begruendung"], "Eintrag ohne Begruendung: %r" % z)
+                self.assertIn(z["phase"], ("absicht", "ergebnis"))
+                self.assertIn("bytes", z)
+                self.assertIn("gib", z)
+                self.assertEqual(z["pfad"], os.path.normpath(ziel))
+                self.assertTrue(z["zeit"])
+
+    def test_ohne_schreibbares_protokoll_wird_nicht_geloescht(self):
+        """DER ZUSATZLIECHE SCHUTZ. Ein Loeschen ohne Protokoll waere genau
+        die Sorte Eingriff, die man spaeter nicht mehr erklaeren kann."""
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(os.path.normpath(t).lower(),)):
+            ziel = self.cacheordner(t)
+            geloescht, abgewiesen = pw.reinigen(
+                [self.messung(ziel)], wurzel=t, protokoll=lambda zeilen: False)
+            self.assertEqual(geloescht, [])
+            self.assertTrue(os.path.exists(ziel),
+                            "Ordner geloescht, obwohl das Protokoll nicht schreibbar war")
+            self.assertIn(ziel, abgewiesen)
+
+    def test_trockenlauf_protokolliert_aber_loescht_nicht(self):
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(os.path.normpath(t).lower(),)):
+            ziel = self.cacheordner(t)
+            geloescht, _ = pw.reinigen([self.messung(ziel, grund="wird gebraucht")],
+                                       trocken=True, wurzel=t)
+            self.assertEqual(geloescht, [ziel])
+            self.assertTrue(os.path.exists(ziel), "Trockenlauf hat geloescht")
+            zeilen = self.zeilen(t)
+            self.assertEqual([z["phase"] for z in zeilen], ["trocken"])
+            self.assertTrue(zeilen[0]["trocken"])
+            self.assertEqual(zeilen[0]["begruendung"], "wird gebraucht")
+
+    def test_nicht_verschwundener_ordner_steht_als_unvollstaendig_drin(self):
+        """rmtree laeuft mit ignore_errors=True und SCHLUCKT Fehler. Ohne
+        Nachpruefung stuende "ergebnis" im Protokoll, der Ordner laege noch
+        da - das schlimmste denkbare Protokoll."""
+        with tempfile_tmp() as t, mock.patch.object(pw, "erlaubte_wurzeln",
+                                                    return_value=(os.path.normpath(t).lower(),)):
+            ziel = self.cacheordner(t)
+            with mock.patch.object(pw.shutil, "rmtree", return_value=None):
+                geloescht, _ = pw.reinigen([self.messung(ziel)], wurzel=t)
+            self.assertEqual(geloescht, [], "als geloescht gemeldet, obwohl da")
+            phasen = [z["phase"] for z in self.zeilen(t)]
+            self.assertIn("unvollstaendig", phasen)
+            letzte = self.zeilen(t)[-1]
+            self.assertFalse(letzte["weg"])
+
+    def test_report_nennt_grund_und_summe(self):
+        m = self.messung(r"C:\cache\a", grund="Shader-Ableitungen")
+        text = pw.loeschreport([m], [r"C:\cache\a"])
+        self.assertIn("3.00 GiB", text)
+        self.assertIn("Shader-Ableitungen", text)
+        self.assertIn("zusammen: 3.00 GiB", text)
+
+    def test_report_warnt_bei_unvollstaendiger_messung(self):
+        m = self.messung(r"C:\cache\a", grund="Shader")
+        m["vollstaendig"] = False
+        text = pw.loeschreport([m], [r"C:\cache\a"])
+        self.assertIn("unvollstaendig", text)
+
+    def test_protokoll_bleibt_im_wurzelverzeichnis_des_aufrufers(self):
+        """GEMESSEN am 27.09.2026: ohne `wurzel` schrieben die Tests in das
+        ECHTE loeschprotokoll.jsonl des Projekts - drei Testeintraege mit
+        tmp-Pfaden standen nach einem Lauf dort. Ein Protokoll, in dem Tests
+        stehen, beweist nichts ueber den Waechter."""
+        with tempfile_tmp() as t:
+            self.assertEqual(pw.protokoll_pfad(t),
+                             os.path.join(t, "Saved", "Diagnose", "loeschprotokoll.jsonl"))
+            ziel = self.cacheordner(t)
+            with mock.patch.object(pw, "erlaubte_wurzeln",
+                                   return_value=(os.path.normpath(t).lower(),)):
+                pw.reinigen([self.messung(ziel)], wurzel=t)
+            self.assertTrue(os.path.exists(pw.protokoll_pfad(t)))
 
 
 if __name__ == "__main__":

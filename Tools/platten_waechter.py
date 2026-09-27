@@ -389,17 +389,128 @@ def erlaubte_wurzeln():
     return tuple(os.path.normpath(w).lower() for w in wurzeln if w)
 
 
-def reinigen(messungen, trocken=False):
+def protokoll_pfad(wurzel=None):
+    """Wohin das Loeschprotokoll geschrieben wird.
+
+    JSONL, eine Zeile je Eingriff, angehaengt und nie ueberschrieben. Eine
+    Reportdatei, die jeder Lauf neu schreibt, verliert genau die Historie,
+    die man braucht: "wann hat dieser Wächter eigentlich geloescht".
+
+    `wurzel` ist nicht nur Kosmetik: die Testsuite rechnet mit TEMP-Wurzeln und
+    darf dort nichts im echten Projekt anruehren (tempfile_tmp). Ohne diesen
+    Parameter schrieben die Tests in das ECHTE loeschprotokoll.jsonl des
+    Projekts - GEMESSEN am 27.09.2026, drei Testeintraege mit tmp-Pfaden
+    standen nach einem Lauf in der echten Datei. Ein Protokoll, in dem Tests
+    stehen, beweist nichts ueber die Waechter.
+    """
+    return os.path.join(wurzel or WURZEL, "Saved", "Diagnose", "loeschprotokoll.jsonl")
+
+
+def protokoll_schreiben(zeilen, pfad=None):
+    """Zeilen an das Protokoll anhaengen. `False`, wenn es nicht gelingt.
+
+    DAS RUECKGABEVERZEICHNIS IST DER GANZE SCHUTZ: `reinigen` loescht nur, wenn
+    diese Funktion True liefert. Ein Loeschen ohne Protokoll waere genau die
+    Sorte Eingriff, die man spaeter nicht mehr erklaeren kann.
+    """
+    if not zeilen:
+        return True
+    pfad = pfad or protokoll_pfad()
+    try:
+        ordner = os.path.dirname(pfad)
+        if ordner and not os.path.isdir(ordner):
+            os.makedirs(ordner, exist_ok=True)
+        with open(pfad, "a", encoding="utf-8") as f:
+            for zeile in zeilen:
+                f.write(json.dumps(zeile, ensure_ascii=False, sort_keys=True) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        return True
+    except OSError:
+        return False
+
+
+def _protokollzeile(m, ziel, phase, trocken, bytes_vorher=None):
+    """Ein Protokolleintrag: wer, warum, wie viel, in welcher Phase."""
+    return {
+        "zeit": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "phase": phase,
+        "trocken": bool(trocken),
+        "pfad": ziel,
+        "klasse": m.get("klasse", ""),
+        "begruendung": m.get("grund", ""),
+        "bytes": int(bytes_vorher or 0),
+        "gib": gb(int(bytes_vorher or 0)),
+        "dateien": m.get("dateien"),
+        "messung_vollstaendig": bool(m.get("vollstaendig")),
+    }
+
+
+def loeschreport(messungen, geloescht, trocken=False):
+    """Der lesbare Report: je Loeschpfad Begruendung und freigewordene Groesse.
+
+    Der Grund kommt aus der Kandidatenliste - dieselbe Zeile, nach der auch
+    entschieden wurde, dass der Pfad loeschbar ist. Eine Begruendung, die
+    nur im Code steht und nicht im Report, hilft niemandem, wenn es drei
+    Monate spaeter darum geht, warum ein Ordner fehlt.
+    """
+    bygueltig = {os.path.normpath(p).lower(): p for p in geloescht}
+    if not bygueltig:
+        return "Loeschreport: nichts %s." % ("zum Loeschen vorgemerkt" if trocken
+                                             else "geloescht")
+    zeilen = []
+    summe = 0
+    for m in messungen:
+        ziel = os.path.normpath(m["pfad"]).lower()
+        if ziel not in bygueltig:
+            continue
+        groesse = m.get("bytes") or 0
+        summe += groesse
+        zeilen.append("    %8.2f GiB  %s" % (gb(groesse), m["pfad"]))
+        grund = (m.get("grund") or "").strip() or "(keine Begruendung hinterlegt)"
+        zeilen.append("               Grund: %s" % grund)
+        if not m.get("vollstaendig", True):
+            zeilen.append("               ACHTUNG: Groesse unvollstaendig gemessen")
+    kopf = ("KOENNTE LOESCHEN (Trockenlauf):" if trocken else "GELOESCHT:")
+    return "\n".join([kopf] + zeilen + ["    zusammen: %.2f GiB" % gb(summe)])
+
+
+def reinigen(messungen, trocken=False, protokoll=None, jetzt=None, wurzel=None):
     """Nur die Klassen aus `NUR_LOESCHEN` loeschen. Alles andere bleibt.
 
-    Der Schutz ist doppelt: erst die Klasse, dann die Pfadnormalisierung. Ein
-    Eintrag, der versehentlich ausserhalb von Projektwurzel, Benutzerordner
-    oder %TEMP% zeigt, wird abgewiesen, statt ein fremdes Verzeichnis zu
-    leeren. Beides pruefen, weil ein Klassenfehler sonst folgenlos waere.
+    Der Schutz ist DREIFACH (27.09.2026, war vorher doppelt):
+      1. die Klasse - nur `cache` wird angefasst;
+      2. die Pfadnormalisierung - nichts ausserhalb von Projektwurzel,
+         Benutzerordner oder %TEMP%;
+      3. das LOESCHPROTOKOLL - die Absicht wird VOR dem Eingriff geschrieben
+         (Phase "absicht"), das Ergebnis danach (Phase "ergebnis" oder
+         "trocken"). Laesst sich das Protokoll nicht schreiben, wird
+         garnichts geloescht.
+    Punkt 3 ist nicht Kosmetik: ein Wächter, der eine Platte leert, ohne zu
+    sagen welchen Ordner er warum genommen hat, ist hinterher nicht mehr von
+    einem Fehlgriff zu unterscheiden.
+
+    `ignore_errors=True` heisst, dass rmtree Fehler SCHLUCKT. Deshalb wird
+    das Ergebnis nicht aus dem Rueckgabewert abgeleitet, sondern danach
+    geprueft, ob der Ordner wirklich weg ist. Sonst stuende im Protokoll
+    "geloescht", und der Ordner laege noch da.
+
+    `protokoll` ist ein callable (zeilen, pfad) -> bool und ueberschreibt
+    das Schreiben - so testen die Faelle "nicht schreibbar" und "trocken",
+    ohne das echte Dateisystem zu verbiegen. `wurzel` verschiebt die
+    Protokolldatei mit (siehe protokoll_pfad).
     """
     erlaubt = erlaubte_wurzeln()
+    ziel_pfad = protokoll_pfad(wurzel)
+    if protokoll is not None:
+        pfad_schreiben = protokoll
+    else:
+        pfad_schreiben = lambda zeilen: protokoll_schreiben(zeilen, ziel_pfad)
     geloescht = []
     abgewiesen = []
+    ohne_protokoll = []
+
+    absichten = []
     for m in messungen:
         if m["klasse"] not in NUR_LOESCHEN:
             continue
@@ -409,9 +520,48 @@ def reinigen(messungen, trocken=False):
             continue
         if not os.path.isdir(ziel):
             continue
-        if not trocken:
-            shutil.rmtree(ziel, ignore_errors=True)
-        geloescht.append(m["pfad"])
+        if trocken:
+            # Der Trockenlauf meldet nur, was er tun WOERDE - die Groesse aus
+            # der Messung reicht, es wird nichts angefasst.
+            absichten.append((m, ziel, m.get("bytes") or 0))
+            continue
+        # GEMESSEN 27.09.2026: die Groesse aus der Kandidatenliste ist eine
+        # Momentaufnahme von vorher. Fuer das Protokoll wird direkt VOR dem
+        # Eingriff noch einmal gemessen - nur so steht drin, was wirklich
+        # weggegangen ist.
+        try:
+            bytes_vorher = groesse_messen(ziel)[0]
+        except OSError:
+            bytes_vorher = m.get("bytes") or 0
+        absichten.append((m, ziel, bytes_vorher))
+
+    if trocken:
+        zeilen = [_protokollzeile(m, z, "trocken", True, b)
+                  for m, z, b in absichten]
+        if zeilen and not pfad_schreiben(zeilen):
+            return [], list(abgewiesen) + [z for _m, z, _b in absichten]
+        return [z for _m, z, _b in absichten], abgewiesen
+
+    if absichten and not pfad_schreiben(
+            [_protokollzeile(m, z, "absicht", False, b) for m, z, b in absichten]):
+        # Der Schutz, der alles andere ueberwacht, hat versagt. Also: nichts
+        # loeschen, und der Aufrufer erfaehrt es.
+        return [], list(abgewiesen) + [z for _m, z, _b in absichten]
+
+    for m, ziel, bytes_vorher in absichten:
+        shutil.rmtree(ziel, ignore_errors=True)
+        weg = not os.path.exists(ziel)
+        eintrag = _protokollzeile(m, ziel, "ergebnis" if weg else "unvollstaendig",
+                                  False, bytes_vorher)
+        eintrag["weg"] = weg
+        pfad_schreiben([eintrag])
+        if not weg:
+            # rmtree hat geschluckt, der Ordner liegt noch. Das gehoert
+            # gemeldet, nicht verschwiegen.
+            ohne_protokoll.append(ziel)
+            continue
+        geloescht.append(ziel)
+
     return geloescht, abgewiesen
 
 
@@ -454,14 +604,17 @@ def hauptprogramm(argv=None):
     print(bericht(frei, gesamt, prozent, messungen, args.schwelle, laufzeit))
 
     if args.reinigen:
-        geloescht, abgewiesen = reinigen(messungen, trocken=args.trocken)
+        geloescht, abgewiesen = reinigen(messungen, trocken=args.trocken,
+                                          wurzel=WURZEL)
         print("")
         if geloescht:
             print(("KOENNTE LOESCHEN: " if args.trocken else "GELOESCHT: ")
                   + ", ".join(geloescht))
         if abgewiesen:
-            print("abgewiesen (ausserhalb der erlaubten Wurzeln): "
-                  + ", ".join(abgewiesen))
+            print("abgewiesen (ausserhalb der erlaubten Wurzeln "
+                  "ODER ohne schreibbares Protokoll): " + ", ".join(abgewiesen))
+        print(loeschreport(messungen, geloescht, args.trocken))
+        print("Protokoll: " + protokoll_pfad())
         # Absichtlich kein Rueckgabecode 3: wer ausdruecklich --reinigen
         # gesagt hat, hat die Platznot ja schon zur Kenntnis genommen.
 

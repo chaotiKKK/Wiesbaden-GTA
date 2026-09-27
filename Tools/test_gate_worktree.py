@@ -639,5 +639,207 @@ class EngineLockTest(unittest.TestCase):
                 prozess.wait(timeout=30)
 
 
+class PlattenGateTest(unittest.TestCase):
+    """Ein Engine-Start bricht ab, wenn die Platte zu voll ist.
+
+    Der Lock ist der einzige Punkt, den wirklich JEDER Engine-Start passiert
+    (31 der 72 .cmd-Wrapper plus build_release.ps1 und gate_worktree.py). Ein
+    Gate an anderer Stelle wuerde an den meisten Starts vorbeikommen.
+
+    Gemessen wird mit -PlattenTestGiga: der freie Platz wird FEST vorgegeben.
+    Ohne diesen Schalter haengt die Aussage an der echten Platte des
+    Rechners - und ein gruener Test waere dann Zufall.
+    """
+
+    LOCK = WURZEL / "Tools" / "engine_run_lock.ps1"
+
+    def ps(self, *args):
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(self.LOCK)] + list(args),
+            capture_output=True, text=True, timeout=120, encoding="utf-8",
+            errors="replace")
+
+    def test_wenig_platz_bricht_start_und_nehmen_ab(self):
+        for modus in ("Start", "Nehmen"):
+            with tempfile.TemporaryDirectory() as tmp:
+                pfad = str(Path(tmp) / "engine_run.lock")
+                lauf = self.ps("-Modus", modus, "-Name", "gatetest",
+                               "-LockPfad", pfad, "-PlattenTestGiga", "0.5")
+                ausgabe = lauf.stdout + lauf.stderr
+                self.assertEqual(lauf.returncode, 4,
+                                 "%s: erwartet 4, bekam %d" % (modus, lauf.returncode))
+                self.assertIn("ABBRUCH", ausgabe)
+
+    def test_abbruch_hinterlaesst_keine_sperrdatei(self):
+        """Der Kern des Gate: es muss beim Abbruch NICHTS zuruecklassen.
+
+        GEMESSEN am 27.09.2026 an der ersten Fassung: `Teste-Plate
+        (Sperre-Nehmen ...)` wertet beide Argumente aus - Sperre-Nehmen
+        laeuft, legt die Datei an, und Teste-Plate verwirft danach nur den
+        Rueckgabewert. Exit 4, aber die Sperre stand da. Wer sie nicht
+        weckt, sieht den naechsten Lauf als "Lock belegt" statt als
+        Platznot - und raeumt notfalls fremde Editoren weg.
+        """
+        for modus in ("Start", "Nehmen"):
+            with tempfile.TemporaryDirectory() as tmp:
+                pfad = str(Path(tmp) / "engine_run.lock")
+                lauf = self.ps("-Modus", modus, "-Name", "gatetest",
+                               "-LockPfad", pfad, "-PlattenTestGiga", "0.5")
+                self.assertEqual(lauf.returncode, 4, modus)
+                self.assertFalse(os.path.exists(pfad),
+                                 "%s: Abbruch hat eine Sperrdatei hinterlassen" % modus)
+
+    def test_genug_platt_laeuft_normaldurch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pfad = str(Path(tmp) / "engine_run.lock")
+            lauf = self.ps("-Modus", "Nehmen", "-Name", "gatetest",
+                           "-LockPfad", pfad, "-PlattenTestGiga", "400")
+            ausgabe = lauf.stdout + lauf.stderr
+            self.assertEqual(lauf.returncode, 0, ausgabe)
+            self.assertTrue(os.path.exists(pfad), "Lock fehlt trotz genug Platz")
+            self.assertIn("gruen", ausgabe)
+
+    def test_status_und_freigeben_blockieren_auch_bei_vollen_platten_nie(self):
+        """Der Ort, an dem ein Gate am meisten schaden kann.
+
+        Status fragt nur ab, Freigeben loescht nur. Ein Gate dort waere
+        hilflos: auf einer vollen Platte koennte man den eigenen Lock nicht
+        mehr loesen, und die Notausgaenge waeren mit blockiert.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            for modus in ("Status", "Freigeben"):
+                pfad = str(Path(tmp) / "engine_run.lock")
+                lauf = self.ps("-Modus", modus, "-LockPfad", pfad,
+                               "-PlattenTestGiga", "0.5")
+                ausgabe = lauf.stdout + lauf.stderr
+                self.assertEqual(lauf.returncode, 0,
+                                 "%s: darf nicht blockieren" % modus)
+                self.assertNotIn("ABBRUCH", ausgabe)
+
+    def test_trotz_und_abschaltung_oeffnen_die_tuer(self):
+        """Wer auf einer wirklich vollen Platte den Editor braucht, muss
+        durchkommen koennen - und ein Gate muss abschaltbar sein."""
+        with tempfile.TemporaryDirectory() as tmp:
+            trotz = str(Path(tmp) / "a.lock")
+            lauf = self.ps("-Modus", "Nehmen", "-Name", "t", "-LockPfad", trotz,
+                           "-PlattenTestGiga", "0.5", "-PlattenTrotz")
+            self.assertEqual(lauf.returncode, 0, lauf.stdout + lauf.stderr)
+            self.assertTrue(os.path.exists(trotz))
+
+            aus = str(Path(tmp) / "b.lock")
+            lauf = self.ps("-Modus", "Nehmen", "-Name", "t", "-LockPfad", aus,
+                           "-PlattenTestGiga", "0.5", "-PlattenGrenze", "0")
+            self.assertEqual(lauf.returncode, 0, lauf.stdout + lauf.stderr)
+            self.assertTrue(os.path.exists(aus))
+
+    def test_grenze_ist_eigene_zehn_prozent_nicht_die_meldegrenze(self):
+        """Der Waechter meldet ab 20 %, das Gate bricht ab 10 % ab.
+
+        Wer die Meldegrenze als Abbruchgrenze nimmt, sperrt den Rechner in
+        der Zone, in der noch gearbeitet werden kann - und gewoennt sich an,
+        das Gate mit -PlattenGrenze 0 auszuschalten.
+        """
+        text = self.LOCK.read_text(encoding="utf-8")
+        self.assertIn("[double]$PlattenGrenze = 10.0", text)
+        # Die Meldegrenze gehoert in den Waechter, nicht in den Lock.
+        waechter = (WURZEL / "Tools" / "platten_waechter.py").read_text(encoding="utf-8")
+        self.assertIn("GRENZE_PROZENT = 20.0", waechter)
+
+    def test_nicht_messbarer_platz_blockiert_nicht(self):
+        """Nicht lesbar heisst NICHT voll. Ein Blockieren im Zweifel haelt
+        den Rechner irgendwann an - und ein fehlendes Laufwerk ist eher ein
+        Rechte- als ein Platzproblem.
+
+        Der Schalter heisst -PlattenTestNichtMessbar, nicht -PlattenTestGiga -1:
+        GEMESSEN am 27.09.2026, -1 ist im Skript der Wert fuer "nicht gesetzt",
+        der Test mass also die ECHTE Platte und meldete 34 % statt nichts. So
+        prueft der Test den Zweifel nicht, sondern den Zufall.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            pfad = str(Path(tmp) / "engine_run.lock")
+            lauf = self.ps("-Modus", "Nehmen", "-Name", "t", "-LockPfad", pfad,
+                           "-PlattenTestNichtMessbar")
+            ausgabe = lauf.stdout + lauf.stderr
+            self.assertEqual(lauf.returncode, 0, ausgabe)
+            self.assertIn("nicht messbar", ausgabe)
+            self.assertTrue(os.path.exists(pfad))
+
+
+class VerwaistMeldungTest(unittest.TestCase):
+    """Die Verwaist-Meldung behauptete, der Rechner lebe nicht mehr.
+
+    GEMESSEN am 27.09.2026 auf diesem Rechner: der Satz lautete
+    "Lock: verwaist - {Get-LockText} lebt nicht mehr", und Get-LockText endet
+    auf "Rechner OMENBERT". Daraus las sich woertlich "Rechner OMENBERT lebt
+    nicht mehr" - OMENBERT lief, nur der zurueckgebliebene Prozess war tot.
+    Die Erkennung war und ist richtig; nur der Satz war falsch gebaut.
+    """
+
+    LOCK = WURZEL / "Tools" / "engine_run_lock.ps1"
+
+    def ps(self, *args):
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(self.LOCK)] + list(args),
+            capture_output=True, text=True, timeout=120, encoding="utf-8",
+            errors="replace")
+
+    def sperrdatei(self, tmp, pid, label="probe"):
+        pfad = str(Path(tmp) / "engine_run.lock")
+        Path(pfad).write_text(
+            "LockVersion=1\nOwnerPid=%d\nOwnerName=cmd\nOwnerStart=\n"
+            "Label=%s\nTakenAt=2026-09-27 12:45:13\nHost=OMENBERT\n" % (pid, label),
+            encoding="ascii")
+        return pfad
+
+    def test_meldung_nennt_den_prozess_und_nicht_den_rechner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lauf = self.ps("-Modus", "Status", "-LockPfad", self.sperrdatei(tmp, 999999))
+            ausgabe = lauf.stdout + lauf.stderr
+            self.assertIn("verwaist", ausgabe)
+            self.assertIn("der Prozess des Laufs lebt nicht mehr", ausgabe)
+            # Der alte, missverstaendliche Satz: "Rechner OMENBERT lebt nicht
+            # mehr". Er darf nicht mehr vorkommen.
+            self.assertNotIn("OMENBERT lebt nicht mehr", ausgabe)
+            # Die Rechnerangabe darf stehen - sie steht nur nicht mehr als
+            # Subjekt des Sterbefalls.
+            self.assertIn("Rechner OMENBERT", ausgabe)
+
+    def test_erkennung_unterscheidet_toten_und_lebenden_besitzer(self):
+        """Gegenprobe auf die Erkennung selbst: nur die Formulierung war
+        falsch. Mit einer Sperrdatei fuer einen LEBENDEN Prozess muss
+        "BELEGT" kommen, nicht "verwaist" - sonst haette man die Diagnose
+        verwechselt und einen falschen Fehler gesucht."""
+        with tempfile.TemporaryDirectory() as tmp:
+            lebend = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(120)"],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            try:
+                time.sleep(1)
+                start = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     '(Get-Process -Id %d).StartTime.ToString("o")' % lebend.pid],
+                    capture_output=True, text=True, timeout=60).stdout.strip()
+                pfad = str(Path(tmp) / "engine_run.lock")
+                Path(pfad).write_text(
+                    "LockVersion=1\nOwnerPid=%d\nOwnerName=python\nOwnerStart=%s\n"
+                    "Label=langtest\nTakenAt=2026-09-27 13:00:00\nHost=OMENBERT\n"
+                    % (lebend.pid, start), encoding="ascii")
+                lauf = self.ps("-Modus", "Status", "-LockPfad", pfad)
+                ausgabe = lauf.stdout + lauf.stderr
+                self.assertIn("BELEGT", ausgabe, ausgabe)
+                self.assertNotIn("verwaist", ausgabe)
+            finally:
+                lebend.terminate()
+                lebend.wait(timeout=30)
+
+    def test_kopf_erklaert_dass_verwaist_der_normalzustand_ist(self):
+        """Nach jedem Lauf liegt die Sperre planmaessig da, weil der
+        Besitzer der endende cmd.exe ist. Wer das nicht weiss, liest
+        "verwaist" als Stoerung. Der Kommentarkopf muss es sagen."""
+        text = self.LOCK.read_text(encoding="utf-8")
+        self.assertIn("NORMALZUSTAND", text)
+        self.assertIn("planmaessig", text)
+
+
 if __name__ == "__main__":
     unittest.main()
