@@ -212,7 +212,21 @@ Write-Host "  Gate 1 gruen: kompiliert."
 # ---- Gate 2: Unit-Tests --------------------------------------------------
 Section 2 "Unit-Tests (Automation RunTests WiesbadenReal)"
 $TestLog = Join-Path $LogDir "release_tests.log"
-Remove-Item $TestLog -ErrorAction SilentlyContinue
+# Loeschen und NACHPRUEFEN. "Remove-Item -ErrorAction SilentlyContinue"
+# schluckt jeden Fehler und laesst die Datei liegen - gemessen mit einem
+# Read-only-Flag und mit dem offenen Handle eines haengenden Editors. Dann
+# waere der Abschluss-Marker unten die Abnahme eines VORRIGEN Laufs, und
+# Gate 2 meldet gruen, ohne einen Test gefahren zu haben. Dieselbe
+# Fehlerklasse wie beim Rauchtest (Tools\smoke_test.ps1) und bei Gate 4.
+Remove-Item $TestLog -Force -ErrorAction SilentlyContinue
+if (Test-Path $TestLog) {
+    try { (Get-Item $TestLog -Force).IsReadOnly = $false } catch { }
+    Remove-Item $TestLog -Force -ErrorAction SilentlyContinue
+}
+if (Test-Path $TestLog) {
+    Fail "Gate 2 (Unit-Tests)" ("Die alte Testlog laesst sich nicht loeschen ({0}). Sie ist schreibgeschuetzt oder von einem haengenden Prozess offen gehalten - erst den beenden, dann erneut." -f $TestLog) $TestLog
+}
+$testLogStart = Get-Date
 # WICHTIG: -ExecCmds MUSS ueber eine .bat mit exakter Quotierung laufen. PowerShell
 # (`& exe -ExecCmds="a b; c"` oder Start-Process -ArgumentList) zerlegt den Wert an
 # Leerzeichen/Semikolon -> der Cmd startet ohne ExecCmds und schreibt kein Log.
@@ -222,12 +236,18 @@ $TestBat = Join-Path $LogDir "release_run_tests.bat"
 "$CmdExe" "$Proj" -ExecCmds="Automation RunTests WiesbadenReal; Quit" -unattended -nop4 -nullrhi -NoSound -stdout -ABSLOG="$TestLog"
 "@ | Set-Content -Path $TestBat -Encoding ASCII
 & cmd /c "`"$TestBat`"" | Out-Null
-$testText = if (Test-Path $TestLog) { Get-Content $TestLog -Raw } else { "" }
+# Aktualitaetsbeweis, nicht nur Vollstaendigkeit: der Abschluss-Marker
+# "TEST COMPLETE. EXIT CODE: 0" steht auch in einem alten, vollstaendigen
+# Log. Nur ein Log, das nach $testLogStart geschrieben wurde, gehoert zu
+# diesem Lauf - eine Sekunde Toleranz fuer die gerundeten Zeitstempel.
+$testLogFresh = (Test-Path $TestLog) -and ((Get-Item $TestLog).LastWriteTime -ge $testLogStart.AddSeconds(-1))
+$testText = if ($testLogFresh) { Get-Content $TestLog -Raw } else { "" }
 $pass = ([regex]::Matches($testText, "Result=\{Success\}")).Count
 $fail = ([regex]::Matches($testText, "Result=\{Fail\}")).Count
 $complete = $testText -match "TEST COMPLETE\. EXIT CODE: 0"
-Write-Host ("  {0} bestanden, {1} fehlgeschlagen, Abschluss-Marker: {2}" -f $pass, $fail, $(if ($complete) { "ja" } else { "NEIN" }))
+Write-Host ("  {0} bestanden, {1} fehlgeschlagen, Abschluss-Marker: {2}, Log aus diesem Lauf: {3}" -f $pass, $fail, $(if ($complete) { "ja" } else { "NEIN" }), $(if ($testLogFresh) { "ja" } else { "NEIN" }))
 if ($fail -gt 0)      { Fail "Gate 2 (Unit-Tests)" ("{0} Test(s) fehlgeschlagen." -f $fail) $TestLog }
+if (-not $testLogFresh) { Fail "Gate 2 (Unit-Tests)" "Keine NEUE Testlog aus diesem Lauf - der Lauf hat nicht gemessen (fehlt, oder vom vorigen Lauf uebernommen?)." $TestLog }
 if ($pass -lt 1)      { Fail "Gate 2 (Unit-Tests)" "Kein Test lief (Registrierung/Build kaputt?)." $TestLog }
 if (-not $complete)   { Fail "Gate 2 (Unit-Tests)" "Kein sauberer Abschluss-Marker (Lauf abgebrochen?)." $TestLog }
 Write-Host "  Gate 2 gruen: alle Unit-Tests bestanden."

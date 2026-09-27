@@ -100,6 +100,60 @@ function Count-Lines([string]$File, [string]$Pattern) {
     return @(Select-String -Path $File -Pattern $Pattern).Count
 }
 
+# -- BELEGE: eine Datei von gestern ist kein Messergebnis ------------------
+#
+# GEMESSEN am 27.09.2026: diese Datei loeschte ihre Belege mit
+# "Remove-Item -ErrorAction SilentlyContinue" und VERTRAUTE darauf, dass sie
+# damit weg sind. SilentlyContinue schluckt jeden Fehler - die Datei blieb
+# liegen, sowohl mit Read-only-Flag als auch mit dem offenen Handle eines
+# haengenden Editors (beide Faelle nachgemessen). Danach las die Auswertung
+# genau diese alte Datei und meldete deren ZAHLEN als das Ergebnis des
+# aktuellen Laufs. Das ist dieselbe Fehlerklasse, an der Gate 4 im selben
+# Lauf gescheitert ist: die Belege waren da, nur nicht von diesem Lauf.
+#
+# Warum das hier besonders leicht passiert: Saved/ ist in .gitignore, und der
+# Gate-Worktree putzt mit "git clean -fd" OHNE -x. Ignorierte Dateien
+# ueberleben den Putz - der Worktree sammelt die Belege ueber beliebig viele
+# Push-Laeufe an.
+$BelegStart = @{}
+
+# Loescht einen Beleg und NACHPRUEFT, dass er wirklich weg ist. Ein nicht
+# loeschbarer Beleg ist kein Anlass zum Weitermachen: die Auswertung waere
+# dann die des letzten Laufs, und genau so sieht ein gruenes Gate aus, das
+# nichts gemessen hat. Also abbruch mit Wegweiser statt weiterlaufen.
+function Remove-Beleg([string]$File) {
+    $name = Split-Path $File -Leaf
+    if (Test-Path $File) { Remove-Item $File -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $File) {
+        # Read-only steckt am Ordner-Eintrag, nicht am Inhalt.
+        try { (Get-Item $File -Force).IsReadOnly = $false } catch { }
+        Remove-Item $File -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $File) {
+        Write-Host ""
+        Write-Host ("ABBRUCH: der Beleg {0} laesst sich nicht loeschen." -f $name)
+        Write-Host "  Er ist entweder schreibgeschuetzt oder von einem haengenden"
+        Write-Host "  Prozess offen gehalten (dann blockiert auch -ABSLOG= auf ihn)."
+        Write-Host "  Laeuft ein Fremdlauf oder steht ein Editor noch? Erst auf ihn"
+        Write-Host "  warten und dann erneut starten - sonst wuerde der Rauchtest die"
+        Write-Host "  ZAHLEN DES FREMdlaufs als Messung dieses Laufs melden."
+        exit 1
+    }
+}
+
+# Stammt die Datei aus dem Lauf, der um $Start begann? Eine Sekunde
+# Toleranz: das Dateisystem rundet die Zeitstempel je nach Plattform, und
+# ein Log, das Sekundenbruchteile nach dem Start entsteht, darf nicht
+# daran scheitern. Gegenlaeufig zur Loeschpruefung - eine Datei, die gar
+# nicht geloescht werden konnte, faellt hier ebenfalls durch.
+function Test-Frisch([string]$File, $Start) {
+    if ($null -eq $Start)  { return $false }
+    if (-not (Test-Path $File)) { return $false }
+    try   { $zeit = (Get-Item $File).LastWriteTime }
+    catch { return $false }
+    return ($zeit -ge $Start.AddSeconds(-1))
+}
+
 # Misst die AKTUELLE CPU-Geschwindigkeit dieser Maschine ueber eine feste,
 # deterministische Last (Median mehrerer Proben glaettet Ausreisser). Steht die
 # Maschine unter Last, dauert das laenger - genau das soll die Frame-Zeit-
@@ -129,12 +183,15 @@ function Invoke-Session([string[]]$ExtraArgs, [string]$ExecCmds, [string]$LogFil
     & "$PSScriptRoot\cleanup_unreal_processes.cmd"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Stop-ProjectEditors $Proj
-    Remove-Item $LogFile -ErrorAction SilentlyContinue
+    Remove-Beleg $LogFile
 
     $sargs = @("`"$Proj`"", "-game", "-windowed", "-resx=1280", "-resy=720") `
         + $ExtraArgs + @("-nosound", "-ABSLOG=$LogFile")
     if ($ExecCmds) { $sargs += "-ExecCmds=`"$ExecCmds`"" }
 
+    # Ab hier ist der Beleg dieser Sitzung: alles, was die Datei nun bekommt,
+    # stammt aus diesem Lauf. Test-Frisch vergleicht später genau dagegen.
+    $BelegStart[$LogFile] = Get-Date
     $proc = Start-Process -FilePath $Exe -ArgumentList $sargs -PassThru
     Write-Host ("  Sitzung PID {0}: {1} {2}" -f $proc.Id, ($ExtraArgs -join ' '), $ExecCmds)
 
@@ -185,20 +242,54 @@ Invoke-Session @() "WbTeleport 2,WbNudge 15 55,WbResetVehicle,WbHeli,WbHeliYaw 8
 # 30 s auf den geladenen Zustand, dann Dump nach WbHealth.json). Auf die
 # geschriebene JSON-Zeile im Log warten.
 Write-Host "Sitzung 3/3: Gesundheits-Gate (WbHealth nach dem Laden) ..."
-Remove-Item $HealthJson -ErrorAction SilentlyContinue
+Remove-Beleg $HealthJson
+$BelegStart[$HealthJson] = Get-Date
 Invoke-Session @() "WbHealth 30" $HealthLog "WbDev: WbHealth:" 1 180
 
-$car  = if (Test-Path $CarLog)  { Get-Content $CarLog  -Raw } else { "" }
-$heli = if (Test-Path $HeliLog) { Get-Content $HeliLog -Raw } else { "" }
+# Die Belege LESEN - aber nur, wenn sie aus diesem Lauf stammen. Ein
+# liegengebliebener Log von gestern bekaeme hier sonst die Messpunkte
+# untergeschoben, und der Warte-Abbruch weiter oben haette den frischen
+# Editor nach vier Sekunden gekillt, ohne je gemessen zu haben.
+$car  = ""
+$heli = ""
+foreach ($sitzung in @(@($CarLog, "Sitzung 1 (Fahrzeug)"),
+                       @($HeliLog, "Sitzung 2 (Heli)"))) {
+    $datei = $sitzung[0]; $was = $sitzung[1]
+    if (Test-Frisch $datei $BelegStart[$datei]) {
+        $text = Get-Content $datei -Raw
+        if ($datei -eq $CarLog) { $car = $text } else { $heli = $text }
+    } else {
+        Add-Check "Beleg:$was" $false `
+            ("{0} ist kein Beleg dieses Laufs (fehlt, oder unveraendert seit dem " +
+             "vorigen Lauf stehen geblieben). Die Zahlen darunter waeren die des " +
+             "vorigen Laufs - deshalb wird hier nichts ausgewertet.") `
+            -f (Split-Path $datei -Leaf)
+    }
+}
+# Umgekehrt heisst "gruen" jetzt auch: die Belege wurden als die dieses Laufs
+# nachgewiesen. Ohne diese Zeile ist nicht unterscheidbar, ob die Pruefungen
+# gemessen haben oder eine liegengebliebene Datei gelesen haben.
+if (@($Checks | Where-Object { $_.Name -like "Beleg:*" }).Count -eq 0) {
+    Add-Check "Beleg" $true ("{0} Logs aus diesem Lauf bestaetigt" -f 2)
+}
 
 # WbHealth.json EINMAL parsen (aus der stationaeren Gate-Sitzung 3). Speist das
 # Gesundheits-Gate UND die Material-Pruefung MASCHINENLESBAR aus dem Report,
 # statt Prosa-Logzeilen zu greppen.
 $health = $null
 $healthErr = ""
-if (Test-Path $HealthJson) {
+if (Test-Frisch $HealthJson $BelegStart[$HealthJson]) {
     try { $health = Get-Content $HealthJson -Raw | ConvertFrom-Json }
     catch { $healthErr = $_.Exception.Message }
+} elseif (Test-Path $HealthJson) {
+    # Die Datei liegt da und sieht richtig aus - nur ist sie von gestern.
+    # Genau dieser Fall macht aus dem Gesundheits-Gate eine Ampel ohne Lampe:
+    # "healthy: true" waeren die Werte des VORRIGEN Durchlaufs.
+    $healthErr = ("WbHealth.json ist vom vorigen Lauf uebernommen (unveraendert " +
+                  "seit {0:HH:mm:ss}) - das Gesundheits-Gate und die " +
+                  "Material-Pruefung wurden nicht aus diesem Lauf gelesen") `
+                 -f (Get-Item $HealthJson).LastWriteTime
+    Add-Check "Beleg:WbHealth.json" $false $healthErr
 } else {
     $healthErr = "keine WbHealth.json geschrieben (WbHealth nicht ausgeloest?)"
 }
