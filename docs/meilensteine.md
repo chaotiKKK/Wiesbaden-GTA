@@ -26,7 +26,7 @@ denselben Bildern.
 | 4 | [Der Käfer: echte Fahrphysik](#4-der-käfer-echte-fahrphysik) | 01.–24.09. | fertig |
 | 3 | [Ton: Mischpult und echte Aufnahmen](#3-ton-mischpult-und-echte-aufnahmen) | 07.–25.09. | fertig |
 | 2 | [Nerobergbahn](#2-nerobergbahn) | 04.–17.09. | fertig |
-| 1 | [Wahrzeichen](#1-wahrzeichen) | 07.–26.09. | fertig |
+| 1 | [Wahrzeichen](#1-wahrzeichen) | 07.–26.09. | Shuttle-Denkmal offen |
 
 ---
 
@@ -243,8 +243,10 @@ Kurbel am Wasserschieber bedienen.
 *07.–26.09.2026*
 
 Markante Bauwerke sind eigens nachgebaut: die Marktkirche, die
-Russisch-Orthodoxe Kirche, das LuisenForum als Brücke über die Schwalbacher
-Straße und ein Space-Shuttle-Denkmal am Jagdschloss Platte.
+Russisch-Orthodoxe Kirche und das LuisenForum als Brücke über die Schwalbacher
+Straße. *Noch offen:* das Space-Shuttle-Denkmal am Jagdschloss Platte – das
+Modell steht noch schief und halb in einem Gebäude und ist deshalb noch nicht
+im Spiel.
 
 | | | |
 |---|---|---|

@@ -5084,3 +5084,28 @@ sauberem Baum gruen, bei Bearbeitung rot, und er sagt etwas Falsches aus.
 - **Tests:** `Tools/test_releases_ausrichten.py` (20) - `LAUF` ist eine
   Attrappe, `git archive` liefert ein gebautes tar, also kein git, kein gh,
   kein Netz.
+
+## Clips aus dem Renderer (-WbClip, 27.09.2026)
+
+Meilenstein-GIFs NICHT mehr per Bildschirmfilm (`medien.py aufnahme`, ffmpeg
+ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
+`-WbClip=<Name>` (`World/WiesbadenClipRecorder`) und danach
+`python Tools/medien.py clip Saved/Clips/<Name> x.gif`. Anleitung:
+`docs/how-to/clip-aufnehmen.md`.
+
+- **Belegt:** Fenster die ganze Aufnahme ueber verdeckt (rotes Testfenster
+  mitten drauf) -> 180/180 Bilder, Mitte zeigt Spielinhalt, 0 % Rot. Nur ein
+  MINIMIERTES Fenster rendert nicht (Abbruch nach 30 s ohne Bild).
+- **Fester Zeitschritt** (`FApp::SetUseFixedTimeStep`, nur waehrend der
+  Aufnahme): `Saved/Clips/<Name>/clip.json` fuehrt `spielzeit_je_bild_gemessen` - bei PNG und
+  Gegendruck (13,1 s Echtzeit fuer 12 s Clip) exakt 1/30 s. Weicht der Wert
+  vom Soll ab, hat der Zeitschritt nicht gegriffen.
+- **Falle:** `UGameViewportClient::OnScreenshotCaptured` ist GLOBAL - solange
+  gebunden, schreibt HighResShot keine Datei. Darum nur waehrend der Aufnahme
+  gebunden; nicht mit `-WbShotWhenReady` ueberlappen.
+- Laeufe aus einem eigenen Worktree: Stadt per
+  `gate_worktree.stadtinhalt()`+`verlinken()` einhaengen (28 Verbindungen),
+  Sperre ueber das Skript des HAUPTordners nehmen (die Branch-Fassung von
+  `engine_run_lock.ps1 -Modus Nehmen` wartet nicht, Exit 3 sofort), und
+  .cmd-Wrapper per `Start-Process -FilePath x.cmd -ArgumentList ...` starten -
+  `cmd /c "x.cmd" arg "y"` wirft das erste und letzte Anfuehrungszeichen weg.

@@ -5,6 +5,13 @@ und die Meilenstein-Releases auf GitHub.
     python Tools/medien.py aufnahme --log <abslog> --start-bei "<Text>" --sekunden 12 --ziel x.mp4
     python Tools/medien.py gif x.mp4 x.gif [--von 0 --bis 6 --breite 480 --fps 12]
     python Tools/medien.py foto bild.png bild.jpg [--breite 1280]
+    python Tools/medien.py clip Saved/Clips/<Name> x.gif [--von 2 --bis 8 --crop 960:400:0:320]
+
+CLIP (empfohlen): das Spiel schreibt die Bilder selbst aus dem Renderer
+(-WbClip=<Name>, siehe Source/WiesbadenReal/World/WiesbadenClipRecorder.h) -
+kein Bildschirm, kein freies Fenster, und durch den festen Zeitschritt
+fluessig. `clip` macht aus dem Ordner ein GIF (.gif) oder MP4 (.mp4); Bildrate
+und Dateimuster stehen in dessen clip.json.
 
 AUFNAHME: wartet, bis im Spiel-Log (-abslog) die Zeile mit <Text> erscheint,
 holt das Spielfenster nach vorn (fuer die Dauer der Aufnahme "immer oben"),
@@ -21,6 +28,7 @@ ffmpeg kommt aus imageio-ffmpeg (auf diesem Rechner gibt es kein System-ffmpeg).
 """
 import argparse
 import ctypes
+import json
 import ctypes.wintypes as wt
 import datetime
 import os
@@ -234,6 +242,43 @@ def gif(a):
     print('GIF %s: %.2f MB' % (a.ziel, os.path.getsize(a.ziel) / 1e6))
 
 
+def clip_befehl(ordner, ziel, von=0.0, bis=0.0, breite=480, fps=12, farben=128, crop=''):
+    """ffmpeg-Aufruf fuer einen -WbClip-Ordner -> GIF oder MP4. Rueckgabe (cmd, clip.json).
+
+    Rein (fuehrt nichts aus), damit testbar. Geschnitten wird per trim-Filter
+    auf der Zeitachse des Clips (-framerate aus clip.json), nicht ueber
+    Bildnummern - so bedeuten --von/--bis Sekunden wie beim gif-Befehl.
+    """
+    with open(os.path.join(ordner, 'clip.json'), encoding='utf-8') as f:
+        info = json.load(f)
+    teile = []
+    if von or bis:
+        teile.append('trim=start=%g%s,setpts=PTS-STARTPTS' % (von, (':end=%g' % bis) if bis else ''))
+    if crop:
+        teile.append('crop=%s' % crop)
+    eingabe = [FFMPEG, '-hide_banner', '-loglevel', 'error', '-y',
+               '-framerate', str(info['fps']), '-i', os.path.join(ordner, info['muster'])]
+    if ziel.lower().endswith('.mp4'):
+        teile.append('scale=%d:-2:flags=lanczos' % breite)
+        cmd = eingabe + ['-vf', ','.join(teile), '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+                         '-crf', '20', '-movflags', '+faststart', ziel]
+    else:
+        teile += ['fps=%d' % fps, 'scale=%d:-1:flags=lanczos' % breite]
+        filt = (','.join(teile) + ',split[a][b];[a]palettegen=max_colors=%d:stats_mode=diff[p];'
+                '[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle' % farben)
+        cmd = eingabe + ['-filter_complex', filt, '-loop', '0', ziel]
+    return cmd, info
+
+
+def clip(a):
+    cmd, info = clip_befehl(a.ordner, a.ziel, a.von, a.bis, a.breite, a.fps, a.farben, a.crop)
+    if not info.get('vollstaendig', False):
+        print('WARNUNG: Clip unvollstaendig - %s von %s Bildern.' % (info.get('bilder'), info.get('soll')))
+    subprocess.run(cmd, check=True)
+    print('%s %s: %.2f MB (aus %s Bildern, %s fps)' % ('MP4' if a.ziel.lower().endswith('.mp4') else 'GIF',
+          a.ziel, os.path.getsize(a.ziel) / 1e6, info.get('bilder'), info.get('fps')))
+
+
 def foto(a):
     cmd = [FFMPEG, '-hide_banner', '-loglevel', 'error', '-y', '-i', a.quelle,
            '-vf', 'scale=%d:-1:flags=lanczos' % a.breite, '-q:v', '4', a.ziel]
@@ -267,6 +312,16 @@ def main():
     g.add_argument('--fps', type=int, default=12)
     g.add_argument('--farben', type=int, default=128)
     g.set_defaults(fn=gif)
+    c = s.add_parser('clip', help='GIF/MP4 aus einem -WbClip-Ordner (Saved/Clips/<Name>)')
+    c.add_argument('ordner')
+    c.add_argument('ziel', help='.gif oder .mp4')
+    c.add_argument('--von', type=float, default=0.0)
+    c.add_argument('--bis', type=float, default=0.0)
+    c.add_argument('--breite', type=int, default=480)
+    c.add_argument('--fps', type=int, default=12, help='nur GIF: Bildrate des GIFs')
+    c.add_argument('--farben', type=int, default=128)
+    c.add_argument('--crop', default='', help='ffmpeg-crop B:H:X:Y auf dem vollen Bild')
+    c.set_defaults(fn=clip)
     f = s.add_parser('foto')
     f.add_argument('quelle')
     f.add_argument('ziel')
