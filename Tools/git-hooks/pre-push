@@ -9,6 +9,38 @@
 # Commits von stdin) - fremde laufende Arbeit im Arbeitsbaum blockiert den
 # Push nicht mehr und faerbt ihn nicht (Tools/gate_worktree.py).
 #
+# ZWEITER SCHRITT, seit 27.09.2026 (Tools/push_ref_wache.py): das Gate
+# laeuft Minuten, und in dieser Zeit kann ein anderer Thread auf denselben
+# Branch committen. GEMESSEN an diesem Tag: der Push von
+# feature/platte-zen-gate lief 25 Minuten durch alle sieben Gates und hat
+# am Ende einen Commit nach origin gebracht, den kein Gate gesehen hatte -
+# gruen, ohne dass etwas gemessen wurde. Deshalb werden die Refs, die git
+# pushen WILL, vor dem Gate gemerkt und danach noch einmal aufgeloest.
+# Bewegt sich einer, wird der Push abgewiesen.
+#
 # Notausgang:  git push --no-verify   oder   WB_KEINE_GATES=1
 WURZEL=$(git rev-parse --show-toplevel)
-exec python "$WURZEL/Tools/vor_dem_commit.py" --stufe voll --push-refs
+MERKFILE="${TMPDIR:-/tmp}/wb_push_refs_$$"
+MERKJSON="$MERKFILE.json"
+
+# stdin ist die Ref-Liste des anstehenden Pushes. Sie wird zweimal gebraucht:
+# einmal roh fuer das Gate, einmal als Merksatz fuer den Waechter - deshalb
+# wird sie zuerst gelesen und liegt danach in beiden Formen vor.
+cat > "$MERKFILE"
+if ! python "$WURZEL/Tools/push_ref_wache.py" merken "$MERKJSON" < "$MERKFILE"; then
+    rm -f "$MERKFILE" "$MERKJSON"
+    echo "Push-Ref-Waechter: die Ref-Liste liess sich nicht merken - der" \
+         "Push wird abgewiesen, weil danach nichts verglichen werden kann." >&2
+    exit 1
+fi
+
+python "$WURZEL/Tools/vor_dem_commit.py" --stufe voll --push-refs < "$MERKFILE"
+RC=$?
+
+# Nur bei gruenem Gate: bei rotem wird ohnehin abgewiesen, und der Waechter
+# wuerde dann eine Ref nennen, die es nicht mehr gibt.
+if [ "$RC" -eq 0 ]; then
+    python "$WURZEL/Tools/push_ref_wache.py" pruefen "$MERKJSON" "$1" || RC=$?
+fi
+rm -f "$MERKFILE" "$MERKJSON"
+exit $RC
