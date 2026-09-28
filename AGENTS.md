@@ -5097,7 +5097,7 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   mitten drauf) -> 180/180 Bilder, Mitte zeigt Spielinhalt, 0 % Rot. Nur ein
   MINIMIERTES Fenster rendert nicht (Abbruch nach 30 s ohne Bild).
 - **Fester Zeitschritt** (`FApp::SetUseFixedTimeStep`, nur waehrend der
-  Aufnahme): `clip.json` fuehrt `spielzeit_je_bild_gemessen` - bei PNG und
+  Aufnahme): `Saved/Clips/<Name>/clip.json` fuehrt `spielzeit_je_bild_gemessen` - bei PNG und
   Gegendruck (13,1 s Echtzeit fuer 12 s Clip) exakt 1/30 s. Weicht der Wert
   vom Soll ab, hat der Zeitschritt nicht gegriffen.
 - **Falle:** `UGameViewportClient::OnScreenshotCaptured` ist GLOBAL - solange
