@@ -58,26 +58,24 @@ set "GATELOG=%PROJ%\Saved\Logs\wb_test_verify_cuttable.log"
 set "PY=C:\Python314\python.exe"
 if not exist "%PY%" set "PY=python"
 
+REM JEDES "exit /b" STEHT AUF OBERSTER EBENE, erreicht per goto.
+REM GEMESSEN am 28.09.2026: ein "exit /b 1" in einem INNEREN Block, hinter
+REM dem im umschliessenden Block noch ein Befehl folgt, kommt beim Aufrufer
+REM von "cmd /c" als 0 an. So war dieser Block gebaut: das Push-Gate meldete
+REM Gate 4 nach 0 s gruen, obwohl der Lauf gar nicht gestartet war (Platte
+REM an der 10-Prozent-Grenze) und "ROT" auf dem Schirm stand - ohne ein
+REM neues Bild. Abgesichert in Tools\test_cmd_exitcode.py.
+set "RUNRC=0"
 if "!NURPRUEF!"=="0" (
   echo == Plasmacutter-Gate: Lauf fahren
   echo    Log: !LOG!
   call "%PROJ%\Tools\run_cut_shots.cmd" !NAME!
   set "RUNRC=!errorlevel!"
-  if "!RUNRC!"=="2" (
-    echo ROT  Der Lauf wurde nicht gestartet - die Engine-Sperre war belegt.
-    echo      Es sind keine neuen Bilder entstanden; die Pruefung laeuft
-    echo      absichtlich NICHT gegen die Bilder des letzten Laufes,
-    echo      sonst wuerde sie deren Glueh-Kante als Beleg ausgeben.
-    exit /b 1
-  )
-  if not "!RUNRC!"=="0" (
-    echo ROT  Der Lauf ist mit Fehlercode !RUNRC! abgebrochen - die
-    echo      Editor-Meldung steht in "!LOG!.out".
-    exit /b 1
-  )
 ) else (
   echo == Plasmacutter-Gate: nur pruefen, kein Lauf
 )
+if "!RUNRC!"=="2" goto :nicht_gestartet
+if not "!RUNRC!"=="0" goto :abgebrochen
 
 echo.
 echo == Plasmacutter-Gate: Log und Bilder pruefen
@@ -88,11 +86,25 @@ type "!GATELOG!"
 echo.
 echo (Gate vollstaendig in !GATELOG!)
 
-if not "!RC!"=="0" (
-  echo.
-  echo ROT  Das Gate ist durchgefallen ^(Exit !RC!^). Log: !GATELOG!
-  exit /b 1
-)
+if not "!RC!"=="0" goto :durchgefallen
 echo.
 echo GRUEN  Bildfolge belegt. Log: !LOG! / !GATELOG!
 exit /b 0
+
+:nicht_gestartet
+echo ROT  Der Lauf wurde nicht gestartet - die Engine-Sperre war belegt oder
+echo      die Platte liegt unter der Grenze (Tools\engine_run_lock.ps1).
+echo      Es sind keine neuen Bilder entstanden; die Pruefung laeuft
+echo      absichtlich NICHT gegen die Bilder des letzten Laufes,
+echo      sonst wuerde sie deren Glueh-Kante als Beleg ausgeben.
+exit /b 1
+
+:abgebrochen
+echo ROT  Der Lauf ist mit Fehlercode !RUNRC! abgebrochen - die
+echo      Editor-Meldung steht in "!LOG!.out".
+exit /b 1
+
+:durchgefallen
+echo.
+echo ROT  Das Gate ist durchgefallen ^(Exit !RC!^). Log: !GATELOG!
+exit /b 1
