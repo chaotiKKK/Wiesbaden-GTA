@@ -448,6 +448,108 @@ class AbgleichTest(unittest.TestCase):
         self.assertIn("releases_bilder_ausrichten.py --anwenden", self.raus)
 
 
+class Drehbuch:
+    """Ein gh, das Versuch fuer Versuch aus einem Drehbuch antwortet.
+
+    Fuer die Wiederholungs-Tests: Ein echter Netz-Aussetzer ist ein
+    ZUSTAND (eine Sekunde lang), kein Dauerzustand - die Attrappe
+    spielt genau das, indem sie je Aufruf den naechsten Eintrag liefert
+    und danach bei der letzten bleibt. Mitgeschrieben wird jeder
+    Aufruf, damit die Tests beweisen koennen, WIEVIELE Versuche es
+    waren - "hat zweimal probiert" ist hier die eigentliche Zusicherung.
+    """
+
+    def __init__(self, schritte):
+        self.schritte = list(schritte)
+        self.aufrufe = 0
+
+    def __call__(self, *args):
+        self.aufrufe += 1
+        return self.schritte[min(self.aufrufe, len(self.schritte)) - 1]
+
+
+class WiederholungTest(unittest.TestCase):
+    """Kurze Netz-Aussetzer heilen - ohne Rueckhalt waere das der Fall vom
+
+    28.09.2026: ein einzelner `dial tcp`-Moment kostete einen Gate-Lauf
+    von 27 Minuten. Der Rueckhalt ist zugleich die Leine: eine Attrappe,
+    die IMMER transient antwortet, muss nach der letzten Probe rot
+    bleiben - "nicht messbar" darf durch das Wiederholen nie zu "in
+    Ordnung" werden.
+    """
+
+    def setUp(self):
+        self.alt = (ra.GH_LAUF, ra.time.sleep)
+        self.pausen = []
+        ra.time.sleep = self.pausen.append
+
+    def tearDown(self):
+        (ra.GH_LAUF, ra.time.sleep) = self.alt
+
+    def test_ein_aussetzer_heilt_beim_zweiten_versuch(self):
+        buch = Drehbuch([(1, "", "dial tcp 140.82.121.5:443: connectex"),
+                         (0, "[{\"tagName\": \"x\"}]", "")])
+        ra.GH_LAUF = buch
+        self.assertEqual(ra.gh_json("release", "list"),
+                         [{"tagName": "x"}])
+        self.assertEqual(buch.aufrufe, 2, "der Aussetzer wurde nicht wiederholt")
+        self.assertEqual(self.pausen, [ra.NETZ_PAUSE_S])
+
+    def test_zwei_aussetzer_brauchen_den_rueckhalt(self):
+        buch = Drehbuch([(1, "", "dial tcp: lookup api.github.com"),
+                         (1, "", "connectex: timeout"),
+                         (0, "[]", "")])
+        ra.GH_LAUF = buch
+        self.assertEqual(ra.gh_json("release", "list"), [])
+        self.assertEqual(buch.aufrufe, 3)
+        self.assertEqual(self.pausen,
+                         [ra.NETZ_PAUSE_S, ra.NETZ_RUECKHALT_S],
+                         "vor dem letzten Versuch fehlt die Rueckhalt-Pause")
+
+    def test_stehender_aussetzer_bleibt_rot_trotz_rueckhalt(self):
+        buch = Drehbuch([(1, "", "dial tcp: keine Verbindung")] * 3)
+        ra.GH_LAUF = buch
+        with self.assertRaises(ra.NichtMessbar) as behauptung:
+            ra.gh_json("release", "list")
+        self.assertIn("dial tcp", str(behauptung.exception))
+        self.assertEqual(buch.aufrufe, 3)
+        self.assertIn(ra.NETZ_RUECKHALT_S, self.pausen)
+
+    def test_ein_404_wird_nicht_wiederholt(self):
+        buch = Drehbuch([(1, "", "HTTP 404: Not Found (https://api.github.com)")])
+        ra.GH_LAUF = buch
+        with self.assertRaises(ra.NichtMessbar):
+            ra.gh_json("release", "view", "x")
+        self.assertEqual(buch.aufrufe, 1, "ein 404 heilt nicht - sofort melden")
+        self.assertEqual(self.pausen, [])
+
+    def test_die_url_steht_nicht_im_aussetzer_muster(self):
+        # Die Falle aus der eigentlichen Regel: gh schreibt die URL in
+        # jeden Fehler. Ein Muster auf "https" wiederholte JEDE
+        # Abgelehnte Antwort - und verlaengerte echte Fehler um Minuten.
+        self.assertFalse(ra.netz_aussetzer(
+            "HTTP 401: Bad credentials (https://api.github.com/repos)"))
+        self.assertFalse(ra.netz_aussetzer(
+            "HTTP 404: Not Found (https://api.github.com)"))
+        for aussetzer in ("dial tcp: connectex: Der Wartevorgang wurde abgebrochen",
+                          "Get \"https://api.github.com\": context deadline exceeded (Client.Timeout)",
+                          "TLS handshake timeout",
+                          "connection refused",
+                          "HTTP 502 Bad Gateway",
+                          "HTTP 429: rate limit"):
+            self.assertTrue(ra.netz_aussetzer(aussetzer), aussetzer)
+
+    def test_der_rueckhalt_wird_im_gate_gemeldet(self):
+        buch = Drehbuch([(1, "", "dial tcp: connectex"),
+                         (1, "", "dial tcp: connectex"),
+                         (0, "[]", "")])
+        ra.GH_LAUF = buch
+        puffer = io.StringIO()
+        with contextlib.redirect_stdout(puffer):
+            self.assertEqual(ra.gh_json("release", "list"), [])
+        self.assertIn("Rueckhalt", puffer.getvalue())
+
+
 class HilfsfunktionTest(unittest.TestCase):
     """Die zwei Bausteine, die ohne GitHub auskommen."""
 

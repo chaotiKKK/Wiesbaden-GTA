@@ -34,6 +34,8 @@ gelesen werden kann (dieselbe Lehre wie in verify_anchor.cmd):
     2  Die Seite im Arbeitszweig ist in sich nicht stimmig
     3  Nicht messbar: gh fehlt, ist nicht angemeldet oder antwortet nicht
     4  Die Release-Seite (--ref) laesst sich nicht lesen
+Kurze Netz-Aussetzer werden vorher wiederholt (Details bei
+`gh_mit_wiederholung`) - ein Sekunden-Moment soll keinen Gate-Lauf kosten.
 Notausgang, wenn GitHub gerade nicht erreichbar ist und es trotzdem raus
 muss: `git push --no-verify` oder `WB_KEINE_GATES=1`.
 """
@@ -48,6 +50,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -90,9 +93,68 @@ def gh_echt(*args):
 
 GH_LAUF = gh_echt  # der Selbsttest setzt das auf eine Attrappe
 
+# Kurze Netz-Aussetzer kosten hier sonst einen ganzen Gate-Lauf: GEMESSEN
+# am 28.09.2026, 02:30 - der Push lief 27 Minuten durch alle Gates und
+# Gate 6 starb an EINEM `dial tcp`-Moment der GitHub-API (um 03:57 passierte
+# derselbe Aussetzer noch einmal, diesmal in der Schluss-Verifikation des
+# Ausrichters). Deshalb wird wiederholt - aber nur, was ein Aussetzer sein
+# KANN, und mit Rueckhalt: vor dem letzten Versuch wird einmal PROBIERT, ob
+# das Netz wieder antwortet. Ein Test, den eine Attrappe, die immer
+# transient antwortet, nicht ueberlebt - und ein echter Aussetzer fast immer.
+NETZ_VERSUCHE = 3
+NETZ_PAUSE_S = 2.0        # zwischen den schnellen Versuchen
+NETZ_RUECKHALT_S = 60.0   # vor dem letzten Versuch - der echte Test
+NETZ_MOMENT = re.compile(
+    r"dial tcp|connectex|timed? ?out|TLS handshake|connection refused"
+    r"|connection reset|no route to host|temporary failure"
+    r"|could not resolve host|HTTP 408|HTTP 429|HTTP 5\d\d", re.I)
+
+
+def netz_aussetzer(fehler):
+    """True, wenn der gh-Fehler wie ein kurzer Netz-Aussetzer aussieht.
+
+    Bewusst eng gefasst: ein 404, eine abgelaufene Anmeldung oder ein
+    fehlendes gh heilen nicht durch Wiederholen - die werden sofort
+    gemeldet. Die Falle dabei: gh schreibt bei HTTP-Fehlern die URL in
+    die Meldung ("HTTP 401: Bad credentials (https://...)"). Deshalb
+    stehen hier nur Transportworte und echte Retry-Statuscodes - niemals
+    ein Muster auf "https" oder auf die URL selbst.
+    """
+    return bool(NETZ_MOMENT.search(fehler or ""))
+
+
+def gh_mit_wiederholung(*args):
+    """(code, stdout, stderr) von `gh ...` mit Wiederholung bei Aussetzern.
+
+    Drei Versuche: schnell, schnell, Rueckhalt. Zwischen den ersten
+    beiden kurz warten; vor dem letzten eine Minute - lang genug, dass
+    ein Router-Reset oder ein API-Moment realistisch heilt, kurz genug,
+    dass das Gate darunter nicht einschlaeft. Scheitert auch der letzte
+    Versuch als Aussetzer, kommt sein echter Fehler hoch: Exit 3, wie
+    bisher - der Rueckhalt macht aus "nicht messbar" keinen Erfolg.
+    Nicht-Aussetzer (404, Anmeldung, gh fehlt) kommen ohne jede
+    Wartezeit sofort durch, genau wie vorher.
+    """
+    versuch = 0
+    while True:
+        if versuch:
+            rueckhalt = versuch >= NETZ_VERSUCHE - 1
+            pause = NETZ_RUECKHALT_S if rueckhalt else NETZ_PAUSE_S
+            print("   ~ %s - noch ein Versuch nach %d s"
+                  % ("Rueckhalt: GitHub antwortete wiederholt nicht; eine "
+                     "letzte Probe, ehe das Gate aufgibt" if rueckhalt else
+                     "`gh %s` war nicht erreichbar (Versuch %d/%d)"
+                     % (" ".join(args[:2]), versuch, NETZ_VERSUCHE), pause))
+            time.sleep(pause)
+        versuch += 1
+        code, raus, fehler = GH_LAUF(*args)
+        if (code == 0 or code == 127 or not netz_aussetzer(fehler)
+                or versuch >= NETZ_VERSUCHE):
+            return code, raus, fehler
+
 
 def gh_json(*args):
-    code, raus, fehler = GH_LAUF(*args)
+    code, raus, fehler = gh_mit_wiederholung(*args)
     if code == 127:
         raise NichtMessbar("gh ist nicht installiert "
                            "(https://cli.github.com - `gh auth login`)")
@@ -107,7 +169,7 @@ def gh_json(*args):
 
 
 def gh_text(*args):
-    code, raus, fehler = GH_LAUF(*args)
+    code, raus, fehler = gh_mit_wiederholung(*args)
     if code == 127:
         raise NichtMessbar("gh ist nicht installiert")
     if code != 0:
