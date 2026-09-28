@@ -9,6 +9,10 @@
 # Commits von stdin) - fremde laufende Arbeit im Arbeitsbaum blockiert den
 # Push nicht mehr und faerbt ihn nicht (Tools/gate_worktree.py).
 #
+# Vorab ein HINWEIS, kein Gate: lebt ein Branch nach seinem Squash-Merge
+# weiter, bekommt sein PR Scheinkonflikte - Tools/squash_waechter.py meldet
+# das und nennt den verlustfreien `git merge -s ours <squash>`.
+#
 # Notausgang:  git push --no-verify   oder   WB_KEINE_GATES=1
 WURZEL=$(git rev-parse --show-toplevel)
 exec python "$WURZEL/Tools/vor_dem_commit.py" --stufe voll --push-refs

@@ -462,6 +462,22 @@ def pruefen(projekt, sha):
     return fertig.returncode
 
 
+def squash_hinweis(projekt, stdin_text):
+    """Squash-Falle melden (Tools/squash_waechter.py) - HINWEIS, kein Gate.
+
+    Steht VOR dem Engine-Lock: das Warten darauf dauert bis zu einer Stunde,
+    der Hinweis kostet 0,2 s und soll lesen, wer gerade vor dem Push sitzt.
+    Der Import liegt im try wie beim Plattenwaechter: ein Werkzeug, das nur
+    melden soll, darf den Push nie zu Fall bringen.
+    """
+    try:
+        import squash_waechter
+        return squash_waechter.hinweis(projekt, stdin_text)
+    except Exception as e:  # ein Waechter darf den Push nie verhindern
+        print("  ... Squash-Falle: Pruefung nicht ausgefuehrt (%s)" % e, flush=True)
+        return []
+
+
 def push_pruefen(projekt, stdin_text):
     """Einstieg fuer den pre-push-Hook: jeden zu pushenden Dateibaum einmal pruefen."""
     # GEMESSEN am 27.09.2026: ein Push AUS dem Gate-Worktree heraus legte
@@ -479,6 +495,7 @@ def push_pruefen(projekt, stdin_text):
     if not shas:
         print("Nur Loeschungen im Push - nichts zu pruefen.")
         return 0
+    squash_hinweis(projekt, stdin_text)
     auswahl = je_baum_einer(shas, lambda s: git(projekt, "rev-parse", s + "^{tree}").strip())
     # Lock VOR dem ersten Checkout und ueber alle Commits (siehe motor_sperre).
     if not motor_sperre("push_gate"):

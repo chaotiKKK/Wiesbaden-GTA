@@ -3720,6 +3720,17 @@ ZWEI Stufen:
 Notausgang: `--no-verify` oder `WB_KEINE_GATES=1`. Absichtlich - ein
 Wachposten ohne Tuer wird eingerissen, nicht benutzt.
 
+**Squash-Falle (Hinweis beim Push, kein Gate, seit 28.09.2026):** wer einen
+Branch nach seinem "Squash and merge" weiterbenutzt, bekommt im naechsten PR
+Scheinkonflikte ("too complex to resolve in the web editor") und tausende
+Dateien, die laengst auf main sind - PR #16 lag so fest, weil main den Squash
+e9dcd96 trug, dessen Dateibaum bitgleich mit b72a30d im Branch war. Der
+pre-push-Hook meldet das jetzt vor dem Engine-Lock (`Tools/squash_waechter.py`,
+von Hand: `python Tools/squash_waechter.py <branch>`) und nennt den
+verlustfreien Ausweg `git merge -s ours <squash>` - nur die Historie, keine
+Datei. Gilt NUR bei bitgleichem Dateibaum; lief main danach weiter, folgt
+ein normaler `git merge origin/main`.
+
 **Die Hooks liegen unter `Tools/git-hooks/`, NICHT in `.git/hooks`** - der
 Ordner ist nicht versioniert und ueberlebt keinen frischen Klon. `core.hooks
 Path` zeigt dorthin; das ist eine LOKALE Einstellung und muss einmal je Klon
