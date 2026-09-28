@@ -12,7 +12,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path
@@ -693,9 +692,9 @@ class EngineLockTest(unittest.TestCase):
     def test_motor_sperre_gehoert_dem_python_lauf_und_wartet_auf_den_fremden(self):
         with tempfile.TemporaryDirectory() as tmp:
             pfad = str(Path(tmp) / "engine_run.lock")
-            # Ein fremder Lauf, der erst 3 s NACH der ersten Abfrage endet.
+            # Ein fremder Lauf, der erst endet, wenn motor_sperre wartet.
             #
-            # GEMESSEN am 28.09.2026 im Push-Gate: vorher lebte er 4 s ab dem
+            # GEMESSEN am 28.09.2026 im Push-Gate: zuerst lebte er 4 s ab dem
             # Start. Schon die erste Abfrage startet PowerShell, und unter der
             # Last des Gate-Laufs dauerte das laenger - beim zweiten Aufruf
             # war der Fremde tot, der Lock verwaist und wurde OHNE Warten
@@ -711,12 +710,23 @@ class EngineLockTest(unittest.TestCase):
                 with mock.patch("sys.stdout", io.StringIO()) as aus:
                     self.assertFalse(gw.motor_sperre("unittest", warte_s=0, lock_pfad=pfad))
                 self.assertIn("BELEGT", aus.getvalue())
-                ende = threading.Timer(3.0, fremder.kill)
-                ende.start()
-                self.addCleanup(ende.cancel)
+                # Keine Frist: der Fremde endet im ersten schlaf()-Aufruf.
+                # Den erreicht motor_sperre nur, nachdem es den belegten Lock
+                # gesehen und "warte" gemeldet hat. Der Timer davor (3 s nach
+                # der ersten Abfrage) war am 28.09.2026 im Push-Gate wieder
+                # zu kurz - jede Frist ist eine Wette auf die Rechnerlast.
+                geschlafen = []
+
+                def schlaf_und_fremden_beenden(sekunden):
+                    geschlafen.append(sekunden)
+                    if fremder.poll() is None:
+                        fremder.kill()
+                        fremder.wait(timeout=30)
+
                 with mock.patch("sys.stdout", io.StringIO()) as aus:
                     gehalten = gw.motor_sperre("unittest", warte_s=60, lock_pfad=pfad,
-                                               schlaf=lambda s: time.sleep(1))
+                                               schlaf=schlaf_und_fremden_beenden)
+                self.assertTrue(geschlafen, "motor_sperre hat gar nicht gewartet")
                 self.assertTrue(gehalten, aus.getvalue())
                 self.assertIn("warte", aus.getvalue())
             finally:
