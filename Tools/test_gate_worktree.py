@@ -461,6 +461,15 @@ class EngineLockTest(unittest.TestCase):
             [sys.executable, "-c", "import time; time.sleep(120)"],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
+    # PLATTENUNABHAENGIG: `Nehmen`/`Start` fuehren das Platten-Gate aus, das
+    # auf einem vollen Laufwerk mit Exit 4 abbricht - GEMESSEN am 28.09.2026,
+    # 03:36: die Python-Suite eines Push-Laufs kippte bei 10,0 % frei, drei
+    # Tests forderten von genau diesem Weg "warte"/"gehalten". Die Tests
+    # pruefen die SPERRE, nicht den Platz - also stellen sie die Grenze auf
+    # 0 (aus). Der echte Weg des Skripts bleibt von -PlattenGrenze 0
+    # unberuehrt und wird separat bewiesen (siehe PlattenAbbruchTest).
+    PLATTENFREI = ["-PlattenGrenze", "0"]
+
     def test_freier_lock_ist_frei_nimmt_an_und_bleibt_reentrant(self):
         with tempfile.TemporaryDirectory() as tmp:
             pfad = str(Path(tmp) / "engine_run.lock")
@@ -468,7 +477,8 @@ class EngineLockTest(unittest.TestCase):
             self.assertEqual(frei.returncode, 0, frei.stdout + frei.stderr)
             self.assertIn("frei", frei.stdout)
 
-            erst = self.ps(self.LOCK, "-Modus", "Nehmen", "-LockPfad", pfad, "-Name", "unittest")
+            erst = self.ps(self.LOCK, "-Modus", "Nehmen", "-LockPfad", pfad,
+                           "-Name", "unittest", *self.PLATTENFREI)
             self.assertEqual(erst.returncode, 0, erst.stdout + erst.stderr)
             # Besitzer ist der AUFRUFPROZESS (dieser Test), nicht der
             # kurzlebige PowerShell-Kindprozess - sonst waere der Lock nach dem
@@ -480,7 +490,8 @@ class EngineLockTest(unittest.TestCase):
             # Derselbe Lauf darf den Lock wiederholt nehmen (Gate -> Rauchtest
             # -> Cleanup): das ist der Reentrant-Fall, ohne den sich das Gate
             # selbst blockieren wuerde.
-            nochmal = self.ps(self.LOCK, "-Modus", "Nehmen", "-LockPfad", pfad, "-Name", "unittest")
+            nochmal = self.ps(self.LOCK, "-Modus", "Nehmen", "-LockPfad", pfad,
+                              "-Name", "unittest", *self.PLATTENFREI)
             self.assertEqual(nochmal.returncode, 0, nochmal.stdout + nochmal.stderr)
             self.assertIn("bereits", nochmal.stdout)
 
@@ -501,7 +512,8 @@ class EngineLockTest(unittest.TestCase):
                 self.assertIn("BELEGT", status.stdout)
                 self.assertIn("rebake_alkis25", status.stdout)
 
-                nehmen = self.ps(self.LOCK, "-Modus", "Nehmen", "-LockPfad", pfad, "-Name", "unittest")
+                nehmen = self.ps(self.LOCK, "-Modus", "Nehmen", "-LockPfad", pfad,
+                                 "-Name", "unittest", *self.PLATTENFREI)
                 self.assertEqual(nehmen.returncode, 3, nehmen.stdout + nehmen.stderr)
                 self.assertIn("NICHT", nehmen.stdout.upper())  # "startet NICHT"
             finally:
@@ -531,12 +543,72 @@ class EngineLockTest(unittest.TestCase):
                 self.assertIn("BELEGT", aus.getvalue())
                 with mock.patch("sys.stdout", io.StringIO()) as aus:
                     gehalten = gw.motor_sperre("unittest", warte_s=60, lock_pfad=pfad,
+                                               platten_grenze=0,
                                                schlaf=lambda s: time.sleep(1))
                 self.assertTrue(gehalten, aus.getvalue())
                 self.assertIn("warte", aus.getvalue())
             finally:
                 fremder.wait(timeout=30)
             self.assertEqual(int(self.felder(pfad)["OwnerPid"]), os.getpid())
+
+    def test_platten_abbruch_bricht_endgueltig_ab_und_meldet_die_platte(self):
+        """Der Vertrag mit dem Skript: Exit 4 (Platte unter der Grenze).
+        Ein unmoeglicher Zustand darf nicht gewartet werden - aber die
+        Meldung muss die PLATTE nennen, nicht 'Lock belegt' sagen.
+        Nachgebaut mit Grenze 101 %: freier Platz ist nie darueber."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pfad = str(Path(tmp) / "w.lock")
+            pausen = []
+            with mock.patch("sys.stdout", io.StringIO()) as aus:
+                ok = gw.motor_sperre("unittest", warte_s=0, lock_pfad=pfad,
+                                     platten_grenze=101, schlaf=pausen.append)
+            self.assertFalse(ok, aus.getvalue())
+            self.assertEqual(pausen, [],
+                             "auf ein unmoegliches Platten-Gate wurde gewartet")
+            self.assertIn("ABBRUCH", aus.getvalue())
+            self.assertIn("gibt auf", aus.getvalue())
+            self.assertNotIn("BELEGT", aus.getvalue())
+
+    def test_platten_abbruch_ist_heilbar_und_wartet_bis_zur_frist(self):
+        """Exit 4 ist ein Zustand, kein Fehler: GEMESSEN am 28.09.2026,
+        03:36 - ein Push starb an 10,0 % frei, obwohl die Platte zwanzig
+        Minuten spaeter wieder Platz hatte. Nachgebaut: erst ABBRUCH,
+        dann nimmt das Skript den Lock. Bewiesen werden Aufrufzahl,
+        die 15-s-Warte und die Meldung mit 'warte auf Plattenplatz'."""
+        antworten = iter([
+            (4, "Lock: ABBRUCH - nur 9,1 % frei, der Start braucht 10 %.\n", ""),
+            (0, "Lock: von diesem Lauf gehalten (Label unittest).\n", ""),
+        ])
+        aufrufe = []
+
+        class Antwort:
+            def __init__(self, tripel):
+                self.returncode, self.stdout, self.stderr = tripel
+
+        def fake_run(befehl, **kwargs):
+            aufrufe.append(list(befehl))
+            return Antwort(next(antworten))
+
+        tick = [0]
+
+        def uhr():
+            tick[0] += 1
+            return tick[0]
+
+        pausen = []
+        with mock.patch("sys.stdout", io.StringIO()) as aus, \
+                mock.patch.object(gw.subprocess, "run", side_effect=fake_run):
+            ok = gw.motor_sperre("unittest", warte_s=60, lock_pfad="x.lock",
+                                 platten_grenze=10, schlaf=pausen.append, uhr=uhr)
+        self.assertTrue(ok, aus.getvalue())
+        self.assertEqual(len(aufrufe), 2,
+                         "der ABBRUCH wurde nicht wiederholt gefragt")
+        self.assertIn("-PlattenGrenze", aufrufe[0],
+                      "die Grenze erreicht das Skript nicht")
+        self.assertEqual(pausen, [15.0],
+                         "zwischen den Versuchen wurde nicht gewartet")
+        self.assertIn("ABBRUCH", aus.getvalue())
+        self.assertIn("warte auf Plattenplatz", aus.getvalue())
 
     def test_tief_verschachtelte_laeufe_bleiben_eigen(self):
         # Die tiefste echte Abfrage liegt 6 Ebenen unter dem Hook (Cleanup ->
@@ -561,7 +633,7 @@ class EngineLockTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             pfad = str(Path(tmp) / "engine_run.lock")
             lauf = self.ps(self.LOCK, "-Modus", "Start", "-LockPfad", pfad,
-                           "-Name", "unittest", "-DryRun")
+                           "-Name", "unittest", "-DryRun", *self.PLATTENFREI)
             self.assertEqual(lauf.returncode, 0, lauf.stdout + lauf.stderr)
             self.assertIn("Prozessbereinigung", lauf.stdout)
             self.assertEqual(self.felder(pfad)["OwnerPid"], str(os.getpid()))

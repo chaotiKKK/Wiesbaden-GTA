@@ -210,9 +210,16 @@ def verlinken(projekt, wt, verzeichnisse, dateien):
 
 LOCK_SKRIPT = Path(__file__).resolve().parent / "engine_run_lock.ps1"
 LOCK_BELEGT = 3
+# Exit 4 des Skripts: die Platte liegt unter der Abbrechgrenze. Das ist kein
+# belegter Lock, sondern ein Zustand, der verschwinden kann - GEMESSEN am
+# 28.09.2026, 03:36: die Python-Suite eines Push-Laufs kippte bei 10,0 % frei
+# auf den ABBRUCH-Weg, motor_sperre wertete das wie einen endgueltigen Fehler
+# und der ganze Push starb, obwohl 20 Minuten spaeter alles geheilt war.
+LOCK_PLATTE = 4
 
 
-def motor_sperre(name, warte_s=None, lock_pfad=None, schlaf=time.sleep, uhr=time.monotonic):
+def motor_sperre(name, warte_s=None, lock_pfad=None, platten_grenze=None,
+                 schlaf=time.sleep, uhr=time.monotonic):
     """Den maschinenweiten Engine-Lock fuer DIESEN Prozess nehmen.
 
     WARUM HIER UND NICHT ERST IN build_release.ps1: build_release nimmt den
@@ -231,9 +238,16 @@ def motor_sperre(name, warte_s=None, lock_pfad=None, schlaf=time.sleep, uhr=time
     smoke_test, Cleanup) finden ihn in ihrer Prozesskette und gelten als eigen.
 
     Ist der Lock belegt, wird GEWARTET statt abgewiesen - ein zweiter Push soll
-    hinter dem ersten anstehen, nicht rot werden. Abfrage alle 15 s, eine
-    Zeile je Minute; nach warte_s (Vorgabe WB_GATE_LOCK_WARTEN, sonst 3600 s)
-    gibt der Lauf auf. Rueckgabe True = gehalten.
+    hinter dem ersten anstehen, nicht rot werden. Dasselbe gilt fuer Exit 4
+    (Platte unter der Abbrechgrenze, LOCK_PLATTE): Raeumlaeufe und endende
+    Cooks geben Platz frei, der Lauf wartet also auf Heilung, bis zur selben
+    Frist. Abfrage alle 15 s, eine Zeile je Minute; nach warte_s (Vorgabe
+    WB_GATE_LOCK_WARTEN, sonst 3600 s) gibt der Lauf auf. Rueckgabe True =
+    gehalten.
+
+    `platten_grenze` reicht -PlattenGrenze durch (0 = Gate aus). Nur fuer
+    Tests da: die Suite soll plattenunabhaengig gruen bleiben, das echte
+    Gate die Grenze aber behalten.
     """
     if warte_s is None:
         warte_s = float(os.environ.get("WB_GATE_LOCK_WARTEN", "3600"))
@@ -241,6 +255,8 @@ def motor_sperre(name, warte_s=None, lock_pfad=None, schlaf=time.sleep, uhr=time
               "-Modus", "Nehmen", "-Name", name]
     if lock_pfad:
         befehl += ["-LockPfad", str(lock_pfad)]
+    if platten_grenze is not None:
+        befehl += ["-PlattenGrenze", str(platten_grenze)]
     frist = uhr() + warte_s
     naechste_meldung = uhr()
     while True:
@@ -252,6 +268,24 @@ def motor_sperre(name, warte_s=None, lock_pfad=None, schlaf=time.sleep, uhr=time
         if fertig.returncode == 0:
             print("Engine-Lock: %s" % (text[-1] if text else "gehalten"), flush=True)
             return True
+        if fertig.returncode == LOCK_PLATTE:
+            # Die Platte ist zu voll - kein belegter Lock, sondern ein
+            # ZUSTAND. Genau wie bei BELEGT gilt: abwarten, bis zur selben
+            # Frist; der naechste Raeumlauf oder ein endender Cook heilt es.
+            if uhr() >= frist:
+                for zeile in text[:2]:
+                    print(zeile, flush=True)
+                print("Engine-Lock: Platte bleibt zu voll - dieser Lauf gibt auf.",
+                      flush=True)
+                return False
+            if uhr() >= naechste_meldung:
+                platte = next((z for z in text if "ABBRUCH" in z),
+                              text[0] if text else "Platte zu voll")
+                print("%s - warte auf Plattenplatz (hoechstens noch %.0f min) ..."
+                      % (platte, (frist - uhr()) / 60.0), flush=True)
+                naechste_meldung = uhr() + 60.0
+            schlaf(15.0)
+            continue
         if fertig.returncode != LOCK_BELEGT or uhr() >= frist:
             for zeile in text[:3]:
                 print(zeile, flush=True)
