@@ -473,5 +473,89 @@ class HilfsfunktionTest(unittest.TestCase):
         self.assertTrue(any("alt.jpg" in z for z in zeilen))
 
 
+
+class NetzAussetzerTest(unittest.TestCase):
+    """Netzfehler werden wiederholt, Befunde nie (28.09.2026: 4 von 6 Laeufen
+    brachen an kurzen Aussetzern ab, jeder kostete einen 25-Minuten-Push)."""
+
+    def setUp(self):
+        self.pausen = []
+
+    def schlaf(self, s):
+        self.pausen.append(s)
+
+    def folge(self, *ergebnisse):
+        reste = list(ergebnisse)
+
+        def versuch():
+            e = reste.pop(0)
+            if isinstance(e, Exception):
+                raise e
+            return e
+        return versuch
+
+    def test_aussetzer_dann_erfolg(self):
+        v = self.folge((1, "", "Post \"https://api.github.com/graphql\": i/o timeout"),
+                       (0, "[]", ""))
+        e = ra.mit_wiederholung(v, lambda e: e[0] != 0 and ra.ist_netzfehler(e[2]),
+                                schlaf=self.schlaf)
+        self.assertEqual(e, (0, "[]", ""))
+        self.assertEqual(self.pausen, [3])
+
+    def test_befund_wird_nicht_wiederholt(self):
+        v = self.folge((1, "", "release not found"), (0, "[]", ""))
+        e = ra.mit_wiederholung(v, lambda e: e[0] != 0 and ra.ist_netzfehler(e[2]),
+                                schlaf=self.schlaf)
+        self.assertEqual(e[0], 1)
+        self.assertEqual(self.pausen, [])
+
+    def test_dauerhaft_weg_bleibt_nicht_gemessen(self):
+        v = self.folge(OSError("timed out"), OSError("timed out"), OSError("timed out"))
+        with self.assertRaises(OSError):
+            ra.mit_wiederholung(v, lambda e: isinstance(e, Exception), schlaf=self.schlaf)
+        self.assertEqual(self.pausen, [3, 10])
+
+    def test_http_404_ist_ein_befund(self):
+        # Genau der Weg in anonym_erreichen: HTTPError wird zum Ergebnis,
+        # also kein Netzfehler, also kein zweiter Versuch.
+        v = self.folge((404, None), (200, "1"))
+        self.assertEqual(ra.mit_wiederholung(v, lambda e: isinstance(e, Exception),
+                                             schlaf=self.schlaf), (404, None))
+        self.assertEqual(self.pausen, [])
+
+    def test_der_echte_bildabruf_wiederholt_den_aussetzer(self):
+        # Nicht nur der Helfer: anonym_erreichen muss ihn auch benutzen.
+        import urllib.error
+        from unittest import mock
+
+        class Antwort:
+            status = 200
+            headers = {"Content-Length": "7"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        aufrufe = []
+
+        def urlopen(anfrage, timeout):
+            aufrufe.append(1)
+            if len(aufrufe) == 1:
+                raise urllib.error.URLError("timed out")
+            return Antwort()
+
+        with mock.patch.object(ra, "NETZ_PAUSEN", (0, 0)), \
+                mock.patch.object(ra.urllib.request, "urlopen", urlopen):
+            self.assertEqual(ra.anonym_erreichen("https://x/bild.jpg"), (200, "7"))
+        self.assertEqual(len(aufrufe), 2)
+
+    def test_netzzeichen(self):
+        self.assertTrue(ra.ist_netzfehler('Post "https://api.github.com/graphql": EOF'))
+        self.assertTrue(ra.ist_netzfehler("<urlopen error timed out>"))
+        self.assertFalse(ra.ist_netzfehler("HTTP 404: Not Found (release)"))
+        self.assertFalse(ra.ist_netzfehler(""))
+
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -78,14 +79,59 @@ class NichtMessbar(Exception):
 # gh: der einzige Weg nach draussen, austauschbar fuer den Selbsttest
 # ---------------------------------------------------------------------------
 
+# NETZAUSSETZER SIND KEIN BEFUND (28.09.2026). GEMESSEN: von sechs Laeufen
+# an einem Vormittag brachen vier mit Exit 3 ab - einmal `gh release list`
+# ("Post https://api.github.com/graphql ..."), dreimal ein Bildabruf mit
+# "timed out" -, und jeder Aussetzer kostete einen ganzen 25-Minuten-Push.
+# Unmittelbar danach liefen dieselben Abrufe in 1-2 s durch. Darum wird ein
+# NETZFEHLER wiederholt; ein Befund (404, falscher Text, gh-Fehler ohne
+# Netzbezug) nie. Scheitern alle Versuche, bleibt es Exit 3 - "nicht
+# gemessen" wird durch Wiederholen nicht zu "in Ordnung".
+NETZ_PAUSEN = (3, 10)  # Sekunden vor dem 2. und 3. Versuch
+NETZ_ZEICHEN = ("api.github.com", "timeout", "timed out", "connection", "dial tcp",
+                "tls handshake", "eof", "no such host", "temporarily unavailable",
+                "i/o timeout", "unexpected eof", "reset by peer")
+
+
+def ist_netzfehler(text):
+    text = (text or "").lower()
+    return any(z in text for z in NETZ_ZEICHEN)
+
+
+def mit_wiederholung(versuch, netzfehler, pausen=None, schlaf=None):
+    """`versuch()` bis zu 1 + len(pausen) Mal, solange `netzfehler(ergebnis)` gilt.
+
+    `netzfehler` bekommt das Ergebnis oder die Ausnahme und sagt, ob sich ein
+    neuer Versuch lohnt. Das letzte Ergebnis wird zurueckgegeben bzw. die
+    letzte Ausnahme geworfen - der Aufrufer sieht genau, was zuletzt geschah.
+    Pausen und Schlaf werden erst beim Aufruf aufgeloest, damit der Selbsttest
+    sie abstellen kann.
+    """
+    pausen = NETZ_PAUSEN if pausen is None else pausen
+    schlaf = schlaf or time.sleep
+    for pause in list(pausen) + [None]:
+        try:
+            ergebnis = versuch()
+        except Exception as fehler:
+            if pause is None or not netzfehler(fehler):
+                raise
+        else:
+            if pause is None or not netzfehler(ergebnis):
+                return ergebnis
+        schlaf(pause)
+
+
 def gh_echt(*args):
     """(returncode, stdout, stderr) von `gh ...` im Projektordner."""
-    try:
-        fertig = subprocess.run(["gh", *args], cwd=REPO, capture_output=True,
-                                text=True, encoding="utf-8", errors="replace")
-    except FileNotFoundError:
-        return 127, "", "gh nicht gefunden"
-    return fertig.returncode, fertig.stdout, fertig.stderr
+    def einmal():
+        try:
+            fertig = subprocess.run(["gh", *args], cwd=REPO, capture_output=True,
+                                    text=True, encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            return 127, "", "gh nicht gefunden"
+        return fertig.returncode, fertig.stdout, fertig.stderr
+    return mit_wiederholung(einmal, lambda e: isinstance(e, tuple)
+                            and e[0] not in (0, 127) and ist_netzfehler(e[2]))
 
 
 GH_LAUF = gh_echt  # der Selbsttest setzt das auf eine Attrappe
@@ -270,12 +316,19 @@ def anonym_erreichen(url, sekunden=20):
     """
     anfrage = urllib.request.Request(url, method="HEAD", headers={
         "User-Agent": "WiesbadenReal-Gate6"})
+
+    def einmal():
+        try:
+            with urllib.request.urlopen(anfrage, timeout=sekunden) as antwort:
+                return antwort.status, antwort.headers.get("Content-Length")
+        except urllib.error.HTTPError as fehler:   # ein Befund, kein Aussetzer
+            return fehler.code, None
+
     try:
-        with urllib.request.urlopen(anfrage, timeout=sekunden) as antwort:
-            return antwort.status, antwort.headers.get("Content-Length")
-    except urllib.error.HTTPError as fehler:
-        return fehler.code, None
-    except Exception as fehler:            # Timeout, DNS, TLS, keine Route
+        # Jede Ausnahme ausser HTTPError ist ein Netzfehler (Timeout, DNS,
+        # TLS, keine Route) - die werden wiederholt, siehe NETZ_PAUSEN.
+        return mit_wiederholung(einmal, lambda e: isinstance(e, Exception))
+    except Exception as fehler:
         raise NichtMessbar("oeffentlicher Abruf %s: %s"
                            % (url, str(fehler)[:120]))
 
