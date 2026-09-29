@@ -53,6 +53,14 @@ def auswerten(proben):
     ende_a = lenk_re or bremse or len(proben)
     k["Radspin im Anfahren [s]"] = sum(0.1 for p in proben[start:ende_a] if p["spin"])
     k["Nicken Anfahren max [Grad]"] = max((abs(p["nick"]) for p in proben[start:ende_a]), default=0)
+    # Federung beim Anfahren: eine Feder schiesst ueber die Ruhelage der
+    # Beschleunigung hinaus, eine reine Glaettung kriecht darauf zu.
+    t0 = proben[start]["t"]
+    frueh = [p["nick"] for p in proben[start:ende_a] if p["t"] - t0 <= 2.0]
+    ruhe = [p["nick"] for p in proben[start:ende_a] if 1.2 <= p["t"] - t0 <= 2.0]
+    if frueh and ruhe and sum(ruhe) > 0:
+        mittel = sum(ruhe) / len(ruhe)
+        k["Nicken Anfahren Ueberschwingen [%]"] = 100.0 * (max(frueh) - mittel) / mittel
 
     # --- Lenken rechts: Sprung auf 0,6 bei Vollgas --------------------------
     if lenk_re is not None:
@@ -120,6 +128,36 @@ def auswerten(proben):
     hub = [p["hub"] for p in proben[start:]]
     k["Hub RMS [cm]"] = math.sqrt(sum(h * h for h in hub) / len(hub))
     k["Hub max [cm]"] = max(abs(h) for h in hub)
+
+    # --- Bodenkontakt je Rad und Kanten ---------------------------------------
+    if "spalt" in proben[start]:
+        fahrt = [p for p in proben[start:] if p["v"] > 5.0]
+        if fahrt:
+            k["Radspalt max [cm]"] = max(p["spalt"] for p in fahrt)
+            k["Radspalt Mittel [cm]"] = sum(p["spalt"] for p in fahrt) / len(fahrt)
+        # Kante = Knick im Bodenverlauf (zweite Differenz), nicht die Steigung:
+        # bei 30 m/s liegen 3 m zwischen zwei Proben, ein Gefaelle allein
+        # verschiebt die Bodenhoehe schon um Dezimeter.
+        kanten = []
+        for i in range(start + 1, len(proben) - 1):
+            a, b, c = proben[i - 1], proben[i], proben[i + 1]
+            if b["v"] > 5.0 and abs(c["boden"] - 2 * b["boden"] + a["boden"]) >= 6.0:
+                if not kanten or i - kanten[-1] > 5:
+                    kanten.append(i)
+        k["Kanten ueberfahren"] = len(kanten)
+        if kanten:
+            spitzen, nach, spalte = [], [], []
+            for i in kanten:
+                fenster = proben[i:i + 12]
+                spitze = max(fenster, key=lambda p: abs(p["fz"]))
+                spitzen.append(abs(spitze["fz"]))
+                danach = fenster[fenster.index(spitze):]
+                gegen = [abs(p["fz"]) for p in danach if p["fz"] * spitze["fz"] < 0]
+                nach.append(max(gegen, default=0.0))
+                spalte.append(max(p["spalt"] for p in proben[max(i - 1, 0):i + 3]))
+            k["Karosseriehub an Kanten, Mittel der Spitzen [cm]"] = sum(spitzen) / len(spitzen)
+            k["Karosserie-Nachschwingen an Kanten [cm]"] = sum(nach) / len(nach)
+            k["Radspalt an Kanten, Mittel [cm]"] = sum(spalte) / len(spalte)
     k["Proben"] = len(proben)
     return k
 

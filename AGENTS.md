@@ -5139,3 +5139,12 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   Vollgas schon am Gierlimit; `LoadStiffness` war nur gruen, weil die Raeder
   dort blockierten. Vor einem Test, der eine Linear-Eigenschaft misst, die
   Gierrate gegen `MaxYaw` pruefen.
+- Federung (29.09.2026): Karosserie und Leuchten haengen am gefederten
+  `SprungRoot` (Nicken, Wanken, Hub als Feder-Masse, `AdvanceBodySpring`,
+  1,5 Hz, Daempfung 0,4), die Raeder ungefedert am `VisualRoot` mit eigenem
+  Federweg je Rad (`UpdateWheelTravel`, +-12 cm). Die Bodenebene kommt aus
+  vier Radstrahlen statt einem Mittelstrahl; die Karosserie bleibt an Kanten
+  ueber die Traegheit der Wurzel zurueck (`UpdateRootMotion`, gedeckelte
+  zweite Ableitung, Teleports > 1,5 m ausgeblendet). Der STADTVERKEHR nutzt
+  weiter die alte Glaettung `ComputeBodyTilt` - bewusst unveraendert.
+  Messfelder: `boden` (Kanten = zweite Differenz >= 6 cm), `spalt`, `fz`.

@@ -231,6 +231,52 @@ public:
 		float Response, float Dt,
 		float& InOutPitchDeg, float& InOutRollDeg);
 
+	/** Nur die Zielneigung aus den Beschleunigungen, am Anschlag geklemmt. */
+	static void ComputeBodyTiltTarget(
+		float LongAccelMs2, float LatAccelMs2,
+		float PitchPerMs2, float RollPerMs2,
+		float MaxPitchDeg, float MaxRollDeg,
+		float& OutPitchDeg, float& OutRollDeg);
+
+	/**
+	 * Eigenfrequenz der gefederten Karosserie (Hz) - Nicken, Wanken und Hub des
+	 * Spielerwagens. Pkw-Aufbau typisch 1,2-1,8 Hz.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Federung", meta = (ClampMin = "0.3", ClampMax = "5.0"))
+	float BodySpringHz = 1.5f;
+
+	/**
+	 * Daempfungsgrad der Karosserie (1 = aperiodisch, kein Nachschwingen).
+	 * 0,4: sichtbares, schnell abklingendes Nachschwingen (~25 % Ueberschwinger,
+	 * nach gut einer Schwingung ruhig). Gemessen am 29.09.2026 mit der alten
+	 * Glaettung: 0,00 Grad Nachschwingen nach dem Stopp - die Karosserie wirkte
+	 * wie auf Schienen geklebt.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Federung", meta = (ClampMin = "0.05", ClampMax = "2.0"))
+	float BodyDampingRatio = 0.4f;
+
+	/** Anschlag des Karosseriehubs (cm) - weiter federt der Aufbau nicht. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Federung", meta = (ClampMin = "0.0"))
+	float BodyHeaveMaxCm = 7.0f;
+
+	/** Federweg je Rad gegen die Ruhelage (cm, ein- und ausfedernd). */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Federung", meta = (ClampMin = "0.0"))
+	float WheelTravelMaxCm = 12.0f;
+
+	/**
+	 * Gedaempfte Feder-Masse-Bewegung EINER Groesse (Nicken, Wanken oder Hub).
+	 *
+	 * x'' = w^2 (Ziel - x) - 2 zeta w x' + AussenBeschleunigung, w = 2 pi Hz.
+	 * Die Aussenbeschleunigung ist die Traegheit gegen die bewegte Wurzel: faehrt
+	 * das Rad eine Kante hoch, bleibt die Karosserie zurueck und schwingt nach.
+	 * Semi-implizit mit Teilschritten von hoechstens 1/240 s - bildratenfest.
+	 * Anschlag: jenseits von Limit (> 0) haelt der Wert und verliert die
+	 * Geschwindigkeit nach aussen. Datenrein: Test Vehicles.Physics.BodySpring.
+	 */
+	static void AdvanceBodySpring(float Target, float ExternalAccel,
+		float NaturalHz, float DampingRatio, float Limit, float Dt,
+		float& InOutValue, float& InOutRate);
+
 	/** Flughoehe ueber dem Gebaeude beim Ueberflug, in cm. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Ueberflug", meta = (ClampMin = "100.0"))
 	float FlyOverClearanceCm = 1000.0f;
@@ -276,6 +322,14 @@ protected:
 	 */
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
 	USceneComponent* VisualRoot = nullptr;
+
+	/**
+	 * GEFEDERTER Aufbau: Karosserie und Leuchten haengen hier, die Raeder nicht.
+	 * Nicken, Wanken und Hub der Feder-Masse-Bewegung liegen auf diesem Traeger -
+	 * frueher neigte sich nur das Karosserie-Mesh, die Leuchten blieben stehen.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fahrzeug")
+	USceneComponent* SprungRoot = nullptr;
 
 	/**
 	 * Kollisionskoerper in echten Fahrzeugmassen.
@@ -396,9 +450,6 @@ private:
 	bool bLastWheelSpin = false;
 	bool bLastWheelLock = false;
 
-	/** Grundausrichtung der Karosserie (Mesh-Orientierung ohne Neigung). */
-	FRotator BodyBaseRotation = FRotator::ZeroRotator;
-
 	/** Aktuelle visuelle Karosserie-Neigung (Grad), weich nachgefuehrt. */
 	float BodyPitchDeg = 0.0f;
 	float BodyRollDeg = 0.0f;
@@ -414,6 +465,53 @@ private:
 
 	/** Abstand der Wurzel zu ihrer Sollhoehe ueber der Fahrbahn (cm, + = zu hoch). */
 	float TelemetryHeaveCm = 0.0f;
+
+	/**
+	 * Bodenkontakt JE RAD. Radaufstandspunkte im Fahrzeug-Lokalsystem (x, y;
+	 * Reihenfolge VL, VR, HL, HR), die Bodenhoehe unter jedem Rad (Welt-Z, cm)
+	 * und ob der Strahl dort Boden fand - TraceWheelGround() fuellt beides.
+	 */
+	FVector WheelBasePositions[4];
+	float WheelGroundZ[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	bool bWheelGroundHit[4] = { false, false, false, false };
+
+	/** Tastet unter jedem Rad senkrecht nach dem Boden. */
+	void TraceWheelGround();
+
+	/** Groesster Spalt zwischen Reifenunterkante und Boden ueber alle Raeder (cm, Betrag). */
+	float ComputeMaxWheelGapCm() const;
+
+	/** Karosseriehub gegen die Ruhelage (cm, + = oben) - Feder-Masse-Zustand. */
+	float BodyHeaveCm = 0.0f;
+
+	/** Geschwindigkeiten der Feder-Masse-Zustaende (Grad/s bzw. cm/s). */
+	float BodyPitchRate = 0.0f;
+	float BodyRollRate = 0.0f;
+	float BodyHeaveRate = 0.0f;
+
+	/** Federweg je Rad (cm, + = eingefedert), weich nachgefuehrt. */
+	float WheelTravelCm[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+	/**
+	 * Bewegung der Wurzel im letzten Bild - daraus die Traegheit, mit der die
+	 * gefederte Karosserie zurueckbleibt (Kante, Kuppe, Senke).
+	 */
+	bool bRootMotionValid = false;
+	float LastRootZ = 0.0f;
+	float LastRootVelZ = 0.0f;
+	float LastRootPitch = 0.0f;
+	float LastRootPitchRate = 0.0f;
+	float LastRootRoll = 0.0f;
+	float LastRootRollRate = 0.0f;
+	float RootAccelZ = 0.0f;
+	float RootPitchAccel = 0.0f;
+	float RootRollAccel = 0.0f;
+
+	/** Wurzelbewegung messen (Ende des Physikschritts), Teleports ausblenden. */
+	void UpdateRootMotion(float DeltaSeconds);
+
+	/** Raeder je auf ihren Boden federn (unabhaengig von der Karosserie). */
+	void UpdateWheelTravel(float DeltaSeconds);
 
 	/** Aktuelle Fallgeschwindigkeit (cm/s), wenn kein Boden unter dem Wagen liegt. */
 	float FallSpeedCmS = 0.0f;

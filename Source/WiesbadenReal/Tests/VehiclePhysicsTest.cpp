@@ -932,6 +932,94 @@ bool FVehicleBodyTiltTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleBodySpringTest,
+	"WiesbadenReal.Vehicles.Physics.BodySpring",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * Gefederte Karosserie des Spielerwagens: Feder-Masse statt Glaettung. Gemessen am
+ * 29.09.2026 mit der Glaettung: 0,00 Grad Nachschwingen nach dem Stopp, 0 cm
+ * Karosseriehub an 13 Kanten - die Karosserie wirkte festgeklebt.
+ */
+bool FVehicleBodySpringTest::RunTest(const FString& Parameters)
+{
+	const AWiesbadenCar* Car = GetDefault<AWiesbadenCar>();
+	const float Hz = Car->BodySpringHz;
+	const float Zeta = Car->BodyDampingRatio;
+	constexpr float Dt = 1.0f / 60.0f;
+
+	// -- Sprung auf ein Ziel: sichtbar ueber das Ziel hinaus, dann schnell ruhig --
+	{
+		float X = 0.0f, V = 0.0f, Max = 0.0f, Rest = 0.0f;
+		for (int32 i = 0; i < 180; ++i)   // 3 s
+		{
+			AWiesbadenCar::AdvanceBodySpring(-2.0f, 0.0f, Hz, Zeta, 0.0f, Dt, X, V);
+			Max = FMath::Max(Max, -X);
+			if (i * Dt > 1.5f) { Rest = FMath::Max(Rest, FMath::Abs(X + 2.0f)); }
+		}
+		const float Ueber = 100.0f * (Max - 2.0f) / 2.0f;
+		TestTrue(FString::Printf(TEXT("Sichtbares Ueberschwingen (%.0f %%)"), Ueber), Ueber > 10.0f && Ueber < 40.0f);
+		TestTrue(FString::Printf(TEXT("Nach 1,5 s ruhig (Rest %.3f Grad)"), Rest), Rest < 0.1f);
+	}
+
+	// -- Bremse los nach dem Stopp: die Nase kommt ueber die Ruhelage zurueck --
+	{
+		float X = -2.7f, V = 0.0f, Gegen = 0.0f;
+		for (int32 i = 0; i < 120; ++i)
+		{
+			AWiesbadenCar::AdvanceBodySpring(0.0f, 0.0f, Hz, Zeta, 0.0f, Dt, X, V);
+			Gegen = FMath::Max(Gegen, X);   // Nicken nach OBEN = Nachschwingen
+		}
+		TestTrue(FString::Printf(TEXT("Nachschwingen nach dem Stopp (%.2f Grad)"), Gegen), Gegen > 0.3f);
+		TestTrue(FString::Printf(TEXT("... und wieder in Ruhe (%.3f)"), X), FMath::Abs(X) < 0.05f);
+	}
+
+	// -- Kante: kurzer Stoss der Wurzel nach oben -> der Aufbau bleibt zurueck,
+	//    federt nach und kehrt in die Ruhelage zurueck; der Anschlag haelt. ------
+	{
+		float X = 0.0f, V = 0.0f, Tief = 0.0f, Hoch = 0.0f;
+		for (int32 i = 0; i < 120; ++i)
+		{
+			const float Stoss = (i < 3) ? -2000.0f : 0.0f;   // -(Wurzel nach oben)
+			AWiesbadenCar::AdvanceBodySpring(0.0f, Stoss, Hz, Zeta, Car->BodyHeaveMaxCm, Dt, X, V);
+			Tief = FMath::Min(Tief, X);
+			Hoch = FMath::Max(Hoch, X);
+		}
+		TestTrue(FString::Printf(TEXT("Kante federt ein (%.1f cm)"), Tief), Tief < -2.0f);
+		TestTrue(FString::Printf(TEXT("Anschlag haelt (%.1f cm)"), Tief), Tief >= -Car->BodyHeaveMaxCm - 0.01f);
+		TestTrue(FString::Printf(TEXT("Federt zurueck ueber die Ruhelage (%.1f cm)"), Hoch), Hoch > 0.3f);
+		TestTrue(FString::Printf(TEXT("Nach 2 s wieder in Ruhe (%.2f cm)"), X), FMath::Abs(X) < 0.1f);
+	}
+
+	// -- Bildratenfest: 30 und 144 Bilder/s zeigen dieselbe Bewegung ---------
+	{
+		auto Nach = [&](float Schritt)
+		{
+			float X = 0.0f, V = 0.0f;
+			for (float T = 0.0f; T < 0.4f - 1e-4f; T += Schritt)
+			{
+				AWiesbadenCar::AdvanceBodySpring(-2.0f, 0.0f, Hz, Zeta, 0.0f, Schritt, X, V);
+			}
+			return X;
+		};
+		const float A = Nach(1.0f / 30.0f);
+		const float B = Nach(1.0f / 144.0f);
+		TestTrue(FString::Printf(TEXT("Bildratenfest (%.3f ~ %.3f)"), A, B), FMath::IsNearlyEqual(A, B, 0.1f));
+	}
+
+	// -- Daempfung wirkt: aperiodisch gedaempft schwingt nichts nach ----------
+	{
+		float X = -2.0f, V = 0.0f, Gegen = 0.0f;
+		for (int32 i = 0; i < 120; ++i)
+		{
+			AWiesbadenCar::AdvanceBodySpring(0.0f, 0.0f, Hz, 1.0f, 0.0f, Dt, X, V);
+			Gegen = FMath::Max(Gegen, X);
+		}
+		TestTrue(FString::Printf(TEXT("Daempfungsgrad 1: kein Nachschwingen (%.3f)"), Gegen), Gegen < 0.01f);
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleTireEffectsTest,
 	"WiesbadenReal.Vehicles.TireEffects",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
