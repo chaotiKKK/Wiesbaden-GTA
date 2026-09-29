@@ -281,6 +281,50 @@ def fremde_engines(filter_path=None):
     return prozesse
 
 
+def engine_frei(name, warte_s=None, schlaf=time.sleep, uhr=time.monotonic):
+    """Warten, bis UEBERHAUPT keine Engine mehr laeuft - maschinenweit.
+
+    GEMESSEN am 29.09.2026: Gate 5 (verify_anchor.cmd) starb zweimal
+    nach ~4 s still (15.670 Bytes Log, exakt dieselbe letzte Zeile,
+    kein WER-Crash, kein Defender-Eintrag) - beide Male lief parallel
+    eine FREMDE Engine auf dem Haupt-Checkout (15:53 ein Cook, 16:21
+    ein interaktiver Editor). Ohne parallele Engine lief dasselbe Gate
+    Exit 0. worktree_exklusiv schaut nur auf Worktree-Pfade in
+    Commandlines - ein interaktiver Editor ohne Argumente, der bloss
+    DDC und Logs schreibt, faellt durch dieses Netz. Der Lock schuetzt
+    nicht: er ist zu diesem Zeitpunkt schon "eigen".
+
+    Diese Schleife wartet deshalb auf die TOTALE Engine-Ruhe. Der
+    zenserver zaehlt bewusst NICHT: er haengt als DDC-Backend an jedem
+    Editor mit dran, stirbt mit ihm - und auf ihn allein zu warten
+    haette den Lauf heute hinter einem Editor-Paar festgehalten.
+
+    Der Aufrufer klammert damit eine enge Race-Lucke, nicht eine
+    Garantie: nach dem Ruecksprung kann sofort wieder ein Editor
+    starten. Aber die heute gemessenen Tode trafen genau diesen
+    Zustand, und ein Startfenster von Sekunden ist eine andere
+    Fehlerklasse als ein Editor, der die ganzen Minuten laeuft.
+    """
+    if warte_s is None:
+        warte_s = float(os.environ.get("WB_GATE_LOCK_WARTEN", "3600"))
+    frist = uhr() + warte_s
+    while True:
+        fremd = [e for e in fremde_engines()
+                 if "zenserver" not in (e.get("commandline") or "").lower()]
+        if not fremd:
+            return True
+        if uhr() >= frist:
+            drucke("Engine-Konflikt: %d fremde Engine(s) laufen - dieser "
+                   "Lauf gibt auf: %s"
+                   % (len(fremd), "; ".join(
+                       "PID %s" % (e.get("pid"),) for e in fremd[:3])))
+            return False
+        drucke("%s: %d fremde Engine(s) laufen - warte auf totale "
+               "Engine-Ruhe (hoechstens noch %.0f min) ..."
+               % (name, len(fremd), max(0.0, (frist - uhr()) / 60.0)))
+        schlaf(10.0)
+
+
 def worktree_exklusiv(name, warte_s=None, schlaf=time.sleep, uhr=time.monotonic,
                       filter_path=None):
     """Warten, bis keine fremde Engine im GEMEINSAMEN Gate-Worktree laeuft.

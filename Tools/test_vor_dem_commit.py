@@ -298,7 +298,12 @@ class StufenZuordnungTest(unittest.TestCase):
         # ihn nicht anfassen (er wartete sonst auf einen echten Gate-Lauf).
         import gate_worktree
         try:
-            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+            # worktree_exklusiv und engine_frei fragen echte Prozesse ab -
+            # ein Test darf auf keine laufende Engine warten, beides gilt
+            # hier als sofort erreicht.
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True), \
+                 mock.patch.object(gate_worktree, "worktree_exklusiv", return_value=True), \
+                 mock.patch.object(gate_worktree, "engine_frei", return_value=True):
                 vdc.gates_fahren(stufe, dateien)
         finally:
             vdc.Lauf = alt
@@ -395,7 +400,12 @@ class SchnittbildGateTest(unittest.TestCase):
         vdc.besitz_gate = lambda *a, **k: False
         import gate_worktree
         try:
-            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+            # worktree_exklusiv und engine_frei fragen echte Prozesse ab -
+            # ein Test darf auf keine laufende Engine warten, beides gilt
+            # hier als sofort erreicht.
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True), \
+                 mock.patch.object(gate_worktree, "worktree_exklusiv", return_value=True), \
+                 mock.patch.object(gate_worktree, "engine_frei", return_value=True):
                 vdc.gates_fahren(stufe, dateien)
         finally:
             vdc.Lauf = alt
@@ -489,7 +499,12 @@ class AnkerGateTest(unittest.TestCase):
         vdc.Lauf = lambda: doppel
         import gate_worktree
         try:
-            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True):
+            # worktree_exklusiv und engine_frei fragen echte Prozesse ab -
+            # ein Test darf auf keine laufende Engine warten, beides gilt
+            # hier als sofort erreicht.
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True), \
+                 mock.patch.object(gate_worktree, "worktree_exklusiv", return_value=True), \
+                 mock.patch.object(gate_worktree, "engine_frei", return_value=True):
                 vdc.gates_fahren(stufe, dateien)
         finally:
             vdc.Lauf = alt
@@ -1429,6 +1444,215 @@ sys.exit(vdc.hauptprogramm())
                       "die Ablehnung nennt den Thread nicht")
         self.assertIn("innen-thread", fertig.stdout + fertig.stderr,
                       "die Ablehnung nennt den Thread nicht")
+
+
+class _Gate5FertigDoppel:
+    """Ein CompletedProcess-Ersatz mit der GEMESSENEN Fehlerzeile von
+    verify_anchor.cmd nach stummem Engine-Tod (Exit 3)."""
+
+    stdout = "FEHLER: Engine endete mit Exit -1 und hat NICHTS geschrieben."
+    stderr = ""
+
+
+class _Gate5LaufDoppel:
+    """Schreibt mit, was gefahren wurde; Gate 5 antwortet nach Plan.
+
+    Der erste und der zweite Gate-5-Lauf geben getrennte Antworten -
+    genau wie der echte Lauf den Retry nur nach stummem Tod sieht.
+    """
+
+    def __init__(self, erste, zweite=None, erste_fertig=None):
+        self.ergebnisse = []
+        self.gefahren = []
+        self.ausgabe = _Gate5AusgabeSammel()
+        self._erste = erste
+        self._zweite = zweite
+        # Der Fertig-Ersatz des ERSTEN roten Laufs; None heisst: der
+        # gemessene stumme Tod (_Gate5FertigDoppel).
+        self._erste_fertig = erste_fertig
+
+    def fahre(self, name, befehl, *, shell_cmd=False):
+        self.gefahren.append(name)
+        if name.startswith("Gate 5"):
+            erster = len([n for n in self.gefahren if n.startswith("Gate 5")]) == 1
+            ok = self._erste if erster else self._zweite
+        else:
+            ok = True
+        fertig = None if ok else (
+            (self._erste_fertig or _Gate5FertigDoppel()) if erster
+            else _Gate5FertigDoppel())
+        self.ergebnisse.append((name, ok, 0.0, fertig))
+        return ok
+
+    def ueberspringe(self, name, grund):
+        self.ergebnisse.append((name, None, 0.0, None))
+
+    def fahre_gate(self, name, ok, dauer, meldung):
+        self.gefahren.append(name)
+        self.ergebnisse.append((name, ok, dauer, None))
+
+    def bericht(self):
+        return 0
+
+
+class _AusgabeSammel:
+    """Nimmt drucke-Zeilen auf - Tests lesen sie, statt stdout umzuleiten."""
+
+    def __init__(self):
+        self.text = ""
+
+    def write(self, stueck):
+        self.text += stueck
+
+    def flush(self):
+        pass
+
+
+class _Gate5AusgabeSammel(_AusgabeSammel):
+    """Fuegt das Datei-Protokoll hinzu: jede Zeile mit \n, wie ein Strom."""
+
+    def write(self, stueck):
+        if stueck.endswith("\n"):
+            self.text += stueck
+        else:
+            self.text += stueck + "\n"
+
+
+class Gate5EngineRuheTest(unittest.TestCase):
+    """Gate 5 ueberlebt fremde Engines: warten, dann EIN sauberer Retry.
+
+    GEMESSEN am 29.09.2026 (zweimal): die Gate-5-Engine starb nach ~4 s
+    still, waehrend parallel eine fremde Engine lief - der Push wurde
+    abgewiesen, obwohl dasselbe Gate ohne die Engine Exit 0 lieferte.
+    Alle Wege hier ohne echte Engine nachgestellt; die Beweise sind die
+    Reihenfolge und die Namen der Aufrufe.
+    """
+
+    def fahre_voll(self, lauf, engine_frei_antworten):
+        """gates_fahren('voll') mit gestellten Antworten; liefert (lauf,
+        engine_frei-Aufrufe). Besitz und Lock sind weggebunden, die
+        Prozess-Blicke gelten als sofort ruhig bzw. nach Plan."""
+        import gate_worktree
+        aufrufe = []
+
+        def engine_frei_spion(name):
+            aufrufe.append(name)
+            return engine_frei_antworten.pop(0)
+
+        alt_besitz = vdc.besitz_gate
+        vdc.besitz_gate = lambda *a, **k: False
+        alt_lauf = vdc.Lauf
+        vdc.Lauf = lambda: lauf
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True), \
+                 mock.patch.object(gate_worktree, "worktree_exklusiv", return_value=True), \
+                 mock.patch.object(gate_worktree, "engine_frei", side_effect=engine_frei_spion):
+                vdc.gates_fahren("voll", ["Tools/x.py"])
+        finally:
+            vdc.besitz_gate = alt_besitz
+            vdc.Lauf = alt_lauf
+        return aufrufe
+
+    def test_stummer_tod_bei_fremder_engine_wird_einmal_wiederholt(self):
+        lauf = _Gate5LaufDoppel(erste=False, zweite=True)
+        aufrufe = self.fahre_voll(lauf, [True, True])
+        self.assertIn("Gate 5  Ankerzustand (WP)", lauf.gefahren)
+        self.assertIn("Gate 5  Ankerzustand (WP) - Retry", lauf.gefahren,
+                      "der stumme Tod bekam keinen sauberen Retry")
+        self.assertEqual(lauf.gefahren.count("Gate 5  Ankerzustand (WP) - Retry"), 1,
+                         "mehr als ein Retry ist keine Sauberkeit mehr")
+        self.assertEqual(aufrufe, ["Gate 4/5", "Gate 5 Retry"],
+                         "der Retry muss erst auf Engine-Ruhe warten")
+        self.assertIn("EINMAL sauber wiederholt", lauf.ausgabe.text)
+
+    def test_rotes_messergebnis_bekommt_keinen_retry(self):
+        """Exit 7 (echte rote Messung) ist kein stummer Tod."""
+        exit7 = type("F", (), {
+            "stdout": "FEHLER: 3 LEERE Komponenten liegen am Kartenursprung.",
+            "stderr": ""})()
+        lauf = _Gate5LaufDoppel(erste=False, erste_fertig=exit7)
+        aufrufe = self.fahre_voll(lauf, [True])
+        self.assertNotIn("Gate 5  Ankerzustand (WP) - Retry", lauf.gefahren,
+                         "eine echte rote Messung darf nicht neu gewuerfelt werden")
+        self.assertEqual(aufrufe, ["Gate 4/5"],
+                         "ohne Retry-Anspruch darf engine_frei nicht noch einmal laufen")
+
+    def test_ohne_engine_ruhe_kein_retry(self):
+        lauf = _Gate5LaufDoppel(erste=False)
+        aufrufe = self.fahre_voll(lauf, [True, False])
+        self.assertNotIn("Gate 5  Ankerzustand (WP) - Retry", lauf.gefahren,
+                         "ohne erreichte Ruhe darf nicht erneut gestartet werden")
+        self.assertEqual(aufrufe, ["Gate 4/5", "Gate 5 Retry"])
+        self.assertIn("ohne Retry abgewiesen", lauf.ausgabe.text)
+
+    def test_gruenes_gate5_bleibt_ohne_retry(self):
+        lauf = _Gate5LaufDoppel(erste=True)
+        aufrufe = self.fahre_voll(lauf, [True])
+        self.assertNotIn("Gate 5  Ankerzustand (WP) - Retry", lauf.gefahren)
+        self.assertEqual(aufrufe, ["Gate 4/5"])
+        self.assertNotIn("wiederholt", lauf.ausgabe.text)
+
+    def test_die_schnelle_stufe_wartet_auf_keine_engine(self):
+        lauf = _Gate5LaufDoppel(erste=True)
+        import gate_worktree
+        aufrufe = []
+        alt_besitz = vdc.besitz_gate
+        vdc.besitz_gate = lambda *a, **k: False
+        alt_lauf = vdc.Lauf
+        vdc.Lauf = lambda: lauf
+        try:
+            with mock.patch.object(gate_worktree, "motor_sperre", return_value=True), \
+                 mock.patch.object(gate_worktree, "engine_frei",
+                                   side_effect=lambda name: aufrufe.append(name) or True):
+                vdc.gates_fahren("schnell", ["Tools/x.py"])
+        finally:
+            vdc.besitz_gate = alt_besitz
+            vdc.Lauf = alt_lauf
+        self.assertEqual(aufrufe, [],
+                         "die schnelle Stufe startet keine Engine und wartet auf keine")
+
+
+class EngineFreiWarteTest(unittest.TestCase):
+    """Die Warteschleife selbst: total heisst total, zenserver zählt nicht.
+
+    (In test_gate_worktree.py, wo sie hingehoerte, liegt fremde WIP -
+    bis deren Commit steht die Pruefung hier.)
+    """
+
+    def test_zenserver_allein_ist_engine_ruhe(self):
+        import gate_worktree
+        beobachtet = [[{"pid": 1, "commandline":
+                        "C:\\pfad\\zenserver.exe --port 8558 --owner-pid 99"}]]
+        with mock.patch.object(gate_worktree, "fremde_engines",
+                               side_effect=lambda: beobachtet.pop(0)):
+            self.assertTrue(gate_worktree.engine_frei(
+                "T", warte_s=60, schlaf=lambda s: None,
+                uhr=lambda: 0))
+
+    def test_editor_blockiert_dann_gibt_ruhe_frei(self):
+        import gate_worktree
+        beobachtet = [
+            [{"pid": 7, "commandline": "C:\\pfad\\UnrealEditor.exe"}],
+            [],
+        ]
+        schlaf = []
+        uhr = iter([0, 1, 2]).__next__
+        with mock.patch.object(gate_worktree, "fremde_engines",
+                               side_effect=lambda: beobachtet.pop(0)):
+            self.assertTrue(gate_worktree.engine_frei(
+                "T", warte_s=60, schlaf=schlaf.append, uhr=uhr))
+        self.assertEqual(len(schlaf), 1, "warten statt sofortiges Aufgeben")
+
+    def test_frist_endet_mit_false(self):
+        import gate_worktree
+        editor = [{"pid": 7, "commandline": "C:\\pfad\\UnrealEditor.exe"}]
+        beobachtet = [editor, editor]
+        uhr = iter([0, 5, 10, 11]).__next__
+        with mock.patch.object(gate_worktree, "fremde_engines",
+                               side_effect=lambda: beobachtet.pop(0)
+                               if beobachtet else editor):
+            self.assertFalse(gate_worktree.engine_frei(
+                "T", warte_s=10, schlaf=lambda s: None, uhr=uhr))
 
 
 if __name__ == "__main__":

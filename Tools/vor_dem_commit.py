@@ -847,11 +847,24 @@ def gates_fahren(stufe, dateien, thread=None):
         # eigene Blick auf die Prozesse - warten, bis keine FREMDE Engine
         # mehr auf diesen Pfad zeigt. Gate 5 startet dieselbe Art Lauf im
         # selben Worktree und reitet auf dieser Exklusivitaet mit.
+        # Und DARUEBER HINAUS die totale Engine-Ruhe (GEMESSEN am
+        # 29.09.2026): Gate 5 starb zweimal still nach ~4 s, waehrend
+        # parallel ein fremder Cook bzw. ein interaktiver Editor lief -
+        # ohne Worktree-Pfad in der Commandline, also unsichtbar fuer
+        # worktree_exklusiv. Ohne parallele Engine lief dasselbe Gate
+        # gruen. Der Claim gilt fuer Gate 4 UND 5 (dieselbe Phase im
+        # selben Worktree); zenserver zaehlt nicht, er haengt an jedem
+        # Editor mit dran.
         if not gate_worktree.worktree_exklusiv("Gate 4",
                                                filter_path=gate_worktree_pfad()):
             lauf.fahre_gate("Gate 4  Gate-Worktree exklusiv", False, 0.0,
                             "Fremde Engine im Gate-Worktree - Frist ohne "
                             "Ruhe abgelaufen (Einzelheiten oben).")
+            return lauf.bericht()
+        if not gate_worktree.engine_frei("Gate 4/5"):
+            lauf.fahre_gate("Gate 4  Engine-Ruhe", False, 0.0,
+                            "Fremde Engine ausserhalb des Gate-Worktrees - "
+                            "Frist ohne Ruhe abgelaufen (Einzelheiten oben).")
             return lauf.bericht()
         lauf.fahre("Gate 4  Plasmacutter-Bildfolge",
                    r"Tools\verify_cuttable.cmd", shell_cmd=True)
@@ -876,8 +889,42 @@ def gates_fahren(stufe, dateien, thread=None):
     # Startet einen Editor, also hinter Gate 4 in dieselbe Stufe; den
     # Engine-Lock haelt vor_dem_commit von Gate 0 an.
     if stufe == "voll":
-        lauf.fahre("Gate 5  Ankerzustand (WP)",
-                   r"Tools\verify_anchor.cmd", shell_cmd=True)
+        # EINMALIGER sauberer Retry nach stummem Engine-Tod. GEMESSEN am
+        # 29.09.2026: die Gate-5-Engine starb zweimal nach ~4 s, ohne
+        # Ergebnisdatei, ohne WER-Crash - verify_anchor meldet diese
+        # Klasse mit Exit 3 ("Engine endete mit Exit -1 und hat NICHTS
+        # geschrieben"). Im selben Fenster lief jedes Mal eine fremde
+        # Engine; ohne sie lief dasselbe Gate gruen (Exit 0, 0 leere
+        # Komponenten am Ursprung). Der Retry wartet erst auf totale
+        # Engine-Ruhe - genau den Zustand, in dem die Messung heute
+        # gelang - und wiederholt den Lauf GENAU EINMAL: zwei Versuche
+        # sind genug fuer ein Ruecksetz-Problem; dreimal verhoezten
+        # echte rote Messungen mit Umgebungsrauschen.
+        ergebnis_gate5 = lauf.fahre("Gate 5  Ankerzustand (WP)",
+                                    r"Tools\verify_anchor.cmd",
+                                    shell_cmd=True)
+        if not ergebnis_gate5:
+            fertig = lauf.ergebnisse[-1][3]
+            stern = ((fertig.stdout or "") + (fertig.stderr or "")) \
+                if fertig else ""
+            if "Engine endete mit Exit" in stern and "NICHTS geschrieben" in stern:
+                if gate_worktree.engine_frei("Gate 5 Retry"):
+                    drucke("      Gate 5 starb still bei laufender fremder "
+                           "Engine - nach erreichter Engine-Ruhe wird der "
+                           "Lauf EINMAL sauber wiederholt.",
+                           file=lauf.ausgabe)
+                    ergebnis_gate5 = lauf.fahre(
+                        "Gate 5  Ankerzustand (WP) - Retry",
+                        r"Tools\verify_anchor.cmd", shell_cmd=True)
+                    if not ergebnis_gate5:
+                        drucke("      Auch der Retry endete rot - das Gate "
+                               "bleibt abgewiesen.", file=lauf.ausgabe)
+                else:
+                    drucke("      Gate 5 starb still, aber die Engine-Ruhe "
+                           "kam vor der Frist nicht - ohne Retry abgewiesen.",
+                           file=lauf.ausgabe)
+        if not ergebnis_gate5:
+            return lauf.bericht()
     else:
         lauf.ueberspringe("Gate 5  Ankerzustand (WP)",
                           "Stufe schnell - sie laeuft vor dem Push")
