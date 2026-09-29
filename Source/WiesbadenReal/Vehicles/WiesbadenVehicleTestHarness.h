@@ -81,6 +81,7 @@ private:
 	int32 DriveLastSecond = -1;
 	float DriveStartYaw = 0.0f;
 	bool bDriveReverse = false; // -WbDriveReverse: gleiches Manoever im Rueckwaertsgang.
+	bool bDriveCornerBrake = false; // -WbDriveKurvenbremsung: Bremsphase mit gehaltener Linkslenkung.
 
 	// -- Mast-/Kamera-Telemetrie der laufenden Sekunde ---------------------
 	// Summen/Maxima werden je Sekunde geloggt und dann zurueckgesetzt.

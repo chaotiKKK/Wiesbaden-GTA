@@ -33,6 +33,23 @@ bool FTrafficCarsTypesTest::RunTest(const FString& Parameters)
 		TestTrue(FString::Printf(TEXT("%s: Antriebsachse wie im Katalog, voller Tank, erster Gang"), T.Name),
 			P.bFrontWheelDrive == T.bFrontWheelDrive && P.HasFuel() && P.Gear == 1 && P.SpeedMetersPerS == 0.0f);
 		TestEqual(FString::Printf(TEXT("%s: Radradius Physik = Mesh"), T.Name), P.WheelRadiusM, static_cast<float>(T.WheelRadiusCm / 100.0));
+
+		// Vollbremsung liefert, womit die Bremsplanung rechnet (FullBrakeCmS2 =
+		// BrakeForceN / Masse). Review PR #26: mit dem Spieler-ABS kam der
+		// Verkehrs-Kaefer nur auf ~0,66 statt 0,8 g und ueberfuhr Haltelinien.
+		FWiesbadenVehiclePhysics B = T.MakePhysics();
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+		for (int32 Step = 0; Step < 600 && B.SpeedMetersPerS < 14.0f; ++Step) { B.Tick(In, 1.0f / 60.0f, Out); }
+		In.Throttle = 0.0f;
+		In.Brake = 1.0f;
+		const float V0 = B.SpeedMetersPerS;
+		for (int32 Step = 0; Step < 30; ++Step) { B.Tick(In, 1.0f / 60.0f, Out); }
+		const float Geplant = B.BrakeForceN / B.Powertrain.MassKg;
+		const float Erreicht = (V0 - B.SpeedMetersPerS) / 0.5f;
+		TestTrue(FString::Printf(TEXT("%s: Vollbremsung %.2f von geplanten %.2f m/s2"), T.Name, Erreicht, Geplant),
+			V0 > 12.0f && Erreicht >= 0.95f * Geplant);
 	}
 	// Der T6 ist schwerer und traeger als der Golf.
 	TestTrue(TEXT("Transporter schwerer als Golf"), All[2].Powertrain.MassKg > 1.8f * All[0].Powertrain.MassKg);

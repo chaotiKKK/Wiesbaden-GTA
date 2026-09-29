@@ -5109,3 +5109,51 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   `engine_run_lock.ps1 -Modus Nehmen` wartet nicht, Exit 3 sofort), und
   .cmd-Wrapper per `Start-Process -FilePath x.cmd -ArgumentList ...` starten -
   `cmd /c "x.cmd" arg "y"` wirft das erste und letzte Anfuehrungszeichen weg.
+
+## Fahrphysik: ABS, Reibungskreis je Achse, Bremsstabilitaet (29.09.2026)
+
+- MESSEN statt schaetzen: `Tools\fahrmessung.cmd <Name> [Sek] [kurve]` faehrt
+  WbDrive auf der Wiese (-WbGoto=-180086,899031) mit `-WbFahrTelemetrie`
+  (10 Hz); `python Tools\fahrmessung_auswerten.py a.log b.log` stellt
+  Vorher/Nachher nebeneinander. `kurve` = Vollbremsung mit gehaltener
+  Lenkung. Zeiten sind auf 0,1 s gerastert - Unterschiede von einer Probe
+  sind Abtastung, keine Physik.
+- `bWheelLock` heisst seit dem ABS "Bremse an der Haftgrenze" (blockiert ODER
+  ABS regelt, HUD "ABS"). Ob die Raeder wirklich GLEITEN, sagt nur
+  `bBrakeLockState` (Telemetrie `gleit`). Tests zum Blockiermodell setzen
+  `bAbsEnabled = false`.
+- Der Kaefer ist schon statisch uebersteuernd (a*Cf > b*Cr, kritische
+  Geschwindigkeit ~142 km/h). Alles, was beim Bremsen HINTEN Seitenfuehrung
+  nimmt, senkt sie unter Betriebstempo: die lastabhaengige Steifigkeit (+-20 %
+  -> ~71 km/h), ein gemeinsamer Reibungskreis fuer beide Achsen, zu viel
+  Bremse hinten. Folge: Dreher beim GERADEN Bremsen nach einer Kurve (43 Grad
+  Schwimmwinkel gemessen). Das war jahrelang unsichtbar, weil die Raeder
+  blockierten und die Gierdaempfung fuer blockierte Raeder es verdeckte -
+  mit ABS trat es offen auf. Abhilfe: Reibungskreis JE ACHSE nur aus
+  Reifenkraeften (kein Luftwiderstand), Bremsverteilung 0,7 vorn, und eine
+  Stabilitaetswache, die die Steifigkeitsverschiebung auf eine kritische
+  Geschwindigkeit mit 20 % Reserve begrenzt. Beim Kaefer muss das hintere
+  Seitenkraftmoment (b * FyrMax) das vordere uebertreffen - bei a = 1,57 m
+  gegen b = 1,13 m braucht die Hinterachse deutlich mehr Reserve als vorn.
+- Tests "im linearen Bereich" pruefen: WbDrive-/Testlenkung 0,25 lag nach 6 s
+  Vollgas schon am Gierlimit; `LoadStiffness` war nur gruen, weil die Raeder
+  dort blockierten. Vor einem Test, der eine Linear-Eigenschaft misst, die
+  Gierrate gegen `MaxYaw` pruefen.
+- Federung (29.09.2026): Karosserie und Leuchten haengen am gefederten
+  `SprungRoot` (Nicken, Wanken, Hub als Feder-Masse, `AdvanceBodySpring`,
+  1,5 Hz, Daempfung 0,4), die Raeder ungefedert am `VisualRoot` mit eigenem
+  Federweg je Rad (`UpdateWheelTravel`, +-12 cm). Die Bodenebene kommt aus
+  vier Radstrahlen statt einem Mittelstrahl; die Karosserie bleibt an Kanten
+  ueber die Traegheit der Wurzel zurueck (`UpdateRootMotion`, gedeckelte
+  zweite Ableitung, Teleports > 1,5 m ausgeblendet). Der STADTVERKEHR nutzt
+  weiter die alte Glaettung `ComputeBodyTilt` - bewusst unveraendert.
+  Messfelder: `boden` (Kanten = zweite Differenz >= 6 cm), `spalt`, `fz`.
+- Grip-Kalibrierung (29.09.2026) gegen ECHTE Tests, nicht Gefuehl: Road &
+  Track 3/1971 Super Beetle und 9/1973 Sports Bug (Scans auf thesamba.com, Pfad
+  vw/archives/lit/magazines/), AMS-Test 1302 LS. Sollwerte Radialreifen:
+  0,704 g quer, 158 ft aus 60 mph (0,76 g, ~52 m aus 100 km/h), 0-60 mph
+  18,2 s. Kaefer: MuTraction 0,9 (laengs), LateralGripFactor 0,8 (quer),
+  BrakeForceN 7000 mit Verteilung 0,74 (0,7 war damit instabil, s.o.),
+  DrivetrainEfficiency 0,9. Verkehr/Bus setzen die beiden neuen Faktoren auf
+  1,0. Offen: Masse 820 statt ~970 kg (Leergewicht + Fahrer) -> 0-100 noch
+  ~2 s zu schnell.

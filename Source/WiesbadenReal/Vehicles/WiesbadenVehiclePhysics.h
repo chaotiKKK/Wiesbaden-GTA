@@ -118,15 +118,19 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysicsOutput
 	bool bWheelSpin = false;
 
 	/**
-	 * True, solange die Raeder beim Bremsen blockieren (Bremsschlupf).
-	 *
-	 * Die geforderte Bremskraft ueberschreitet die Haftreibung; die uebertragene
-	 * Kraft pulst dann zwischen Gleit- und Haftreibung (Threshold-/ABS-Anmutung)
-	 * und die Seitenfuehrung bricht ueber den Reibungskreis weg (kein Lenken mit
-	 * blockierten Raedern).
+	 * True, solange Raeder beim Bremsen blockieren und GLEITEN (Bremsschlupf):
+	 * ohne ABS, oder hinten unter der Handbremse. Die gleitende Achse verliert
+	 * ihre Seitenfuehrung; Reifenspuren und Quietschen haengen an diesem Flag.
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
 	bool bWheelLock = false;
+
+	/**
+	 * True, solange das ABS die Fussbremse an der Haftgrenze regelt. Die Raeder
+	 * rollen dabei noch (keine Spuren) - nur die Kontrollleuchte zeigt es.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
+	bool bAbsActive = false;
 };
 
 /**
@@ -242,8 +246,13 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
 	//
 	// Das ist die BremsANFORDERUNG bei vollem Pedal, NICHT die am Reifen
-	// wirksame Kraft. 5.600 N bei 820 kg sind rund 0,7 g - die reale Verzoegerung
-	// eines Kaefer von 1969 mit Trommelbremsen, Bremsweg ~14 m aus 50 km/h.
+	// wirksame Kraft. Kalibriert am 29.09.2026 auf Road & Track 9/1973 (VW Sports
+	// Bug, Radialreifen 175/70 HR 15): kuerzester Anhalteweg 158 ft aus 60 mph =
+	// 0,76 g, also rund 52 m aus 100 km/h. 7.000 N bei 820 kg fordern 0,87 g; mit
+	// Bremsverteilung 0,74 und ABS-Anteil 0,9 regelt die Vorderachse. Gemessen
+	// (Fahrmessung Wiese): 0,74 g im Mittel, 52,5 m aus 100 km/h (vorher 5.600 N:
+	// 0,64 g, 60 m). Unter mu*Gewicht (0,9 g) - geradeaus blockiert das
+	// Blockiermodell ohne ABS darum weiterhin nicht.
 	//
 	// Das Blockieren haengt NICHT an diesem Wert: der Tick prueft die Anforderung
 	// gegen den REIBUNGSKREIS-REDUZIERTEN Laengs-Grip (mu*Gewicht abzueglich der
@@ -251,7 +260,7 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	// 0,7 g), das Pedal blockiert dort NICHT; beim Bremsen in der Kurve oder auf
 	// griffarmem Belag faellt der verfuegbare Grip unter die Anforderung und die
 	// Raeder blockieren - grip-abgeleitet, robust gegen Aenderungen von Masse/mu.
-	float BrakeForceN = 5600.0f;
+	float BrakeForceN = 7000.0f;
 
 	// -- Querdynamik ------------------------------------------------------
 	/** Maximaler Lenkeinschlag der Vorderraeder (Grad). */
@@ -313,12 +322,36 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.5"))
 	float WheelbaseM = 2.7f;
 
-	/** Reibbeiwert Reifen/Strasse - begrenzt Antriebs- UND Querkraft. */
+	/** Reibbeiwert Reifen/Strasse (Laengshaftung) - begrenzt Antrieb und Bremse. */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.1"))
 	//
-	// 0,75 statt 0,9: Ein Kaefer von 1969 faehrt auf Diagonalreifen, die
-	// deutlich weniger Seitenfuehrung aufbauen als moderne Guerteilreifen.
-	float MuTraction = 0.75f;
+	// 0,9: trockener Asphalt, Radialreifen (Bezug wie BrakeForceN: R&T 9/1973,
+	// AMS-Test 1302 LS mit 185/70 R 15). Mit 0,75 drehte der Kaefer beim Anfahren
+	// 2 s lang durch - ein 50-PS-Heckmotorwagen mit 57 % Last hinten tut das auf
+	// trockener Strasse nicht. Die Seitenhaftung kalibriert LateralGripFactor.
+	float MuTraction = 0.9f;
+
+	/**
+	 * Seitenhaftung als Anteil der Laengshaftung (0..1).
+	 *
+	 * Ein Auto erreicht quer weniger als mu*g: der kurvenaeussere Reifen traegt
+	 * mehr Last und haftet dabei relativ schlechter (Lastempfindlichkeit), dazu
+	 * Sturz und Wanken - im Einspurmodell nicht abgebildet. Kalibriert auf R&T
+	 * 9/1973: 0,704 g auf dem Kreis mit 100 ft Radius (Fahrmessung mit 0,9 * 0,8:
+	 * 0,71 g, vorher 0,73 g). Verkehr und Bus setzen 1,0 (unveraendert).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.3", ClampMax = "1.0"))
+	float LateralGripFactor = 0.8f;
+
+	/**
+	 * Wirkungsgrad des Triebstrangs (Getriebe, Achsantrieb): Anteil des
+	 * Motormoments, der am Rad ankommt. Das Drehmoment der Motorkennlinie ist ein
+	 * Motorwert (DIN); ohne Verluste lag die Radkraft ~10 % zu hoch - der Wagen
+	 * drehte beim Anfahren durch und war 3 s zu schnell auf 100 (15,6 statt
+	 * 18,2-18,7 s laut R&T/AMS). Verkehr und Bus setzen 1,0 (unveraendert).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.5", ClampMax = "1.0"))
+	float DrivetrainEfficiency = 0.9f;
 
 	// -- Dynamisches Einspurmodell (Querschlupf/Drift) --------------------
 	//
@@ -420,6 +453,47 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0"))
 	float LockedYawDampingRate = 3.0f;
 
+	/**
+	 * Antiblockiersystem an der Fussbremse.
+	 *
+	 * AN: fordert das Pedal mehr, als der Reifen laengs uebertragen kann, regelt
+	 * die Bremse an der Haftgrenze - die Raeder gleiten nie, der Wagen bleibt beim
+	 * Vollbremsen lenkbar (Seitenfuehrung ueber den Reibungskreis). Gemessen am
+	 * 29.09.2026 ohne ABS: eine Vollbremsung aus der Kurve blieb bis zum Stillstand
+	 * blockiert (98 % des Bremswegs), denn die Gleitreibung liegt unter der
+	 * Pedalanforderung - mit der Tastatur, die immer voll bremst, war jeder harte
+	 * Stopp aus einer Kurve eine unlenkbare Rutschpartie.
+	 * AUS: das Blockiermodell (Haft/Gleit mit Hysterese, Puls, Gierdaempfung).
+	 * Die Handbremse wirkt immer ohne ABS - sie soll blockieren koennen.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik")
+	bool bAbsEnabled = true;
+
+	/**
+	 * ABS: Anteil ihrer Haftung, den eine Achse laengs zum Bremsen nutzen darf.
+	 * Der Rest bleibt fuer die Seitenfuehrung - bei 0,9 mindestens
+	 * Wurzel(1 - 0,81) = 44 % je Achse. So regelt auch ein echtes ABS: es haelt den
+	 * Bremsschlupf knapp vor dem Maximum, wo der Reifen noch Seitenkraft baut.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.3", ClampMax = "1.0"))
+	float AbsLongGripShare = 0.9f;
+
+	/**
+	 * Anteil der Fussbremse an der Vorderachse (Bremskraftverteilung). Vorn mehr
+	 * als die statische Achslast (Kaefer 0,42), weil Bremsen Last nach vorn
+	 * verlagert - die Hinterachse erreicht ihre Grenze so NACH der Vorderachse
+	 * und behaelt Seitenfuehrung: der Wagen schiebt beim Ueberbremsen gerade,
+	 * statt sich zu drehen. Warum so viel vorn: beim Kaefer liegt die
+	 * Vorderachse weit vom Schwerpunkt (1,57 gegen 1,13 m); stehen beide Achsen
+	 * an der Seitenkraftgrenze, muss das Moment hinten (b * FyrMax) das vordere
+	 * (a * FyfMax) uebertreffen. Mit 0,6 blieb der Wagen nach einer schnellen
+	 * Kurve beim geraden Bremsen 15 Grad quer (Test Physics.Abs). 0,74 seit der
+	 * Grip-Kalibrierung (29.09.2026): mit 7.000 N Pedal nahm die Hinterachse bei
+	 * 0,7 zu viel Bremsarbeit und das Momentenverhaeltnis fiel auf 0,98.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.3", ClampMax = "0.9"))
+	float BrakeFrontBias = 0.74f;
+
 	/** Unterhalb dieser Geschwindigkeit kinematisch lenken (m/s). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.5"))
 	float LowSpeedBlendMetersPerS = 3.0f;
@@ -469,6 +543,23 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	float LastLongAccelMetersPerS2 = 0.0f;
 
+	/**
+	 * Laengskraft der REIFEN je Achse (N, + = vorwaerts): Antrieb und Motorbremse
+	 * auf der Antriebsachse, Bremse nach BrakeFrontBias. Der Eingang des
+	 * Reibungskreises der Querdynamik - JE ACHSE, denn beim Bremsen nutzt die
+	 * Vorderachse mehr ihrer Haftung als die Hinterachse, und genau die Reserve
+	 * hinten haelt den Wagen stabil.
+	 *
+	 * Luft- und Rollwiderstand greifen an der Karosserie an und verbrauchen keine
+	 * Reifenhaftung. Mit der GESAMTEN Verzoegerung und einem gemeinsamen Kreis fuer
+	 * beide Achsen drehte der Wagen am 29.09.2026 beim geraden Bremsen aus 120 km/h
+	 * ohne Lenkung bis 43 Grad Schwimmwinkel weg.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float TireLongForceFrontN = 0.0f;
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float TireLongForceRearN = 0.0f;
+
 	/** Phase der Bremsschlupf-Pulsung (rad) - Zustand der ABS-Anmutung. */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	float BrakeAbsPhaseRad = 0.0f;
@@ -485,9 +576,19 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	float WheelSpinFlare = 0.0f;
 
-	/** Hysterese-Zustand Bremsschlupf (Rad blockiert). */
+	/** Hysterese-Zustand Bremsschlupf (Rad blockiert, Blockiermodell ohne ABS). */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	bool bBrakeLockState = false;
+
+	/** Hysterese-Zustand: die Handbremse blockiert die Hinterachse trotz ABS. */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	bool bRearLockState = false;
+
+	/** Diese Achse gleitet in diesem Tick (keine Seitenfuehrung). */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	bool bFrontAxleSliding = false;
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	bool bRearAxleSliding = false;
 
 	/** Belags-Griffigkeit dieses Ticks (0..1, 1 = trocken) - aus dem Input. */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
@@ -539,6 +640,13 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	 */
 	static float ComputeAvailableLateralAccel(
 		float MuTraction, float GravityMetersPerS2, float LongitudinalAccelMetersPerS2);
+
+	/**
+	 * Derselbe Reibungskreis fuer EINE Achse: welcher Anteil (0..1) ihrer Haftung
+	 * bleibt quer, wenn ihre Reifen laengs LongForceN uebertragen?
+	 * Wurzel(1 - (|Fx| / Haftung)^2); ohne Haftung 0.
+	 */
+	static float ComputeAxleLateralShare(float LongForceN, float AxleGripN);
 
 	/**
 	 * Dynamischer Vorderachs-Lastanteil (0..1) nach Laengs-Radlastverlagerung.

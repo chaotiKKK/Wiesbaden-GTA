@@ -83,6 +83,10 @@ AWiesbadenCar::AWiesbadenCar()
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	VisualRoot->SetupAttachment(SceneRoot);
 	VisualRoot->SetRelativeLocation(FVector(0.0f, 0.0f, -GroundClearanceCm));
+
+	// Gefederter Aufbau (Karosserie + Leuchten); die Raeder bleiben am VisualRoot.
+	SprungRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SprungRoot"));
+	SprungRoot->SetupAttachment(VisualRoot);
 	CollisionBox->SetBoxExtent(FVector(204.0f, 78.0f, 75.0f));
 	CollisionBox->SetRelativeLocation(FVector(0.0f, 0.0f, 75.0f));
 	CollisionBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -128,12 +132,24 @@ AWiesbadenCar::AWiesbadenCar()
 	// getestet, s. ChooseBeetleAssembly). Das Herbie-Voll-Mesh vermisst ein
 	// Hinterrad, daher bevorzugt die radlose Karosserie + 4 Einzelraeder.
 	// bBodyIncludesWheels steuert unten das Ausblenden der separaten Raeder.
+#if !UE_BUILD_SHIPPING
+	// Sichtprobe des Notfallwegs: -WbKaeferHerbie erzwingt das Herbie-Voll-Mesh
+	// (Raeder im Mesh, Einzelraeder ausgeblendet), das sonst nie zu sehen ist.
+	const bool bForceHerbie = FParse::Param(FCommandLine::Get(), TEXT("WbKaeferHerbie"));
+#else
+	const bool bForceHerbie = false;
+#endif
 	const FBeetleAssembly Assembly = ChooseBeetleAssembly(
-		Beetle != nullptr, BeetleWheel != nullptr, Herbie != nullptr);
+		Beetle != nullptr && !bForceHerbie, BeetleWheel != nullptr, Herbie != nullptr);
 	const bool bBodyIncludesWheels = !Assembly.bSeparateWheels;
 
 	BodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BodyMesh"));
-	BodyMesh->SetupAttachment(VisualRoot);
+	BodyMesh->SetupAttachment(SprungRoot);
+	// Die Bremsspuren (UWiesbadenTireEffectsComponent) werden mit 60 cm
+	// Projektionstiefe unter die Raeder gelegt - ohne diese Zeile landeten sie
+	// als dunkle Flecken auf Tuer und Schweller (Clip 29.09.2026). Im Konstruktor
+	// das Flag direkt setzen, wie bei jedem Standardwert eines Unterobjekts.
+	BodyMesh->bReceivesDecals = false;
 
 	switch (Assembly.Body)
 	{
@@ -175,11 +191,6 @@ AWiesbadenCar::AWiesbadenCar()
 		break;
 	}
 
-	// Grundausrichtung der Karosserie merken (identisch, ausser Herbie-Voll:
-	// 90 Grad). Die Gewichtsverlagerung legt Nicken/Wanken im FAHRZEUG-Rahmen
-	// darauf - unabhaengig davon, wie das jeweilige Mesh orientiert ist.
-	BodyBaseRotation = BodyMesh->GetRelativeRotation();
-
 	// Radpositionen, am Modell vermessen (Reifenmitten, cm im Fahrzeug-
 	// Lokalsystem: +X vorwaerts, +Y rechts, Z = Radradius ueber der Strasse).
 	//
@@ -210,9 +221,11 @@ AWiesbadenCar::AWiesbadenCar()
 	for (int32 Index = 0; Index < 4; ++Index)
 	{
 		UStaticMeshComponent* Wheel = Wheels[Index];
+		WheelBasePositions[Index] = WheelPositions[Index];
 		Wheel->SetupAttachment(VisualRoot);
 		Wheel->SetRelativeLocation(WheelPositions[Index]);
 		Wheel->SetRelativeScale3D(WheelScale);
+		Wheel->bReceivesDecals = false;   // Bremsspuren gehoeren auf die Strasse
 
 		if (BeetleWheel)
 		{
@@ -275,7 +288,7 @@ AWiesbadenCar::AWiesbadenCar()
 	// BeginPlay auf - im Konstruktor gibt es weder eine Welt noch ein
 	// Audiogeraet, an das sie sich haengen koennten.
 	Lights = CreateDefaultSubobject<UWiesbadenCarLightsComponent>(TEXT("Lights"));
-	Lights->SetupAttachment(VisualRoot);
+	Lights->SetupAttachment(SprungRoot);
 
 	EngineAudio = CreateDefaultSubobject<UWiesbadenCarAudioComponent>(TEXT("EngineAudio"));
 	EngineAudio->SetupAttachment(SceneRoot);
@@ -322,6 +335,8 @@ void AWiesbadenCar::BeginPlay()
 		bSurfaceGripOverridden = true;
 		UE_LOG(LogWbVehicles, Log, TEXT("WbDev: Belags-Griffigkeit fest auf %.2f (Override)."), SurfaceGripOverride);
 	}
+
+	bDriveTelemetry = FParse::Param(FCommandLine::Get(), TEXT("WbFahrTelemetrie"));
 
 	// Herbie-Lackierung - NUR fuer das Spielerauto.
 	//
@@ -483,10 +498,12 @@ void AWiesbadenCar::UpdateLightsAndAudio(const FWiesbadenVehiclePhysicsOutput& O
 	// Traktions-Flags fuer die HUD-Kontrollleuchte spiegeln - reine Anzeige,
 	// keine Wirkung auf die Fahrt (das HUD liest sie ueber die Steuernaht).
 	bLastWheelSpin = Output.bWheelSpin;
-	bLastWheelLock = Output.bWheelLock;
+	// Die Leuchte zeigt "ABS" beim Regeln wie beim Blockieren.
+	bLastWheelLock = Output.bWheelLock || Output.bAbsActive;
 
 	// Reifen-Effekte: den Schlupf-Zustand nur KONSUMIEREN (keine Physikaenderung).
-	// Welche Raeder Gummi lassen: beim Blockieren alle vier, beim Radspin die
+	// Welche Raeder Gummi lassen: beim Blockieren alle vier (unter der Handbremse
+	// nur das Heck; das ABS regelt ohne Spuren), beim Radspin die
 	// angetriebenen (hinten), beim Drift ebenfalls das kommende Heck.
 	if (TireEffects)
 	{
@@ -496,12 +513,13 @@ void AWiesbadenCar::UpdateLightsAndAudio(const FWiesbadenVehiclePhysicsOutput& O
 		{
 			return Wheel->GetComponentLocation() - FVector(0.0f, 0.0f, WheelRadiusCm);
 		};
-		if (Output.bWheelLock && FrontLeftWheel && FrontRightWheel && RearLeftWheel && RearRightWheel)
+		if (VehiclePhysics.bFrontAxleSliding && Output.bWheelLock
+			&& FrontLeftWheel && FrontRightWheel && RearLeftWheel && RearRightWheel)
 		{
 			Marks = { Contact(FrontLeftWheel), Contact(FrontRightWheel),
 				Contact(RearLeftWheel), Contact(RearRightWheel) };
 		}
-		else if ((Output.bWheelSpin || FMath::Abs(Output.SlipAngleDeg) > 8.0f)
+		else if ((Output.bWheelLock || Output.bWheelSpin || FMath::Abs(Output.SlipAngleDeg) > 8.0f)
 			&& RearLeftWheel && RearRightWheel)
 		{
 			Marks = { Contact(RearLeftWheel), Contact(RearRightWheel) };
@@ -688,8 +706,10 @@ void AWiesbadenCar::ComputeBodyTilt(
 	float& InOutPitchDeg, float& InOutRollDeg)
 {
 	// Ziel-Neigung aus den Beschleunigungen, an den Anschlag geklemmt.
-	const float TargetPitch = FMath::Clamp(LongAccelMs2 * PitchPerMs2, -MaxPitchDeg, MaxPitchDeg);
-	const float TargetRoll = FMath::Clamp(LatAccelMs2 * RollPerMs2, -MaxRollDeg, MaxRollDeg);
+	float TargetPitch = 0.0f;
+	float TargetRoll = 0.0f;
+	ComputeBodyTiltTarget(LongAccelMs2, LatAccelMs2, PitchPerMs2, RollPerMs2,
+		MaxPitchDeg, MaxRollDeg, TargetPitch, TargetRoll);
 
 	// Exponentielle Glaettung, rahmenratenunabhaengig: die Federung braucht
 	// einen Moment, bis die Karosserie steht - ein sofortiger Sprung saehe
@@ -697,6 +717,45 @@ void AWiesbadenCar::ComputeBodyTilt(
 	const float Alpha = 1.0f - FMath::Exp(-FMath::Max(Response, 0.0f) * FMath::Max(Dt, 0.0f));
 	InOutPitchDeg = FMath::Lerp(InOutPitchDeg, TargetPitch, Alpha);
 	InOutRollDeg = FMath::Lerp(InOutRollDeg, TargetRoll, Alpha);
+}
+
+void AWiesbadenCar::ComputeBodyTiltTarget(
+	float LongAccelMs2, float LatAccelMs2,
+	float PitchPerMs2, float RollPerMs2,
+	float MaxPitchDeg, float MaxRollDeg,
+	float& OutPitchDeg, float& OutRollDeg)
+{
+	OutPitchDeg = FMath::Clamp(LongAccelMs2 * PitchPerMs2, -MaxPitchDeg, MaxPitchDeg);
+	OutRollDeg = FMath::Clamp(LatAccelMs2 * RollPerMs2, -MaxRollDeg, MaxRollDeg);
+}
+
+void AWiesbadenCar::AdvanceBodySpring(float Target, float ExternalAccel,
+	float NaturalHz, float DampingRatio, float Limit, float Dt,
+	float& InOutValue, float& InOutRate)
+{
+	const float Omega = 2.0f * PI * FMath::Max(NaturalHz, 0.05f);
+	const float Zeta = FMath::Max(DampingRatio, 0.0f);
+	// Lange Bilder (Hitch, Laden) nicht als einen grossen Schritt rechnen: die
+	// Feder wuerde dabei Energie gewinnen und aufschwingen.
+	float Remaining = FMath::Clamp(Dt, 0.0f, 0.25f);
+	while (Remaining > KINDA_SMALL_NUMBER)
+	{
+		const float Step = FMath::Min(Remaining, 1.0f / 240.0f);
+		const float Accel = Omega * Omega * (Target - InOutValue)
+			- 2.0f * Zeta * Omega * InOutRate + ExternalAccel;
+		InOutRate += Accel * Step;       // semi-implizit: erst Geschwindigkeit,
+		InOutValue += InOutRate * Step;  // dann Lage - stabil fuer Federn
+		if (Limit > 0.0f && FMath::Abs(InOutValue) > Limit)
+		{
+			// Anschlag: der Aufbau steht, die Bewegung nach aussen ist weg.
+			InOutValue = FMath::Sign(InOutValue) * Limit;
+			if (InOutRate * InOutValue > 0.0f)
+			{
+				InOutRate = 0.0f;
+			}
+		}
+		Remaining -= Step;
+	}
 }
 
 void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
@@ -743,17 +802,29 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 	// Rein visuell an der BodyMesh - die Raeder haengen an SceneRoot und
 	// bleiben am Boden, die Actor-Kollision bleibt unberuehrt.
 	const float LateralAccelMs2 = Output.ForwardSpeedMetersPerS * Output.YawRateRadPerS;
-	ComputeBodyTilt(
+
+	// FEDER-MASSE statt Glaettung: Ziel aus den Beschleunigungen wie bisher, aber
+	// die Karosserie schwingt darueber hinaus und kommt nach dem Anhalten zurueck.
+	// Dazu die Traegheit gegen die Wurzel: faehrt der Wagen eine Kante hoch oder
+	// kippt die Bodenebene, bleibt der Aufbau zurueck und federt nach.
+	float TargetPitch = 0.0f;
+	float TargetRoll = 0.0f;
+	ComputeBodyTiltTarget(
 		Output.ForwardAccelerationMetersPerS2, LateralAccelMs2,
 		BodyPitchPerMeterPerS2, BodyRollPerMeterPerS2,
-		BodyMaxPitchDeg, BodyMaxRollDeg, BodyTiltResponse, DeltaSeconds,
-		BodyPitchDeg, BodyRollDeg);
-	if (BodyMesh)
+		BodyMaxPitchDeg, BodyMaxRollDeg, TargetPitch, TargetRoll);
+	AdvanceBodySpring(TargetPitch, -RootPitchAccel, BodySpringHz, BodyDampingRatio,
+		BodyMaxPitchDeg * 1.5f, DeltaSeconds, BodyPitchDeg, BodyPitchRate);
+	AdvanceBodySpring(TargetRoll, -RootRollAccel, BodySpringHz, BodyDampingRatio,
+		BodyMaxRollDeg * 1.5f, DeltaSeconds, BodyRollDeg, BodyRollRate);
+	AdvanceBodySpring(0.0f, -RootAccelZ, BodySpringHz, BodyDampingRatio,
+		BodyHeaveMaxCm, DeltaSeconds, BodyHeaveCm, BodyHeaveRate);
+	if (SprungRoot)
 	{
-		// Neigung im FAHRZEUG-Rahmen VOR die Grundausrichtung des Meshes legen
-		// (Quat-Reihenfolge: erst kippen, dann die Mesh-Eigenorientierung).
-		const FQuat Tilt = FRotator(BodyPitchDeg, 0.0f, BodyRollDeg).Quaternion();
-		BodyMesh->SetRelativeRotation(Tilt * BodyBaseRotation.Quaternion());
+		// Neigung und Hub im FAHRZEUG-Rahmen auf den gefederten Traeger - Mesh und
+		// Leuchten behalten darunter ihre Eigenorientierung.
+		SprungRoot->SetRelativeLocationAndRotation(
+			FVector(0.0f, 0.0f, BodyHeaveCm), FRotator(BodyPitchDeg, 0.0f, BodyRollDeg));
 	}
 
 	// Geschwindigkeit (m/s) -> Weltbewegung (cm/s) entlang der Fahrzeug-X-Achse.
@@ -1014,6 +1085,9 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(WbCarGround), true);
 		Params.AddIgnoredActor(this);
 
+		// Boden unter jedem Rad - fuer die Bodenebene und den Federweg je Rad.
+		TraceWheelGround();
+
 		if (CarWorld->LineTraceSingleByChannel(Hit, Start, End, ECC_WorldStatic, Params))
 		{
 			// Boden gefunden: der Wagen faellt nicht, Fallgeschwindigkeit zurueck.
@@ -1023,9 +1097,42 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 			// wie moeglich an der bisherigen Fahrtrichtung. Sehr steile oder
 			// senkrechte Treffer (Bordsteinkante, Hauswand) werden ignoriert -
 			// sie wuerden den Wagen auf die Seite legen.
-			const FVector GroundNormal = Hit.ImpactNormal;
+			FVector GroundNormal = Hit.ImpactNormal;
+			float GroundZ = static_cast<float>(Hit.Location.Z);
 			const FVector ForwardFlat =
 				FVector::VectorPlaneProject(GetActorForwardVector(), FVector::UpVector).GetSafeNormal();
+
+			// BODENEBENE AUS DEN VIER RADPUNKTEN statt eines Strahls in der Mitte:
+			// ein Bordstein unter einem Rad hebt diese Ecke, eine Welle zwischen
+			// den Achsen kippt den Wagen. Vorher sah der Mittelstrahl nur, was
+			// genau unter dem Wagenzentrum lag - die Raeder schwebten oder sanken
+			// an Kanten bis 15 cm (gemessen 29.09.2026). Radpunkte weit weg vom
+			// Mittelstrahl (Mauerkrone, Graben) gelten als nicht getroffen.
+			if (!bFlyingOverBuilding && !ForwardFlat.IsNearlyZero())
+			{
+				float H[4];
+				int32 Hits = 0;
+				for (int32 Index = 0; Index < 4; ++Index)
+				{
+					const bool bUsable = bWheelGroundHit[Index]
+						&& FMath::Abs(WheelGroundZ[Index] - GroundZ) <= 45.0f;
+					H[Index] = bUsable ? WheelGroundZ[Index] : GroundZ;
+					Hits += bUsable ? 1 : 0;
+				}
+				if (Hits >= 3)
+				{
+					const FVector* W = WheelBasePositions;
+					const float Dx = 0.5f * ((W[0].X + W[1].X) - (W[2].X + W[3].X));
+					const float Dy = 0.5f * ((W[1].Y + W[3].Y) - (W[0].Y + W[2].Y));
+					const float SlopeX = 0.5f * ((H[0] + H[1]) - (H[2] + H[3])) / FMath::Max(Dx, 1.0f);
+					const float SlopeY = 0.5f * ((H[1] + H[3]) - (H[0] + H[2])) / FMath::Max(Dy, 1.0f);
+					const FVector RightFlat = FVector::CrossProduct(FVector::UpVector, ForwardFlat);
+					GroundNormal = (FVector::UpVector - SlopeX * ForwardFlat - SlopeY * RightFlat).GetSafeNormal();
+					// Hoehe der Ebene am Fahrzeugursprung (die Radmitte liegt vorn).
+					const float CenterX = 0.25f * (W[0].X + W[1].X + W[2].X + W[3].X);
+					GroundZ = 0.25f * (H[0] + H[1] + H[2] + H[3]) - SlopeX * CenterX;
+				}
+			}
 
 			if (GroundNormal.Z > 0.5f && !ForwardFlat.IsNearlyZero())
 			{
@@ -1034,8 +1141,9 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 					GetActorRotation(), Target, DeltaSeconds, GroundAlignResponse));
 			}
 
-			float DesiredZ = Hit.Location.Z + GroundClearanceCm;
+			float DesiredZ = GroundZ + GroundClearanceCm;
 			const float CurrentZ = GetActorLocation().Z;
+			TelemetryHeaveCm = CurrentZ - DesiredZ;
 
 			if (bFlyingOverBuilding)
 			{
@@ -1093,6 +1201,39 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 			AddActorWorldOffset(FVector(0.0f, 0.0f, -FallSpeedCmS * DeltaSeconds), false);
 		}
 	}
+
+	UpdateWheelTravel(DeltaSeconds);
+	UpdateRootMotion(DeltaSeconds);
+
+	// Fahrtelemetrie: eine Zeile je 0,1 s Spielzeit. Querbeschleunigung wie beim
+	// Wanken als v * Gierrate; Nicken/Wanken sind die sichtbare Karosserie-
+	// Neigung, Hub der Abstand der Wurzel zu ihrer Sollhoehe. "gleit" ist der
+	// innere Zustand "Raeder gleiten" (blockiert, keine Seitenfuehrung) - anders
+	// als "block", das auch meldet, wenn die Bremse nur an der Haftgrenze regelt.
+	if (bDriveTelemetry && GetWorld())
+	{
+		const double Now = GetWorld()->GetTimeSeconds();
+		if (Now >= DriveTelemetryNextTime)
+		{
+			DriveTelemetryNextTime = Now + 0.1;
+			// Boden = mittlere Bodenhoehe unter den Raedern (Kanten-Erkennung),
+			// spalt = groesster Abstand Reifen/Boden, fz = Karosseriehub.
+			float GroundSum = 0.0f;
+			int32 GroundHits = 0;
+			for (int32 Index = 0; Index < 4; ++Index)
+			{
+				if (bWheelGroundHit[Index]) { GroundSum += WheelGroundZ[Index]; ++GroundHits; }
+			}
+			UE_LOG(LogWbVehicles, Log,
+				TEXT("WbFahrt t=%.2f v=%.2f ax=%.2f ay=%.2f gier=%.2f schwimm=%.2f lenk=%.3f gas=%.2f bremse=%.2f nick=%.2f wank=%.2f hub=%.2f spin=%d block=%d gleit=%d gang=%d boden=%.1f spalt=%.2f fz=%.2f"),
+				Now, Output.SpeedKmh, Output.ForwardAccelerationMetersPerS2, LateralAccelMs2,
+				FMath::RadiansToDegrees(Output.YawRateRadPerS), Output.SlipAngleDeg,
+				Output.SteerAngleNorm, ThrottleInput, BrakeInput, BodyPitchDeg, BodyRollDeg,
+				TelemetryHeaveCm, Output.bWheelSpin ? 1 : 0, (Output.bWheelLock || Output.bAbsActive) ? 1 : 0,
+				Output.bWheelLock ? 1 : 0, Output.Gear,
+				GroundHits > 0 ? GroundSum / GroundHits : 0.0f, ComputeMaxWheelGapCm(), BodyHeaveCm);
+		}
+	}
 }
 
 void AWiesbadenCar::UpdateWheels(float DeltaSeconds)
@@ -1122,6 +1263,114 @@ void AWiesbadenCar::UpdateWheels(float DeltaSeconds)
 	FrontRightWheel->SetRelativeRotation(WheelVisualRotation(WheelRotationPitch, SteerDegrees, false));
 	RearLeftWheel->SetRelativeRotation(WheelVisualRotation(WheelRotationPitch, 0.0f, true));
 	RearRightWheel->SetRelativeRotation(WheelVisualRotation(WheelRotationPitch, 0.0f, false));
+}
+
+void AWiesbadenCar::TraceWheelGround()
+{
+	UWorld* CarWorld = GetWorld();
+	if (!CarWorld)
+	{
+		return;
+	}
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(WbCarWheelGround), true);
+	Params.AddIgnoredActor(this);
+	const FTransform& Transform = GetActorTransform();
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		// Senkrecht unter dem Radaufstandspunkt, vom Rad aus gesehen 1,5 m hoch
+		// beginnend (nicht im Boden starten) und 4 m tief suchend.
+		const FVector Contact = Transform.TransformPosition(
+			FVector(WheelBasePositions[Index].X, WheelBasePositions[Index].Y, 0.0f));
+		FHitResult Hit;
+		const bool bHit = CarWorld->LineTraceSingleByChannel(Hit,
+			Contact + FVector(0.0f, 0.0f, 150.0f), Contact - FVector(0.0f, 0.0f, 400.0f),
+			ECC_WorldStatic, Params);
+		// Steile Treffer (Hauswand, Bordsteinflanke) sind kein Aufstand.
+		bWheelGroundHit[Index] = bHit && Hit.ImpactNormal.Z > 0.5f;
+		WheelGroundZ[Index] = bHit ? static_cast<float>(Hit.ImpactPoint.Z) : 0.0f;
+	}
+}
+
+void AWiesbadenCar::UpdateWheelTravel(float DeltaSeconds)
+{
+	// Die Raeder sind UNGEFEDERT: jedes folgt seinem eigenen Boden innerhalb des
+	// Federwegs, die Karosserie (SprungRoot) bleibt davon unberuehrt. So steht an
+	// einer Kante jedes Rad auf dem Boden, statt mit dem Wagen zu schweben.
+	UStaticMeshComponent* Wheels[4] = { FrontLeftWheel, FrontRightWheel, RearLeftWheel, RearRightWheel };
+	const FTransform& Transform = GetActorTransform();
+	const float RadiusCm = VehiclePhysics.WheelRadiusM * MetersToCm;
+	const float UpZ = FMath::Max(static_cast<float>(GetActorUpVector().Z), 0.3f);
+	const float Alpha = 1.0f - FMath::Exp(-40.0f * FMath::Max(DeltaSeconds, 0.0f));
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		if (!Wheels[Index])
+		{
+			continue;
+		}
+		float Target = 0.0f;
+		if (bWheelGroundHit[Index])
+		{
+			// Radmitte in Ruhelage (VisualRoot liegt GroundClearanceCm unter der Wurzel).
+			const FVector Rest = Transform.TransformPosition(FVector(WheelBasePositions[Index].X,
+				WheelBasePositions[Index].Y, WheelBasePositions[Index].Z - GroundClearanceCm));
+			Target = FMath::Clamp((WheelGroundZ[Index] + RadiusCm - static_cast<float>(Rest.Z)) / UpZ,
+				-WheelTravelMaxCm, WheelTravelMaxCm);
+		}
+		WheelTravelCm[Index] = FMath::Lerp(WheelTravelCm[Index], Target, Alpha);
+		Wheels[Index]->SetRelativeLocation(WheelBasePositions[Index] + FVector(0.0f, 0.0f, WheelTravelCm[Index]));
+	}
+}
+
+void AWiesbadenCar::UpdateRootMotion(float DeltaSeconds)
+{
+	if (DeltaSeconds <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+	const float Z = static_cast<float>(GetActorLocation().Z);
+	const FRotator Rot = GetActorRotation();
+	// Erstes Bild oder Teleport (-WbGoto, Aussteigen, Fall): keine Traegheit
+	// daraus ableiten - ein Meter Sprung waere sonst ein Karosserie-Schlag.
+	if (!bRootMotionValid || FMath::Abs(Z - LastRootZ) > 150.0f)
+	{
+		bRootMotionValid = true;
+		LastRootZ = Z;
+		LastRootPitch = Rot.Pitch;
+		LastRootRoll = Rot.Roll;
+		LastRootVelZ = LastRootPitchRate = LastRootRollRate = 0.0f;
+		RootAccelZ = RootPitchAccel = RootRollAccel = 0.0f;
+		return;
+	}
+	const float VelZ = (Z - LastRootZ) / DeltaSeconds;
+	const float PitchRate = FMath::FindDeltaAngleDegrees(LastRootPitch, Rot.Pitch) / DeltaSeconds;
+	const float RollRate = FMath::FindDeltaAngleDegrees(LastRootRoll, Rot.Roll) / DeltaSeconds;
+	// Gedeckelt: eine Kante ist ein kurzer Stoss, kein Crash - und die zweite
+	// Ableitung einzelner Bilder rauscht.
+	RootAccelZ = FMath::Clamp((VelZ - LastRootVelZ) / DeltaSeconds, -2000.0f, 2000.0f);
+	RootPitchAccel = FMath::Clamp((PitchRate - LastRootPitchRate) / DeltaSeconds, -500.0f, 500.0f);
+	RootRollAccel = FMath::Clamp((RollRate - LastRootRollRate) / DeltaSeconds, -500.0f, 500.0f);
+	LastRootZ = Z;
+	LastRootVelZ = VelZ;
+	LastRootPitch = Rot.Pitch;
+	LastRootPitchRate = PitchRate;
+	LastRootRoll = Rot.Roll;
+	LastRootRollRate = RollRate;
+}
+
+float AWiesbadenCar::ComputeMaxWheelGapCm() const
+{
+	const UStaticMeshComponent* Wheels[4] = { FrontLeftWheel, FrontRightWheel, RearLeftWheel, RearRightWheel };
+	const float RadiusCm = VehiclePhysics.WheelRadiusM * MetersToCm;
+	float MaxGap = 0.0f;
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		if (bWheelGroundHit[Index] && Wheels[Index])
+		{
+			const float Bottom = static_cast<float>(Wheels[Index]->GetComponentLocation().Z) - RadiusCm;
+			MaxGap = FMath::Max(MaxGap, FMath::Abs(Bottom - WheelGroundZ[Index]));
+		}
+	}
+	return MaxGap;
 }
 
 bool AWiesbadenCar::SweepVehicle(const FVector& Delta, FHitResult& OutHit) const

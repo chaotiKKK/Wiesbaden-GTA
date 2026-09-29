@@ -194,6 +194,16 @@ void UWiesbadenVehicleCameraComponent::HandleInput(float DeltaTime)
 		{
 			CameraMode = static_cast<EWiesbadenVehicleCameraMode>(FMath::Clamp(Forced, 0, 2));
 			ApplyCameraMode();
+			// Fester Blick fuer Aufnahmen von aussen: -WbCamYaw=90 (von rechts),
+			// -WbCamPitch=-10, -WbCamArm=600 (cm). Im Orbit-Modus bleibt er stehen
+			// und dreht mit dem Wagen - eine mitfahrende Seitenansicht.
+			float Value = 0.0f;
+			if (FParse::Value(FCommandLine::Get(), TEXT("WbCamYaw="), Value)) { OrbitOffset.Yaw = Value; }
+			if (FParse::Value(FCommandLine::Get(), TEXT("WbCamPitch="), Value)) { OrbitOffset.Pitch = Value; }
+			if (FParse::Value(FCommandLine::Get(), TEXT("WbCamArm="), Value) && SpringArm && Value > 50.0f)
+			{
+				SpringArm->TargetArmLength = Value;
+			}
 			return;
 		}
 	}
