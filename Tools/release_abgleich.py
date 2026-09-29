@@ -48,7 +48,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -80,13 +79,28 @@ class NichtMessbar(Exception):
 # gh: der einzige Weg nach draussen, austauschbar fuer den Selbsttest
 # ---------------------------------------------------------------------------
 
+GH_BEFEHL = ("gh",)    # der Selbsttest setzt hier ein haengendes Programm ein
+GH_TIMEOUT_S = 60      # ein einzelner gh-Aufruf braucht sonst 1-3 s
+GH_ZEITUEBERSCHREITUNG = 124
+
+
 def gh_echt(*args):
-    """(returncode, stdout, stderr) von `gh ...` im Projektordner."""
+    """(returncode, stdout, stderr) von `gh ...` im Projektordner.
+
+    Mit Zeitgrenze: ein haengendes gh (Verbindung steht, Antwort kommt nie)
+    haette sonst jede Obergrenze des Laufs ausgehebelt. Die Grenze ist
+    hoechstens die Restzeit der Frist; ihr Ablauf ist ein Transportfehler.
+    """
+    grenze = versuchszeit(GH_TIMEOUT_S)
     try:
-        fertig = subprocess.run(["gh", *args], cwd=REPO, capture_output=True,
-                                text=True, encoding="utf-8", errors="replace")
+        fertig = subprocess.run([*GH_BEFEHL, *args], cwd=REPO, capture_output=True,
+                                text=True, encoding="utf-8", errors="replace",
+                                timeout=grenze)
     except FileNotFoundError:
         return 127, "", "gh nicht gefunden"
+    except subprocess.TimeoutExpired:
+        return (GH_ZEITUEBERSCHREITUNG, "",
+                "gh antwortete nicht binnen %.0f s (timed out)" % grenze)
     return fertig.returncode, fertig.stdout, fertig.stderr
 
 
@@ -109,8 +123,9 @@ GH_LAUF = gh_echt  # der Selbsttest setzt das auf eine Attrappe
 # wiederholt. Bleibt GitHub ueber alle Versuche weg, bleibt es bei
 # "nicht messbar" (Exit 3) - nie gruen ohne Messung.
 WARTEN_S = (5, 15, 30)         # Pausen je Abruf: hoechstens drei Wiederholungen
-BUDGET_S = 90                  # Wartebudget fuer den GANZEN Lauf, alle Abrufe zusammen
-SCHLAF = time.sleep            # der Selbsttest setzt das auf eine Attrappe
+FRIST_S = 180                  # Echtzeit-Frist fuer den GANZEN Lauf, Versuche eingeschlossen
+UHR = time.monotonic           # der Selbsttest setzt beides auf eine Attrappe
+SCHLAF = time.sleep
 AUSSETZER = re.compile(
     r"error connecting to|dial tcp|connectex|i/o timeout|timed out|"
     r"timeout awaiting|TLS handshake timeout|connection reset|"
@@ -118,24 +133,35 @@ AUSSETZER = re.compile(
     r"\b50[0234]\b", re.I)
 HTTP_AUSSETZER = (500, 502, 503, 504)
 
-# Ein flatterndes Netz darf das Gate nicht beliebig aufhalten: ohne Budget
-# waeren bei rund 30 Abrufen je Lauf bis zu 25 Minuten Warten moeglich. Die
-# parallelen Downloads teilen sich das Budget, daher die Sperre.
-_budget = {"rest": BUDGET_S}
-_budget_sperre = threading.Lock()
+# Ein flatterndes Netz darf das Gate nicht beliebig aufhalten: ohne Grenze
+# waeren bei rund 30 Abrufen je Lauf bis zu 25 Minuten Warten moeglich.
+# Massgeblich ist die VERGANGENE Zeit, nicht die Summe der Pausen: acht
+# parallele Downloads, die gleichzeitig 5 s warten, kosten 5 s und nicht 40.
+# (Ein Pausenbudget je Thread liess am 29.09.2026 schon einen 12-s-Ausfall
+# in der Download-Phase mit Exit 3 enden.) Ein gesunder Lauf braucht rund
+# 30 s - die Frist trifft nur einen Lauf, der am Netz haengt.
+_frist = {"ende": None}
 
 
-def budget_zuruecksetzen():
-    with _budget_sperre:
-        _budget["rest"] = BUDGET_S
+def frist_setzen():
+    """Startet die Frist des Laufs. Ohne Aufruf gilt keine Frist, nur die
+    Grenzen je Abruf (drei Wiederholungen, Zeitgrenze je Versuch)."""
+    _frist["ende"] = UHR() + FRIST_S
 
 
-def _budget_nehmen(sekunden):
-    with _budget_sperre:
-        if _budget["rest"] < sekunden:
-            return False
-        _budget["rest"] -= sekunden
-        return True
+def frist_rest():
+    ende = _frist["ende"]
+    return float("inf") if ende is None else ende - UHR()
+
+
+def versuchszeit(eigene_s):
+    """Zeitgrenze eines Versuchs: die eigene, aber nie ueber die Frist."""
+    return max(0.1, min(eigene_s, frist_rest()))
+
+
+def frist_abgelaufen(aussetzer):
+    return NichtMessbar("%s - Frist von %d s fuer diesen Lauf abgelaufen"
+                        % (aussetzer, FRIST_S))
 
 
 def ist_aussetzer(text):
@@ -149,16 +175,18 @@ def wiederholt(versuch):
 
     `versuch()` liefert (ergebnis, aussetzer): aussetzer ist None, wenn eine
     Antwort kam (auch ein Befund wie 404), sonst der Text des
-    Transportfehlers. Nach len(WARTEN_S) Wiederholungen oder bei
-    aufgebrauchtem Wartebudget: NichtMessbar - also Exit 3, nie gruen.
+    Transportfehlers. Nach len(WARTEN_S) Wiederholungen oder wenn die Frist
+    des Laufs keine weitere Pause mehr zulaesst: NichtMessbar - also
+    Exit 3, nie gruen.
     """
+    if frist_rest() <= 0:
+        raise frist_abgelaufen("kein Abruf mehr begonnen")
     ergebnis, aussetzer = versuch()
     for nummer, pause in enumerate(WARTEN_S, 1):
         if aussetzer is None:
             return ergebnis
-        if not _budget_nehmen(pause):
-            raise NichtMessbar("%s - Wartebudget von %d s fuer diesen Lauf aufgebraucht"
-                               % (aussetzer, BUDGET_S))
+        if frist_rest() <= pause:
+            raise frist_abgelaufen(aussetzer)
         print("  GitHub nicht erreichbar - Wiederholung %d/%d in %d s: %s"
               % (nummer, len(WARTEN_S), pause, aussetzer[:100]), flush=True)
         SCHLAF(pause)
@@ -176,7 +204,8 @@ def gh_lauf(*args):
     """GH_LAUF ueber wiederholt(): nur Transportfehler werden wiederholt."""
     def versuch():
         code, raus, fehler = GH_LAUF(*args)
-        transport = code not in (0, 127) and ist_aussetzer(fehler)
+        transport = code == GH_ZEITUEBERSCHREITUNG or (
+            code not in (0, 127) and ist_aussetzer(fehler))
         return (code, raus, fehler), (gh_fehlertext(args, code, fehler) if transport else None)
     return wiederholt(versuch)
 
@@ -359,7 +388,7 @@ def anonym_erreichen(url, sekunden=20):
     anfrage = urllib.request.Request(url, method="HEAD", headers={
         "User-Agent": "WiesbadenReal-Gate6"})
     try:
-        with urllib.request.urlopen(anfrage, timeout=sekunden) as antwort:
+        with urllib.request.urlopen(anfrage, timeout=versuchszeit(sekunden)) as antwort:
             return antwort.status, antwort.headers.get("Content-Length")
     except urllib.error.HTTPError as fehler:
         return fehler.code, None
@@ -591,7 +620,7 @@ def hauptprogramm(argv=None):
                     help="fehlender Ref ist kein Fehler, sondern heisst: nur "
                          "die Seite im Arbeitszweig wurde geprueft")
     args = ap.parse_args(argv)
-    budget_zuruecksetzen()
+    frist_setzen()
 
     print("Release-Abgleich: Seite, Assets und Texte")
     print(f"  Quelle der Releases: {args.quelle} ({args.ref})")
