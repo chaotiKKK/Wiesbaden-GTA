@@ -75,7 +75,7 @@ class Attrappe:
         self.fehler = fehler
         self.aufrufe = []
 
-    def __call__(self, *args):
+    def __call__(self, _grenze_s, *args):
         self.aufrufe.append(args)
         if self.fehler is not None:
             return self.fehler
@@ -112,7 +112,7 @@ class AbgleichTest(unittest.TestCase):
         ra.SEITE_ARBEIT = self.seite
         ra.BILDER_ARBEIT = self.bilder
         # Kein echter Abruf im Test: HTTP 200 gilt als "oeffentlich".
-        ra.HTTP_LAUF = lambda url: (200, "123")
+        ra.HTTP_LAUF = lambda url, _grenze_s: (200, "123")
         ra.rba.TAGS = dict(TAGS)
         ra.rta.SEITEN_TITEL = dict(TITEL)
         # Die Seite aus dem Ref ist im Test dieselbe wie im Arbeitsbaum, nur
@@ -336,7 +336,7 @@ class AbgleichTest(unittest.TestCase):
         # Eine FREIE Funktion als gh, nicht die Attrappe: `__call__` am
         # Instanzattribut nimmt Python beim Aufruf nicht her - die Attrappe
         # wuerde weiterlaufen und der Test pruefte die falsche Sache.
-        def kaputt(*args):
+        def kaputt(_grenze_s, *args):
             return 0, "kein json", ""
 
         ra.GH_LAUF = kaputt
@@ -390,13 +390,13 @@ class AbgleichTest(unittest.TestCase):
     def test_ein_totes_oeffentliches_bild_ist_rot(self):
         """Der Text ist richtig, das Bild liegt aber nicht im Schaufenster -
         das faellt nur, wenn man es wirklich abruft."""
-        ra.HTTP_LAUF = lambda url: (404, None)
+        ra.HTTP_LAUF = lambda url, _grenze_s: (404, None)
         code = self.laufen(releases=self.releases())
         self.assertEqual(code, 1, self.raus)
         self.assertIn("ohne Konto nicht abrufbar (HTTP 404)", self.raus)
 
     def test_ein_netzfehler_beim_abruf_ist_nicht_messbar(self):
-        def kaputt(url):
+        def kaputt(url, _grenze_s):
             raise ra.NichtMessbar("Timeout")
 
         ra.HTTP_LAUF = kaputt
@@ -423,11 +423,11 @@ class AbgleichTest(unittest.TestCase):
         zaehler = {"n": 0}
         attrappe = self.attrappe
 
-        def gh(*args):
+        def gh(grenze_s, *args):
             zaehler["n"] += 1
             if zaehler["n"] <= fehlschlaege or (flattern and zaehler["n"] % 2):
                 return 1, "", meldung
-            return attrappe(*args)
+            return attrappe(grenze_s, *args)
 
         ra.GH_LAUF = gh
         puffer = io.StringIO()
@@ -507,7 +507,7 @@ class AbgleichTest(unittest.TestCase):
         zugleich = threading.Barrier(ra.ABRUFE_PARALLEL, timeout=30)
         downloads = []
 
-        def http(url):
+        def http(url, _grenze_s):
             if "/releases/download/" not in url:
                 return 200, "1"
             with sperre:
@@ -554,22 +554,17 @@ class AbgleichTest(unittest.TestCase):
         """gh startet einen Enkel, der die Pipes erbt. subprocess.run(timeout)
         kam erst nach dessen Ende zurueck (15 s statt 2 s) und liess ihn
         weiterlaufen. Jetzt: zurueck an der Grenze, Enkel beendet."""
-        self.zeit_ersetzen(time.monotonic, time.sleep)
-        ra.frist_setzen()
         pid_datei = self.wurzel / "enkel.pid"
         self.addCleanup(setattr, ra, "GH_BEFEHL", ra.GH_BEFEHL)
-        self.addCleanup(setattr, ra, "GH_TIMEOUT_S", ra.GH_TIMEOUT_S)
         ra.GH_BEFEHL = (sys.executable, "-c",
                         "import subprocess, sys, time\n"
                         "enkel = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
                         "open(%r, 'w').write(str(enkel.pid))\n"
                         "time.sleep(30)\n" % str(pid_datei))
-        ra.GH_TIMEOUT_S = 2
         beginn = time.monotonic()
-        code, _raus, fehler = ra.gh_echt("release", "list")
+        code, _raus, fehler = ra.gh_echt(2, "release", "list")
         dauer = time.monotonic() - beginn
         self.assertEqual(code, ra.GH_ZEITUEBERSCHREITUNG, fehler)
-        self.assertTrue(ra.ist_aussetzer(fehler), fehler)
         self.assertLess(dauer, 2 + 1, "Aufruf kam erst nach %.1f s zurueck" % dauer)
         enkel = pid_datei.read_text()
         liste = subprocess.run(["tasklist", "/FI", "PID eq %s" % enkel, "/NH"],
@@ -579,7 +574,7 @@ class AbgleichTest(unittest.TestCase):
     def test_ein_kurzer_http_aussetzer_wird_wiederholt_und_ist_gruen(self):
         gescheitert = []
 
-        def http(url):
+        def http(url, _grenze_s):
             if not gescheitert:
                 gescheitert.append(url)
                 raise ra.NichtMessbar("oeffentlicher Abruf %s: <urlopen error timed out>" % url)
@@ -591,14 +586,14 @@ class AbgleichTest(unittest.TestCase):
         self.assertEqual(self.geschlafen, [5])
 
     def test_ein_http_404_ist_sofort_rot_ohne_wiederholung(self):
-        ra.HTTP_LAUF = lambda url: (404, None)
+        ra.HTTP_LAUF = lambda url, _grenze_s: (404, None)
         code = self.laufen(releases=self.releases())
         self.assertEqual(code, 1, self.raus)
         self.assertIn("HTTP 404", self.raus)
         self.assertEqual(self.geschlafen, [], "ein 404 ist ein Befund, kein Aussetzer")
 
     def test_ein_dauerhaftes_http_503_ist_nicht_gemessen_statt_toter_link(self):
-        ra.HTTP_LAUF = lambda url: (503, None)
+        ra.HTTP_LAUF = lambda url, _grenze_s: (503, None)
         code = self.laufen(releases=self.releases())
         self.assertEqual(code, 3, self.raus)
         self.assertNotIn("HTTP 503)", self.raus, "ein 5xx ist kein toter Link")
@@ -611,7 +606,7 @@ class AbgleichTest(unittest.TestCase):
         Repo liegen."""
         gesehen = []
 
-        def merker(url):
+        def merker(url, _grenze_s):
             gesehen.append(url)
             return 200, "1"
 
@@ -648,7 +643,7 @@ class AbgleichTest(unittest.TestCase):
     def test_ein_toter_oeffentlicher_download_ist_rot(self):
         """Nur die Download-Wege sind tot, die Bildlinks sind gesund: der Fall,
         den ein reiner Textvergleich nie sieht."""
-        def teilweise(url):
+        def teilweise(url, _grenze_s):
             return (404, None) if "/releases/download/" in url else (200, "1")
 
         ra.HTTP_LAUF = teilweise

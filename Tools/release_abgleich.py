@@ -84,12 +84,13 @@ GH_TIMEOUT_S = 60      # ein einzelner gh-Aufruf braucht sonst 1-3 s
 GH_ZEITUEBERSCHREITUNG = 124
 
 
-def gh_echt(*args):
+def gh_echt(grenze_s, *args):
     """(returncode, stdout, stderr) von `gh ...` im Projektordner.
 
-    Mit Zeitgrenze: ein haengendes gh (Verbindung steht, Antwort kommt nie)
-    haette sonst jede Obergrenze des Laufs ausgehebelt. Die Grenze ist
-    hoechstens die Restzeit der Frist; ihr Ablauf ist ein Transportfehler.
+    Mit Zeitgrenze `grenze_s`: ein haengendes gh (Verbindung steht, Antwort
+    kommt nie) haette sonst jede Obergrenze des Laufs ausgehebelt. Ihr
+    Ablauf meldet GH_ZEITUEBERSCHREITUNG - daran, und nur daran, erkennt
+    gh_lauf() ihn als Transportfehler.
 
     Nicht subprocess.run(timeout=...): das beendet nur gh selbst und wartet
     danach, bis die Pipes schliessen. Haelt ein Kindprozess von gh sie offen,
@@ -97,7 +98,6 @@ def gh_echt(*args):
     statt 2 s). Hier endet der ganze Baum, und auf die Pipes wird nicht
     mehr gewartet.
     """
-    grenze = versuchszeit(GH_TIMEOUT_S)
     try:
         prozess = subprocess.Popen([*GH_BEFEHL, *args], cwd=REPO,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -105,11 +105,11 @@ def gh_echt(*args):
     except FileNotFoundError:
         return 127, "", "gh nicht gefunden"
     try:
-        raus, fehler = prozess.communicate(timeout=grenze)
+        raus, fehler = prozess.communicate(timeout=grenze_s)
     except subprocess.TimeoutExpired:
         prozessbaum_beenden(prozess)
         return (GH_ZEITUEBERSCHREITUNG, "",
-                "gh antwortete nicht binnen %.0f s (timed out)" % grenze)
+                "gh antwortete nicht binnen %.0f s" % grenze_s)
     return prozess.returncode, raus, fehler
 
 
@@ -162,28 +162,25 @@ HTTP_AUSSETZER = (500, 502, 503, 504)
 # (Ein Pausenbudget je Thread liess am 29.09.2026 schon einen 12-s-Ausfall
 # in der Download-Phase mit Exit 3 enden.) Ein gesunder Lauf braucht rund
 # 30 s - die Frist trifft nur einen Lauf, der am Netz haengt.
-_frist = {"ende": None}
+class Frist:
+    """Die Echtzeit-Frist EINES Laufs. hauptprogramm() legt sie an und
+    reicht sie an jeden Abruf weiter; die Transporte sehen nur die
+    Zeitgrenze ihres einen Versuchs."""
 
+    def __init__(self):
+        self.sekunden = FRIST_S
+        self.ende = UHR() + FRIST_S
 
-def frist_setzen():
-    """Startet die Frist des Laufs. Ohne Aufruf gilt keine Frist, nur die
-    Grenzen je Abruf (drei Wiederholungen, Zeitgrenze je Versuch)."""
-    _frist["ende"] = UHR() + FRIST_S
+    def rest(self):
+        return self.ende - UHR()
 
+    def grenze(self, eigene_s):
+        """Zeitgrenze eines Versuchs: die eigene, aber nie ueber die Frist."""
+        return max(0.1, min(eigene_s, self.rest()))
 
-def frist_rest():
-    ende = _frist["ende"]
-    return float("inf") if ende is None else ende - UHR()
-
-
-def versuchszeit(eigene_s):
-    """Zeitgrenze eines Versuchs: die eigene, aber nie ueber die Frist."""
-    return max(0.1, min(eigene_s, frist_rest()))
-
-
-def frist_abgelaufen(aussetzer):
-    return NichtMessbar("%s - Frist von %d s fuer diesen Lauf abgelaufen"
-                        % (aussetzer, FRIST_S))
+    def abgelaufen(self, aussetzer):
+        return NichtMessbar("%s - Frist von %d s fuer diesen Lauf abgelaufen"
+                            % (aussetzer, self.sekunden))
 
 
 def ist_aussetzer(text):
@@ -192,7 +189,7 @@ def ist_aussetzer(text):
     return bool(AUSSETZER.search(text or ""))
 
 
-def wiederholt(versuch):
+def wiederholt(versuch, frist):
     """Der eine Wiederholweg fuer gh und den anonymen Download.
 
     `versuch()` liefert (ergebnis, aussetzer): aussetzer ist None, wenn eine
@@ -201,14 +198,14 @@ def wiederholt(versuch):
     des Laufs keine weitere Pause mehr zulaesst: NichtMessbar - also
     Exit 3, nie gruen.
     """
-    if frist_rest() <= 0:
-        raise frist_abgelaufen("kein Abruf mehr begonnen")
+    if frist.rest() <= 0:
+        raise frist.abgelaufen("kein Abruf mehr begonnen")
     ergebnis, aussetzer = versuch()
     for nummer, pause in enumerate(WARTEN_S, 1):
         if aussetzer is None:
             return ergebnis
-        if frist_rest() <= pause:
-            raise frist_abgelaufen(aussetzer)
+        if frist.rest() <= pause:
+            raise frist.abgelaufen(aussetzer)
         print("  GitHub nicht erreichbar - Wiederholung %d/%d in %d s: %s"
               % (nummer, len(WARTEN_S), pause, aussetzer[:100]), flush=True)
         SCHLAF(pause)
@@ -222,18 +219,18 @@ def gh_fehlertext(args, code, fehler):
     return "`gh %s` endete mit %d: %s" % (" ".join(args), code, (fehler or "").strip()[:200])
 
 
-def gh_lauf(*args):
+def gh_lauf(frist, *args):
     """GH_LAUF ueber wiederholt(): nur Transportfehler werden wiederholt."""
     def versuch():
-        code, raus, fehler = GH_LAUF(*args)
+        code, raus, fehler = GH_LAUF(frist.grenze(GH_TIMEOUT_S), *args)
         transport = code == GH_ZEITUEBERSCHREITUNG or (
             code not in (0, 127) and ist_aussetzer(fehler))
         return (code, raus, fehler), (gh_fehlertext(args, code, fehler) if transport else None)
-    return wiederholt(versuch)
+    return wiederholt(versuch, frist)
 
 
-def gh_json(*args):
-    code, raus, fehler = gh_lauf(*args)
+def gh_json(frist, *args):
+    code, raus, fehler = gh_lauf(frist, *args)
     if code == 127:
         raise NichtMessbar("gh ist nicht installiert "
                            "(https://cli.github.com - `gh auth login`)")
@@ -244,15 +241,6 @@ def gh_json(*args):
     except ValueError as fehler:
         raise NichtMessbar("`gh %s` lieferte kein JSON (%s)"
                            % (" ".join(args), fehler))
-
-
-def gh_text(*args):
-    code, raus, fehler = gh_lauf(*args)
-    if code == 127:
-        raise NichtMessbar("gh ist nicht installiert")
-    if code != 0:
-        raise NichtMessbar(gh_fehlertext(args, code, fehler))
-    return raus
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +388,10 @@ PRIVAT = rta.PRIVAT
 ABRUFE_PARALLEL = 8
 
 
-def anonym_erreichen(url, sekunden=20):
+HTTP_TIMEOUT_S = 20
+
+
+def anonym_erreichen(url, grenze_s):
     """(code, groesse) eines HTTP-HEAD OHNE Anmeldung.
 
     Bewusst ohne Token: die ganze Frage ist, ob jemand ohne GitHub-Konto
@@ -410,7 +401,7 @@ def anonym_erreichen(url, sekunden=20):
     anfrage = urllib.request.Request(url, method="HEAD", headers={
         "User-Agent": "WiesbadenReal-Gate6"})
     try:
-        with urllib.request.urlopen(anfrage, timeout=versuchszeit(sekunden)) as antwort:
+        with urllib.request.urlopen(anfrage, timeout=grenze_s) as antwort:
             return antwort.status, antwort.headers.get("Content-Length")
     except urllib.error.HTTPError as fehler:
         return fehler.code, None
@@ -426,19 +417,19 @@ def anonym_erreichen(url, sekunden=20):
 HTTP_LAUF = anonym_erreichen
 
 
-def http_abruf(url):
+def http_abruf(frist, url):
     """HTTP_LAUF ueber wiederholt(): Netzfehler und 5xx werden wiederholt,
     ein 404/403 ist eine Antwort und kommt sofort zurueck (ein Befund). Ein
     dauerhaftes 5xx ist "nicht messbar", kein toter Link."""
     def versuch():
         try:
-            code, groesse = HTTP_LAUF(url)
+            code, groesse = HTTP_LAUF(url, frist.grenze(HTTP_TIMEOUT_S))
         except NichtMessbar as grund:
             return None, str(grund)
         if code in HTTP_AUSSETZER:
             return None, "oeffentlicher Abruf %s: HTTP %d" % (url, code)
         return (code, groesse), None
-    return wiederholt(versuch)
+    return wiederholt(versuch, frist)
 
 
 def ohne_stand(text):
@@ -458,9 +449,9 @@ def stand_im_code(text):
     return treffer.group(1) if treffer else None
 
 
-def releases_lesen():
+def releases_lesen(frist):
     """-> {tag: {"assets": [namen], "body": text}} fuer alle Releases."""
-    roh = gh_json("release", "list", "--limit", "100", "--json", "tagName")
+    roh = gh_json(frist, "release", "list", "--limit", "100", "--json", "tagName")
     if not isinstance(roh, list):
         raise NichtMessbar("`gh release list` lieferte keine Liste")
     out = {}
@@ -468,7 +459,7 @@ def releases_lesen():
         tag = eintrag.get("tagName")
         if not tag:
             continue
-        daten = gh_json("release", "view", tag, "--json", "assets,body")
+        daten = gh_json(frist, "release", "view", tag, "--json", "assets,body")
         out[tag] = {
             "assets": [a.get("name", "") for a in (daten.get("assets") or [])],
             "body": daten.get("body") or "",
@@ -476,11 +467,11 @@ def releases_lesen():
     return out
 
 
-def releases_pruefen(text):
+def releases_pruefen(text, frist):
     """Befunde der Releases gegen die Seite, aus der sie erzeugt wurden."""
     _, bilder, _ = seiten_daten(text)
     befunde = []
-    vorhanden = releases_lesen()
+    vorhanden = releases_lesen(frist)
 
     for num, tag in sorted(rba.TAGS.items()):
         wollen = bilder.get(num, [])
@@ -517,13 +508,13 @@ def releases_pruefen(text):
             befunde.append(f"M{num:02d} {tag}: Release-Text nennt keinen "
                            f"Stand im Code")
 
-    befunde.extend(oeffentlichkeit_pruefen(vorhanden))
+    befunde.extend(oeffentlichkeit_pruefen(vorhanden, frist))
     return befunde
 
 
-def spiegel_lesen():
+def spiegel_lesen(frist):
     """Die Releases des OEFFENTLICHEN Schaufenster-Repos."""
-    roh = gh_json("release", "list", "--limit", "100", "--json", "tagName",
+    roh = gh_json(frist, "release", "list", "--limit", "100", "--json", "tagName",
                   "--repo", OEFFENTLICHES_REPO)
     if not isinstance(roh, list):
         raise NichtMessbar("`gh release list` im oeffentlichen Repo lieferte "
@@ -533,7 +524,7 @@ def spiegel_lesen():
         tag = eintrag.get("tagName")
         if not tag:
             continue
-        daten = gh_json("release", "view", tag, "--json", "assets,body",
+        daten = gh_json(frist, "release", "view", tag, "--json", "assets,body",
                         "--repo", OEFFENTLICHES_REPO)
         out[tag] = {
             "assets": [a.get("name", "") for a in (daten.get("assets") or [])],
@@ -542,7 +533,7 @@ def spiegel_lesen():
     return out
 
 
-def spiegel_pruefen(text):
+def spiegel_pruefen(text, frist):
     """Das oeffentliche Gegenstueck: DER Download-Weg fuer Menschen ohne Konto.
 
     Warum das ein eigener Block ist: die Bildlinks im Release-Text sind im
@@ -555,7 +546,7 @@ def spiegel_pruefen(text):
     """
     _, bilder, _ = seiten_daten(text)
     befunde = []
-    spiegel = spiegel_lesen()
+    spiegel = spiegel_lesen(frist)
 
     downloads = []
     for num, tag in sorted(rba.TAGS.items()):
@@ -580,14 +571,14 @@ def spiegel_pruefen(text):
 
     if downloads:
         with concurrent.futures.ThreadPoolExecutor(max_workers=ABRUFE_PARALLEL) as pool:
-            for url, (code, _groesse) in zip(downloads, pool.map(http_abruf, downloads)):
+            for url, (code, _groesse) in zip(downloads, pool.map(lambda url: http_abruf(frist, url), downloads)):
                 if code != 200:
                     befunde.append(f"oeffentlicher Download nicht erreichbar "
                                    f"(HTTP {code}): {url.rsplit('/', 2)[-2:]}")
     return befunde
 
 
-def oeffentlichkeit_pruefen(vorhanden):
+def oeffentlichkeit_pruefen(vorhanden, frist):
     """Bilder der Releases MUESSEN ohne GitHub-Konto abrufbar sein.
 
     Zwei Pruefungen, weil sie zwei verschiedene Fehlerklassen fangen:
@@ -613,7 +604,7 @@ def oeffentlichkeit_pruefen(vorhanden):
         # EINE echte Abrufprobe je Release: der Basispfad traegt fuer alle
         # Bilder, ein 404 an genau dieser Datei heisst "die Basis ist tot".
         if links:
-            code, groesse = http_abruf(links[0])
+            code, groesse = http_abruf(frist, links[0])
             if code != 200:
                 befunde.append(f"{tag}: erstes Bild ist ohne Konto nicht "
                                f"abrufbar (HTTP {code}): {links[0][:110]}")
@@ -642,7 +633,7 @@ def hauptprogramm(argv=None):
                     help="fehlender Ref ist kein Fehler, sondern heisst: nur "
                          "die Seite im Arbeitszweig wurde geprueft")
     args = ap.parse_args(argv)
-    frist_setzen()
+    frist = Frist()
 
     print("Release-Abgleich: Seite, Assets und Texte")
     print(f"  Quelle der Releases: {args.quelle} ({args.ref})")
@@ -688,8 +679,8 @@ def hauptprogramm(argv=None):
 
     # --- 3. Die Releases selbst ---------------------------------------------
     try:
-        rel_befunde = releases_pruefen(main_text)
-        spiegel_befunde = spiegel_pruefen(main_text)
+        rel_befunde = releases_pruefen(main_text, frist)
+        spiegel_befunde = spiegel_pruefen(main_text, frist)
     except NichtMessbar as grund:
         print(f"\n  Releases nicht abfragbar: {grund}")
         print("  Exit 3 - ausdruecklich NICHT 'alles in Ordnung'. "
