@@ -576,7 +576,7 @@ bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
 	}
 
 	// -- Im Fahrzeug: Geradeaus-Vollbremsung blockiert NICHT, stoppt normal ---
-	// (Blockiermodell, also ohne ABS - mit ABS meldet bWheelLock die Regelung.)
+	// (Blockiermodell, also ohne ABS - mit ABS meldet bAbsActive die Regelung.)
 	{
 		FWiesbadenVehiclePhysics Vehicle;
 		Vehicle.Reset();
@@ -669,7 +669,7 @@ bool FVehicleSurfaceGripTest::RunTest(const FString& Parameters)
 	}
 
 	// -- Geradeaus-Vollbremsung: trocken haelt, griffarm blockiert -----------
-	// (Blockiermodell, also ohne ABS - mit ABS meldet bWheelLock die Regelung.)
+	// (Blockiermodell, also ohne ABS - mit ABS meldet bAbsActive die Regelung.)
 	{
 		FWiesbadenVehiclePhysics Vehicle; Vehicle.Reset();
 		Vehicle.bAbsEnabled = false;
@@ -1193,7 +1193,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleAbsTest,
  */
 bool FVehicleAbsTest::RunTest(const FString& Parameters)
 {
-	struct FErgebnis { float KursGrad = 0.0f; bool bGeglitten = false; bool bLeuchte = false; float KmhNach = 0.0f; };
+	struct FErgebnis
+	{
+		float KursGrad = 0.0f; bool bGeglitten = false; bool bLeuchte = false; bool bSpuren = false;
+		bool bVorneGleitet = false; bool bHintenGleitet = false; float KmhNach = 0.0f;
+	};
 	auto Kurvenbremsung = [](bool bAbs, bool bHandbremse)
 	{
 		FWiesbadenVehiclePhysics V;
@@ -1214,8 +1218,11 @@ bool FVehicleAbsTest::RunTest(const FString& Parameters)
 		{
 			V.Tick(In, VehicleDt, Out);
 			E.KursGrad += FMath::RadiansToDegrees(Out.YawRateRadPerS * VehicleDt);
-			E.bGeglitten = E.bGeglitten || V.bBrakeLockState;
-			E.bLeuchte = E.bLeuchte || Out.bWheelLock;
+			E.bVorneGleitet = E.bVorneGleitet || V.bFrontAxleSliding;
+			E.bHintenGleitet = E.bHintenGleitet || V.bRearAxleSliding;
+			E.bGeglitten = E.bVorneGleitet || E.bHintenGleitet;
+			E.bLeuchte = E.bLeuchte || Out.bAbsActive;
+			E.bSpuren = E.bSpuren || Out.bWheelLock;
 		}
 		E.KmhNach = Out.SpeedKmh;
 		return E;
@@ -1227,6 +1234,10 @@ bool FVehicleAbsTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Mit ABS gleiten die Raeder nie"), Abs.bGeglitten);
 	TestTrue(TEXT("Ohne ABS gleiten sie (Bezug)"), Ohne.bGeglitten);
 	TestTrue(TEXT("Die Leuchte meldet die ABS-Regelung"), Abs.bLeuchte);
+	// Das ABS haelt die Raeder rollend - keine Bremsspuren, kein Blockier-
+	// Quietschen (Review PR #26: vorher zog jeder Halt Spuren unter allen vier).
+	TestFalse(TEXT("ABS-Regelung ist kein Blockieren (keine Spuren)"), Abs.bSpuren);
+	TestTrue(TEXT("Ohne ABS blockieren sie (Bezug)"), Ohne.bSpuren);
 	TestTrue(FString::Printf(TEXT("Mit ABS lenkbar: Kurs %.1f statt %.1f Grad"), Abs.KursGrad, Ohne.KursGrad),
 		Abs.KursGrad > Ohne.KursGrad * 1.3f);
 	TestTrue(FString::Printf(TEXT("Kein Dreher beim Bremsen (%.1f Grad)"), Abs.KursGrad),
@@ -1258,8 +1269,17 @@ bool FVehicleAbsTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("Geradeaus gleitet nichts"), V.bBrakeLockState);
 	}
 
-	// Die Handbremse umgeht das ABS.
-	TestTrue(TEXT("Handbremse blockiert auch mit ABS"), Kurvenbremsung(true, true).bGeglitten);
+	// Die Handbremse wirkt am ABS vorbei nur HINTEN: das Heck gleitet, die
+	// Vorderachse bleibt geregelt und lenkt - der Wagen dreht ein
+	// (Handbremswende). Review PR #26: vorher verloren beide Achsen die
+	// Seitenfuehrung, der Wagen rutschte gedaempft geradeaus.
+	{
+		const FErgebnis Hb = Kurvenbremsung(true, true);
+		TestTrue(TEXT("Handbremse blockiert das Heck auch mit ABS"), Hb.bHintenGleitet && Hb.bSpuren);
+		TestFalse(TEXT("... die Vorderachse gleitet nicht"), Hb.bVorneGleitet);
+		TestTrue(FString::Printf(TEXT("... und dreht staerker ein als ohne Handbremse (%.1f gegen %.1f Grad)"),
+			Hb.KursGrad, Abs.KursGrad), Hb.KursGrad > Abs.KursGrad);
+	}
 
 	// Aus schneller Kurve GERADE bremsen (Lenkung zurueck auf 0): der Wagen faengt
 	// sich. Im Spiel gemessen (29.09.2026): solange der Reibungskreis den Luft-

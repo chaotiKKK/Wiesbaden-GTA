@@ -118,15 +118,19 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysicsOutput
 	bool bWheelSpin = false;
 
 	/**
-	 * True, solange die Raeder beim Bremsen blockieren (Bremsschlupf).
-	 *
-	 * Die geforderte Bremskraft ueberschreitet die Haftreibung; die uebertragene
-	 * Kraft pulst dann zwischen Gleit- und Haftreibung (Threshold-/ABS-Anmutung)
-	 * und die Seitenfuehrung bricht ueber den Reibungskreis weg (kein Lenken mit
-	 * blockierten Raedern).
+	 * True, solange Raeder beim Bremsen blockieren und GLEITEN (Bremsschlupf):
+	 * ohne ABS, oder hinten unter der Handbremse. Die gleitende Achse verliert
+	 * ihre Seitenfuehrung; Reifenspuren und Quietschen haengen an diesem Flag.
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
 	bool bWheelLock = false;
+
+	/**
+	 * True, solange das ABS die Fussbremse an der Haftgrenze regelt. Die Raeder
+	 * rollen dabei noch (keine Spuren) - nur die Kontrollleuchte zeigt es.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle")
+	bool bAbsActive = false;
 };
 
 /**
@@ -572,9 +576,19 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	float WheelSpinFlare = 0.0f;
 
-	/** Hysterese-Zustand Bremsschlupf (Rad blockiert). */
+	/** Hysterese-Zustand Bremsschlupf (Rad blockiert, Blockiermodell ohne ABS). */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	bool bBrakeLockState = false;
+
+	/** Hysterese-Zustand: die Handbremse blockiert die Hinterachse trotz ABS. */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	bool bRearLockState = false;
+
+	/** Diese Achse gleitet in diesem Tick (keine Seitenfuehrung). */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	bool bFrontAxleSliding = false;
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	bool bRearAxleSliding = false;
 
 	/** Belags-Griffigkeit dieses Ticks (0..1, 1 = trocken) - aus dem Input. */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")

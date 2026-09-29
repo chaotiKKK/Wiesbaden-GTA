@@ -30,6 +30,7 @@ FWiesbadenVehiclePhysics WiesbadenBusDrive::MakeBusPhysics()
 	Physics.MuTraction = 0.85f;
 	Physics.LateralGripFactor = 1.0f;     // Kaefer-Kalibrierung gilt hier nicht
 	Physics.DrivetrainEfficiency = 1.0f;
+	Physics.bAbsEnabled = false;          // wie vor dem Spieler-ABS: Bremsplanung unveraendert
 	Physics.CorneringStiffnessFrontNPerRad = 160000.0f;
 	Physics.CorneringStiffnessRearNPerRad = 190000.0f;
 	Physics.YawInertiaKgM2 = 70000.0f;

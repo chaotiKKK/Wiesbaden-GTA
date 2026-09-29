@@ -24,6 +24,9 @@ void FWiesbadenVehiclePhysics::Reset()
 	BrakeAbsPhaseRad = 0.0f;
 	bDriveSlipState = false;
 	bBrakeLockState = false;
+	bRearLockState = false;
+	bFrontAxleSliding = false;
+	bRearAxleSliding = false;
 	SurfaceGripScale = 1.0f;
 	ShiftTimeRemaining = 0.0f;
 	WheelSpinFlare = 0.0f;
@@ -386,7 +389,8 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 	// "begrenzt und gepulst". Die Seitenfuehrung bricht ueber denselben
 	// Reibungskreis (Querdynamik) von selbst weg.
 	const float PedalN = Brake * BrakeForceN;
-	const float BrakeDemandN = PedalN + (Input.bHandbrake ? BrakeForceN * 0.6f : 0.0f);
+	const float HandbrakeN = Input.bHandbrake ? BrakeForceN * 0.6f : 0.0f;
+	const float BrakeDemandN = PedalN + HandbrakeN;
 
 	// Lock-ENTSCHEIDUNG aus dem kombinierten Reibungskreis: die Querbeschleunigung
 	// (a_lat = Vx * Gierrate aus dem Vortick) zehrt am verfuegbaren Laengs-Grip.
@@ -399,8 +403,10 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 		ComputeAvailableLateralAccel(EffectiveMuTraction(), GravityMetersPerS2, LateralAccel);
 
 	// ABS regelt die Fussbremse je ACHSE unter deren Haftgrenze: kein Gleiten,
-	// keine Hysterese. Die Handbremse umgeht das ABS und darf weiter blockieren.
-	const bool bAbsControl = bAbsEnabled && !Input.bHandbrake;
+	// keine Hysterese. Die Handbremse wirkt mechanisch hinten, am ABS vorbei, und
+	// darf die Hinterachse blockieren (siehe unten) - die Fussbremse bleibt dabei
+	// geregelt, die Vorderachse lenkt weiter (Handbremswende).
+	const bool bAbsControl = bAbsEnabled;
 	if (bAbsControl)
 	{
 		bBrakeLockState = false;
@@ -454,11 +460,25 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 		const float CapFrontN = AbsLongGripShare * StaticGripN(FrontLoadN);
 		const float CapRearN = AbsLongGripShare * StaticGripN(RearLoadN);
 		BrakeFrontN = FMath::Min(WantFrontN, CapFrontN);
-		BrakeRearN = FMath::Min(WantRearN, CapRearN);
 		bAbsRegulating = WantFrontN > CapFrontN || WantRearN > CapRearN;
+
+		// Die Handbremse kommt hinten obendrauf, ungeregelt: ueber der Haftung der
+		// Hinterachse gleitet sie (Hysterese wie beim Blockiermodell) und traegt
+		// nur noch die Gleitreibung.
+		const float RearN = FMath::Min(WantRearN, CapRearN) + HandbrakeN;
+		if (bRearLockState)
+		{
+			if (HandbrakeN <= 0.0f || RearN <= KineticGripN(RearLoadN)) { bRearLockState = false; }
+		}
+		else if (HandbrakeN > 0.0f && RearN > StaticGripN(RearLoadN))
+		{
+			bRearLockState = true;
+		}
+		BrakeRearN = bRearLockState ? KineticGripN(RearLoadN) : RearN;
 	}
 	else
 	{
+		bRearLockState = false;
 		// Blockiermodell: Gesamtkraft wie bisher, fuer den Reibungskreis nach
 		// derselben Verteilung auf die Achsen gelegt (Handbremse hinten).
 		const float TotalN = FMath::Min(BrakeDemandN, BrakeCapN);
@@ -468,10 +488,17 @@ float FWiesbadenVehiclePhysics::TickLongitudinal(
 	}
 	const float BrakeForce = (BrakeFrontN + BrakeRearN) * FMath::Sign(Speed);
 
-	// bWheelLock = die Bremse steht an der Haftgrenze: Raeder blockiert ODER das
-	// ABS regelt. Beides zeigt die Kontrollleuchte als "ABS" und die Reifen
-	// quietschen; nur das Blockieren nimmt auch die Seitenfuehrung.
-	Out.bWheelLock = (bBrakeLockState || bAbsRegulating) && FMath::Abs(Speed) > 0.1f;
+	// Welche Achse GLEITET: im Blockiermodell die Vorderachse nur, wenn das Pedal
+	// sie bremst (die Handbremse allein wirkt hinten), die Hinterachse immer;
+	// mit ABS gleitet hoechstens die Hinterachse unter der Handbremse. Nur eine
+	// gleitende Achse verliert ihre Seitenfuehrung.
+	bFrontAxleSliding = bBrakeLockState && PedalN > 0.0f;
+	bRearAxleSliding = bBrakeLockState || bRearLockState;
+
+	// bWheelLock = Raeder gleiten wirklich (Spuren, Quietschen); bAbsActive = das
+	// ABS regelt an der Haftgrenze, die Raeder rollen noch (nur die Leuchte).
+	Out.bWheelLock = (bFrontAxleSliding || bRearAxleSliding) && FMath::Abs(Speed) > 0.1f;
+	Out.bAbsActive = bAbsRegulating && FMath::Abs(Speed) > 0.1f;
 
 	// Motorbremse im Schub: geschlossene Drosselklappe, Gang eingelegt.
 	//
@@ -626,13 +653,13 @@ void FWiesbadenVehiclePhysics::TickLateral(
 		// der Achse, an der es wirkt: die Bremsverteilung laesst der Hinterachse
 		// Reserve, und die haelt den Wagen beim Bremsen stabil.
 		// BLOCKIERTE Raeder gleiten: ein gleitender Reifen hat keine Seitenfuehrung
-		// uebrig - auf beiden Achsen, gleich wie die Bremskraft verteilt ist.
+		// uebrig - je Achse (die Handbremse laesst die Vorderachse lenken).
 		const float FrontGripN = StaticGripN(FrontLoad);
 		const float RearGripN = StaticGripN(RearLoad);
 		// Quer haftet der Reifen nur mit LateralGripFactor der Laengshaftung.
-		const float FyfMax = bBrakeLockState ? 0.0f
+		const float FyfMax = bFrontAxleSliding ? 0.0f
 			: FrontGripN * LateralGripFactor * ComputeAxleLateralShare(TireLongForceFrontN, FrontGripN);
-		const float FyrMax = bBrakeLockState ? 0.0f
+		const float FyrMax = bRearAxleSliding ? 0.0f
 			: RearGripN * LateralGripFactor * ComputeAxleLateralShare(TireLongForceRearN, RearGripN);
 
 		// LASTABHAENGIGE Schraeglaufsteifigkeit: ein staerker belasteter Reifen
@@ -708,7 +735,7 @@ void FWiesbadenVehiclePhysics::TickLateral(
 		// Limit mu*g/v, sonst naehme die Klemme ihm jede Drehung.
 		LateralVelocityMetersPerS =
 			FMath::Clamp(LateralVelocityMetersPerS, -0.7f * Vx - 1.0f, 0.7f * Vx + 1.0f);
-		const float MaxLateralAccel = bBrakeLockState
+		const float MaxLateralAccel = (bFrontAxleSliding || bRearAxleSliding)
 			? EffectiveMuTraction() * LateralGripFactor * GravityMetersPerS2
 			: FMath::Max((FyfMax + FyrMax) / m, 0.1f);
 		const float MaxYaw = MaxLateralAccel / FMath::Max(Vx, 1.0f);
@@ -721,8 +748,9 @@ void FWiesbadenVehiclePhysics::TickLateral(
 		// Daempfung holt den UEBERSCHUSS zurueck, ohne das Blockieren abzuschalten:
 		// der Lastwechsel bleibt spuerbar, laeuft aber nicht mehr weg. NUR bei
 		// blockierten Raedern aktiv -> gerades Bremsen (Gier ~0) und normale Kurve
-		// (nicht blockiert) bleiben voellig unveraendert.
-		if (bBrakeLockState && LockedYawDampingRate > 0.0f)
+		// (nicht blockiert) bleiben voellig unveraendert. Gleitet nur das Heck
+		// (Handbremse), lenkt die Vorderachse - die Drehung ist dann gewollt.
+		if (bFrontAxleSliding && LockedYawDampingRate > 0.0f)
 		{
 			const float Damp = FMath::Exp(-LockedYawDampingRate * DeltaSeconds);
 			YawRateRadPerS *= Damp;

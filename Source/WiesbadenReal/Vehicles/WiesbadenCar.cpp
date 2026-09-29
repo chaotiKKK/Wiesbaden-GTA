@@ -498,10 +498,12 @@ void AWiesbadenCar::UpdateLightsAndAudio(const FWiesbadenVehiclePhysicsOutput& O
 	// Traktions-Flags fuer die HUD-Kontrollleuchte spiegeln - reine Anzeige,
 	// keine Wirkung auf die Fahrt (das HUD liest sie ueber die Steuernaht).
 	bLastWheelSpin = Output.bWheelSpin;
-	bLastWheelLock = Output.bWheelLock;
+	// Die Leuchte zeigt "ABS" beim Regeln wie beim Blockieren.
+	bLastWheelLock = Output.bWheelLock || Output.bAbsActive;
 
 	// Reifen-Effekte: den Schlupf-Zustand nur KONSUMIEREN (keine Physikaenderung).
-	// Welche Raeder Gummi lassen: beim Blockieren alle vier, beim Radspin die
+	// Welche Raeder Gummi lassen: beim Blockieren alle vier (unter der Handbremse
+	// nur das Heck; das ABS regelt ohne Spuren), beim Radspin die
 	// angetriebenen (hinten), beim Drift ebenfalls das kommende Heck.
 	if (TireEffects)
 	{
@@ -511,12 +513,13 @@ void AWiesbadenCar::UpdateLightsAndAudio(const FWiesbadenVehiclePhysicsOutput& O
 		{
 			return Wheel->GetComponentLocation() - FVector(0.0f, 0.0f, WheelRadiusCm);
 		};
-		if (Output.bWheelLock && FrontLeftWheel && FrontRightWheel && RearLeftWheel && RearRightWheel)
+		if (VehiclePhysics.bFrontAxleSliding && Output.bWheelLock
+			&& FrontLeftWheel && FrontRightWheel && RearLeftWheel && RearRightWheel)
 		{
 			Marks = { Contact(FrontLeftWheel), Contact(FrontRightWheel),
 				Contact(RearLeftWheel), Contact(RearRightWheel) };
 		}
-		else if ((Output.bWheelSpin || FMath::Abs(Output.SlipAngleDeg) > 8.0f)
+		else if ((Output.bWheelLock || Output.bWheelSpin || FMath::Abs(Output.SlipAngleDeg) > 8.0f)
 			&& RearLeftWheel && RearRightWheel)
 		{
 			Marks = { Contact(RearLeftWheel), Contact(RearRightWheel) };
@@ -1226,8 +1229,8 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 				Now, Output.SpeedKmh, Output.ForwardAccelerationMetersPerS2, LateralAccelMs2,
 				FMath::RadiansToDegrees(Output.YawRateRadPerS), Output.SlipAngleDeg,
 				Output.SteerAngleNorm, ThrottleInput, BrakeInput, BodyPitchDeg, BodyRollDeg,
-				TelemetryHeaveCm, Output.bWheelSpin ? 1 : 0, Output.bWheelLock ? 1 : 0,
-				VehiclePhysics.bBrakeLockState ? 1 : 0, Output.Gear,
+				TelemetryHeaveCm, Output.bWheelSpin ? 1 : 0, (Output.bWheelLock || Output.bAbsActive) ? 1 : 0,
+				Output.bWheelLock ? 1 : 0, Output.Gear,
 				GroundHits > 0 ? GroundSum / GroundHits : 0.0f, ComputeMaxWheelGapCm(), BodyHeaveCm);
 		}
 	}
