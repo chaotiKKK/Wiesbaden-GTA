@@ -132,8 +132,15 @@ AWiesbadenCar::AWiesbadenCar()
 	// getestet, s. ChooseBeetleAssembly). Das Herbie-Voll-Mesh vermisst ein
 	// Hinterrad, daher bevorzugt die radlose Karosserie + 4 Einzelraeder.
 	// bBodyIncludesWheels steuert unten das Ausblenden der separaten Raeder.
+#if !UE_BUILD_SHIPPING
+	// Sichtprobe des Notfallwegs: -WbKaeferHerbie erzwingt das Herbie-Voll-Mesh
+	// (Raeder im Mesh, Einzelraeder ausgeblendet), das sonst nie zu sehen ist.
+	const bool bForceHerbie = FParse::Param(FCommandLine::Get(), TEXT("WbKaeferHerbie"));
+#else
+	const bool bForceHerbie = false;
+#endif
 	const FBeetleAssembly Assembly = ChooseBeetleAssembly(
-		Beetle != nullptr, BeetleWheel != nullptr, Herbie != nullptr);
+		Beetle != nullptr && !bForceHerbie, BeetleWheel != nullptr, Herbie != nullptr);
 	const bool bBodyIncludesWheels = !Assembly.bSeparateWheels;
 
 	BodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BodyMesh"));
