@@ -151,9 +151,12 @@ def main() -> int:
         global SEITE
         SEITE = pathlib.Path(args.seite).resolve()
 
+    # errors="replace": dekodier-tolerant halten. Ohne Handler dekodiert
+    # der Textmodus ab Python 3.15 (PEP 686) UTF-8/strict - ein einziges
+    # Nicht-UTF-8-Byte wuerde den Reader-Thread still sterben lassen.
     sha = args.sha or subprocess.run(
         ["git", "rev-parse", "origin/main"],
-        cwd=REPO, capture_output=True, text=True, check=True,
+        cwd=REPO, capture_output=True, text=True, errors="replace", check=True,
     ).stdout.strip()
 
     for num, tag in sorted(TAGS.items()):

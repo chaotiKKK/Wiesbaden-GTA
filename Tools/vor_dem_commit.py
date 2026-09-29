@@ -223,9 +223,15 @@ def zu_pushende_dateien(cwd=WURZEL):
     Rueckgabe None = Bereich NICHT bestimmbar (kein Upstream, kaputtes Repo).
     Dann darf nichts uebersprungen werden; siehe braucht_compiler.
     """
+    # errors="replace": git-Metadaten sind dekodier-tolerant zu halten.
+    # Ohne Handler dekodiert der Textmodus mit der Locale-Vorgabe (3.14:
+    # cp1252/strict) - ab Python 3.15 (PEP 686) mit UTF-8/strict, und
+    # jedes Nicht-UTF-8-Byte (z. B. ein Umlaut aus der OEM-Konsole) wuerde
+    # den Reader-Thread STILL sterben lassen.
     zeiger = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-        cwd=cwd, capture_output=True, text=True, env=saubere_umgebung())
+        cwd=cwd, capture_output=True, text=True, errors="replace",
+        env=saubere_umgebung())
     if zeiger.returncode != 0 or not zeiger.stdout.strip():
         return None
 
@@ -307,7 +313,7 @@ def besitz_pfad():
         return aus_umgebung
     roh = subprocess.run(["git", "rev-parse", "--git-common-dir"],
                          cwd=WURZEL, capture_output=True, text=True,
-                         env=saubere_umgebung())
+                         errors="replace", env=saubere_umgebung())
     if roh.returncode != 0 or not roh.stdout.strip():
         return None
     ordner = roh.stdout.strip()
@@ -498,7 +504,7 @@ def besitz_gate(dateien, lauf, eigener_branch=None, thread=None):
 def aktueller_branch():
     roh = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
                          cwd=WURZEL, capture_output=True, text=True,
-                         env=saubere_umgebung())
+                         errors="replace", env=saubere_umgebung())
     name = roh.stdout.strip() if roh.returncode == 0 else ""
     return name or "(kein Branch)"
 
@@ -510,7 +516,7 @@ def threadname(branch=None):
         return aus_umgebung
     roh = subprocess.run(["git", "config", "--get", "wb.thread"],
                          cwd=WURZEL, capture_output=True, text=True,
-                         env=saubere_umgebung())
+                         errors="replace", env=saubere_umgebung())
     if roh.returncode == 0 and roh.stdout.strip():
         return roh.stdout.strip()
     return branch or aktueller_branch()
