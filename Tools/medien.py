@@ -190,7 +190,11 @@ def aufnahme(a):
         cmd = [FFMPEG, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', quelle,
                '-t', str(a.sekunden), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
                '-pix_fmt', 'yuv420p', roh]
-        lauf = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # errors="replace": ffmpeg-Stderr dekodier-tolerant lesen. Ohne Handler
+        # dekodiert der Textmodus ab Python 3.15 (PEP 686) UTF-8/strict - ein
+        # einziges Fremd-Byte wuerde den Reader-Thread still sterben lassen.
+        lauf = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, errors="replace")
         while lauf.poll() is None:
             time.sleep(0.2)
             if not user32.IsWindow(hwnd) or not user32.IsWindowVisible(hwnd):

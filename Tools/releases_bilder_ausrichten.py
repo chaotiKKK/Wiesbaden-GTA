@@ -69,8 +69,11 @@ TAGS = {
 
 
 def gh(*args: str) -> str:
+    # errors="replace": gh-Ausgabe dekodier-tolerant lesen (PEP 686 - ohne
+    # Handler dekodiert der Textmodus ab 3.15 strict und stirbt still).
     r = subprocess.run(
-        ["gh", *args], cwd=REPO, capture_output=True, text=True, encoding="utf-8"
+        ["gh", *args], cwd=REPO, capture_output=True, text=True, encoding="utf-8",
+        errors="replace"
     )
     if r.returncode != 0:
         raise RuntimeError(f"gh {' '.join(args)} fehlgeschlagen: {r.stderr.strip()}")

@@ -59,9 +59,13 @@ def convert(name, src_name, peak_db, b_loop):
     dst = os.path.join(DST, "%s.wav" % name)
     # loudnorm waere zweistufig; hier reicht ein simpler Peak-Norm über
     # volume=(dBFS): messen mit volumedetect, dann anheben/absenken.
+    # errors="replace": ffmpeg-Ausgabe dekodier-tolerant lesen (beide Leser
+    # unten). Ohne Handler dekodiert der Textmodus ab Python 3.15 (PEP 686)
+    # UTF-8/strict - ein einziges Fremd-Byte wuerde den Leser still sterben
+    # lassen.
     probe = subprocess.run(
         [FFMPEG, "-hide_banner", "-i", src, "-af", "volumedetect", "-f", "null", "-"],
-        capture_output=True, text=True)
+        capture_output=True, text=True, errors="replace")
     peak = 0.0
     for line in probe.stderr.splitlines():
         if "max_volume" in line:
@@ -76,7 +80,7 @@ def convert(name, src_name, peak_db, b_loop):
         "-vn", "-ac", "1", "-ar", "44100", "-sample_fmt", "s16",
         "-af", "volume=%.1f dB" % gain,
         "-c:a", "pcm_s16le", dst]
-    run = subprocess.run(cmd, capture_output=True, text=True)
+    run = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     if run.returncode != 0 or not os.path.isfile(dst):
         return "%s FEHLER: %s" % (name, run.stderr.strip()[:200])
     size_kb = os.path.getsize(dst) // 1024

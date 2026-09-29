@@ -368,8 +368,11 @@ def main():
     projekt = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     tar = subprocess.run(['git', 'archive', a.ref, 'docs/meilensteine.md', 'docs/meilensteine'],
                          cwd=projekt, capture_output=True, check=True).stdout
+    # errors="replace": Git-Metadaten dekodier-tolerant lesen. Ohne Handler
+    # dekodiert der Textmodus ab Python 3.15 (PEP 686) UTF-8/strict - ein
+    # einziges Fremd-Byte wuerde den Leser still sterben lassen.
     sha = subprocess.run(['git', 'rev-parse', '--short', a.ref], cwd=projekt, capture_output=True,
-                         text=True, check=True).stdout.strip()
+                         text=True, errors="replace", check=True).stdout.strip()
     with tarfile.open(fileobj=io.BytesIO(tar)) as t:
         text = t.extractfile('docs/meilensteine.md').read().decode('utf-8')
         tmp = os.path.join(a.ziel, '.quelle_tmp')

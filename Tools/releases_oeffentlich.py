@@ -225,9 +225,10 @@ def hauptprogramm(argv=None):
         else REPO / "docs" / "meilensteine" / "bilder"
     sha = args.sha
     if not sha:
+        # errors="replace": Git-Metadaten dekodier-tolerant lesen (PEP 686).
         fertig = subprocess.run(["git", "rev-parse", "--short", args.ref], cwd=REPO,
                                 capture_output=True, text=True, encoding="utf-8",
-                                check=True)
+                                errors="replace", check=True)
         sha = fertig.stdout.strip()
 
     print(f"Spiegel nach {args.ziel} (Seite {args.ref} @ {sha})")

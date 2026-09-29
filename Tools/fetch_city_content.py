@@ -80,8 +80,12 @@ def github_token():
     if not gh:
         return ""
     try:
+        # errors="replace": gh-Ausgabe dekodier-tolerant lesen. Ohne Handler
+        # dekodiert der Textmodus ab Python 3.15 (PEP 686) UTF-8/strict -
+        # ein einziges Fremd-Byte wuerde den Leser still sterben lassen.
         result = subprocess.run(
-            [gh, "auth", "token"], capture_output=True, text=True, check=False)
+            [gh, "auth", "token"], capture_output=True, text=True,
+            errors="replace", check=False)
     except OSError:
         return ""
     return result.stdout.strip() if result.returncode == 0 else ""

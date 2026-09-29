@@ -161,9 +161,12 @@ def main() -> int:
 
     for num, tag in sorted(TAGS.items()):
         neu = release_text(num, sha)
+        # errors="replace": gh-Ausgabe dekodier-tolerant lesen (PEP 686 -
+        # ohne Handler dekodiert der Textmodus ab 3.15 strict).
         alt = subprocess.run(
             ["gh", "release", "view", tag, "--json", "body", "-q", ".body"],
             cwd=REPO, capture_output=True, text=True, encoding="utf-8",
+            errors="replace",
         ).stdout
         # Der bestehende Text hat keine "#"-Ueberschrift - dieselbe Form halten.
         alt_ohne = re.sub(r"^## \d+\..*\n\n", "", alt.rstrip())
