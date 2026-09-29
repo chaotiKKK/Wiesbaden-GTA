@@ -38,6 +38,21 @@ def zeit_bis(proben, start, bedingung):
     return None if i is None else proben[i]["t"] - proben[start]["t"]
 
 
+def zeit_aus_dem_stand(proben, start, kmh):
+    """Zeit vom Stillstand bis kmh, wie bei einem Beschleunigungstest.
+
+    Die erste Zeile mit Gas faehrt schon (~5 km/h, 10 Hz): der Stillstand wird
+    mit ihrer Beschleunigung zurueckgerechnet, sonst fehlen ~0,4 s. Das
+    Erreichen von kmh wird zwischen zwei Zeilen interpoliert.
+    """
+    p0 = proben[start]
+    t0 = p0["t"] - (p0["v"] / 3.6) / p0["ax"] if p0["ax"] > 0.1 else p0["t"]
+    for a, b in zip(proben[start:], proben[start + 1:]):
+        if a["v"] < kmh <= b["v"]:
+            return a["t"] + (b["t"] - a["t"]) * (kmh - a["v"]) / (b["v"] - a["v"]) - t0
+    return None
+
+
 def auswerten(proben):
     k = {}
     start = erste(proben, lambda p: p["gas"] > 0.5)
@@ -48,8 +63,10 @@ def auswerten(proben):
     bremse = erste(proben, lambda p: p["bremse"] > 0.5, start)
 
     # --- Anfahren ---------------------------------------------------------
-    k["0-50 km/h [s]"] = zeit_bis(proben, start, lambda p: p["v"] >= 50)
-    k["0-100 km/h [s]"] = zeit_bis(proben, start, lambda p: p["v"] >= 100)
+    k["0-50 km/h [s]"] = zeit_aus_dem_stand(proben, start, 50.0)
+    # 0-60 mph ist die Messgroesse von Road & Track (Vorlage der Kalibrierung).
+    k["0-60 mph (96,6 km/h) [s]"] = zeit_aus_dem_stand(proben, start, 96.56)
+    k["0-100 km/h [s]"] = zeit_aus_dem_stand(proben, start, 100.0)
     ende_a = lenk_re or bremse or len(proben)
     k["Radspin im Anfahren [s]"] = sum(0.1 for p in proben[start:ende_a] if p["spin"])
     k["Nicken Anfahren max [Grad]"] = max((abs(p["nick"]) for p in proben[start:ende_a]), default=0)

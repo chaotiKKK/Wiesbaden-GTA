@@ -5155,5 +5155,9 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   18,2 s. Kaefer: MuTraction 0,9 (laengs), LateralGripFactor 0,8 (quer),
   BrakeForceN 7000 mit Verteilung 0,74 (0,7 war damit instabil, s.o.),
   DrivetrainEfficiency 0,9. Verkehr/Bus setzen die beiden neuen Faktoren auf
-  1,0. Offen: Masse 820 statt ~970 kg (Leergewicht + Fahrer) -> 0-100 noch
-  ~2 s zu schnell.
+  1,0. Masse seit 29.09. 970 kg (R&T: Leergewicht 1.960/1.970 lb + Fahrer);
+  BrakeForceN (8.300 N), Seitensteifigkeiten und Giertraegheit wuchsen mit
+  (x1,183), damit Bremsen in g und Kurvenverhalten gleich bleiben. Vergleich
+  mit R&T in mph: 0-60 mph 18,2 s (Spiel 18,2-18,3 s), 0-100 km/h daraus
+  ~20,3 s - NICHT "0-100 in 18,2 s". fahrmessung_auswerten.py misst seit dem
+  ab Stillstand (die erste Gaszeile faehrt schon, vorher fehlten 0,4 s).

@@ -44,6 +44,10 @@ FWiesbadenPowertrainSpec FWiesbadenPowertrainSpec::Kaefer1302()
     S.ForwardGearRatios = { 3.80f, 2.06f, 1.32f, 0.89f };
     S.ReverseGearRatio = 3.61f;
     S.FinalDriveRatio = 4.375f;
-    S.MassKg = 820.0f;
+    // Fahrfertig mit Fahrer: Leergewicht 1.960-1.970 lb (889-894 kg, Road &
+    // Track 3/1971 Super Beetle und 9/1973 Sports Bug) plus ~80 kg Fahrer.
+    // Bis 29.09.2026 stand hier 820 kg - leichter als der leere Wagen, der
+    // Kaefer lief 0-100 darum ~2 s zu schnell.
+    S.MassKg = 970.0f;
     return S;
 }
