@@ -607,12 +607,13 @@ class FahrphysikGateTest(unittest.TestCase):
         self.assertIn("goto :nicht_gemessen", text,
                       "'nicht gemessen' (Exit 2) muss rot werden, nicht gruen")
 
-    def test_die_messfahrt_gibt_die_gehaltene_sperre_nicht_frei(self):
-        """Im Push haelt der Hook die Sperre; die Fahrt darf sie nicht loeschen."""
-        text = (WURZEL / "Tools" / "fahrmessung.cmd").read_text(
+    def test_die_sperre_bleibt_beim_umschliessenden_lauf(self):
+        """Im Push haelt der Hook die Sperre; Unterlaeufe (Gate 4, Gate 7)
+        rufen Freigeben - das Sperr-Skript muss die Sperre dann stehen lassen.
+        Das Verhalten selbst belegt Tools/test_engine_run_lock_freigabe.py."""
+        text = (WURZEL / "Tools" / "engine_run_lock.ps1").read_text(
             encoding="utf-8", errors="replace")
-        self.assertIn("bereits gehalten", text)
-        self.assertIn('if "%SCHON_GEHALTEN%"=="0" call', text)
+        self.assertIn("gehoert dem umschliessenden Lauf - bleibt gehalten", text)
 
     def test_ohne_neues_ergebnis_ist_es_rot(self):
         doppel = AnkerBeweisTest.LaufDoppel(0)

@@ -5196,8 +5196,11 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   Kalibrierung 4 x ROT, mit 820 kg 0-60 ROT, kalibriert GRUEN.
 - Sollwerte AENDERN heisst neu kalibrieren und belegen - nicht das Band
   weiten, bis ein Rueckfall durchpasst.
-- `fahrmessung.cmd` gibt eine Sperre, die es beim Start SCHON hielt
-  ("bereits gehalten"), am Ende NICHT frei. `run_cut_shots.cmd` (Gate 4) tut
-  das noch: sein `Freigeben` loescht die Sperre des Push-Hooks (eigene
-  Prozesskette), die Gates danach laufen ohne Sperre - offen, nicht behoben.
+- Engine-Sperre im Push: der Hook haelt sie ab Gate 0. Seit 30.09.2026 gibt
+  `engine_run_lock.ps1 -Modus Freigeben` nur die Sperre des EIGENEN Laufs frei
+  (Besitzer = Elternprozess des Aufrufs); gehoert sie einem umschliessenden
+  Lauf, bleibt sie ("gehoert dem umschliessenden Lauf - bleibt gehalten").
+  Vorher loeschte Gate 4 (run_cut_shots.cmd: Start + Freigeben) die Sperre des
+  Hooks, und alle Gates danach liefen ohne. Beleg:
+  Tools/test_engine_run_lock_freigabe.py (gegen den alten Stand rot).
 

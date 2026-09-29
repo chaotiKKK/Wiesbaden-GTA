@@ -20,6 +20,12 @@
 #   * Gehoert der Besitzer zur eigenen Prozesskette (Vater/Sohn desselben Laufs,
 #     z. B. Gate -> smoke_test -> Cleanup), ist die Sperre EIGEN: der Lauf darf
 #     beenden. Reentrant, sonst wuerde sich das Gate selbst blockieren.
+#   * FREIGEBEN darf nur der Lauf, der die Sperre genommen hat (Besitzer =
+#     Elternprozess dieses Aufrufs). Gehoert sie einem UMSCHLIESSENDEN Lauf
+#     weiter oben in der Kette, bleibt sie stehen. GEMESSEN am 29.09.2026: der
+#     Push-Hook haelt sie ab Gate 0, Gate 4 (run_cut_shots.cmd) rief darunter
+#     Start + Freigeben und loeschte sie - alle Gates danach liefen ohne Sperre.
+#     -Gewalt gibt trotzdem frei. Belegt in Tools\test_engine_run_lock_freigabe.py.
 #   * PID-Wiederverwendung: neben dem PID wird die Startzeit gespeichert und
 #     beim Pruefen verglichen - ein recycelter PID gilt nicht als Besitzer.
 #
@@ -182,12 +188,19 @@ function Write-LockInhalt($Strom, [int]$OwnerPid, [string]$Label) {
 # Der ELTERNprozess ist der Besitzer: der aufrufende Lauf (cmd.exe bzw.
 # powershell.exe), nicht der kurzlebige PowerShell-Kindprozess, der nur die
 # Sperre anlegt. Nur so ueberlebt der Lock die Engine-Sitzung.
-function Get-Besitzer([string]$Label) {
+function Get-EigenerLauf {
     $zeile = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $PID) -ErrorAction SilentlyContinue
     if (-not $zeile) { return $PID }
     $elternPid = [int]$zeile.ParentProcessId
     if ($elternPid -le 0) { return $PID }
-    Write-Host ("Lock: besetzt fuer Lauf '{0}' (Besitzer PID {1})." -f $Label, $elternPid)
+    return $elternPid
+}
+
+function Get-Besitzer([string]$Label) {
+    $elternPid = Get-EigenerLauf
+    if ($elternPid -ne $PID) {
+        Write-Host ("Lock: besetzt fuer Lauf '{0}' (Besitzer PID {1})." -f $Label, $elternPid)
+    }
     return $elternPid
 }
 
@@ -339,6 +352,15 @@ function Sperre-Freigeben([string]$Pfad, [bool]$Gewalt) {
     if ($zustand.Status -eq "Fremd" -and -not $Gewalt) {
         Write-Host ("Lock: fremder Lauf haelt ihn weiter - {0}. Nichts freigegeben." -f (Get-LockText $zustand))
         return $ExitBelegt
+    }
+    # EIGEN heisst nur "gehoert zu dieser Prozesskette". Freigeben darf ihn
+    # aber nur der Lauf, der ihn genommen hat - nicht ein Unterlauf eines
+    # umschliessenden Besitzers (Push-Hook -> Gate 4 -> run_cut_shots.cmd).
+    $eigenerLauf = Get-EigenerLauf
+    if ($zustand.Status -eq "Eigen" -and -not $Gewalt -and
+            $zustand.Lock.Pid -ne $eigenerLauf -and $zustand.Lock.Pid -ne $PID) {
+        Write-Host ("Lock: gehoert dem umschliessenden Lauf - bleibt gehalten ({0})." -f (Get-LockText $zustand))
+        return 0
     }
     Remove-Item -LiteralPath $Pfad -Force -ErrorAction SilentlyContinue
     Write-Host ("Lock: freigegeben (war {0})." -f (Get-LockText $zustand))
