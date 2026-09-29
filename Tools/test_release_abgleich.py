@@ -119,6 +119,16 @@ class AbgleichTest(unittest.TestCase):
         self.attrappe = None
         self.raus = ""
         self._oeffentlich = None
+        self.geschlafen = []
+        self._schlaf_alt = getattr(ra, "SCHLAF", None)
+        ra.SCHLAF = self.geschlafen.append
+        self.addCleanup(self._schlaf_zurueck)
+
+    def _schlaf_zurueck(self):
+        if self._schlaf_alt is None:
+            delattr(ra, "SCHLAF")
+        else:
+            ra.SCHLAF = self._schlaf_alt
 
     def tearDown(self):
         (ra.SEITE_ARBEIT, ra.BILDER_ARBEIT, ra.GH_LAUF, ra.HTTP_LAUF,
@@ -204,6 +214,7 @@ class AbgleichTest(unittest.TestCase):
         del rel[TAGS[2]]
         self.assertEqual(self.laufen(releases=rel), 1, self.raus)
         self.assertIn("Release fehlt ganz", self.raus)
+        self.assertEqual(self.geschlafen, [], "ein fehlendes Release ist eine Antwort, kein Aussetzer")
 
     # -- 3. Abweichungen im Text -------------------------------------------
 
@@ -371,6 +382,96 @@ class AbgleichTest(unittest.TestCase):
         self.assertEqual(code, 3, self.raus)
         self.assertIn("nicht abfragbar", self.raus)
 
+    # -- 5b. Kurze Netzaussetzer: wiederholen, aber nie einen Befund -----
+    #
+    # GEMESSEN am 28.09.2026: drei volle Push-Gates scheiterten allein an
+    # kurzen Verbindungsabbruechen zu GitHub (Exit 3), der zweite Versuch
+    # Sekunden spaeter war gruen. Die Meldungen hier sind die echten.
+
+    DIAL = ('Post "https://api.github.com/graphql": dial tcp 140.82.121.6:443: '
+            'connectex: Ein Verbindungsversuch ist fehlgeschlagen, da die '
+            'Gegenstelle nach einer bestimmten Zeitspanne nicht richtig reagiert hat')
+
+    def laufen_mit_aussetzern(self, fehlschlaege, meldung=DIAL):
+        """Die ersten `fehlschlaege` gh-Aufrufe scheitern am Transport, der
+        Rest antwortet wie die Attrappe."""
+        self.attrappe = Attrappe(self.releases())
+        zaehler = {"n": 0}
+        attrappe = self.attrappe
+
+        def gh(*args):
+            zaehler["n"] += 1
+            if zaehler["n"] <= fehlschlaege:
+                return 1, "", meldung
+            return attrappe(*args)
+
+        ra.GH_LAUF = gh
+        puffer = io.StringIO()
+        with contextlib.redirect_stdout(puffer):
+            code = ra.hauptprogramm([])
+        self.raus = puffer.getvalue()
+        return code
+
+    def test_ein_kurzer_gh_aussetzer_wird_wiederholt_und_ist_gruen(self):
+        code = self.laufen_mit_aussetzern(1)
+        self.assertEqual(code, 0, self.raus)
+        self.assertEqual(self.geschlafen, [5])
+        self.assertIn("Wiederholung 1/3", self.raus)
+
+    def test_zwei_aussetzer_hintereinander_werden_auch_ueberbrueckt(self):
+        code = self.laufen_mit_aussetzern(2, "error connecting to api.github.com\n"
+                                             "check your internet connection")
+        self.assertEqual(code, 0, self.raus)
+        self.assertEqual(self.geschlafen, [5, 15])
+
+    def test_ein_dauerhafter_gh_aussetzer_bleibt_nicht_gemessen(self):
+        code = self.laufen_mit_aussetzern(10 ** 6)
+        self.assertEqual(code, 3, self.raus)
+        self.assertEqual(self.geschlafen, [5, 15, 30], "begrenzt: drei Wiederholungen")
+        self.assertIn("auch nach 3 Wiederholungen", self.raus)
+        self.assertIn("NICHT 'alles in Ordnung'", self.raus)
+
+    def test_ein_gh_5xx_ist_ein_aussetzer(self):
+        code = self.laufen_mit_aussetzern(1, "HTTP 502: Bad Gateway (https://api.github.com/graphql)")
+        self.assertEqual(code, 0, self.raus)
+        self.assertEqual(self.geschlafen, [5])
+
+    def test_eine_antwort_von_github_wird_nie_wiederholt(self):
+        for meldung in ("HTTP 401: Bad credentials", "HTTP 404: Not Found",
+                        "release not found"):
+            self.geschlafen.clear()
+            code = self.laufen(fehler=(1, "", meldung))
+            self.assertEqual(code, 3, (meldung, self.raus))
+            self.assertEqual(self.geschlafen, [], meldung)
+
+    def test_ein_kurzer_http_aussetzer_wird_wiederholt_und_ist_gruen(self):
+        gescheitert = []
+
+        def http(url):
+            if not gescheitert:
+                gescheitert.append(url)
+                raise ra.NichtMessbar("oeffentlicher Abruf %s: <urlopen error timed out>" % url)
+            return 200, "123"
+
+        ra.HTTP_LAUF = http
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 0, self.raus)
+        self.assertEqual(self.geschlafen, [5])
+
+    def test_ein_http_404_ist_sofort_rot_ohne_wiederholung(self):
+        ra.HTTP_LAUF = lambda url: (404, None)
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 1, self.raus)
+        self.assertIn("HTTP 404", self.raus)
+        self.assertEqual(self.geschlafen, [], "ein 404 ist ein Befund, kein Aussetzer")
+
+    def test_ein_dauerhaftes_http_503_ist_nicht_gemessen_statt_toter_link(self):
+        ra.HTTP_LAUF = lambda url: (503, None)
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 3, self.raus)
+        self.assertIn("auch nach 3 Wiederholungen", self.raus)
+        self.assertTrue(self.geschlafen and set(self.geschlafen) == {5, 15, 30}, self.geschlafen)
+
     def test_der_abruf_erfolgt_ohne_anmeldung_und_oeffentlich(self):
         """Der Aufruf darf keine Anmeldedaten mitschicken - sonst wuerde
         200 beweisen, dass der Link mit Konto geht, und nicht das, was
@@ -471,6 +572,23 @@ class HilfsfunktionTest(unittest.TestCase):
         self.assertEqual(len(zeilen), 2, zeilen)
         self.assertTrue(any("neu.jpg" in z for z in zeilen))
         self.assertTrue(any("alt.jpg" in z for z in zeilen))
+
+
+class AussetzerErkennungTest(unittest.TestCase):
+    """Die Erkennung an den echten Meldungen vom 28.09.2026."""
+
+    def test_transportfehler(self):
+        for text in (AbgleichTest.DIAL,
+                     "error connecting to api.github.com\ncheck your internet connection",
+                     "HTTP 502: Bad Gateway", "HTTP 503: Service Unavailable",
+                     "read tcp: i/o timeout", "TLS handshake timeout"):
+            self.assertTrue(ra.ist_aussetzer(text), text)
+
+    def test_antworten_sind_keine_aussetzer(self):
+        for text in ("release not found", "HTTP 404: Not Found",
+                     "HTTP 401: Bad credentials", "HTTP 403: Forbidden",
+                     "gh nicht gefunden", "", None):
+            self.assertFalse(ra.ist_aussetzer(text), text)
 
 
 if __name__ == "__main__":
