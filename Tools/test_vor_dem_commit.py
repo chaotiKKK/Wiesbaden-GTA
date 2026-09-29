@@ -25,6 +25,184 @@ import vor_dem_commit as vdc  # noqa: E402
 WURZEL = Path(__file__).resolve().parent.parent
 
 
+def setUpModule():
+    """Die AUTO-REINIGUNG fuer die ganze Suite stilllegen.
+
+    GEMESSEN am 29.09.2026: die echte Platte stand bei 10-14 % - mehrere
+    Tests fahren gates_fahren mit dem ECHTEN platten_hinweis, und ohne
+    diesen Schalter haette JEDE davon die Cache-Klasse wirklich geloescht.
+    Tests entscheiden mit gestellten Werten, nie mit echter Disk.
+    """
+    os.environ["WB_PLATTEN_AUTO_REINIGUNG"] = "0"
+
+
+class PlattenAutoReinigungTest(unittest.TestCase):
+    """Der Platten-Hinweis räumt die Cache-Klasse selbst, wenn Luft fehlt.
+
+    GEMESSEN am 29.09.2026: 10.2 % frei, 0 % Luft bis zur Abbruchgrenze;
+    der manuelle cache-only Lauf holte 11 GB. Genau dieser Lauf wird
+    automatisiert - aber nur fail-open, cache-only und per Schalter
+    abstellbar. Alle Tests hier stellen Werte, keiner berührt echte Disk.
+    """
+
+    def setUp(self):
+        os.environ.pop("WB_PLATTEN_AUTO_REINIGUNG", None)
+        self.addCleanup(os.environ.pop, "WB_PLATTEN_AUTO_REINIGUNG", None)
+
+    def test_ab_der_schwelle_wird_nicht_gereinigt(self):
+        """Die Schwelle selbst und alles darueber gilt als gesund - erst
+        UNTER 14 % wird ueberhaupt gemessen. None (Messung fehlgeschlagen)
+        wird ebenso still durchgereicht."""
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "reinigen") as reinig:
+            for prozent in (14.0, 20.0, 86.0, None):
+                self.assertIsNone(vdc.platten_auto_reinigen(prozent),
+                                  "bei %.1f %% gab es eine Meldung" % (prozent or -1))
+        reinig.assert_not_called()
+        self.assertIsNone(vdc.platten_auto_reinigen(None))
+
+    def test_direkt_unter_der_schwelle_wird_gereinigt(self):
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "messen", return_value=[]), \
+             mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
+             mock.patch.object(platten_waechter, "reinigen",
+                               return_value=(["C:/x/Zen/Data"], [])) as reinig, \
+             mock.patch.object(platten_waechter, "platz",
+                               return_value=(100, 1000, 18.0)):
+            meldung = vdc.platten_auto_reinigen(11.0)
+        reinig.assert_called_once()
+        # GENAU der cache-only Aufruf: ohne klassen-Argument ist der
+        # Waechter-Default NUR_LOESCHEN = ("cache",) - die Ausgabe-Klasse
+        # wird niemals automatisch angefasst.
+        self.assertNotIn("klassen", reinig.call_args.kwargs)
+        self.assertIn("AUTO-REINIGUNG", meldung)
+        self.assertIn("jetzt 18 % frei", meldung)
+
+    def test_schalter_wb_platten_auto_reinigung_0_schaltet_ab(self):
+        os.environ["WB_PLATTEN_AUTO_REINIGUNG"] = "0"
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "reinigen") as reinig:
+            self.assertIsNone(vdc.platten_auto_reinigen(5.0))
+        reinig.assert_not_called()
+
+    def test_waechter_fehler_wird_zu_zeile_und_faengt_kein_gate(self):
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "kandidaten",
+                               side_effect=OSError("disk gone")):
+            meldung = vdc.platten_auto_reinigen(5.0)
+        self.assertIn("nicht ausgefuehrt", meldung)
+        self.assertIn("kein Gate", meldung)
+
+    def test_ohne_loeschbares_faellt_still_durch(self):
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "messen", return_value=[]), \
+             mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
+             mock.patch.object(platten_waechter, "reinigen",
+                               return_value=([], [])):
+            self.assertIsNone(vdc.platten_auto_reinigen(11.0))
+
+    def test_der_hinweis_verkabelt_die_reinigung(self):
+        """platten_hinweis ruft platten_auto_reinigen mit dem GEMESSENEN
+        Prozent-Stand - nicht mit None, nicht mit der Grenze."""
+        import platten_waechter
+        mit_waechter = mock.patch.object(
+            platten_waechter, "warnung", return_value="Plattenwaechter: "
+            "94.0 GB frei (10.2 %) - UNTER der Grenze (20 %)")
+        mit_platz = mock.patch.object(
+            platten_waechter, "platz", return_value=(94e9, 953e9, 10.2))
+        mit_auto = mock.patch.object(
+            vdc, "platten_auto_reinigen", return_value=None)
+        with mit_waechter, mit_platz, mit_auto as auto:
+            vdc.platten_hinweis()
+        auto.assert_called_once_with(10.2)
+
+    def test_stufe_2_feuert_wenn_der_cache_nicht_reicht(self):
+        """Bleibt die Platte nach Stufe 1 unter der Schwelle, raeumt Stufe 2
+        die AUSGABE-Klasse - hinter der VOLLBUILD-Warnung, mit dem
+        Konstanten-Zitat als Messbeleg im Log."""
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "messen", return_value=[]), \
+             mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
+             mock.patch.object(
+                 platten_waechter, "reinigen",
+                 side_effect=[(["C:/x/Zen/Data"], []),
+                              (["C:/p/Intermediate/Build",
+                                "C:/p/Saved/StagedBuilds"], [])]) as reinig, \
+             mock.patch.object(platten_waechter, "platz",
+                               side_effect=[(100, 1000, 13.0),
+                                            (100, 1000, 22.0)]), \
+             mock.patch.object(platten_waechter, "engine_lock_aktiv",
+                               return_value=False):
+            text = vdc.platten_auto_reinigen(11.0)
+        self.assertEqual(reinig.call_count, 2)
+        zweiter = reinig.call_args_list[1].kwargs
+        self.assertEqual(zweiter.get("klassen"),
+                         (platten_waechter.REGENERIERBAR,),
+                         "Stufe 2 gibt GENAU die Ausgabe-Klasse frei - "
+                         "nie cache nochmal, nie dev-builds")
+        self.assertIn("STUFE 2", text)
+        self.assertIn("VOLLBUILD", text, "die Erwartung steht im Gate-Log")
+        self.assertIn("104 s -> 181 s", text, "der gemessene Beleg kommt mit")
+        self.assertIn("2 Ausgabe-Ordner", text)
+        self.assertIn("22 % frei", text)
+
+    def test_die_zeitkosten_warnung_steht_vor_dem_ergebnis(self):
+        """Erst die Warnung (Erwartung), dann der Bericht (Wirkung) -
+        ein Leser, der mid-run abbricht, hat die Kosten schon gelesen."""
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "messen", return_value=[]), \
+             mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
+             mock.patch.object(platten_waechter, "reinigen",
+                               side_effect=[([], []),
+                                            (["C:/p/Saved/StagedBuilds"], [])]), \
+             mock.patch.object(platten_waechter, "platz",
+                               side_effect=[(100, 1000, 13.0),
+                                            (100, 1000, 19.0)]), \
+             mock.patch.object(platten_waechter, "engine_lock_aktiv",
+                               return_value=False):
+            text = vdc.platten_auto_reinigen(11.0)
+        self.assertLess(text.index("ZEITKOSTEN"), text.index("1 Ausgabe-Ordner"),
+                        "die Warnung muss VOR dem Raeum-Bericht stehen")
+
+    def test_stufe_2_wird_durch_engine_lock_gestoppt(self):
+        """Ein laufender Build/Editor stoppt Stufe 2: Objektdateien unter
+        dem Compiler zu loeschen erzeugt halbe Builds."""
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "messen", return_value=[]), \
+             mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
+             mock.patch.object(platten_waechter, "reinigen",
+                               side_effect=[(["C:/x/Zen/Data"], [])]) as reinig, \
+             mock.patch.object(platten_waechter, "platz",
+                               return_value=(100, 1000, 13.0)), \
+             mock.patch.object(platten_waechter, "engine_lock_aktiv",
+                               return_value=True):
+            text = vdc.platten_auto_reinigen(11.0)
+        self.assertEqual(reinig.call_count, 1,
+                         "Stufe 2 startet keinen Loeschlauf unter Lock")
+        self.assertIn("uebersprungen", text)
+        self.assertIn("Engine-Lock", text)
+        self.assertIn("halbe", text)
+        self.assertIn("erneut", text, "der naechste Lauf versucht es wieder")
+
+    def test_stufe_2_endpunkt_nichts_mehr_zu_raeumen(self):
+        """Leert auch Stufe 2 nichts, benennt der Text die Grenze: die
+        Platte ist mit nicht-regenerierbaren Daten voll - und verweist
+        auf die Strategie, statt allein zu entscheiden."""
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "messen", return_value=[]), \
+             mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
+             mock.patch.object(platten_waechter, "reinigen",
+                               side_effect=[([], []), ([], [])]), \
+             mock.patch.object(platten_waechter, "platz",
+                               return_value=(100, 1000, 13.0)), \
+             mock.patch.object(platten_waechter, "engine_lock_aktiv",
+                               return_value=False):
+            text = vdc.platten_auto_reinigen(11.0)
+        self.assertIn("nichts mehr zu raeumen", text)
+        self.assertIn("docs/plattenstrategie.md", text)
+        self.assertIn("kein Gate", text)
+
+
 class DruckeTest(unittest.TestCase):
     """Ein Gate-Bericht darf nie am Drucken sterben (29.09.2026, cp1252).
 

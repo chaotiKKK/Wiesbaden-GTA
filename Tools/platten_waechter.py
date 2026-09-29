@@ -44,6 +44,7 @@ Exit-Codes:
     3  Platz UNTER der Grenze - gemeldet, nichts geloescht
 """
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -78,6 +79,24 @@ GESCHUETZT = "geschuetzt"
 
 # Nur diese Klasse darf --reinigen anfassen.
 NUR_LOESCHEN = (LOESCHBAR,)
+# Nur mit ausdruecklicher Zusage (--auch-devbuilds). Zeitgestempelte
+# Diagnose-Builds des fremden Threads (Saved/Package/dev-builds/<Datum>-
+# name): ihre Befunde stehen als Beleg in seiner Berichterstattung, also
+# entscheidet ueber sie NICHT dieser Wächter allein - er macht nur den
+# Aufbewahrungs-Kompromiss sichtbar, den die Abstimmung nennt.
+DEV_BUILDS = "dev-builds"
+DEV_BUILDS_BEHALTEN = 2        # Keep-N: die letzten N Ordner bleiben
+DEV_BUILDS_MINDESTALTER_TAGE = 0.5   # 12 h - Burst-Schutz: ein dritter
+# Build aus einem frischen Schub rutscht unter Keep-N, darf aber nicht
+# sofort zur Entsorgung stehen. Der dokumentierte Kompromiss ist Keep-N;
+# das Mindestalter ist nur die Race-Kante.
+DEV_BUILDS_ORIGINALKLASSE = GESCHUETZT   # die Klasse, die es bleibt
+
+
+def _alter_text(tage):
+    """"0.5 -> "12 h", 3.0 -> "3 Tage" - fuer Meldung und Protokoll."""
+    return "%d h" % round(tage * 24) if tage < 1.0 else "%.0f Tage" % tage
+
 # Nur mit ausdruecklicher Zusage (--auch-ausgabe). Das sind abgeleitete
 # Kopien, aber ihr Weggang hat einen Preis, den man vorher kennen muss:
 # `Intermediate\Build` loeschen heisst, dass der naechste Build ein
@@ -114,6 +133,14 @@ KANDIDATEN = [
     (r"{gate}\Intermediate", REGENERIERBAR,
      "Gate-Worktree-Objektdateien, baut der naechste Gate-Lauf neu"),
 
+    # --- dev-builds: die Abstimmungsklasse (siehe DEV_BUILDS oben) --------
+    # Die Eintraege stehen NICHT als normale Kandidaten in dieser Liste:
+    # ein Static-Scan wuerde sie messen, aber ob ein Build als Altlast
+    # zaehlt, haelt vom LAUFDATUM ab - Keep-N laesst sich nicht als
+    # statische Klasse ausdruecken. Der Weg geht ueber
+    # dev_builds_altlasten(), die zu den drei Messpunkten unten
+    # dazugeschaltet wird.
+    #
     # --- EINGANGSDATEN: von Werkzeugen gelesen, NIEMALS Muell --------------
     (r"{w}\Saved\_aaa_source", EINGABE,
      "CC0-Saetze von ambientCG - Quelle fuer aaa_import_materials.py und roof_variation.py"),
@@ -256,6 +283,67 @@ def kandidaten(wurzel=None, home=None):
         gesehen.add(aufgeloest.lower())
         raus.append((aufgeloest, klasse, grund))
     return raus
+
+
+def dev_builds_altlasten(basis=None, jetzt=None, behalten=None,
+                         mindestalter_tage=None):
+    """Altlasten unter Saved/Package/dev-builds als Pseudo-Messungen.
+
+    GEMESSEN am 29.09.2026: 13 zeitgestempelgte Diagnose-Builds, 49 GB,
+    ~32 GB davon an EINEM Tag - bei diesem Tempo holt keine automatische
+    Reinigung auf. Diese Funktion implementiert den Kompromiss aus der
+    Abstimmung mit dem fremden Thread: die letzten N Build-Baume bleiben
+    (seine frischen Beweise), AELTERES mit Mindestalter wird zur
+    Entsorgung vorgemerkt - sichtbar im Bericht, geloescht nur mit
+    --auch-devbuilds, protokolliert wie jede Klasse.
+
+    Keep-N zaehlt die ROOT-Ordner nach ALTER (mtime), nicht nach Name:
+    die Namen tragen Datums-Praefixe, aber darauf wuerde man sich nicht
+    verlassen wollen. Alte EINZELDATEIEN im Basisordner (kein Datum im
+    Namen) sind hier NICHT enthalten - sie sind keine Build-Baume.
+    """
+    basis = os.path.normpath(basis or os.path.join(WURZEL, "Saved",
+                                                    "Package", "dev-builds"))
+    behalten = DEV_BUILDS_BEHALTEN if behalten is None else behalten
+    mindestalter_tage = (DEV_BUILDS_MINDESTALTER_TAGE if mindestalter_tage is None
+                         else mindestalter_tage)
+    if not os.path.isdir(basis):
+        return [], []
+    jetzt_dt = jetzt or datetime.datetime.now()
+    frist = jetzt_dt - datetime.timedelta(days=mindestalter_tage)
+    eintraege = []
+    for name in os.listdir(basis):
+        voll = os.path.join(basis, name)
+        # Nur ORDNER sind Build-Baeume. Eine lose Datei im Basisordner
+        # (notizen.txt, altes Log) ist kein Build, verbraucht keinen
+        # Keep-N-Platz und wird nie als Altlast vorgemerkt.
+        if not os.path.isdir(voll):
+            continue
+        try:
+            eintraege.append((os.path.getmtime(voll), name, voll))
+        except OSError:
+            continue
+    eintraege.sort(reverse=True)
+    altlasten, behaltene = [], []
+    for index, (mtime, name, voll) in enumerate(eintraege):
+        if index < behalten:
+            behaltene.append(name)
+            continue
+        if os.path.getmtime(voll) >= frist.timestamp():
+            behaltene.append(name)
+            continue
+        bytes_, dateien, vollstaendig = groesse_messen(voll)
+        altlasten.append({
+            "pfad": voll, "klasse": DEV_BUILDS,
+            "grund": "Diagnose-Build vom %s - aelter als %s und "
+                     "ausserhalb der letzten %d (Keep-N-Kompromiss, "
+                     "docs/plattenstrategie.md)"
+                     % (datetime.datetime.fromtimestamp(mtime).strftime("%d.%m.%Y %H:%M"),
+                        _alter_text(mindestalter_tage), behalten),
+            "bytes": bytes_, "dateien": dateien,
+            "vollstaendig": vollstaendig,
+        })
+    return altlasten, behaltene
 
 
 def cache_pfad(wurzel=None):
@@ -470,6 +558,15 @@ def bericht(frei, gesamt, prozent, messungen, grenze=GRENZE_PROZENT, laufzeit=0.
     _zeilen_block(zeilen, messungen, GESCHUETZT, "Nicht anfassen - geschuetzt:",
                   "Projektinhalt, Fremddateien, Systemdateien.")
 
+    _zeilen_block(zeilen, messungen, DEV_BUILDS,
+                  "dev-builds - ALT, zur Entsorgung vorgemerkt "
+                  "(nur mit --auch-devbuilds):",
+                  "Die letzten %d Build-Baeume und alles juenger als %s "
+                  "bleiben - Beweise des fremden Threads (Abstimmung: "
+                  "docs/plattenstrategie.md)." % (DEV_BUILDS_BEHALTEN,
+                                                     _alter_text(
+                                                         DEV_BUILDS_MINDESTALTER_TAGE)))
+
     abgeschnitten = [m for m in messungen if not m["vollstaendig"] and m["bytes"] > 0]
     if abgeschnitten:
         zeilen.append("HINWEIS: %d Ordner waren nicht vollstaendig messbar (Budget %.0f s) -"
@@ -638,7 +735,8 @@ def loeschreport(messungen, geloescht, trocken=False):
 
 
 def reinigen(messungen, trocken=False, protokoll=None, jetzt=None,
-             wurzel=None, klassen=NUR_LOESCHEN):
+             wurzel=None, klassen=NUR_LOESCHEN, dev_builds_behalten=None,
+             dev_builds_basis=None):
     """Nur die Klassen aus `NUR_LOESCHEN` loeschen. Alles andere bleibt.
 
     Der Schutz ist DREIFACH (27.09.2026, war vorher doppelt):
@@ -669,6 +767,15 @@ def reinigen(messungen, trocken=False, protokoll=None, jetzt=None,
     """
     erlaubt = erlaubte_wurzeln()
     klassen = tuple(klassen)
+    # dev-builds nur ALT, nicht frisch: die frischen Build-Baeume sind die
+    # Beweise des fremden Threads. Die Keep-N-Funktion liefert nur alte
+    # Eintraege - trotzdem wird hier doppelt gefiltert (Klasse UND Pfad),
+    # damit keine Misch-Messung durchrutscht.
+    altlasten, behaltene = dev_builds_altlasten(
+        basis=dev_builds_basis,
+        behalten=dev_builds_behalten) if DEV_BUILDS in klassen else ([], [])
+    altlasten_pfade = {os.path.normpath(a["pfad"]).lower()
+                       for a in altlasten}
     # Der Lock ist eine Sperre fuer die Ausgabe-Klasse, nicht fuer die
     # Caches: die sind per Definition nichts, woran ein laufender Editor
     # haengt. Also getrennt zurueckweisen, statt den ganzen Lauf zu kippen.
@@ -694,6 +801,22 @@ def reinigen(messungen, trocken=False, protokoll=None, jetzt=None,
 
     absichten = []
     for m in messungen:
+        # Der dev-builds-Veto-Filter greift NUR, wenn die Klasse auch
+        # freigegeben ist (klassen enthaelt DEV_BUILDS). Ohne die
+        # Freigabe faellt der Eintrag in den normalen Klassenfilter und
+        # wird dort still uebersprungen - ein Normal-Lauf (NUR_LOESCHEN)
+        # darf dev-builds weder anfassen noch dafuer abweisen.
+        if (m["klasse"] == DEV_BUILDS and DEV_BUILDS in klassen
+                and os.path.normpath(m["pfad"]).lower() not in altlasten_pfade):
+            # Eine dev-builds-Messung, die NICHT als Altlast gilt (frisch
+            # oder unter den letzten N): abgewiesen mit Grund, nicht still
+            # uebersprungen.
+            abgewiesen.append(
+                "%s (dev-builds, aber frisch oder in den letzten %d - "
+                "Keep-N-Kompromiss)" % (os.path.normpath(m["pfad"]),
+                                          dev_builds_behalten
+                                          or DEV_BUILDS_BEHALTEN))
+            continue
         if m["klasse"] not in klassen:
             continue
         ziel = os.path.normpath(m["pfad"])
@@ -762,6 +885,16 @@ def hauptprogramm(argv=None):
                    help="mit --reinigen: auch die regenerierbaren Ausgaben loeschen "
                         "(Intermediate, Cooked, StagedBuilds). Kostet Zeit: der "
                         "naechste Build wird langsamer. Nie, solange der Editor laeuft.")
+    p.add_argument("--auch-devbuilds", action="store_true",
+                   help="mit --reinigen: ausserdem dev-builds-ALTlasten loeschen "
+                        "(aelter als %s und ausserhalb der letzten %d; "
+                        "VORGABE trocken via --trocken). Frische Builds und die "
+                        "letzten bleiben - Beweise des fremden Threads."
+                        % (_alter_text(DEV_BUILDS_MINDESTALTER_TAGE),
+                           DEV_BUILDS_BEHALTEN))
+    p.add_argument("--devbuilds-behalten", type=int, default=None,
+                   help="Override: wie viele dev-builds-Baume behalten werden "
+                        "(Vorgabe %d)" % DEV_BUILDS_BEHALTEN)
     p.add_argument("--budget", type=float, default=BUDGET_SEKUNDEN,
                    help="Sekunden fuer die gesamte Messung")
     p.add_argument("--kein-cache", action="store_true",
@@ -789,12 +922,21 @@ def hauptprogramm(argv=None):
                        "signatur": kandidaten_signatur()})
 
     klassen = MIT_AUSGABE if args.auch_ausgabe else NUR_LOESCHEN
+    if args.auch_devbuilds:
+        klassen = tuple(klassen) + (DEV_BUILDS,)
+    # Die ALTlasten haengen FRISCH an, nicht im Mess-Cache: ob ein Build
+    # alt genug ist, haelt vom Laufzeitpunkt ab - ein 30-Minuten-Cache
+    # wuerde Entsorgungskandidaten verstecken oder frische zeigen.
+    altlasten, _behaltene = dev_builds_altlasten(
+        behalten=args.devbuilds_behalten)
+    messungen = messungen + altlasten
     print(bericht(frei, gesamt, prozent, messungen, args.schwelle, laufzeit,
                   klassen))
 
     if args.reinigen:
-        geloescht, abgewiesen = reinigen(messungen, trocken=args.trocken,
-                                          wurzel=WURZEL, klassen=klassen)
+        geloescht, abgewiesen = reinigen(
+            messungen, trocken=args.trocken, wurzel=WURZEL, klassen=klassen,
+            dev_builds_behalten=args.devbuilds_behalten)
         print("")
         if geloescht:
             print(("KOENNTE LOESCHEN: " if args.trocken else "GELOESCHT: ")

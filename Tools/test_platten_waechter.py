@@ -15,9 +15,11 @@ laeuft", sondern die drei Zusagen, auf die man sich verlassen muss:
 
     python -m unittest discover -s Tools -p "test_platten_waechter.py"
 """
+import datetime
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -996,6 +998,218 @@ class HinweisVerweisTest(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"platten_waechter": None}):
             with redirect_stdout(io.StringIO()):
                 vdc.platten_hinweis()  # darf nicht werfen
+
+
+class DevBuildsAltlastenTest(unittest.TestCase):
+    """Die Keep-N-Klasse fuer dev-builds - der Kompromiss mit dem fremden
+    Thread (docs/plattenstrategie.md): die letzten N Build-Baeume und alles
+    Frische bleiben SEINE Beweise; aelteres wird nur sichtbar vorgemerkt
+    und geloescht erst mit --auch-devbuilds, protokolliert wie jede
+    Klasse. Alle Tests bauen ihre Ordner im eigenen Tempverzeichnis -
+    die echten dev-builds werden nie beruehrt.
+    """
+
+    def basis(self, now):
+        """Temp-Basis mit drei Build-Baeumen: heute, vor 2 Tagen, vor 5 Tagen."""
+        d = tempfile.mkdtemp(prefix="wb_devbuilds_")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        import shutil as _shutil
+        for name, alter_tage, inhalt in (
+                ("2026-09-29-bugtank-frisch", 0.1, b"frisch"),
+                ("2026-09-27-bugtank-mittel", 2.0, b"mittel"),
+                ("2026-09-24-bugtank-alt", 5.0, b"alt" * 100)):
+            voll = os.path.join(d, name)
+            os.makedirs(voll)
+            with open(os.path.join(voll, "probe.bin"), "wb") as fh:
+                fh.write(inhalt * 10)
+            stempel = (now - datetime.timedelta(days=alter_tage)).timestamp()
+            os.utime(voll, (stempel, stempel))
+        return d
+
+    def test_keep_n_und_mindestalter_zusammen(self):
+        import datetime as dt
+        now = dt.datetime.now()
+        d = self.basis(now)
+        altlasten, behaltene = pw.dev_builds_altlasten(
+            basis=d, jetzt=now, behalten=2, mindestalter_tage=0.5)
+        namen = {a["pfad"] for a in altlasten}
+        # Keep-N-Platz 1 (frisch) und Platz 2 (2 Tage alt) bleiben - der
+        # zweite ist AUCH aelter als 0.5 Tage, aber unter den letzten 2.
+        self.assertEqual(len(altlasten), 1, altlasten)
+        self.assertIn(os.path.join(d, "2026-09-24-bugtank-alt"), namen)
+        self.assertEqual(len(behaltene), 2)
+
+    def test_mindestalter_schuetzt_den_keep_n_ueberlauf(self):
+        """Ein dritter Build aus einem frischen Schub ist kein Altlast,
+        solange er juenger als das Mindestalter ist. Bei 3 Tagen ist nur
+        der 5-Tage-Baum alt - der 2-Tage-Baum ist Keep-N-Platz 2 UND
+        Burst-geschaetzt."""
+        import datetime as dt
+        now = dt.datetime.now()
+        d = self.basis(now)
+        altlasten, _ = pw.dev_builds_altlasten(
+            basis=d, jetzt=now, behalten=1, mindestalter_tage=3.0)
+        self.assertEqual([a["pfad"] for a in altlasten],
+                         [os.path.join(d, "2026-09-24-bugtank-alt")],
+                         "nur der 5-Tage-Baum ist Altlast; der 2-Tage-Baum "
+                         "bleibt Burst-geschaetzt")
+
+    def test_leere_und_fehlende_basis_sind_still(self):
+        import datetime as dt
+        d = tempfile.mkdtemp(prefix="wb_devbuilds_leer_")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        self.assertEqual(pw.dev_builds_altlasten(basis=d), ([], []))
+        self.assertEqual(
+            pw.dev_builds_altlasten(
+                basis=os.path.join(d, "fehlt")), ([], []))
+
+    def test_altlast_misst_vollstaendig_und_begruendet(self):
+        import datetime as dt
+        now = dt.datetime.now()
+        d = self.basis(now)
+        altlasten, _ = pw.dev_builds_altlasten(
+            basis=d, jetzt=now, behalten=2, mindestalter_tage=0.5)
+        a = altlasten[0]
+        self.assertTrue(a["vollstaendig"])
+        self.assertEqual(a["klasse"], "dev-builds")
+        self.assertGreater(a["bytes"], 0)
+        self.assertIn("docs/plattenstrategie.md", a["grund"])
+        self.assertIn("24.09.2026", a["grund"], "die Begruendung nennt das "
+                                                  "Build-Datum (deutsches Format)")
+
+    def test_single_file_im_basisordner_zaehlt_nicht(self):
+        import datetime as dt
+        now = dt.datetime.now()
+        d = self.basis(now)
+        stempel = (now - dt.timedelta(days=9)).timestamp()
+        lose = os.path.join(d, "notizen.txt")
+        with open(lose, "w") as fh:
+            fh.write("x")
+        os.utime(lose, (stempel, stempel))
+        altlasten, _ = pw.dev_builds_altlasten(
+            basis=d, jetzt=now, behalten=2, mindestalter_tage=0.5)
+        self.assertNotIn(lose, {a["pfad"] for a in altlasten},
+                         "eine lose Datei ist kein Build-Baum")
+
+
+class DevBuildsReinigenTest(unittest.TestCase):
+    """reinigen(): dev-builds nur ALT, nur mit der Klasse, protokolliert.
+
+    Der zentrale Schutz: ein normaler --reinigen-Lauf (NUR_LOESCHEN)
+    beruehrt dev-builds NICHT - auch dann nicht, wenn jemand eine
+    Misch-Messung mit der falschen Klasse einschmuggelt.
+    """
+
+    def _basis_mit_altlast(self, now, alt_tage=5.0, frisch_tage=0.1):
+        import datetime as dt
+        d = tempfile.mkdtemp(prefix="wb_devbuilds_rein_")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        basis = os.path.join(d, "Saved", "Package", "dev-builds")
+        os.makedirs(basis)
+        pfade = {}
+        for name, alter_tage in (("build-alt", alt_tage),
+                                 ("build-frisch", frisch_tage)):
+            voll = os.path.join(basis, name)
+            os.makedirs(voll)
+            with open(os.path.join(voll, "probe.bin"), "wb") as fh:
+                fh.write(b"x" * 50)
+            stempel = (now - dt.timedelta(days=alter_tage)).timestamp()
+            os.utime(voll, (stempel, stempel))
+            pfade[name] = voll
+        return d, basis, pfade
+
+    def test_normaler_reinigen_lauf_fasst_devbuilds_nicht_an(self):
+        import datetime as dt
+        now = dt.datetime.now()
+        d, basis, pfade = self._basis_mit_altlast(now)
+        alt, beh = pw.dev_builds_altlasten(basis=basis, jetzt=now,
+                                           behalten=1, mindestalter_tage=0.5)
+        self.assertEqual(len(alt), 1)
+        geloescht, abgewiesen = pw.reinigen(
+            alt, trocken=False, protokoll=lambda zeilen: True,
+            wurzel=d, klassen=pw.NUR_LOESCHEN)
+        self.assertEqual(geloescht, [], "NUR_LOESCHEN enthaelt keine "
+                                        "dev-builds-Klasse")
+        self.assertTrue(os.path.isdir(pfade["build-alt"]),
+                        "der normale Lauf hat die Altlast NICHT angefasst")
+
+    def test_reinigen_mit_devbuilds_klasse_nur_altlast(self):
+        import datetime as dt
+        now = dt.datetime.now()
+        d, basis, pfade = self._basis_mit_altlast(now)
+        alt, beh = pw.dev_builds_altlasten(basis=basis, jetzt=now,
+                                           behalten=1, mindestalter_tage=0.5)
+        messungen = alt + [{"pfad": pfade["build-frisch"],
+                            "klasse": "dev-builds", "grund": "frisch",
+                            "bytes": 50, "dateien": 1,
+                            "vollstaendig": True}]
+        geloescht, abgewiesen = pw.reinigen(
+            messungen, trocken=False, protokoll=lambda zeilen: True,
+            wurzel=d, klassen=pw.NUR_LOESCHEN + (pw.DEV_BUILDS,),
+            dev_builds_behalten=1, dev_builds_basis=basis)
+        self.assertIn(os.path.normpath(pfade["build-alt"]),
+                      [os.path.normpath(p) for p in geloescht])
+        self.assertFalse(os.path.exists(pfade["build-alt"]),
+                         "die Altlast ist weg")
+        self.assertTrue(os.path.isdir(pfade["build-frisch"]),
+                        "der frische Build bleibt - Beweis des fremden Threads")
+        self.assertTrue(any("frisch oder in den letzten" in z for z in abgewiesen),
+                        "die frische Misch-Messung wird mit Grund abgewiesen")
+
+    def test_trocken_vermerkt_altlast_ohne_zu_loeschen(self):
+        import datetime as dt
+        now = dt.datetime.now()
+        d, basis, pfade = self._basis_mit_altlast(now)
+        alt, _ = pw.dev_builds_altlasten(basis=basis, jetzt=now,
+                                         behalten=1, mindestalter_tage=0.5)
+        protokoll = []
+        geloescht, _ = pw.reinigen(
+            alt, trocken=True,
+            protokoll=lambda zeilen: protokoll.extend(zeilen) or True,
+            wurzel=d, klassen=pw.NUR_LOESCHEN + (pw.DEV_BUILDS,),
+            dev_builds_behalten=1, dev_builds_basis=basis)
+        self.assertEqual(len(geloescht), 1)
+        self.assertTrue(os.path.isdir(pfade["build-alt"]), "trocken loescht nicht")
+        self.assertTrue(all(z.get("phase") == "trocken" and z.get("trocken")
+                            for z in protokoll), "die Trocken-Phase steht im Protokoll")
+
+    def test_fehlendes_protokoll_stoppt_auch_devbuilds(self):
+        import datetime as dt
+        now = dt.datetime.now()
+        d, basis, pfade = self._basis_mit_altlast(now)
+        alt, _ = pw.dev_builds_altlasten(basis=basis, jetzt=now,
+                                         behalten=1, mindestalter_tage=0.5)
+        geloescht, abgewiesen = pw.reinigen(
+            alt, trocken=False, protokoll=lambda zeilen: False,
+            wurzel=d, klassen=pw.NUR_LOESCHEN + (pw.DEV_BUILDS,),
+            dev_builds_basis=basis)
+        self.assertEqual(geloescht, [], "ohne schreibbares Protokoll wird "
+                                        "nichts geloescht - auch keine Altlast")
+        self.assertTrue(os.path.isdir(pfade["build-alt"]))
+
+    def test_override_behalten_wirkt_im_filter(self):
+        import datetime as dt
+        now = dt.datetime.now()
+        d, basis, pfade = self._basis_mit_altlast(now, alt_tage=5.0,
+                                                   frisch_tage=0.1)
+        # Nur der FRISCHE Build existiert real; die Altlast-Messung wird
+        # von Hand gebaut, um den Pfad-Filter gegen den Override zu pruefen.
+        messungen = [{"pfad": pfade["build-alt"], "klasse": "dev-builds",
+                      "grund": "handgebaut", "bytes": 50, "dateien": 1,
+                      "vollstaendig": True}]
+        geloescht, abgewiesen = pw.reinigen(
+            messungen, trocken=False, protokoll=lambda zeilen: True,
+            wurzel=d, klassen=pw.NUR_LOESCHEN + (pw.DEV_BUILDS,),
+            dev_builds_behalten=5, dev_builds_basis=basis)
+        # Mit Keep-N=5 waere der Build BEHALTEN - aber er steht NICHT in
+        # den frisch berechneten Altlasten... Doch: der Pfad-Filter prueft
+        # gegen dev_builds_altlasten(behalten=5), und dort zaehlt der
+        # Ordner als Platz 1 von 2 -> behalten -> abgewiesen.
+        self.assertEqual(geloescht, [],
+                         "der Override im Filter schuetzt den Build")
+        self.assertTrue(os.path.isdir(pfade["build-alt"]))
+        self.assertTrue(any("frisch oder in den letzten" in z
+                            for z in abgewiesen))
 
 
 if __name__ == "__main__":

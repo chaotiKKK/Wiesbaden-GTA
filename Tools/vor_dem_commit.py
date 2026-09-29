@@ -702,6 +702,109 @@ def _gate_verweis():
         pass
 
 
+# Autoreinigung unter dieser Schwelle (Prozent frei), in ZWEI STUFEN:
+# Stufe 1 raeumt die CACHE-Klasse (regeneriert sich, kostet nur
+# Rechenzeit beim naechsten Cook/Editorstart). Reicht das nicht, raeumt
+# Stufe 2 die AUSGABE-Klasse - hinter einer Zeitkosten-Warnung im
+# Gate-Log, die die Erwartung festhaelt: der naechste Build wird ein
+# VOLLBUILD (am 27.09.2026 gemessen: Gate 1 im Gate-Worktree 104 s ->
+# 181 s; im Hauptbaum ein Full Build). GEMESSEN am 29.09.2026: 10.2 %
+# frei - 0 % Luft bis zur Abbruchgrenze; der manuelle cache-only Lauf
+# holte 11 GB zurueck. Ein Engine-Lock (laufender Build/Editor) stoppt
+# Stufe 2 - Objektdateien unter einem laufenden Compiler zu loeschen
+# erzeugt halbe Builds. Schalter: WB_PLATTEN_AUTO_REINIGUNG=0 (die
+# Testsuite setzt ihn).
+AUTO_REINIGUNG_PROZENT = 14.0
+
+
+def platten_auto_reinigen(prozent):
+    """Unter AUTO_REINIGUNG_PROZENT in zwei Stufen raeumen - oder None.
+
+    Stufe 1: die Cache-Klasse (wie bisher). Stufe 2 - nur wenn die
+    Platte AUCH DANACH unter der Schwelle liegt - die Ausgabe-Klasse.
+    Der Rueckgabewert ist ein mehrzeiliger Meldungstext (oder None);
+    diese Funktion druckt nichts selbst, damit der Test sie stellen
+    kann.
+
+    Die Zeitkosten-Warnung von Stufe 2 steht als eigene Zeile im
+    Gate-Log und haelt die Erwartung fest, BEVOR das Ergebnis kommt:
+    der naechste Build wird ein VOLLBUILD. Sie feuert bewusst selten -
+    nur wenn der Cache die Schwelle nicht retten konnte - denn ihr
+    Preis ist echte Bauzeit, kein Rechenzeit-Beilaeuf.
+
+    FAIL-OPEN, wie der ganze Hinweis: ein Waechter-Ausfall druckt eine
+    Zeile und verbietet nichts. Der Schalter
+    WB_PLATTEN_AUTO_REINIGUNG=0 schaltet beide Stufen ab (die Testsuite
+    lebt davon, dass echte Platten- und Loesch-Welt nie beruehrt wird);
+    reinigen() schreibt sein Loeschprotokoll selbst (Absicht vor dem
+    Eingriff) und fasst ausser den freigegebenen Klassen nichts an -
+    die Buende sind schon im Waechter verlegt, und der Engine-Lock-
+    Vorbehalt des Waechters stoppt Stufe 2 ein zweites Mal, falls
+    zwischen Warnung und Eingriff ein Build startet.
+    """
+    if os.environ.get("WB_PLATTEN_AUTO_REINIGUNG", "1") == "0":
+        return None
+    if prozent is None or prozent >= AUTO_REINIGUNG_PROZENT:
+        return None
+    try:
+        import platten_waechter
+        messungen = platten_waechter.messen(platten_waechter.kandidaten())
+        geloescht, _abgewiesen = platten_waechter.reinigen(messungen)
+        _frei, _gesamt, jetzt_prozent = platten_waechter.platz(
+            platten_waechter.WURZEL)
+        zeilen = []
+        if geloescht:
+            zeilen.append(
+                "      AUTO-REINIGUNG: %.0f %% frei - %d Cache-Ordner "
+                "geraeumt, jetzt %.0f %% frei (Protokoll: "
+                "Saved\\Diagnose\\loeschprotokoll.jsonl)."
+                % (prozent, len(geloescht), jetzt_prozent))
+        if jetzt_prozent >= AUTO_REINIGUNG_PROZENT:
+            return "\n".join(zeilen) or None
+        # STUFE 2: der Cache hat die Schwelle nicht gerettet. Erst die
+        # Zeitkosten-Warnung (mit der Vollbuild-Erwartung als Gate-Log-
+        # Zeile), dann der Eingriff - und nur ohne Engine-Lock.
+        if platten_waechter.engine_lock_aktiv(platten_waechter.WURZEL):
+            zeilen.append(
+                "      AUTO-REINIGUNG STUFE 2 uebersprungen: weiterhin "
+                "%.0f %% frei, aber ein Engine-Lock liegt - Objektdateien "
+                "unter einem laufenden Build zu loeschen erzeugt halbe "
+                "Builds. Der naechste Lauf versucht es erneut."
+                % jetzt_prozent)
+            return "\n".join(zeilen)
+        zeilen.append(
+            "      AUTO-REINIGUNG STUFE 2: weiterhin %.0f %% frei - die "
+            "Ausgabe-Klasse wird geraeumt. ZEITKOSTEN/ERWARTUNG: der "
+            "naechste Build wird ein VOLLBUILD (am 27.09.2026 gemessen: "
+            "Gate 1 im Gate-Worktree 104 s -> 181 s), StagedBuilds und "
+            "Cooked baut der naechste Cook neu."
+            % jetzt_prozent)
+        try:
+            geloescht2, _abgewiesen2 = platten_waechter.reinigen(
+                messungen, klassen=(platten_waechter.REGENERIERBAR,))
+            _frei, _gesamt, fertig_prozent = platten_waechter.platz(
+                platten_waechter.WURZEL)
+            if geloescht2:
+                zeilen.append(
+                    "      AUTO-REINIGUNG STUFE 2: %d Ausgabe-Ordner "
+                    "geraeumt, jetzt %.0f %% frei."
+                    % (len(geloescht2), fertig_prozent))
+            else:
+                zeilen.append(
+                    "      AUTO-REINIGUNG STUFE 2: nichts mehr zu raeumen - "
+                    "die Platte ist mit nicht-regenerierbaren Daten voll "
+                    "(dev-builds? Nutzerdaten?). Das entscheidet kein Gate "
+                    "allein: docs/plattenstrategie.md.")
+        except Exception as e:
+            zeilen.append(
+                "      AUTO-REINIGUNG STUFE 2 nicht ausgefuehrt (%s) - "
+                "der Hinweis ist und bleibt kein Gate." % e)
+        return "\n".join(zeilen)
+    except Exception as e:
+        return ("      AUTO-REINIGUNG nicht ausgefuehrt (%s) - der Hinweis "
+                "ist und bleibt kein Gate." % e)
+
+
 def platten_hinweis(grenze=None):
     """Plattenplatz melden - als HINWEIS, niemals als Gate.
 
@@ -737,6 +840,18 @@ def platten_hinweis(grenze=None):
     if text:
         for zeile in str(text).splitlines():
             drucke("      %s" % zeile[:200])
+        # AUTO-REINIGUNG der Cache-Klasse, bevor der Verweis aufs Gate
+        # kommt - die Naechstes-Zeile unten nennt dann schon den Stand
+        # nach dem Aufraeumen (sie misst selbst frisch).
+        try:
+            from platten_waechter import platz as _platz, WURZEL as _wurzel
+            _frei, _gesamt, _prozent = _platz(_wurzel)
+        except Exception:
+            _prozent = None
+        meldung = platten_auto_reinigen(_prozent)
+        if meldung:
+            for zeile in meldung.splitlines():
+                drucke(zeile)
     # DER HINWEIS BRAUCHT EINE HANDLUNG (27.09.2026). GEMESSEN: er sagte
     # "UNTER der Grenze (20 %)" und sonst nichts - eine Zahl ohne Folge. Der
     # Leser weiss damit nicht, dass gleich der naechste Engine-Start scheitert.
