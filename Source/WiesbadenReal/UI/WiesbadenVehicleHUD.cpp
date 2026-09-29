@@ -41,6 +41,7 @@
 #include "Store/WiesbadenStore.h"
 #include "Engine/GameInstance.h"
 #include "UI/WiesbadenWorldMapView.h"
+#include "World/WiesbadenParcoursActor.h"
 #include "Engine/TextureRenderTarget2D.h"
 
 namespace
@@ -836,6 +837,7 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	DrawVehicleBanner(Width * 0.5f, Height * 0.16f);
 	DrawTransientHint(Width, Height);
 	DrawMissionPanel(Width, Height);
+	DrawParcoursPanel(Width, Height);
 
 	// Guthaben oben rechts (aus dem persistenten Spielzustand).
 	if (const UWorld* HudGameWorld = GetWorld())
@@ -3033,6 +3035,27 @@ void AWiesbadenVehicleHUD::DrawMissionPanel(float Width, float Height)
 
 	DrawText(ObjLine, BodyColour, X + 16.0f, Y + 28.0f,
 		GEngine ? GEngine->GetMediumFont() : nullptr, 1.0f);
+}
+
+void AWiesbadenVehicleHUD::DrawParcoursPanel(float Width, float Height)
+{
+	const AWiesbadenParcours* Parcours = AWiesbadenParcours::Aktiver(GetWorld());
+	if (!Parcours || !Parcours->HudSichtbar())
+	{
+		return;
+	}
+	// Unter dem Missionspanel (y 60..116), gleiche Machart.
+	const float PanelW = 440.0f;
+	const float PanelH = 78.0f;
+	const float X = (Width - PanelW) * 0.5f;
+	const float Y = 124.0f;
+	DrawPanelBackdrop(X, Y, PanelW, PanelH, 10.0f, FLinearColor(0.08f, 0.10f, 0.13f), 0.72f);
+	DrawText(Parcours->HudTitel(), FLinearColor(1.0f, 0.55f, 0.12f, 1.0f), X + 16.0f, Y + 8.0f,
+		GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
+	DrawText(Parcours->HudZeile(), FLinearColor(0.92f, 0.94f, 0.96f, 1.0f), X + 16.0f, Y + 26.0f,
+		GEngine ? GEngine->GetMediumFont() : nullptr, 1.0f);
+	DrawText(Parcours->HudHinweis(), FLinearColor(0.70f, 0.76f, 0.82f, 1.0f), X + 16.0f, Y + 54.0f,
+		GEngine ? GEngine->GetSmallFont() : nullptr, 1.0f);
 }
 
 void AWiesbadenVehicleHUD::DrawStorePanel(float Width, float Height)

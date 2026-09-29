@@ -209,6 +209,9 @@ private:
 	/** Missions-Ziel-Panel (Titel + Ziel-Label + Distanz), oben mittig. */
 	void DrawMissionPanel(float Width, float Height);
 
+	/** Geschicklichkeitsparcours (WbParcours): Abschnitt, Zeit, Strafe, Hinweis. */
+	void DrawParcoursPanel(float Width, float Height);
+
 	/** Freischaltungs-Katalog (Ausgabe-Senke) - Liste mit Kosten/Besitz/Deckung,
 	 *  nur wenn per Konsole "Wb.Store" geoeffnet. */
 	void DrawStorePanel(float Width, float Height);

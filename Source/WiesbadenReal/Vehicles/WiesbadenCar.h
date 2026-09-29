@@ -126,6 +126,7 @@ public:
 	 *  ausgewerteten Fahrphysik, nur weitergereicht - keine Wirkung auf die Fahrt. */
 	virtual bool IsWheelSpinning() const override { return bLastWheelSpin; }
 	virtual bool IsWheelLocked() const override { return bLastWheelLock; }
+	virtual bool IsHandbrakeApplied() const override { return bLastHandbrake; }
 
 	/** Fahrzeug-Physik-Modul (Motor, Getriebe, Radkraefte, Lenkung). */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Fahrzeug|Physik")
@@ -449,6 +450,8 @@ private:
 	 */
 	bool bLastWheelSpin = false;
 	bool bLastWheelLock = false;
+	/** Handbremse des letzten Physik-Ticks (Taste oder externe Steuerung). */
+	bool bLastHandbrake = false;
 
 	/** Aktuelle visuelle Karosserie-Neigung (Grad), weich nachgefuehrt. */
 	float BodyPitchDeg = 0.0f;

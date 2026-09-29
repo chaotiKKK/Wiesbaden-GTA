@@ -49,6 +49,7 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 | `WbHeliYaw` | `WbHeliYaw <s>` | Helikopter besessen | Gierprobe (Test-Harness) fuer s Sekunden |
 | `WbHeliFly` | `WbHeliFly <s>` | Helikopter besessen | Flugprofil (Test-Harness) fuer s Sekunden |
 | `WbDrive` | `WbDrive <s>` | Fahrzeug besessen | Fahrprofil (Test-Harness) fuer s Sekunden |
+| `WbParcours` | `WbParcours [0/1/2]` | Fahrzeug besessen | Geschicklichkeitsparcours vor dem Wagen aufbauen; 1 = Fahrer faehrt ihn selbst, 2 = mit Absicht Fehlern |
 | `WbHeliGoto` | `WbHeliGoto <dx> <dy> <dz>` | Helikopter besessen | Autopilot fliegt dx/dy/dz m relativ, haelt |
 | `WbHeliHover` | `WbHeliHover` | Helikopter besessen | Autopilot haelt aktuelle Position |
 | `WbHeliOff` | `WbHeliOff` | Helikopter besessen | Autopilot aus, Steuerung zurueck an Eingabe |
@@ -199,6 +200,26 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 - **Log-Nachweis:**
   - Erfolg: `WbDev: WbDrive - Fahrprofil fuer <s> s gestartet.`
   - Kein Fahrzeug (Warning): `WbDev: WbDrive erkannt, aber kein Fahrzeug besessen.`
+
+## WbParcours
+
+- **Signatur:** `WbParcours [Fahrer:int = 0]` (0 selbst fahren, 1 Fahrer sauber, 2 Fahrer mit Fehlern)
+- **Wirkung:** Baut den Geschicklichkeitsparcours (`AWiesbadenParcours`) in
+  Blickrichtung des besessenen Wagens auf, sobald dieser 1 s ruhig steht
+  (Startlinie 10 m voraus): Slalom mit fuenf Kegeln (erster links), Bremslinie
+  mit Stoppbox, Wendezone fuer die Handbremswende, zurueck durchs Starttor.
+  Wertung nach Zeit plus Strafsekunden und Sauberkeit (0-100 %), Medaille
+  Gold/Silber/Bronze; das HUD zeigt Abschnitt, Zeit und Hinweis. Ein neuer
+  Aufruf baut neu auf. `Fahrer = 1` faehrt die Runde ueber die Steuernaht
+  selbst (Nachweislauf), `Fahrer = 2` faehrt mit Absicht ueber Slalomkegel 2
+  und mit 30 km/h an die Bremslinie (belegt Strafen und das Umkippen). Braucht ~250 x 30 m freie Flaeche, z. B.
+  `-WbGoto=-180086,899031`.
+- **Voraussetzung:** ein besessenes Fahrzeug.
+- **Log-Nachweis:**
+  - Erfolg: `WbDev: WbParcours - Parcours wird vor dem Wagen aufgebaut (Fahrer <0/1>).`
+  - Kein Fahrzeug (Warning): `WbDev: WbParcours erkannt, aber kein Fahrzeug besessen.`
+  - Aufbau: `Parcours: aufgebaut - Startlinie (x, y, z), Kurs <Grad> Grad, 17 Kegel, ...`
+  - Ergebnis: `Parcours-Ergebnis: im Ziel, Fahrzeit ... s, Strafe ... s, Gesamt ... s, ...`
 
 ## WbHeliGoto
 

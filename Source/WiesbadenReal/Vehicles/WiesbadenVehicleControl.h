@@ -214,6 +214,10 @@ public:
 
 	/** Blockieren die Raeder gerade (Bremse ueber der Haftgrenze)? */
 	virtual bool IsWheelLocked() const { return false; }
+
+	/** Ist die Handbremse gezogen (Taste oder externe Steuerung)? Fuer die
+	 *  Parcours-Wertung (Handbremswende); ChaosCar meldet nie eine. */
+	virtual bool IsHandbrakeApplied() const { return false; }
 };
 
 UINTERFACE(MinimalAPI)

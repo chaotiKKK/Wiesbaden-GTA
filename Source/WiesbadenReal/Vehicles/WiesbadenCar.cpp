@@ -770,6 +770,7 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 	Input.bHandbrake = bExternalControlActive
 		? ExternalControl.bHandbrake
 		: (IsKeyDown(EKeys::SpaceBar) || IsKeyDown(EKeys::Gamepad_FaceButton_Right));
+	bLastHandbrake = Input.bHandbrake;
 	Input.bReverseRequested = bReverseRequested;
 
 	// Belags-Griffigkeit aus der WELT: der Dev-Override hat Vorrang (Messfahrten),

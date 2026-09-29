@@ -5118,10 +5118,11 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   Vorher/Nachher nebeneinander. `kurve` = Vollbremsung mit gehaltener
   Lenkung. Zeiten sind auf 0,1 s gerastert - Unterschiede von einer Probe
   sind Abtastung, keine Physik.
-- `bWheelLock` heisst seit dem ABS "Bremse an der Haftgrenze" (blockiert ODER
-  ABS regelt, HUD "ABS"). Ob die Raeder wirklich GLEITEN, sagt nur
-  `bBrakeLockState` (Telemetrie `gleit`). Tests zum Blockiermodell setzen
-  `bAbsEnabled = false`.
+- Seit eaa7820 (Review PR #26): `bWheelLock` = Raeder GLEITEN wirklich (Spuren,
+  Quietschen; je Achse `bFrontAxleSliding`/`bRearAxleSliding`, die Handbremse
+  laesst nur das Heck gleiten), `bAbsActive` = ABS regelt (nur die HUD-Leuchte).
+  Telemetrie: `block` = Haftgrenze (gleiten ODER ABS), `gleit` = gleiten. Tests
+  zum Blockiermodell setzen `bAbsEnabled = false`; Verkehr und Bus fahren ohne ABS.
 - Der Kaefer ist schon statisch uebersteuernd (a*Cf > b*Cr, kritische
   Geschwindigkeit ~142 km/h). Alles, was beim Bremsen HINTEN Seitenfuehrung
   nimmt, senkt sie unter Betriebstempo: die lastabhaengige Steifigkeit (+-20 %
@@ -5161,3 +5162,24 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   mit R&T in mph: 0-60 mph 18,2 s (Spiel 18,2-18,3 s), 0-100 km/h daraus
   ~20,3 s - NICHT "0-100 in 18,2 s". fahrmessung_auswerten.py misst seit dem
   ab Stillstand (die erste Gaszeile faehrt schon, vorher fehlten 0,4 s).
+
+## Geschicklichkeitsparcours (WbParcours, 29.09.2026)
+
+- `WbParcours [0/1/2]` baut Slalom, Bremslinie+Stoppbox und Wendezone in
+  Blickrichtung des Wagens auf (~250 x 30 m frei; Wiese -WbGoto=-180086,899031),
+  sobald er 1 s ruhig steht - ein -WbGoto vor dem Start baut dort neu auf.
+  Logik ohne Welt in `Missions/WiesbadenParcours` (Bewertung + Fahrer), Welt in
+  `World/WiesbadenParcoursActor`. 1 = Fahrer sauber (Referenz 41-42 s, Gold),
+  2 = mit Absicht Fehlern. Nachweis: `Tools\parcours_lauf.cmd <Name> [s] [1/2]`,
+  Zeile `Parcours-Ergebnis:` im Log; Kamera per WBCAM, Clip/Tageszeit per
+  WBARGS (`-WbTime=14`, sonst Systemzeit = oft Nacht).
+- Kegel OHNE Kollision (der kinematische Wagen bliebe haengen); Beruehrung
+  entscheidet der Grundriss in der Wertung, der Kegel kippt dann um.
+- Kegel-Material: BasicShapeMaterial stand im Gegenlicht schwarz und war nachts
+  unsichtbar, das Lampenglas (M_WbStreetLampGlass) ist in der Sonne milchweiss
+  (Grundfarbe fest, LensColor nur Leuchten). Darum M_WbLeitkegel
+  (`Tools/create_leitkegel_material.py`): Farbe = Grundfarbe UND Leuchten x Glow.
+  Orange (1, 0,16, 0,01) mit Glow 0,25 - mehr Gruen/Glow ueberstrahlt gelb.
+- Ein Clip mit fester Zeitschrittweite (10 fps = 0,1 s) aendert die Runde kaum
+  (41,5 statt 42,1 s), verlangsamt aber das Spiel gegen die Wanduhr:
+  -WbQuitAfter grosszuegig setzen, sonst endet der Lauf vor dem Ziel.
