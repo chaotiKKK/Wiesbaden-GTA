@@ -121,7 +121,7 @@ class BelegFunktionenTest(unittest.TestCase):
         fertig = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", str(self.skript), "-Modus", modus, "-Ziel", str(ziel)],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, errors="replace", timeout=120)
         return fertig.returncode, fertig.stdout.strip(), fertig.stderr
 
     def datei(self, inhalt="WbDev: Beleg", alter=None):

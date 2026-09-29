@@ -608,7 +608,8 @@ class EchteMaschineTest(unittest.TestCase):
     def test_werkzeug_laeuft_und_beendet_sich(self):
         import subprocess
         r = subprocess.run([sys.executable, os.path.join("Tools", "platten_waechter.py")],
-                           cwd=str(WURZEL), capture_output=True, text=True)
+                           cwd=str(WURZEL), capture_output=True, text=True,
+                           errors="replace")
         self.assertIn(r.returncode, (0, 3), r.stderr[-400:])
         self.assertIn("Plattenwaechter:", r.stdout)
 

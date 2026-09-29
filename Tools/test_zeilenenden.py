@@ -27,7 +27,8 @@ SPAEHWEITE = 8000
 
 def git(*args):
     return subprocess.run(
-        ["git", *args], cwd=WURZEL, capture_output=True, text=True, check=True
+        ["git", *args], cwd=WURZEL, capture_output=True, text=True,
+        errors="replace", check=True
     ).stdout
 
 

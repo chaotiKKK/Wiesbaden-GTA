@@ -31,8 +31,8 @@ def _ohne_git_umgebung():
 
 def git(wurzel, *args):
     return subprocess.run(["git", *args], cwd=wurzel, capture_output=True,
-                          text=True, encoding="utf-8", check=True,
-                          env=_ohne_git_umgebung()).stdout
+                          text=True, encoding="utf-8", errors="replace",
+                          check=True, env=_ohne_git_umgebung()).stdout
 
 
 class BaumMitFremderArbeit(unittest.TestCase):
@@ -132,7 +132,8 @@ class GeloeschtePfadeTest(BaumMitFremderArbeit):
         # Harmlos: nur der Arbeitsbaum kennt die Loeschung.
         gutmuetig = subprocess.run(
             ["git", "add", "wird_geloescht.txt", "meins_a.txt"],
-            cwd=self.wurzel, capture_output=True, text=True)
+            cwd=self.wurzel, capture_output=True, text=True,
+            errors="replace")
         self.assertEqual(gutmuetig.returncode, 0)
         self.assertEqual(
             sorted(git(self.wurzel, "diff", "--cached", "--name-only").split()),
@@ -145,7 +146,8 @@ class GeloeschtePfadeTest(BaumMitFremderArbeit):
         git(self.wurzel, "rm", "-q", "wird_geloescht.txt")
         ergebnis = subprocess.run(
             ["git", "add", "wird_geloescht.txt", "meins_a.txt"],
-            cwd=self.wurzel, capture_output=True, text=True)
+            cwd=self.wurzel, capture_output=True, text=True,
+            errors="replace")
         self.assertNotEqual(ergebnis.returncode, 0, "git add muss abbrechen")
         self.assertIn("did not match any files", ergebnis.stderr)
         # UND DAS IST DER SCHADEN: im Index steht nur die Loeschung, die `git rm`

@@ -284,7 +284,8 @@ class HookTest(unittest.TestCase):
 
     def test_der_hook_ist_ausfuehrbar(self):
         r = subprocess.run(["git", "ls-files", "-s", "Tools/git-hooks/pre-push"],
-                           cwd=str(WURZEL), capture_output=True, text=True)
+                           cwd=str(WURZEL), capture_output=True, text=True,
+                           errors="replace")
         self.assertTrue(r.stdout.strip().startswith("100755"),
                         "der Hook ist nicht als ausfuehrbar eingetragen: %s"
                         % r.stdout.strip())

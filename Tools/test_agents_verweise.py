@@ -84,7 +84,8 @@ KARTEN_MUSTER = r"(?<![A-Za-z0-9])Alkis(\d+)\b"
 
 def git(*args):
     return subprocess.run(["git", *args], cwd=WURZEL,
-                          capture_output=True, text=True).stdout
+                          capture_output=True, text=True,
+                          errors="replace").stdout
 
 
 def gitignoriert(pfade):

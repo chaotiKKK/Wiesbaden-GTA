@@ -215,7 +215,7 @@ class HookModusTest(unittest.TestCase):
         fertig = subprocess.run(
             ["git", "ls-files", "-s", "Tools/git-hooks/"],
             cwd=WURZEL, capture_output=True, text=True,
-            env=vdc.saubere_umgebung())
+            errors="replace", env=vdc.saubere_umgebung())
         self.assertEqual(fertig.returncode, 0, fertig.stderr)
         zeilen = [z for z in fertig.stdout.splitlines() if z.strip()]
         self.assertEqual(len(zeilen), 2, "erwartet werden zwei Hooks")
@@ -581,6 +581,7 @@ class PushBereichTest(unittest.TestCase):
         # laufenden Commits (gemessen am 21.09.2026).
         return subprocess.run(["git", *args], cwd=self.repo,
                               capture_output=True, text=True,
+                              errors="replace",
                               env=vdc.saubere_umgebung())
 
     def commit(self, pfad, inhalt="x"):
@@ -611,6 +612,7 @@ class PushBereichTest(unittest.TestCase):
         # GEGENPROBE gegen den kaputten Stand: genau das sah die alte Quelle.
         baum = subprocess.run(["git", "diff", "HEAD", "--name-only"],
                               cwd=self.repo, capture_output=True, text=True,
+                              errors="replace",
                               env=vdc.saubere_umgebung()).stdout.split()
         self.assertEqual(baum, [], "der Arbeitsbaum ist leer - genau das war das Problem")
         self.assertFalse(vdc.braucht_compiler(baum),
@@ -1212,6 +1214,7 @@ class BesitzPfadTest(unittest.TestCase):
         """Sonst koennte ein Thread im Neben-Worktree am Gate vorbei."""
         roh = subprocess.run(["git", "worktree", "list", "--porcelain"],
                              cwd=WURZEL, capture_output=True, text=True,
+                             errors="replace",
                              env=vdc.saubere_umgebung())
         if roh.returncode != 0 or len(roh.stdout.split("worktree ")) < 3:
             self.skipTest("nur ein Worktree - nichts zu vergleichen")
@@ -1282,6 +1285,7 @@ class EchterHookTest(unittest.TestCase):
         # Index des echten Commits.
         return subprocess.run(["git", *args], cwd=self.repo,
                               capture_output=True, text=True,
+                              errors="replace",
                               env=vdc.saubere_umgebung())
 
     def laeufer(self, exitcode):
@@ -1374,6 +1378,7 @@ sys.exit(vdc.hauptprogramm())
     def git(self, *args):
         return subprocess.run(["git", *args], cwd=self.repo,
                               capture_output=True, text=True,
+                              errors="replace",
                               env=vdc.saubere_umgebung())
 
     def commits(self):

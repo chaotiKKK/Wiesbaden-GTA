@@ -189,7 +189,7 @@ class BelegPs1Test(unittest.TestCase):
         lauf = subprocess.run(
             [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", str(skript)],
-            capture_output=True, text=True, timeout=180)
+            capture_output=True, text=True, errors="replace", timeout=180)
         return lauf
 
     def test_loescht_eine_normale_datei(self):
@@ -448,7 +448,7 @@ class KeineNeueStilleLoeschungTest(unittest.TestCase):
         # das ist HEAD. Neu eingecheckte Dateien fasst er im naechsten Lauf.
         roh = subprocess.run(["git", "ls-tree", "-r", "--name-only", "HEAD"],
                              cwd=PROJEKT, capture_output=True, text=True,
-                             check=True).stdout
+                             errors="replace", check=True).stdout
         return [z.strip().replace("\\", "/") for z in roh.splitlines()
                 if z.strip().endswith(".ps1")]
 
