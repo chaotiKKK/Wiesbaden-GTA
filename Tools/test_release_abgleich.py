@@ -392,16 +392,18 @@ class AbgleichTest(unittest.TestCase):
             'connectex: Ein Verbindungsversuch ist fehlgeschlagen, da die '
             'Gegenstelle nach einer bestimmten Zeitspanne nicht richtig reagiert hat')
 
-    def laufen_mit_aussetzern(self, fehlschlaege, meldung=DIAL):
+    def laufen_mit_aussetzern(self, fehlschlaege, meldung=DIAL, releases=None, flattern=False):
         """Die ersten `fehlschlaege` gh-Aufrufe scheitern am Transport, der
-        Rest antwortet wie die Attrappe."""
-        self.attrappe = Attrappe(self.releases())
+        Rest antwortet wie die Attrappe. `flattern`: jeder ERSTE Versuch
+        eines Aufrufs scheitert, die Wiederholung klappt - ein Netz, das
+        immer wieder kurz wegbricht."""
+        self.attrappe = Attrappe(self.releases() if releases is None else releases)
         zaehler = {"n": 0}
         attrappe = self.attrappe
 
         def gh(*args):
             zaehler["n"] += 1
-            if zaehler["n"] <= fehlschlaege:
+            if zaehler["n"] <= fehlschlaege or (flattern and zaehler["n"] % 2):
                 return 1, "", meldung
             return attrappe(*args)
 
@@ -418,12 +420,6 @@ class AbgleichTest(unittest.TestCase):
         self.assertEqual(self.geschlafen, [5])
         self.assertIn("Wiederholung 1/3", self.raus)
 
-    def test_zwei_aussetzer_hintereinander_werden_auch_ueberbrueckt(self):
-        code = self.laufen_mit_aussetzern(2, "error connecting to api.github.com\n"
-                                             "check your internet connection")
-        self.assertEqual(code, 0, self.raus)
-        self.assertEqual(self.geschlafen, [5, 15])
-
     def test_ein_dauerhafter_gh_aussetzer_bleibt_nicht_gemessen(self):
         code = self.laufen_mit_aussetzern(10 ** 6)
         self.assertEqual(code, 3, self.raus)
@@ -431,18 +427,29 @@ class AbgleichTest(unittest.TestCase):
         self.assertIn("auch nach 3 Wiederholungen", self.raus)
         self.assertIn("NICHT 'alles in Ordnung'", self.raus)
 
-    def test_ein_gh_5xx_ist_ein_aussetzer(self):
-        code = self.laufen_mit_aussetzern(1, "HTTP 502: Bad Gateway (https://api.github.com/graphql)")
-        self.assertEqual(code, 0, self.raus)
+    def test_ein_aussetzer_dann_abweichender_text_ist_rot(self):
+        """Wiederholen darf einen Befund nie verschwinden lassen: nach dem
+        Aussetzer antwortet GitHub - mit einem veralteten Release-Text."""
+        rel = self.releases()
+        rel[TAGS[1]]["body"] = rel[TAGS[1]]["body"].replace(
+            "Der erste Meilenstein mit einem Bild.", "Ein alter Satz.")
+        code = self.laufen_mit_aussetzern(1, releases=rel)
+        self.assertEqual(code, 1, self.raus)
         self.assertEqual(self.geschlafen, [5])
+        self.assertIn("weicht", self.raus)
 
-    def test_eine_antwort_von_github_wird_nie_wiederholt(self):
-        for meldung in ("HTTP 401: Bad credentials", "HTTP 404: Not Found",
-                        "release not found"):
-            self.geschlafen.clear()
-            code = self.laufen(fehler=(1, "", meldung))
-            self.assertEqual(code, 3, (meldung, self.raus))
-            self.assertEqual(self.geschlafen, [], meldung)
+    def test_ein_erschoepftes_wartebudget_ist_exit_3(self):
+        """Ein flatterndes Netz: jeder Abruf klappt erst beim zweiten Versuch.
+        Das gemeinsame Budget des Laufs ist nach zwei Pausen aufgebraucht -
+        der dritte Aussetzer endet mit Exit 3 statt weiter zu warten."""
+        alt = ra.BUDGET_S
+        ra.BUDGET_S = 12
+        self.addCleanup(setattr, ra, "BUDGET_S", alt)
+        code = self.laufen_mit_aussetzern(0, flattern=True)
+        self.assertEqual(code, 3, self.raus)
+        self.assertEqual(self.geschlafen, [5, 5])
+        self.assertIn("Wartebudget von 12 s fuer diesen Lauf aufgebraucht", self.raus)
+        self.assertIn("NICHT 'alles in Ordnung'", self.raus)
 
     def test_ein_kurzer_http_aussetzer_wird_wiederholt_und_ist_gruen(self):
         gescheitert = []
@@ -469,8 +476,8 @@ class AbgleichTest(unittest.TestCase):
         ra.HTTP_LAUF = lambda url: (503, None)
         code = self.laufen(releases=self.releases())
         self.assertEqual(code, 3, self.raus)
-        self.assertIn("auch nach 3 Wiederholungen", self.raus)
-        self.assertTrue(self.geschlafen and set(self.geschlafen) == {5, 15, 30}, self.geschlafen)
+        self.assertNotIn("HTTP 503)", self.raus, "ein 5xx ist kein toter Link")
+        self.assertTrue(0 < sum(self.geschlafen) <= ra.BUDGET_S, self.geschlafen)
 
     def test_der_abruf_erfolgt_ohne_anmeldung_und_oeffentlich(self):
         """Der Aufruf darf keine Anmeldedaten mitschicken - sonst wuerde

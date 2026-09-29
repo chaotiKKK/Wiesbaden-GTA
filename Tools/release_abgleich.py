@@ -48,6 +48,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -107,15 +108,34 @@ GH_LAUF = gh_echt  # der Selbsttest setzt das auf eine Attrappe
 # oder abweichender Inhalt sind ANTWORTEN von GitHub - sie werden nie
 # wiederholt. Bleibt GitHub ueber alle Versuche weg, bleibt es bei
 # "nicht messbar" (Exit 3) - nie gruen ohne Messung.
-WARTEN_S = (5, 15, 30)         # drei Wiederholungen, zusammen hoechstens 50 s
+WARTEN_S = (5, 15, 30)         # Pausen je Abruf: hoechstens drei Wiederholungen
+BUDGET_S = 90                  # Wartebudget fuer den GANZEN Lauf, alle Abrufe zusammen
 SCHLAF = time.sleep            # der Selbsttest setzt das auf eine Attrappe
 AUSSETZER = re.compile(
     r"error connecting to|dial tcp|connectex|i/o timeout|timed out|"
     r"timeout awaiting|TLS handshake timeout|connection reset|"
     r"connection refused|no such host|could not resolve|unexpected EOF|"
-    r"HTTP 50[0234]\b|\b50[234] (?:Bad Gateway|Service Unavailable|Gateway Time)",
-    re.I)
+    r"\b50[0234]\b", re.I)
 HTTP_AUSSETZER = (500, 502, 503, 504)
+
+# Ein flatterndes Netz darf das Gate nicht beliebig aufhalten: ohne Budget
+# waeren bei rund 30 Abrufen je Lauf bis zu 25 Minuten Warten moeglich. Die
+# parallelen Downloads teilen sich das Budget, daher die Sperre.
+_budget = {"rest": BUDGET_S}
+_budget_sperre = threading.Lock()
+
+
+def budget_zuruecksetzen():
+    with _budget_sperre:
+        _budget["rest"] = BUDGET_S
+
+
+def _budget_nehmen(sekunden):
+    with _budget_sperre:
+        if _budget["rest"] < sekunden:
+            return False
+        _budget["rest"] -= sekunden
+        return True
 
 
 def ist_aussetzer(text):
@@ -124,32 +144,45 @@ def ist_aussetzer(text):
     return bool(AUSSETZER.search(text or ""))
 
 
-def gh_geduldig(*args):
-    """GH_LAUF, bei Transportfehlern bis zu len(WARTEN_S)-mal wiederholt.
+def wiederholt(versuch):
+    """Der eine Wiederholweg fuer gh und den anonymen Download.
 
-    Rueckgabe wie GH_LAUF: nach dem letzten Versuch das letzte Ergebnis -
-    daraus machen gh_json/gh_text wie bisher "nicht messbar".
+    `versuch()` liefert (ergebnis, aussetzer): aussetzer ist None, wenn eine
+    Antwort kam (auch ein Befund wie 404), sonst der Text des
+    Transportfehlers. Nach len(WARTEN_S) Wiederholungen oder bei
+    aufgebrauchtem Wartebudget: NichtMessbar - also Exit 3, nie gruen.
     """
-    code, raus, fehler = GH_LAUF(*args)
+    ergebnis, aussetzer = versuch()
     for nummer, pause in enumerate(WARTEN_S, 1):
-        if code in (0, 127) or not ist_aussetzer(fehler):
-            break
-        print("  GitHub nicht erreichbar (`gh %s`) - Wiederholung %d/%d in %d s"
-              % (" ".join(args[:3]), nummer, len(WARTEN_S), pause), flush=True)
+        if aussetzer is None:
+            return ergebnis
+        if not _budget_nehmen(pause):
+            raise NichtMessbar("%s - Wartebudget von %d s fuer diesen Lauf aufgebraucht"
+                               % (aussetzer, BUDGET_S))
+        print("  GitHub nicht erreichbar - Wiederholung %d/%d in %d s: %s"
+              % (nummer, len(WARTEN_S), pause, aussetzer[:100]), flush=True)
         SCHLAF(pause)
-        code, raus, fehler = GH_LAUF(*args)
-    return code, raus, fehler
+        ergebnis, aussetzer = versuch()
+    if aussetzer is None:
+        return ergebnis
+    raise NichtMessbar("%s - auch nach %d Wiederholungen" % (aussetzer, len(WARTEN_S)))
 
 
 def gh_fehlertext(args, code, fehler):
-    zusatz = (" - auch nach %d Wiederholungen" % len(WARTEN_S)
-              if ist_aussetzer(fehler) else "")
-    return "`gh %s` endete mit %d: %s%s" % (
-        " ".join(args), code, (fehler or "").strip()[:200], zusatz)
+    return "`gh %s` endete mit %d: %s" % (" ".join(args), code, (fehler or "").strip()[:200])
+
+
+def gh_lauf(*args):
+    """GH_LAUF ueber wiederholt(): nur Transportfehler werden wiederholt."""
+    def versuch():
+        code, raus, fehler = GH_LAUF(*args)
+        transport = code not in (0, 127) and ist_aussetzer(fehler)
+        return (code, raus, fehler), (gh_fehlertext(args, code, fehler) if transport else None)
+    return wiederholt(versuch)
 
 
 def gh_json(*args):
-    code, raus, fehler = gh_geduldig(*args)
+    code, raus, fehler = gh_lauf(*args)
     if code == 127:
         raise NichtMessbar("gh ist nicht installiert "
                            "(https://cli.github.com - `gh auth login`)")
@@ -163,7 +196,7 @@ def gh_json(*args):
 
 
 def gh_text(*args):
-    code, raus, fehler = gh_geduldig(*args)
+    code, raus, fehler = gh_lauf(*args)
     if code == 127:
         raise NichtMessbar("gh ist nicht installiert")
     if code != 0:
@@ -342,28 +375,19 @@ def anonym_erreichen(url, sekunden=20):
 HTTP_LAUF = anonym_erreichen
 
 
-def http_geduldig(url):
-    """HTTP_LAUF, bei Transportfehlern (Netzfehler, 5xx) begrenzt wiederholt.
-
-    Ein 404/403 ist eine Antwort und kommt sofort zurueck (ein BEFUND: der
-    Link ist tot). Bleibt es nach allen Versuchen beim Transportfehler, ist
-    das "nicht messbar" - auch fuer ein 5xx, das frueher als toter Link
-    gezaehlt haette, obwohl GitHub nur kurz ausgefallen war.
-    """
-    letzter = None
-    for nummer, pause in enumerate((0,) + WARTEN_S):
-        if pause:
-            SCHLAF(pause)
+def http_abruf(url):
+    """HTTP_LAUF ueber wiederholt(): Netzfehler und 5xx werden wiederholt,
+    ein 404/403 ist eine Antwort und kommt sofort zurueck (ein Befund). Ein
+    dauerhaftes 5xx ist "nicht messbar", kein toter Link."""
+    def versuch():
         try:
             code, groesse = HTTP_LAUF(url)
         except NichtMessbar as grund:
-            letzter = str(grund)
-            continue
+            return None, str(grund)
         if code in HTTP_AUSSETZER:
-            letzter = "oeffentlicher Abruf %s: HTTP %d" % (url, code)
-            continue
-        return code, groesse
-    raise NichtMessbar("%s - auch nach %d Wiederholungen" % (letzter, len(WARTEN_S)))
+            return None, "oeffentlicher Abruf %s: HTTP %d" % (url, code)
+        return (code, groesse), None
+    return wiederholt(versuch)
 
 
 def ohne_stand(text):
@@ -505,7 +529,7 @@ def spiegel_pruefen(text):
 
     if downloads:
         with concurrent.futures.ThreadPoolExecutor(max_workers=ABRUFE_PARALLEL) as pool:
-            for url, (code, _groesse) in zip(downloads, pool.map(http_geduldig, downloads)):
+            for url, (code, _groesse) in zip(downloads, pool.map(http_abruf, downloads)):
                 if code != 200:
                     befunde.append(f"oeffentlicher Download nicht erreichbar "
                                    f"(HTTP {code}): {url.rsplit('/', 2)[-2:]}")
@@ -538,7 +562,7 @@ def oeffentlichkeit_pruefen(vorhanden):
         # EINE echte Abrufprobe je Release: der Basispfad traegt fuer alle
         # Bilder, ein 404 an genau dieser Datei heisst "die Basis ist tot".
         if links:
-            code, groesse = http_geduldig(links[0])
+            code, groesse = http_abruf(links[0])
             if code != 200:
                 befunde.append(f"{tag}: erstes Bild ist ohne Konto nicht "
                                f"abrufbar (HTTP {code}): {links[0][:110]}")
@@ -567,6 +591,7 @@ def hauptprogramm(argv=None):
                     help="fehlender Ref ist kein Fehler, sondern heisst: nur "
                          "die Seite im Arbeitszweig wurde geprueft")
     args = ap.parse_args(argv)
+    budget_zuruecksetzen()
 
     print("Release-Abgleich: Seite, Assets und Texte")
     print(f"  Quelle der Releases: {args.quelle} ({args.ref})")
