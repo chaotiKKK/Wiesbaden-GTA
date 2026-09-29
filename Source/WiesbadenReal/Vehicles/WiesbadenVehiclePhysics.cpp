@@ -130,7 +130,9 @@ float FWiesbadenVehiclePhysics::GetWheelForceDemand(float Throttle) const
 	// ueber ComputeTransmittedLongitudinalForce - so kann die geforderte Kraft
 	// die Haftgrenze der Antriebsachse ueberschreiten und das Rad durchdrehen.
 	const float Torque = MotorTorqueAt(EngineRpm);
-	const float WheelForce = Torque * GetTotalGearRatio() / FMath::Max(WheelRadiusM, 0.01f);
+	// Mit Triebstrang-Verlusten: die Kennlinie ist ein Motorwert, am Rad kommt weniger an.
+	const float WheelForce = Torque * GetTotalGearRatio() * DrivetrainEfficiency
+		/ FMath::Max(WheelRadiusM, 0.01f);
 	return WheelForce * FMath::Clamp(Throttle, 0.0f, 1.0f);
 }
 
@@ -265,7 +267,7 @@ float FWiesbadenVehiclePhysics::ComputeYawRate(
 	// Seitenkraftlimit aus dem Reibungskreis: Wer bremst oder beschleunigt,
 	// hat weniger Querkraft uebrig. Bei hoher Geschwindigkeit untersteuert das
 	// Fahrzeug zusaetzlich, weil die zulaessige Gierrate mit 1/v faellt.
-	const float AvailableLateral = ComputeAvailableLateralAccel(
+	const float AvailableLateral = LateralGripFactor * ComputeAvailableLateralAccel(
 		EffectiveMuTraction(), GravityMetersPerS2, LongitudinalAccelMetersPerS2);
 	const float MaxLateralYaw = AvailableLateral / Speed;
 	return FMath::Clamp(KinematicYaw, -MaxLateralYaw, MaxLateralYaw);
@@ -627,10 +629,11 @@ void FWiesbadenVehiclePhysics::TickLateral(
 		// uebrig - auf beiden Achsen, gleich wie die Bremskraft verteilt ist.
 		const float FrontGripN = StaticGripN(FrontLoad);
 		const float RearGripN = StaticGripN(RearLoad);
+		// Quer haftet der Reifen nur mit LateralGripFactor der Laengshaftung.
 		const float FyfMax = bBrakeLockState ? 0.0f
-			: FrontGripN * ComputeAxleLateralShare(TireLongForceFrontN, FrontGripN);
+			: FrontGripN * LateralGripFactor * ComputeAxleLateralShare(TireLongForceFrontN, FrontGripN);
 		const float FyrMax = bBrakeLockState ? 0.0f
-			: RearGripN * ComputeAxleLateralShare(TireLongForceRearN, RearGripN);
+			: RearGripN * LateralGripFactor * ComputeAxleLateralShare(TireLongForceRearN, RearGripN);
 
 		// LASTABHAENGIGE Schraeglaufsteifigkeit: ein staerker belasteter Reifen
 		// baut Seitenkraft steiler auf. Bisher skalierte die dynamische Achslast
@@ -706,7 +709,7 @@ void FWiesbadenVehiclePhysics::TickLateral(
 		LateralVelocityMetersPerS =
 			FMath::Clamp(LateralVelocityMetersPerS, -0.7f * Vx - 1.0f, 0.7f * Vx + 1.0f);
 		const float MaxLateralAccel = bBrakeLockState
-			? EffectiveMuTraction() * GravityMetersPerS2
+			? EffectiveMuTraction() * LateralGripFactor * GravityMetersPerS2
 			: FMath::Max((FyfMax + FyrMax) / m, 0.1f);
 		const float MaxYaw = MaxLateralAccel / FMath::Max(Vx, 1.0f);
 		YawRateRadPerS = FMath::Clamp(YawRateRadPerS, -MaxYaw, MaxYaw);

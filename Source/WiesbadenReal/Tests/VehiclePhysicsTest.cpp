@@ -509,12 +509,26 @@ bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
 			FMath::IsNearlyEqual(Sum / N, 5000.0f, 50.0f));
 	}
 
-	// -- Im Fahrzeug: Anfahren mit Vollgas -> Radspin, verschwindet bei Fahrt -
+	// -- Im Fahrzeug: TROCKEN dreht der kalibrierte Kaefer nicht durch --------
+	// (R&T 9/1973: 0-30 mph in 5,2 s ohne Traktionsprobleme; 50 PS, 57 % hinten.)
 	{
 		FWiesbadenVehiclePhysics Vehicle;
 		Vehicle.Reset();
 		FWiesbadenVehiclePhysicsInput In;
 		In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+		bool bSpun = false;
+		for (int32 Step = 0; Step < 300; ++Step) { Vehicle.Tick(In, VehicleDt, Out); bSpun = bSpun || Out.bWheelSpin; }
+		TestFalse(TEXT("Trocken: Vollgas-Start ohne Radspin"), bSpun);
+	}
+
+	// -- Im Fahrzeug: NASS (voller Regen) -> Radspin, verschwindet bei Fahrt ---
+	{
+		FWiesbadenVehiclePhysics Vehicle;
+		Vehicle.Reset();
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		In.SurfaceGripScale = 0.65f;
 		FWiesbadenVehiclePhysicsOutput Out;
 
 		bool bSpunAtLaunch = false;
@@ -523,7 +537,7 @@ bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
 			Vehicle.Tick(In, VehicleDt, Out);
 			bSpunAtLaunch = bSpunAtLaunch || Out.bWheelSpin;
 		}
-		TestTrue(TEXT("Vollgas-Start dreht die Antriebsraeder durch"), bSpunAtLaunch);
+		TestTrue(TEXT("Nass: Vollgas-Start dreht die Antriebsraeder durch"), bSpunAtLaunch);
 
 		// Auf Tempo - bei Fahrt reicht das Moment nicht mehr fuer Radspin.
 		Simulate(Vehicle, In, 10.0f);
@@ -542,9 +556,10 @@ bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
 		const float G = V.GravityMetersPerS2;
 		const float FullBrakeDemandN = V.BrakeForceN;
 
-		// Normalbremse ist der ALTE Wert (0,7 g) - keine unangeforderte Aenderung.
-		TestTrue(FString::Printf(TEXT("BrakeForceN auf altem Wert (%.0f N)"), V.BrakeForceN),
-			FMath::IsNearlyEqual(V.BrakeForceN, 5600.0f, 0.5f));
+		// Normalbremse ist der KALIBRIERTE Wert (R&T 9/1973, 29.09.2026) - eine
+		// Aenderung braucht eine neue Messung als Begruendung.
+		TestTrue(FString::Printf(TEXT("BrakeForceN auf kalibriertem Wert (%.0f N)"), V.BrakeForceN),
+			FMath::IsNearlyEqual(V.BrakeForceN, 7000.0f, 0.5f));
 
 		// Geradeaus: voller Grip mu*g -> Grip-Kraft ueber der Anforderung -> kein Block.
 		const float GripStraightN = V.Powertrain.MassKg *
@@ -1218,9 +1233,11 @@ bool FVehicleAbsTest::RunTest(const FString& Parameters)
 		FMath::Abs(Abs.KursGrad) < 90.0f);
 	// Der Preis der Stabilitaet: die Hinterachse bremst mit der Verteilung nur so
 	// stark, dass sie Seitenfuehrung behaelt - etwas weniger Verzoegerung als vier
-	// gleitende Raeder, aber kaum (in 0,9 s hoechstens 3 km/h).
+	// gleitende Raeder, aber kaum (in 0,9 s hoechstens 4 km/h; seit der Grip-
+	// Kalibrierung 29.09.2026 nutzt das Blockiermodell das staerkere Pedal voll,
+	// das ABS haelt die Hinterachse fuer die Stabilitaet zurueck: 3,3 km/h).
 	TestTrue(FString::Printf(TEXT("Bremst fast so stark (%.1f gegen %.1f km/h)"), Abs.KmhNach, Ohne.KmhNach),
-		Abs.KmhNach <= Ohne.KmhNach + 3.0f);
+		Abs.KmhNach <= Ohne.KmhNach + 4.0f);
 
 	// Geradeaus: das ABS regelt vorn an der Achsgrenze (Pedal * Verteilung liegt
 	// darueber), der Wagen verzoegert trotzdem kraeftig und bleibt gerade.
@@ -1529,9 +1546,10 @@ bool FVehicleWheelSpinFlareTest::RunTest(const FString& Parameters)
 	}
 
 	// -- Im Fahrzeug: Vollgas-Start flart die AUSGABE ueber die Basis --------
+	// (auf nasser Strasse - trocken dreht der kalibrierte Kaefer nicht durch)
 	{
 		FWiesbadenVehiclePhysics Vehicle; Vehicle.Reset();
-		FWiesbadenVehiclePhysicsInput In; In.Throttle = 1.0f;
+		FWiesbadenVehiclePhysicsInput In; In.Throttle = 1.0f; In.SurfaceGripScale = 0.65f;
 		FWiesbadenVehiclePhysicsOutput Out;
 
 		bool bFlared = false;

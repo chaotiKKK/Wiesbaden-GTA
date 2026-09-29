@@ -284,6 +284,10 @@ FWiesbadenVehiclePhysics FWbTrafficCarType::MakePhysics() const
 	P.MaxSteerAngleDeg = MaxSteerAngleDeg;
 	// Heutige Reifen haften besser als die des Kaefers (0,75), Bremse ~0,8 g.
 	P.MuTraction = 0.9f;
+	// Die Kaefer-Kalibrierung (Seitenhaftung, Triebstrang) gilt nur fuer den
+	// Spielerwagen - der Verkehr bleibt wie er war.
+	P.LateralGripFactor = 1.0f;
+	P.DrivetrainEfficiency = 1.0f;
 	P.BrakeForceN = 0.8f * Powertrain.MassKg * P.GravityMetersPerS2;
 	P.EngineBrakeTorqueNm = 0.3f * Powertrain.MaxTorqueNm;
 	P.Reset();

@@ -242,8 +242,13 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.0"))
 	//
 	// Das ist die BremsANFORDERUNG bei vollem Pedal, NICHT die am Reifen
-	// wirksame Kraft. 5.600 N bei 820 kg sind rund 0,7 g - die reale Verzoegerung
-	// eines Kaefer von 1969 mit Trommelbremsen, Bremsweg ~14 m aus 50 km/h.
+	// wirksame Kraft. Kalibriert am 29.09.2026 auf Road & Track 9/1973 (VW Sports
+	// Bug, Radialreifen 175/70 HR 15): kuerzester Anhalteweg 158 ft aus 60 mph =
+	// 0,76 g, also rund 52 m aus 100 km/h. 7.000 N bei 820 kg fordern 0,87 g; mit
+	// Bremsverteilung 0,74 und ABS-Anteil 0,9 regelt die Vorderachse. Gemessen
+	// (Fahrmessung Wiese): 0,74 g im Mittel, 52,5 m aus 100 km/h (vorher 5.600 N:
+	// 0,64 g, 60 m). Unter mu*Gewicht (0,9 g) - geradeaus blockiert das
+	// Blockiermodell ohne ABS darum weiterhin nicht.
 	//
 	// Das Blockieren haengt NICHT an diesem Wert: der Tick prueft die Anforderung
 	// gegen den REIBUNGSKREIS-REDUZIERTEN Laengs-Grip (mu*Gewicht abzueglich der
@@ -251,7 +256,7 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	// 0,7 g), das Pedal blockiert dort NICHT; beim Bremsen in der Kurve oder auf
 	// griffarmem Belag faellt der verfuegbare Grip unter die Anforderung und die
 	// Raeder blockieren - grip-abgeleitet, robust gegen Aenderungen von Masse/mu.
-	float BrakeForceN = 5600.0f;
+	float BrakeForceN = 7000.0f;
 
 	// -- Querdynamik ------------------------------------------------------
 	/** Maximaler Lenkeinschlag der Vorderraeder (Grad). */
@@ -313,12 +318,36 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.5"))
 	float WheelbaseM = 2.7f;
 
-	/** Reibbeiwert Reifen/Strasse - begrenzt Antriebs- UND Querkraft. */
+	/** Reibbeiwert Reifen/Strasse (Laengshaftung) - begrenzt Antrieb und Bremse. */
 	UPROPERTY(EditAnywhere, Category = "Vehicle", meta = (ClampMin = "0.1"))
 	//
-	// 0,75 statt 0,9: Ein Kaefer von 1969 faehrt auf Diagonalreifen, die
-	// deutlich weniger Seitenfuehrung aufbauen als moderne Guerteilreifen.
-	float MuTraction = 0.75f;
+	// 0,9: trockener Asphalt, Radialreifen (Bezug wie BrakeForceN: R&T 9/1973,
+	// AMS-Test 1302 LS mit 185/70 R 15). Mit 0,75 drehte der Kaefer beim Anfahren
+	// 2 s lang durch - ein 50-PS-Heckmotorwagen mit 57 % Last hinten tut das auf
+	// trockener Strasse nicht. Die Seitenhaftung kalibriert LateralGripFactor.
+	float MuTraction = 0.9f;
+
+	/**
+	 * Seitenhaftung als Anteil der Laengshaftung (0..1).
+	 *
+	 * Ein Auto erreicht quer weniger als mu*g: der kurvenaeussere Reifen traegt
+	 * mehr Last und haftet dabei relativ schlechter (Lastempfindlichkeit), dazu
+	 * Sturz und Wanken - im Einspurmodell nicht abgebildet. Kalibriert auf R&T
+	 * 9/1973: 0,704 g auf dem Kreis mit 100 ft Radius (Fahrmessung mit 0,9 * 0,8:
+	 * 0,71 g, vorher 0,73 g). Verkehr und Bus setzen 1,0 (unveraendert).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.3", ClampMax = "1.0"))
+	float LateralGripFactor = 0.8f;
+
+	/**
+	 * Wirkungsgrad des Triebstrangs (Getriebe, Achsantrieb): Anteil des
+	 * Motormoments, der am Rad ankommt. Das Drehmoment der Motorkennlinie ist ein
+	 * Motorwert (DIN); ohne Verluste lag die Radkraft ~10 % zu hoch - der Wagen
+	 * drehte beim Anfahren durch und war 3 s zu schnell auf 100 (15,6 statt
+	 * 18,2-18,7 s laut R&T/AMS). Verkehr und Bus setzen 1,0 (unveraendert).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.5", ClampMax = "1.0"))
+	float DrivetrainEfficiency = 0.9f;
 
 	// -- Dynamisches Einspurmodell (Querschlupf/Drift) --------------------
 	//
@@ -450,14 +479,16 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	 * als die statische Achslast (Kaefer 0,42), weil Bremsen Last nach vorn
 	 * verlagert - die Hinterachse erreicht ihre Grenze so NACH der Vorderachse
 	 * und behaelt Seitenfuehrung: der Wagen schiebt beim Ueberbremsen gerade,
-	 * statt sich zu drehen. Warum 0,7 und nicht weniger: beim Kaefer liegt die
+	 * statt sich zu drehen. Warum so viel vorn: beim Kaefer liegt die
 	 * Vorderachse weit vom Schwerpunkt (1,57 gegen 1,13 m); stehen beide Achsen
 	 * an der Seitenkraftgrenze, muss das Moment hinten (b * FyrMax) das vordere
 	 * (a * FyfMax) uebertreffen. Mit 0,6 blieb der Wagen nach einer schnellen
-	 * Kurve beim geraden Bremsen 15 Grad quer (Test Physics.Abs).
+	 * Kurve beim geraden Bremsen 15 Grad quer (Test Physics.Abs). 0,74 seit der
+	 * Grip-Kalibrierung (29.09.2026): mit 7.000 N Pedal nahm die Hinterachse bei
+	 * 0,7 zu viel Bremsarbeit und das Momentenverhaeltnis fiel auf 0,98.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.3", ClampMax = "0.9"))
-	float BrakeFrontBias = 0.7f;
+	float BrakeFrontBias = 0.74f;
 
 	/** Unterhalb dieser Geschwindigkeit kinematisch lenken (m/s). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.5"))

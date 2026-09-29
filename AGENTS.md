@@ -5148,3 +5148,12 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   zweite Ableitung, Teleports > 1,5 m ausgeblendet). Der STADTVERKEHR nutzt
   weiter die alte Glaettung `ComputeBodyTilt` - bewusst unveraendert.
   Messfelder: `boden` (Kanten = zweite Differenz >= 6 cm), `spalt`, `fz`.
+- Grip-Kalibrierung (29.09.2026) gegen ECHTE Tests, nicht Gefuehl: Road &
+  Track 3/1971 Super Beetle und 9/1973 Sports Bug (Scans auf thesamba.com, Pfad
+  vw/archives/lit/magazines/), AMS-Test 1302 LS. Sollwerte Radialreifen:
+  0,704 g quer, 158 ft aus 60 mph (0,76 g, ~52 m aus 100 km/h), 0-60 mph
+  18,2 s. Kaefer: MuTraction 0,9 (laengs), LateralGripFactor 0,8 (quer),
+  BrakeForceN 7000 mit Verteilung 0,74 (0,7 war damit instabil, s.o.),
+  DrivetrainEfficiency 0,9. Verkehr/Bus setzen die beiden neuen Faktoren auf
+  1,0. Offen: Masse 820 statt ~970 kg (Leergewicht + Fahrer) -> 0-100 noch
+  ~2 s zu schnell.
