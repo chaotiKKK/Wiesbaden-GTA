@@ -4253,7 +4253,7 @@ dieselbe Karte** – ein weiterer Bake derselben Daten aendert nichts messbares.
   dieser Zellen ist pro Bake anders, ihr Inhalt nicht. Wer die %-Zahl als
   Inhaltswechsel liest, zieht den falschen Schluss.
 - **Ankermessung, beide Karten, dasselbe Werkzeug, zwei Minuten auseinander**
-  (`Toolserify_anchor.cmd Alkis31` bzw. ohne Argument): je **2010 Zell-Actors,
+  (`Tools\verify_anchor.cmd Alkis31` bzw. ohne Argument): je **2010 Zell-Actors,
   23799 leere Komponenten, 0 am Kartenursprung**, 82-zeilige Ergebnisse, die sich
   nur im Kartennamen und in der Reihenfolge der Beispielzellen unterscheiden
   (`Saved/Diagnose/anchor_verify.txt`, `anchor_verify_WiesbadenCity_Alkis31.txt`).
@@ -5186,7 +5186,7 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
 
 ## Gate 7: Fahrphysik-Messfahrt gegen die Sollwerte (29.09.2026)
 
-- Push-Gate (volle Stufe, ohne Dateifilter): `Toolserify_fahrphysik.cmd` faehrt
+- Push-Gate (volle Stufe, ohne Dateifilter): `Tools\verify_fahrphysik.cmd` faehrt
   `fahrmessung.cmd gate_fahrphysik 40` (~160 s) und prueft mit
   `Tools/verify_fahrphysik.py` die Kennzahlen gegen SOLLWERTE: Radspin <= 0,2 s,
   0-60 mph 16,4..20 s (R&T 18,2), Kurvengrip 0,65..0,76 g je Seite (0,704),
