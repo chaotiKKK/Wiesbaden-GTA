@@ -420,6 +420,45 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.0"))
 	float LockedYawDampingRate = 3.0f;
 
+	/**
+	 * Antiblockiersystem an der Fussbremse.
+	 *
+	 * AN: fordert das Pedal mehr, als der Reifen laengs uebertragen kann, regelt
+	 * die Bremse an der Haftgrenze - die Raeder gleiten nie, der Wagen bleibt beim
+	 * Vollbremsen lenkbar (Seitenfuehrung ueber den Reibungskreis). Gemessen am
+	 * 29.09.2026 ohne ABS: eine Vollbremsung aus der Kurve blieb bis zum Stillstand
+	 * blockiert (98 % des Bremswegs), denn die Gleitreibung liegt unter der
+	 * Pedalanforderung - mit der Tastatur, die immer voll bremst, war jeder harte
+	 * Stopp aus einer Kurve eine unlenkbare Rutschpartie.
+	 * AUS: das Blockiermodell (Haft/Gleit mit Hysterese, Puls, Gierdaempfung).
+	 * Die Handbremse wirkt immer ohne ABS - sie soll blockieren koennen.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik")
+	bool bAbsEnabled = true;
+
+	/**
+	 * ABS: Anteil ihrer Haftung, den eine Achse laengs zum Bremsen nutzen darf.
+	 * Der Rest bleibt fuer die Seitenfuehrung - bei 0,9 mindestens
+	 * Wurzel(1 - 0,81) = 44 % je Achse. So regelt auch ein echtes ABS: es haelt den
+	 * Bremsschlupf knapp vor dem Maximum, wo der Reifen noch Seitenkraft baut.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.3", ClampMax = "1.0"))
+	float AbsLongGripShare = 0.9f;
+
+	/**
+	 * Anteil der Fussbremse an der Vorderachse (Bremskraftverteilung). Vorn mehr
+	 * als die statische Achslast (Kaefer 0,42), weil Bremsen Last nach vorn
+	 * verlagert - die Hinterachse erreicht ihre Grenze so NACH der Vorderachse
+	 * und behaelt Seitenfuehrung: der Wagen schiebt beim Ueberbremsen gerade,
+	 * statt sich zu drehen. Warum 0,7 und nicht weniger: beim Kaefer liegt die
+	 * Vorderachse weit vom Schwerpunkt (1,57 gegen 1,13 m); stehen beide Achsen
+	 * an der Seitenkraftgrenze, muss das Moment hinten (b * FyrMax) das vordere
+	 * (a * FyfMax) uebertreffen. Mit 0,6 blieb der Wagen nach einer schnellen
+	 * Kurve beim geraden Bremsen 15 Grad quer (Test Physics.Abs).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.3", ClampMax = "0.9"))
+	float BrakeFrontBias = 0.7f;
+
 	/** Unterhalb dieser Geschwindigkeit kinematisch lenken (m/s). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.5"))
 	float LowSpeedBlendMetersPerS = 3.0f;
@@ -468,6 +507,23 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
 	float LastLongAccelMetersPerS2 = 0.0f;
+
+	/**
+	 * Laengskraft der REIFEN je Achse (N, + = vorwaerts): Antrieb und Motorbremse
+	 * auf der Antriebsachse, Bremse nach BrakeFrontBias. Der Eingang des
+	 * Reibungskreises der Querdynamik - JE ACHSE, denn beim Bremsen nutzt die
+	 * Vorderachse mehr ihrer Haftung als die Hinterachse, und genau die Reserve
+	 * hinten haelt den Wagen stabil.
+	 *
+	 * Luft- und Rollwiderstand greifen an der Karosserie an und verbrauchen keine
+	 * Reifenhaftung. Mit der GESAMTEN Verzoegerung und einem gemeinsamen Kreis fuer
+	 * beide Achsen drehte der Wagen am 29.09.2026 beim geraden Bremsen aus 120 km/h
+	 * ohne Lenkung bis 43 Grad Schwimmwinkel weg.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float TireLongForceFrontN = 0.0f;
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
+	float TireLongForceRearN = 0.0f;
 
 	/** Phase der Bremsschlupf-Pulsung (rad) - Zustand der ABS-Anmutung. */
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Zustand")
@@ -539,6 +595,13 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	 */
 	static float ComputeAvailableLateralAccel(
 		float MuTraction, float GravityMetersPerS2, float LongitudinalAccelMetersPerS2);
+
+	/**
+	 * Derselbe Reibungskreis fuer EINE Achse: welcher Anteil (0..1) ihrer Haftung
+	 * bleibt quer, wenn ihre Reifen laengs LongForceN uebertragen?
+	 * Wurzel(1 - (|Fx| / Haftung)^2); ohne Haftung 0.
+	 */
+	static float ComputeAxleLateralShare(float LongForceN, float AxleGripN);
 
 	/**
 	 * Dynamischer Vorderachs-Lastanteil (0..1) nach Laengs-Radlastverlagerung.

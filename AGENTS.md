@@ -5109,3 +5109,33 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   `engine_run_lock.ps1 -Modus Nehmen` wartet nicht, Exit 3 sofort), und
   .cmd-Wrapper per `Start-Process -FilePath x.cmd -ArgumentList ...` starten -
   `cmd /c "x.cmd" arg "y"` wirft das erste und letzte Anfuehrungszeichen weg.
+
+## Fahrphysik: ABS, Reibungskreis je Achse, Bremsstabilitaet (29.09.2026)
+
+- MESSEN statt schaetzen: `Tools\fahrmessung.cmd <Name> [Sek] [kurve]` faehrt
+  WbDrive auf der Wiese (-WbGoto=-180086,899031) mit `-WbFahrTelemetrie`
+  (10 Hz); `python Tools\fahrmessung_auswerten.py a.log b.log` stellt
+  Vorher/Nachher nebeneinander. `kurve` = Vollbremsung mit gehaltener
+  Lenkung. Zeiten sind auf 0,1 s gerastert - Unterschiede von einer Probe
+  sind Abtastung, keine Physik.
+- `bWheelLock` heisst seit dem ABS "Bremse an der Haftgrenze" (blockiert ODER
+  ABS regelt, HUD "ABS"). Ob die Raeder wirklich GLEITEN, sagt nur
+  `bBrakeLockState` (Telemetrie `gleit`). Tests zum Blockiermodell setzen
+  `bAbsEnabled = false`.
+- Der Kaefer ist schon statisch uebersteuernd (a*Cf > b*Cr, kritische
+  Geschwindigkeit ~142 km/h). Alles, was beim Bremsen HINTEN Seitenfuehrung
+  nimmt, senkt sie unter Betriebstempo: die lastabhaengige Steifigkeit (+-20 %
+  -> ~71 km/h), ein gemeinsamer Reibungskreis fuer beide Achsen, zu viel
+  Bremse hinten. Folge: Dreher beim GERADEN Bremsen nach einer Kurve (43 Grad
+  Schwimmwinkel gemessen). Das war jahrelang unsichtbar, weil die Raeder
+  blockierten und die Gierdaempfung fuer blockierte Raeder es verdeckte -
+  mit ABS trat es offen auf. Abhilfe: Reibungskreis JE ACHSE nur aus
+  Reifenkraeften (kein Luftwiderstand), Bremsverteilung 0,7 vorn, und eine
+  Stabilitaetswache, die die Steifigkeitsverschiebung auf eine kritische
+  Geschwindigkeit mit 20 % Reserve begrenzt. Beim Kaefer muss das hintere
+  Seitenkraftmoment (b * FyrMax) das vordere uebertreffen - bei a = 1,57 m
+  gegen b = 1,13 m braucht die Hinterachse deutlich mehr Reserve als vorn.
+- Tests "im linearen Bereich" pruefen: WbDrive-/Testlenkung 0,25 lag nach 6 s
+  Vollgas schon am Gierlimit; `LoadStiffness` war nur gruen, weil die Raeder
+  dort blockierten. Vor einem Test, der eine Linear-Eigenschaft misst, die
+  Gierrate gegen `MaxYaw` pruefen.

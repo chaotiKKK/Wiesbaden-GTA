@@ -561,9 +561,11 @@ bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
 	}
 
 	// -- Im Fahrzeug: Geradeaus-Vollbremsung blockiert NICHT, stoppt normal ---
+	// (Blockiermodell, also ohne ABS - mit ABS meldet bWheelLock die Regelung.)
 	{
 		FWiesbadenVehiclePhysics Vehicle;
 		Vehicle.Reset();
+		Vehicle.bAbsEnabled = false;
 		FWiesbadenVehiclePhysicsInput In;
 		In.Throttle = 1.0f;
 		Simulate(Vehicle, In, 10.0f);          // geradeaus auf Tempo (kein Lenken)
@@ -584,9 +586,11 @@ bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
 	}
 
 	// -- Im Fahrzeug: Bremsen in der Kurve -> Blockieren aus der Grip-Grenze --
+	// Das Blockiermodell gibt es nur OHNE ABS (mit ABS: Test Physics.Abs).
 	{
 		FWiesbadenVehiclePhysics Vehicle;
 		Vehicle.Reset();
+		Vehicle.bAbsEnabled = false;
 		FWiesbadenVehiclePhysicsInput In;
 		In.Throttle = 1.0f;
 		Simulate(Vehicle, In, 8.0f);           // Tempo aufbauen
@@ -650,8 +654,10 @@ bool FVehicleSurfaceGripTest::RunTest(const FString& Parameters)
 	}
 
 	// -- Geradeaus-Vollbremsung: trocken haelt, griffarm blockiert -----------
+	// (Blockiermodell, also ohne ABS - mit ABS meldet bWheelLock die Regelung.)
 	{
 		FWiesbadenVehiclePhysics Vehicle; Vehicle.Reset();
+		Vehicle.bAbsEnabled = false;
 		FWiesbadenVehiclePhysicsInput Acc; Acc.Throttle = 1.0f;
 		Simulate(Vehicle, Acc, 8.0f);              // geradeaus auf Tempo
 
@@ -973,7 +979,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleLockedYawDampingTest,
  * Kurvenbremsung mit blockierten Raedern reisst den Wagen nicht mehr weit herum.
  * Die Gier-Daempfung wirkt NUR bei blockierten Raedern - sie zaehmt den
  * ueberschiessenden Dreh, ohne das Blockieren abzuschalten; gerades Bremsen und
- * normale Kurvenfahrt bleiben unveraendert.
+ * normale Kurvenfahrt bleiben unveraendert. Blockieren gibt es nur OHNE ABS -
+ * alle Szenarien hier schalten es darum ab.
  */
 bool FVehicleLockedYawDampingTest::RunTest(const FString& Parameters)
 {
@@ -982,6 +989,7 @@ bool FVehicleLockedYawDampingTest::RunTest(const FString& Parameters)
 	{
 		FWiesbadenVehiclePhysics V;
 		V.Reset();
+		V.bAbsEnabled = false;
 		V.LockedYawDampingRate = DampRate;
 
 		FWiesbadenVehiclePhysicsInput In;
@@ -1030,6 +1038,7 @@ bool FVehicleLockedYawDampingTest::RunTest(const FString& Parameters)
 	{
 		FWiesbadenVehiclePhysics V;
 		V.Reset();
+		V.bAbsEnabled = false;
 		V.LockedYawDampingRate = DampRate;
 		FWiesbadenVehiclePhysicsInput In;
 		In.Throttle = 1.0f;
@@ -1050,6 +1059,7 @@ bool FVehicleLockedYawDampingTest::RunTest(const FString& Parameters)
 	{
 		FWiesbadenVehiclePhysics V;
 		V.Reset();
+		V.bAbsEnabled = false;
 		V.LockedYawDampingRate = DampRate;
 		FWiesbadenVehiclePhysicsInput In;
 		In.Throttle = 1.0f;
@@ -1064,6 +1074,117 @@ bool FVehicleLockedYawDampingTest::RunTest(const FString& Parameters)
 	RunCorner(0.0f, Y0);
 	TestTrue(TEXT("Normale Kurve unveraendert (nicht blockiert)"), FMath::IsNearlyEqual(Y1, Y0, 0.001f));
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleAbsTest,
+	"WiesbadenReal.Vehicles.Physics.Abs",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+/**
+ * ABS: eine Vollbremsung in der Kurve laesst die Raeder nicht gleiten - der Wagen
+ * bleibt lenkbar und dreht weiter in die Kurve, statt blockiert geradeaus zu
+ * rutschen. Gemessen im Spiel (29.09.2026): ohne ABS blieb eine Vollbremsung aus
+ * der Kurve bis zum Stillstand blockiert. Geradeaus aendert das ABS nichts (dort
+ * reicht der Grip fuer das Pedal), und die Handbremse blockiert weiterhin.
+ */
+bool FVehicleAbsTest::RunTest(const FString& Parameters)
+{
+	struct FErgebnis { float KursGrad = 0.0f; bool bGeglitten = false; bool bLeuchte = false; float KmhNach = 0.0f; };
+	auto Kurvenbremsung = [](bool bAbs, bool bHandbremse)
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		V.bAbsEnabled = bAbs;
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(V, In, 8.0f);        // Tempo aufbauen
+		In.Steering = 1.0f;
+		Simulate(V, In, 1.0f);        // in die Kurve (Querbeschleunigung)
+
+		In.Throttle = 0.0f;
+		In.Brake = 1.0f;              // voll bremsen, Lenkung bleibt
+		In.bHandbrake = bHandbremse;
+		FErgebnis E;
+		FWiesbadenVehiclePhysicsOutput Out;
+		for (int32 Step = 0; Step < 90; ++Step)
+		{
+			V.Tick(In, VehicleDt, Out);
+			E.KursGrad += FMath::RadiansToDegrees(Out.YawRateRadPerS * VehicleDt);
+			E.bGeglitten = E.bGeglitten || V.bBrakeLockState;
+			E.bLeuchte = E.bLeuchte || Out.bWheelLock;
+		}
+		E.KmhNach = Out.SpeedKmh;
+		return E;
+	};
+
+	const FErgebnis Abs = Kurvenbremsung(true, false);
+	const FErgebnis Ohne = Kurvenbremsung(false, false);
+
+	TestFalse(TEXT("Mit ABS gleiten die Raeder nie"), Abs.bGeglitten);
+	TestTrue(TEXT("Ohne ABS gleiten sie (Bezug)"), Ohne.bGeglitten);
+	TestTrue(TEXT("Die Leuchte meldet die ABS-Regelung"), Abs.bLeuchte);
+	TestTrue(FString::Printf(TEXT("Mit ABS lenkbar: Kurs %.1f statt %.1f Grad"), Abs.KursGrad, Ohne.KursGrad),
+		Abs.KursGrad > Ohne.KursGrad * 1.3f);
+	TestTrue(FString::Printf(TEXT("Kein Dreher beim Bremsen (%.1f Grad)"), Abs.KursGrad),
+		FMath::Abs(Abs.KursGrad) < 90.0f);
+	// Der Preis der Stabilitaet: die Hinterachse bremst mit der Verteilung nur so
+	// stark, dass sie Seitenfuehrung behaelt - etwas weniger Verzoegerung als vier
+	// gleitende Raeder, aber kaum (in 0,9 s hoechstens 3 km/h).
+	TestTrue(FString::Printf(TEXT("Bremst fast so stark (%.1f gegen %.1f km/h)"), Abs.KmhNach, Ohne.KmhNach),
+		Abs.KmhNach <= Ohne.KmhNach + 3.0f);
+
+	// Geradeaus: das ABS regelt vorn an der Achsgrenze (Pedal * Verteilung liegt
+	// darueber), der Wagen verzoegert trotzdem kraeftig und bleibt gerade.
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(V, In, 10.0f);
+		const float V0 = V.SpeedMetersPerS;
+		In.Throttle = 0.0f;
+		In.Brake = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+		SimulateTo(V, In, 1.0f, Out);
+		const float VerzoegerungG = (V0 - Out.ForwardSpeedMetersPerS) / 1.0f / 9.81f;
+		TestTrue(FString::Printf(TEXT("Geradeaus kraeftig (%.2f g)"), VerzoegerungG), VerzoegerungG > 0.6f);
+		TestTrue(TEXT("Geradeaus ohne Gier"), FMath::Abs(Out.YawRateRadPerS) < 0.001f);
+		TestFalse(TEXT("Geradeaus gleitet nichts"), V.bBrakeLockState);
+	}
+
+	// Die Handbremse umgeht das ABS.
+	TestTrue(TEXT("Handbremse blockiert auch mit ABS"), Kurvenbremsung(true, true).bGeglitten);
+
+	// Aus schneller Kurve GERADE bremsen (Lenkung zurueck auf 0): der Wagen faengt
+	// sich. Im Spiel gemessen (29.09.2026): solange der Reibungskreis den Luft-
+	// widerstand mitzaehlte, lag die Verzoegerung bei 120 km/h ueber mu*g, die
+	// Seitenfuehrung fiel auf null, und der Wagen drehte bis 43 Grad Schwimmwinkel weg.
+	{
+		FWiesbadenVehiclePhysics V;
+		V.Reset();
+		FWiesbadenVehiclePhysicsInput In;
+		In.Throttle = 1.0f;
+		Simulate(V, In, 16.0f);       // ~110 km/h
+		In.Steering = -0.6f;
+		Simulate(V, In, 1.5f);        // schnelle Linkskurve am Limit
+		In.Throttle = 0.0f;
+		In.Steering = 0.0f;
+		In.Brake = 1.0f;
+		FWiesbadenVehiclePhysicsOutput Out;
+		float MaxSchwimm = 0.0f;
+		for (int32 Step = 0; Step < 300; ++Step)
+		{
+			V.Tick(In, VehicleDt, Out);
+			MaxSchwimm = FMath::Max(MaxSchwimm, FMath::Abs(Out.SlipAngleDeg));
+		}
+		// Etwas Lastwechsel beim Heckmotor-Kaefer ist echt - aber kein Dreher, und
+		// nach drei Sekunden steht er wieder gerade.
+		TestTrue(FString::Printf(TEXT("Gerade Bremsung nach der Kurve: kein Dreher (Schwimmwinkel max %.1f Grad)"), MaxSchwimm),
+			MaxSchwimm < 20.0f);
+		TestTrue(FString::Printf(TEXT("... und faengt sich (Schwimmwinkel am Ende %.1f Grad)"), Out.SlipAngleDeg),
+			FMath::Abs(Out.SlipAngleDeg) < 3.0f);
+	}
 	return true;
 }
 
@@ -1209,7 +1330,11 @@ bool FVehicleLoadStiffnessTest::RunTest(const FString& Parameters)
 		Simulate(V, In, AccelSeconds);
 		// Sanft einlenken: die Gierrate bleibt UNTER dem Seitenkraftlimit
 		// (MaxYaw), sonst maskiert die Klemmung die Steifigkeits-Wirkung.
-		In.Steering = 0.25f;
+		// 0,25 lag nach 6 s Vollgas (~70 km/h) schon AM Limit: die Bremsprobe war
+		// nur gruen, weil die Raeder dort blockierten und die Gierdaempfung die
+		// Rate unter die Klemme zog. Mit ABS blockiert nichts mehr - 0,12 misst
+		// jetzt wirklich den linearen Bereich (29.09.2026).
+		In.Steering = 0.12f;
 		Simulate(V, In, 0.5f);
 		In.Throttle = Throttle;
 		In.Brake = Brake;
