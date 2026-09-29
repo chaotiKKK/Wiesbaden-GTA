@@ -540,8 +540,31 @@ class WiederholungTest(unittest.TestCase):
             self.assertTrue(ra.netz_aussetzer(aussetzer), aussetzer)
 
     def test_der_rueckhalt_wird_im_gate_gemeldet(self):
-        buch = Drehbuch([(1, "", "dial tcp: connectex"),
-                         (1, "", "dial tcp: connectex"),
+        """Die Rueckhalt-Zeile UEBERLEBT eine cp1252-Konsole (28.09., Zusatz).
+
+        Sie nennt `gh <args>` und ist damit der Beweis, welcher Befehl
+        nicht antwortete - genau die Zeile, die beim 28.09.-Crash mitten
+        im Bericht starb.
+        """
+        buch = Drehbuch([(1, "", "dial tcp \ufffd gate \u00fcberlastet"),
+                         (1, "", "dial tcp \ufffd gate \u00fcberlastet"),
+                         (0, "[]", "")])
+        ra.GH_LAUF = buch
+        alt = sys.stdout
+        puffer = io.BytesIO()
+        sys.stdout = io.TextIOWrapper(puffer, encoding="cp1252")
+        try:
+            self.assertEqual(ra.gh_json("release", "list"), [])
+            text = puffer.getvalue().decode("cp1252")
+        finally:
+            sys.stdout = alt
+        self.assertIn("Rueckhalt", text)
+        self.assertIn("gh release", text)
+
+    def test_der_rueckhalt_wird_im_gate_gemeldet_utf8(self):
+        """Auf UTF-8-stdout bleibt das Zeichen selbst erhalten."""
+        buch = Drehbuch([(1, "", "dial tcp \ufffd gate \u00fcberlastet"),
+                         (1, "", "dial tcp \ufffd gate \u00fcberlastet"),
                          (0, "[]", "")])
         ra.GH_LAUF = buch
         puffer = io.StringIO()
@@ -573,6 +596,7 @@ class HilfsfunktionTest(unittest.TestCase):
         self.assertEqual(len(zeilen), 2, zeilen)
         self.assertTrue(any("neu.jpg" in z for z in zeilen))
         self.assertTrue(any("alt.jpg" in z for z in zeilen))
+
 
 
 if __name__ == "__main__":

@@ -48,6 +48,29 @@ import sys
 import time
 from pathlib import Path
 
+def drucke(text, file=None):
+    """Print ohne Unicode-Absturz (Gleiche Hilfe wie vor_dem_commit.drucke).
+
+    Gate-Meldungen tragen Unterprozess-Text mit errors="replace" in sich
+    (U+FFFD, fremde Schriftzeichen) - eine cp1252-Konsole darf daran
+    nicht sterben, sonst stirbt der Bericht statt des Fehlers.
+    """
+    ziel = file if file is not None else sys.stdout
+    try:
+        print(text, file=ziel, flush=True)
+    except UnicodeEncodeError:
+        fehler = getattr(ziel, "errors", None) or "strict"
+        if fehler != "strict":
+            raise
+        roh = text.encode(ziel.encoding or "ascii", "replace")
+        kanal = getattr(ziel, "buffer", None)
+        if kanal is None:
+            print(roh.decode(ziel.encoding or "ascii"), file=ziel, flush=True)
+            return
+        kanal.write(roh + b"\n")
+        kanal.flush()
+
+
 NULL_SHA = "0" * 40
 # Unversionierte Karten, die zur Stadt gehoeren (Bake-Ergebnisse, kein WIP).
 STADTKARTEN = "Content/Maps/WiesbadenCity_*.umap"
@@ -266,7 +289,7 @@ def motor_sperre(name, warte_s=None, lock_pfad=None, platten_grenze=None,
                                 encoding="utf-8", errors="replace")
         text = ((fertig.stdout or "") + (fertig.stderr or "")).strip().splitlines()
         if fertig.returncode == 0:
-            print("Engine-Lock: %s" % (text[-1] if text else "gehalten"), flush=True)
+            drucke("Engine-Lock: %s" % (text[-1] if text else "gehalten"))
             return True
         if fertig.returncode == LOCK_PLATTE:
             # Die Platte ist zu voll - kein belegter Lock, sondern ein
@@ -274,28 +297,25 @@ def motor_sperre(name, warte_s=None, lock_pfad=None, platten_grenze=None,
             # Frist; der naechste Raeumlauf oder ein endender Cook heilt es.
             if uhr() >= frist:
                 for zeile in text[:2]:
-                    print(zeile, flush=True)
-                print("Engine-Lock: Platte bleibt zu voll - dieser Lauf gibt auf.",
-                      flush=True)
+                    drucke(zeile)
+                drucke("Engine-Lock: Platte bleibt zu voll - dieser Lauf gibt auf.")
                 return False
             if uhr() >= naechste_meldung:
                 platte = next((z for z in text if "ABBRUCH" in z),
                               text[0] if text else "Platte zu voll")
-                print("%s - warte auf Plattenplatz (hoechstens noch %.0f min) ..."
-                      % (platte, (frist - uhr()) / 60.0), flush=True)
+                drucke("%s - warte auf Plattenplatz (hoechstens noch %.0f min) ..."
+                       % (platte, (frist - uhr()) / 60.0))
                 naechste_meldung = uhr() + 60.0
             schlaf(15.0)
             continue
         if fertig.returncode != LOCK_BELEGT or uhr() >= frist:
             for zeile in text[:3]:
-                print(zeile, flush=True)
-            print("Engine-Lock nicht bekommen - dieser Lauf faesst den Gate-Worktree nicht an.",
-                  flush=True)
+                drucke(zeile)
+            drucke("Engine-Lock nicht bekommen - dieser Lauf fasst den Gate-Worktree nicht an.")
             return False
         if uhr() >= naechste_meldung:
             belegt = next((z for z in text if "BELEGT" in z), text[0] if text else "belegt")
-            print("%s - warte (hoechstens noch %.0f min) ..." % (belegt, (frist - uhr()) / 60.0),
-                  flush=True)
+            drucke("%s - warte (hoechstens noch %.0f min) ..." % (belegt, (frist - uhr()) / 60.0))
             naechste_meldung = uhr() + 60.0
         schlaf(15.0)
 
@@ -308,7 +328,7 @@ def vorbereiten(projekt, sha):
         wt.parent.mkdir(parents=True, exist_ok=True)
         git(projekt, "worktree", "prune")
         git(projekt, "worktree", "add", "--detach", str(wt), sha)
-        print("Gate-Worktree angelegt: %s" % wt, flush=True)
+        drucke("Gate-Worktree angelegt: %s" % wt)
     else:
         git(wt, "checkout", "--detach", "--force", sha)
         # Reste frueherer Laeufe weg; ignorierte Pfade (Build, Verlinktes) und
@@ -323,8 +343,8 @@ def vorbereiten(projekt, sha):
             if not fnmatch.fnmatch(z[3:], STADTKARTEN)]
     if rest:
         raise RuntimeError("Gate-Worktree nicht sauber: %s" % "; ".join(rest[:5]))
-    print("Gate-Worktree %s auf %s (%d Stadtinhalte verlinkt, %d neu)."
-          % (wt, sha[:10], len(verzeichnisse) + len(dateien), neu), flush=True)
+    drucke("Gate-Worktree %s auf %s (%d Stadtinhalte verlinkt, %d neu)."
+           % (wt, sha[:10], len(verzeichnisse) + len(dateien), neu))
     return wt
 
 
@@ -345,28 +365,28 @@ def push_pruefen(projekt, stdin_text):
     # Lauf darin prueft nichts Neues und nur durch den Zufall, dass die
     # Verlinkungen mitwandern. Deshalb wird er hier abgewiesen.
     if ist_im_gate_worktree(projekt):
-        print("Dieser Ordner IST der Gate-Worktree (%s)." % projekt)
-        print("Ein Push wird aus dem HAUPT-Arbeitsordner gepusht, nicht von hier:")
-        print("  %s" % haupt_ordner(projekt))
+        drucke("Dieser Ordner IST der Gate-Worktree (%s)." % projekt)
+        drucke("Ein Push wird aus dem HAUPT-Arbeitsordner gepusht, nicht von hier:")
+        drucke("  %s" % haupt_ordner(projekt))
         return 1
     shas = push_shas(stdin_text)
     if not shas:
-        print("Nur Loeschungen im Push - nichts zu pruefen.")
+        drucke("Nur Loeschungen im Push - nichts zu pruefen.")
         return 0
     auswahl = je_baum_einer(shas, lambda s: git(projekt, "rev-parse", s + "^{tree}").strip())
     # Lock VOR dem ersten Checkout und ueber alle Commits (siehe motor_sperre).
     if not motor_sperre("push_gate"):
-        print("\nEngine-Lock belegt - der Push wird abgewiesen, der laufende Gate-Lauf bleibt heil.")
-        print("Spaeter erneut pushen, oder: git push --no-verify")
+        drucke("\nEngine-Lock belegt - der Push wird abgewiesen, der laufende Gate-Lauf bleibt heil.")
+        drucke("Spaeter erneut pushen, oder: git push --no-verify")
         return 1
     for sha in auswahl:
-        print("Volles Gate im sauberen Worktree fuer %s ..." % sha[:10], flush=True)
+        drucke("Volles Gate im sauberen Worktree fuer %s ..." % sha[:10])
         rot = pruefen(projekt, sha)
         if rot:
-            print("\nGate ROT fuer %s - der Push wird abgewiesen." % sha[:10])
-            print("Wenn das so gewollt ist: git push --no-verify")
+            drucke("\nGate ROT fuer %s - der Push wird abgewiesen." % sha[:10])
+            drucke("Wenn das so gewollt ist: git push --no-verify")
             return 1
-    print("Gate gruen fuer %d Commit(s) im sauberen Worktree." % len(auswahl))
+    drucke("Gate gruen fuer %d Commit(s) im sauberen Worktree." % len(auswahl))
     return 0
 
 

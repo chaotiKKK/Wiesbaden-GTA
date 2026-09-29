@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import contextlib
 from unittest import mock
 from pathlib import Path
 
@@ -22,6 +23,84 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import vor_dem_commit as vdc  # noqa: E402
 
 WURZEL = Path(__file__).resolve().parent.parent
+
+
+class DruckeTest(unittest.TestCase):
+    """Ein Gate-Bericht darf nie am Drucken sterben (29.09.2026, cp1252).
+
+    GEMESSEN: der Bericht zeigte den Diff zu einer fremden Aenderung mit
+    U+FFFD (aus errors="replace") - und starb beim Druck auf einer
+    cp1252-Stdout. Genau der ROT-Bericht: die Leserin sah eine Traceback
+    statt der Ablehnung.
+    """
+
+    ZEILE = "gemergte Zeile mit \ufffd Ersetzungszeichen und \u00fc"
+
+    def test_druckt_auf_cp1252_ohne_absturz(self):
+        # sys.stdout selbst als cp1252-Attrappe: genau der Live-Fall.
+        alt = sys.stdout
+        puffer = io.BytesIO()
+        sys.stdout = io.TextIOWrapper(puffer, encoding="cp1252")
+        try:
+            vdc.drucke(self.ZEILE)
+            text = puffer.getvalue().decode("cp1252")
+        finally:
+            sys.stdout = alt
+        # Das nicht abbildbare Zeichen kommt als "?" an - der Bericht
+        # bleibt ganz, das ue (abbildbar) ueberlebt echt.
+        self.assertIn("gemergte Zeile mit ? Ersetzungszeichen und \u00fc", text)
+
+    def test_verliert_kein_zeichen_auf_strict_utf8(self):
+        alt = sys.stdout
+        puffer = io.BytesIO()
+        sys.stdout = io.TextIOWrapper(puffer, encoding="utf-8", errors="strict")
+        try:
+            vdc.drucke(self.ZEILE)
+            text = puffer.getvalue().decode("utf-8")
+        finally:
+            sys.stdout = alt
+        self.assertIn(self.ZEILE, text)
+
+    def test_ein_strom_mit_eigenem_errors_modell_gewinnt(self):
+        # backslashreplace ersetzt nicht - es zeigt die Codes. Ein solches
+        # Modell ist Absicht und wird nicht heimlich umgebogen - aber ein
+        # Fehler am Zeichen bleibt ein Fehler am Zeichen: wir schreiben
+        # trotzdem, statt zu sterben (29.09.: surrogateescape starb auch).
+        alt = sys.stdout
+        puffer = io.BytesIO()
+        sys.stdout = io.TextIOWrapper(puffer, encoding="cp1252",
+                                      errors="backslashreplace")
+        try:
+            vdc.drucke("X\ufffdY")
+            gelesen = puffer.getvalue()
+        finally:
+            sys.stdout = alt
+        # Der Strom hat das Zeichen SELBST escaped - er hat nie geworfen,
+        # und wir haben sein Modell nicht angetastet (kein "?").
+        self.assertIn(b"X\\ufffdY", gelesen)
+
+    def test_bericht_ueberlebt_ersatzzeichen_in_gates(self):
+        # Der Fall vom 29.09.: Gate rot, Subprozess-Ausgabe mit U+FFFD,
+        # Bericht auf cp1252 - und keine Traceback. Aufgenommen wird ueber
+        # den ausgabe-Parameter (dieselbe Mechanik wie stdout), damit die
+        # Gate-Meldung von fahre_gate mit im Puffer landet.
+        puffer = io.BytesIO()
+        ziel = io.TextIOWrapper(puffer, encoding="cp1252")
+        lauf = vdc.Lauf(ausgabe=ziel)
+        lauf.fahre_gate("Gate B  Besitz", False, 0.0, "Meldung \ufffd Umlaut \u00fc")
+        lauf.ergebnisse.append((
+            "Gate 6  Release-Abgleich", False, 33.0,
+        mock.Mock(returncode=1, stdout="Diff: \ufffd und \u00fc\n", stderr="")))
+        rot = lauf.bericht()
+        ziel.flush()
+        text = puffer.getvalue().decode("cp1252")
+        self.assertEqual(rot, 2)  # Gate B und Gate 6 sind beide rot
+        self.assertIn("ROT: Gate B  Besitz", text)
+        self.assertIn("ROT: Gate 6  Release-Abgleich", text)
+        # Das nicht abbildbare Zeichen kommt als "?" an - die Meldung
+        # bleibt GANZ statt eine Traceback zu werden.
+        self.assertIn("Meldung ? Umlaut", text)
+        self.assertIn("Diff: ", text)
 
 
 class CompilerBedarfTest(unittest.TestCase):
@@ -1341,6 +1420,8 @@ sys.exit(vdc.hauptprogramm())
         (self.repo / "Tools" / "innen_probe.cmd").write_text("x", encoding="utf-8")
         self.git("add", "-A")
         fertig = self.git("commit", "-m", "fremd")
+        self.assertIn("innen-thread", fertig.stdout + fertig.stderr,
+                      "die Ablehnung nennt den Thread nicht")
         self.assertIn("innen-thread", fertig.stdout + fertig.stderr,
                       "die Ablehnung nennt den Thread nicht")
 

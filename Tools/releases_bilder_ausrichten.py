@@ -17,6 +17,24 @@ import re
 import subprocess
 import sys
 
+
+def drucke(text, file=None):
+    """Print ohne Unicode-Absturz (Gleiche Hilfe wie vor_dem_commit.drucke)."""
+    ziel = file if file is not None else sys.stdout
+    try:
+        print(text, file=ziel, flush=True)
+    except UnicodeEncodeError:
+        fehler = getattr(ziel, "errors", None) or "strict"
+        if fehler != "strict":
+            raise
+        roh = text.encode(ziel.encoding or "ascii", "replace")
+        kanal = getattr(ziel, "buffer", None)
+        if kanal is None:
+            print(roh.decode(ziel.encoding or "ascii"), file=ziel, flush=True)
+            return
+        kanal.write(roh + b"\n")
+        kanal.flush()
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SEITE = REPO / "docs" / "meilensteine.md"
 BILDER = REPO / "docs" / "meilensteine" / "bilder"
@@ -94,19 +112,19 @@ def main() -> int:
         fehlend = [w for w in wollen if w not in ist_namen]
         ueberzaehlig = [i for i in ist_namen if i not in wollen]
         if not fehlend and not ueberzaehlig:
-            print(f"M{num:02d} {tag}: passt ({len(wollen)} Bilder)")
+            drucke(f"M{num:02d} {tag}: passt ({len(wollen)} Bilder)")
             continue
-        print(f"M{num:02d} {tag}:")
+        drucke(f"M{num:02d} {tag}:")
         for f in fehlend:
-            print(f"   + {f}")
+            drucke(f"   + {f}")
         for u in ueberzaehlig:
-            print(f"   - {u} (veralteter Name, Dublette der Seite)")
+            drucke(f"   - {u} (veralteter Name, Dublette der Seite)")
         if not args.anwenden:
             continue
         for f in fehlend:
             quelle = BILDER / f
             if not quelle.exists():
-                print(f"   FEHLER: {quelle} fehlt lokal", file=sys.stderr)
+                drucke(f"   FEHLER: {quelle} fehlt lokal", file=sys.stderr)
                 fehler = True
                 continue
             gh("release", "upload", tag, str(quelle), "--clobber")

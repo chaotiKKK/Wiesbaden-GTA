@@ -35,6 +35,24 @@ import subprocess
 import sys
 import time
 
+
+def drucke(text, file=None):
+    """Print ohne Unicode-Absturz (Gleiche Hilfe wie vor_dem_commit.drucke)."""
+    ziel = file if file is not None else sys.stdout
+    try:
+        print(text, file=ziel, flush=True)
+    except UnicodeEncodeError:
+        fehler = getattr(ziel, "errors", None) or "strict"
+        if fehler != "strict":
+            raise
+        roh = text.encode(ziel.encoding or "ascii", "replace")
+        kanal = getattr(ziel, "buffer", None)
+        if kanal is None:
+            print(roh.decode(ziel.encoding or "ascii"), file=ziel, flush=True)
+            return
+        kanal.write(roh + b"\n")
+        kanal.flush()
+
 NULL_SHA = "0" * 40
 
 
@@ -221,7 +239,7 @@ def main(argv=None):
         return 0
     rc, zeilen = pruefen(pfad, remote=argv[0] if argv else None)
     for z in zeilen:
-        print(z)
+        drucke(z)
     return rc
 
 

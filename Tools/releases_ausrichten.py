@@ -51,6 +51,7 @@ TOOLS = REPO / "Tools"
 sys.path.insert(0, str(TOOLS))
 
 import schaufenster  # noqa: E402
+from vor_dem_commit import drucke  # noqa: E402
 
 OEFFENTLICHES_REPO = "chaotiKKK/wiesbaden-real-meilensteine"
 # Steht als "Stand TT.MM.JJJJ" in der Fusszeile jeder Seite.
@@ -94,7 +95,7 @@ def werkzeug(name, *args):
     fertig = LAUF(befehl, cwd=str(REPO), capture_output=True, text=True,
                   encoding="utf-8", errors="replace")
     for zeile in ((fertig.stdout or "") + (fertig.stderr or "")).rstrip().splitlines():
-        print("   " + zeile)
+        drucke("   " + zeile)
     return fertig.returncode
 
 

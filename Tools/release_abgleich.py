@@ -54,6 +54,29 @@ import time
 import urllib.error
 import urllib.request
 
+
+def drucke(text, file=None):
+    """Print ohne Unicode-Absturz (Gleiche Hilfe wie vor_dem_commit.drucke).
+
+    Retry- und Diff-Zeilen zeigen Unterprozess- und GitHub-Text mit
+    errors="replace" in sich - eine cp1252-Konsole darf daran nicht
+    sterben, sonst stirbt der Bericht statt des Fehlers.
+    """
+    ziel = file if file is not None else sys.stdout
+    try:
+        print(text, file=ziel, flush=True)
+    except UnicodeEncodeError:
+        fehler = getattr(ziel, "errors", None) or "strict"
+        if fehler != "strict":
+            raise
+        roh = text.encode(ziel.encoding or "ascii", "replace")
+        kanal = getattr(ziel, "buffer", None)
+        if kanal is None:
+            print(roh.decode(ziel.encoding or "ascii"), file=ziel, flush=True)
+            return
+        kanal.write(roh + b"\n")
+        kanal.flush()
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 TOOLS = REPO / "Tools"
 sys.path.insert(0, str(TOOLS))
@@ -140,11 +163,11 @@ def gh_mit_wiederholung(*args):
         if versuch:
             rueckhalt = versuch >= NETZ_VERSUCHE - 1
             pause = NETZ_RUECKHALT_S if rueckhalt else NETZ_PAUSE_S
-            print("   ~ %s - noch ein Versuch nach %d s"
-                  % ("Rueckhalt: GitHub antwortete wiederholt nicht; eine "
-                     "letzte Probe, ehe das Gate aufgibt" if rueckhalt else
-                     "`gh %s` war nicht erreichbar (Versuch %d/%d)"
-                     % (" ".join(args[:2]), versuch, NETZ_VERSUCHE), pause))
+            drucke("   ~ %s - noch ein Versuch nach %d s"
+                   % ("Rueckhalt: GitHub antwortete wiederholt nicht; eine "
+                      "letzte Probe, ehe das Gate aufgibt" if rueckhalt else
+                      "`gh %s` war nicht erreichbar (Versuch %d/%d)"
+                      % (" ".join(args[:2]), versuch, NETZ_VERSUCHE), pause))
             time.sleep(pause)
         versuch += 1
         code, raus, fehler = GH_LAUF(*args)
@@ -551,46 +574,46 @@ def hauptprogramm(argv=None):
                          "die Seite im Arbeitszweig wurde geprueft")
     args = ap.parse_args(argv)
 
-    print("Release-Abgleich: Seite, Assets und Texte")
-    print(f"  Quelle der Releases: {args.quelle} ({args.ref})")
+    drucke("Release-Abgleich: Seite, Assets und Texte")
+    drucke(f"  Quelle der Releases: {args.quelle} ({args.ref})")
 
     # --- 1. Die Seite im Arbeitszweig: immer, ohne Netz ---------------------
     arbeit_text = arbeitsbaum_seite()
     befunde, titel_arbeit, bilder_arbeit = seite_pruefen(
         arbeit_text, lambda name: (BILDER_ARBEIT / name).exists())
     if befunde:
-        print("\nSEITE IM ARBEITSBAUM:")
+        drucke("\nSEITE IM ARBEITSBAUM:")
         for zeile in befunde:
-            print("   " + zeile)
-        print("\n  Exit 2. Notausgang: die Seite reparieren, nicht das Gate.")
+            drucke("   " + zeile)
+        drucke("\n  Exit 2. Notausgang: die Seite reparieren, nicht das Gate.")
         return 2
     anzahl_bilder = sum(len(v) for v in bilder_arbeit.values())
-    print(f"  Seite im Arbeitszweig stimmig: {len(titel_arbeit)} Meilensteine, "
-          f"{anzahl_bilder} Bildverweise, alle Dateien da")
+    drucke(f"  Seite im Arbeitszweig stimmig: {len(titel_arbeit)} Meilensteine, "
+           f"{anzahl_bilder} Bildverweise, alle Dateien da")
 
     if args.quelle == "arbeit":
-        print("\nNur die Seite geprueft (--quelle arbeit). "
-              "Die Releases wurden NICHT abgeglichen.")
+        drucke("\nNur die Seite geprueft (--quelle arbeit). "
+               "Die Releases wurden NICHT abgeglichen.")
         return 0
 
     # --- 2. Die Seite, aus der die Releases stammen --------------------------
     main_text = seite_aus_ref(args.ref)
     if main_text is None:
-        print(f"\n  Die Seite {SEITENPFAD} gibt es in {args.ref} nicht "
-              f"(Ref nicht geholt?)")
+        drucke(f"\n  Die Seite {SEITENPFAD} gibt es in {args.ref} nicht "
+               f"(Ref nicht geholt?)")
         if args.ref_fehlt_ist_ok:
-            print("  Exit 0 auftragsgemaess (--ref-fehlt-ist-ok).")
+            drucke("  Exit 0 auftragsgemaess (--ref-fehlt-ist-ok).")
             return 0
-        print("  Exit 4: ohne diese Seite ist der Abgleich der Releases "
-              "nicht moeglich.")
+        drucke("  Exit 4: ohne diese Seite ist der Abgleich der Releases "
+               "nicht moeglich.")
         return 4
     main_befunde, _, bilder_main = seite_pruefen(
         main_text, lambda name: ref_hat_datei(args.ref, f"{BILDERPFAD}/{name}"))
     if main_befunde:
-        print(f"\nSEITE IN {args.ref}:")
+        drucke(f"\nSEITE IN {args.ref}:")
         for zeile in main_befunde:
-            print("   " + zeile)
-        print("\n  Exit 2: die veroeffentlichte Seite ist in sich kaputt.")
+            drucke("   " + zeile)
+        drucke("\n  Exit 2: die veroeffentlichte Seite ist in sich kaputt.")
         return 2
 
     # --- 3. Die Releases selbst ---------------------------------------------
@@ -598,16 +621,16 @@ def hauptprogramm(argv=None):
         rel_befunde = releases_pruefen(main_text)
         spiegel_befunde = spiegel_pruefen(main_text)
     except NichtMessbar as grund:
-        print(f"\n  Releases nicht abfragbar: {grund}")
-        print("  Exit 3 - ausdruecklich NICHT 'alles in Ordnung'. "
-              "Notausgang: git push --no-verify")
+        drucke(f"\n  Releases nicht abfragbar: {grund}")
+        drucke("  Exit 3 - ausdruecklich NICHT 'alles in Ordnung'. "
+               "Notausgang: git push --no-verify")
         return 3
     rel_befunde = rel_befunde + spiegel_befunde
 
     # --- 4. Was der Arbeitszweig gegenueber der veroeffentlichten Seite hat --
     unterschied = arbeitsvergleich(bilder_arbeit, bilder_main)
     for zeile in unterschied:
-        print(zeile)
+        drucke(zeile)
     if unterschied:
         print("\n  Nach dem Merge, in dieser Reihenfolge:")
         print("    1) python Tools/releases_bilder_ausrichten.py --anwenden")
@@ -616,16 +639,16 @@ def hauptprogramm(argv=None):
         print("       (das Schaufenster nur, wenn sich Bildnamen geaendert haben)")
 
     if rel_befunde:
-        print("\nRELEASES:")
+        drucke("\nRELEASES:")
         for zeile in rel_befunde:
-            print("   " + zeile)
+            drucke("   " + zeile)
         print("\n  Exit 1. Beheben mit:")
         print("    python Tools/releases_bilder_ausrichten.py --anwenden")
         print("    python Tools/releases_texte_ausrichten.py --anwenden")
         print("    python Tools/releases_oeffentlich.py --anwenden")
         return 1
 
-    print("\n  Alles stimmt: Seite, Assets und Texte passen zusammen.")
+    drucke("\n  Alles stimmt: Seite, Assets und Texte passen zusammen.")
     return 0
 
 

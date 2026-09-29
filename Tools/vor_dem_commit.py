@@ -143,6 +143,34 @@ TOOLS = os.path.join(WURZEL, "Tools")
 # Compiler nicht kaputt machen und soll ihn darum nicht kosten.
 CPP_ENDUNGEN = (".cpp", ".h", ".cs", ".inl")
 
+def drucke(text, file=None):
+    """Zeichen sicher ausgeben - cp1252-Konsolen duerfen nicht crashen.
+
+    Der Gate-Bericht schreibt Unterprozess-Ausgaben mit errors="replace"
+    durch und zeigt Diffs ausdruecklich MIT den Ersetzungszeichen (U+FFFD):
+    sie sind der Beweis, dass hier zwei Einheiten nicht mehr auseinanderzu-
+    halten sind. Auf einer Windows-Konsole stirbt genau dieser Bericht am
+    Druck - und ein Bericht, der beim Drucken stirbt, wird nie gelesen.
+    """
+    ziel = file if file is not None else sys.stdout
+    try:
+        print(text, file=ziel, flush=True)
+    except UnicodeEncodeError:
+        # Ein UnicodeEncodeError heisst immer: DIESER Strom kann den Text
+        # nicht ausgeben. GEMESSEN am 29.09.2026: der Harness-stdout laeuft
+        # mit errors="surrogateescape" (nicht "strict") - und stirbt an
+        # U+FFFD genauso wie "strict". Eine Rucksicht aufs Fehlermodell
+        # waere dort der Crash gewesen. Darum immer: mit "replace" direkt
+        # in den Buffer - nur das eine Zeichen geht verloren, der Bericht
+        # bleibt ganz.
+        roh = text.encode(ziel.encoding or "ascii", "replace")
+        kanal = getattr(ziel, "buffer", None)
+        if kanal is None:
+            print(roh.decode(ziel.encoding or "ascii"), file=ziel, flush=True)
+            return
+        kanal.write(roh + b"\n")
+        kanal.flush()
+
 def saubere_umgebung():
     """Umgebung OHNE die GIT_*-Variablen des laufenden Hooks.
 
@@ -536,11 +564,15 @@ def besitz_zeigen():
 class Lauf:
     """Ein Gate mit seiner gemessenen Dauer - Zahlen statt Eindruecke."""
 
-    def __init__(self):
+    def __init__(self, ausgabe=None):
         self.ergebnisse = []
+        # Wohin gemeldet wird. None heisst stdout - aber erst BEIM Druck
+        # aufgeloest, damit ein umgeleitetes sys.stdout im Test wirklich
+        # ankommt; Tests geben stattdessen ihren eigenen Strom hinein.
+        self.ausgabe = ausgabe
 
     def fahre(self, name, befehl, *, shell_cmd=False):
-        print("  ... %s" % name, flush=True)
+        drucke("  ... %s" % name, file=self.ausgabe)
         start = time.time()
         if shell_cmd:
             fertig = subprocess.run(["cmd", "/c", befehl], cwd=WURZEL,
@@ -554,29 +586,32 @@ class Lauf:
         dauer = time.time() - start
         ok = fertig.returncode == 0
         self.ergebnisse.append((name, ok, dauer, fertig))
-        print("      %s  %.0f s" % ("gruen" if ok else "ROT  ", dauer), flush=True)
+        drucke("      %s  %.0f s" % ("gruen" if ok else "ROT  ", dauer),
+               file=self.ausgabe)
         return ok
 
     def ueberspringe(self, name, grund):
         self.ergebnisse.append((name, None, 0.0, None))
-        print("  ... %s\n      uebersprungen: %s" % (name, grund), flush=True)
+        drucke("  ... %s\n      uebersprungen: %s" % (name, grund),
+               file=self.ausgabe)
 
     def fahre_gate(self, name, ok, dauer, meldung):
         """Ein Gate OHNE Unterprozess - Besitz und Zeitstempel werden so
         protokolliert, damit der Bericht sie wie alle anderen mitzaehlt."""
         self.ergebnisse.append((name, ok, dauer, None))
-        print("  ... %s\n      %s  %.0f s" % (
-            name, "gruen" if ok else "ROT  ", dauer), flush=True)
+        drucke("  ... %s\n      %s  %.0f s" % (
+            name, "gruen" if ok else "ROT  ", dauer), file=self.ausgabe)
         if meldung:
             for zeile in str(meldung).splitlines():
-                print("      %s" % zeile, flush=True)
+                drucke("      %s" % zeile, file=self.ausgabe)
 
     def bericht(self):
         rot = [e for e in self.ergebnisse if e[1] is False]
         gesamt = sum(e[2] for e in self.ergebnisse)
-        print("\n  %d Gate(s) in %.0f s." % (len(self.ergebnisse), gesamt))
+        drucke("\n  %d Gate(s) in %.0f s." % (len(self.ergebnisse), gesamt),
+               file=self.ausgabe)
         for name, ok, _, fertig in rot:
-            print("\nROT: %s" % name)
+            drucke("\nROT: %s" % name, file=self.ausgabe)
             # Ein Gate OHNE Subprozess (Besitz, Zeitstempel) hat nichts
             # nachzuschreiben - es hat seine Zeilen schon bei fahre_gate
             # gedruckt. GEMESSEN am 27.09.2026: hier stuerzte der Bericht ab
@@ -585,7 +620,7 @@ class Lauf:
                 continue
             text = ((fertig.stdout or "") + (fertig.stderr or "")).strip().splitlines()
             for zeile in text[-15:]:
-                print("     " + zeile[:140])
+                drucke("     " + zeile[:140], file=self.ausgabe)
         return len(rot)
 
 
@@ -628,21 +663,21 @@ def _gate_verweis():
     except Exception:
         g = None
     if g is None:
-        print("      NAECHSTES: unterhalb der Gate-Grenze bricht jeder Engine-Start ab"
-              " (Tools\\engine_run_lock.ps1).", flush=True)
+        drucke("      NAECHSTES: unterhalb der Gate-Grenze bricht jeder Engine-Start ab"
+               " (Tools\\engine_run_lock.ps1).")
         return
-    print("      NAECHSTES: unter %.0f %% frei bricht JEDER Engine-Start ab (Exit 4,"
-          % g, flush=True)
-    print("                Tools\\engine_run_lock.ps1 -PlattenGrenze). Notausgang:"
-          " -PlattenTrotz.", flush=True)
+    drucke("      NAECHSTES: unter %.0f %% frei bricht JEDER Engine-Start ab (Exit 4,"
+           % g)
+    drucke("                Tools\\engine_run_lock.ps1 -PlattenGrenze). Notausgang:"
+           " -PlattenTrotz.")
     try:
         from platten_waechter import platz, WURZEL
         _frei, _gesamt, _p = platz(WURZEL)
     except Exception:
         return
     try:
-        print("                aktuell %.0f %% frei - bis zum Abbruch noch %.0f %%."
-              % (_p, _p - g), flush=True)
+        drucke("                aktuell %.0f %% frei - bis zum Abbruch noch %.0f %%."
+               % (_p, _p - g))
     except Exception:
         pass
 
@@ -678,10 +713,10 @@ def platten_hinweis(grenze=None):
     except Exception as e:  # ein Waechter darf den Commit nie verhindern
         text = "Pruefung nicht ausgefuehrt (%s)" % e
     dauer = time.time() - start
-    print("  ... Plattenplatz (Hinweis, kein Gate)  %.0f s" % dauer, flush=True)
+    drucke("  ... Plattenplatz (Hinweis, kein Gate)  %.0f s" % dauer)
     if text:
         for zeile in str(text).splitlines():
-            print("      %s" % zeile[:200], flush=True)
+            drucke("      %s" % zeile[:200])
     # DER HINWEIS BRAUCHT EINE HANDLUNG (27.09.2026). GEMESSEN: er sagte
     # "UNTER der Grenze (20 %)" und sonst nichts - eine Zahl ohne Folge. Der
     # Leser weiss damit nicht, dass gleich der naechste Engine-Start scheitert.
@@ -703,7 +738,7 @@ def platten_hinweis(grenze=None):
 
 def gates_fahren(stufe, dateien, thread=None):
     lauf = Lauf()
-    print("Gates vor dem Commit (Stufe: %s)" % stufe)
+    drucke("Gates vor dem Commit (Stufe: %s)" % stufe)
 
     # Gate B (Besitz) zuerst und VOR dem Engine-Lock: es kostet nichts, und
     # ein Compilerlauf fuer einen Commit, der nicht stattfinden darf, waere

@@ -17,6 +17,29 @@ import re
 import subprocess
 import sys
 
+
+def drucke(text, file=None):
+    """Print ohne Unicode-Absturz (Gleiche Hilfe wie vor_dem_commit.drucke).
+
+    Die Diff-Zeilen zeigen Seiten-Inhalt mit errors="replace" in sich
+    (U+FFFD) - eine cp1252-Konsole darf daran nicht sterben, sonst stirbt
+    der Bericht statt des Befunds.
+    """
+    ziel = file if file is not None else sys.stdout
+    try:
+        print(text, file=ziel, flush=True)
+    except UnicodeEncodeError:
+        fehler = getattr(ziel, "errors", None) or "strict"
+        if fehler != "strict":
+            raise
+        roh = text.encode(ziel.encoding or "ascii", "replace")
+        kanal = getattr(ziel, "buffer", None)
+        if kanal is None:
+            print(roh.decode(ziel.encoding or "ascii"), file=ziel, flush=True)
+            return
+        kanal.write(roh + b"\n")
+        kanal.flush()
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SEITE = REPO / "docs" / "meilensteine.md"
 # Wird von --seite ueberschrieben. Wichtig: dieses Modul hat sein eigenes SEITE,
@@ -143,14 +166,14 @@ def main() -> int:
         alt_ohne = re.sub(r"^## \d+\..*\n\n", "", alt.rstrip())
         neu_ohne = re.sub(r"^## \d+\..*\n\n", "", neu.rstrip())
         if alt_ohne.strip() == neu_ohne.strip():
-            print(f"M{num:02d} {tag}: Text passt")
+            drucke(f"M{num:02d} {tag}: Text passt")
             continue
-        print(f"M{num:02d} {tag}: Text weicht ab")
+        drucke(f"M{num:02d} {tag}: Text weicht ab")
         for zeile in difflib.unified_diff(
             alt_ohne.splitlines(), neu_ohne.splitlines(),
             "ist", "soll", lineterm="", n=0,
         ):
-            print("   " + zeile)
+            drucke("   " + zeile)
         if args.anwenden:
             # Ueber eine Datei schreiben: "--notes" mit Umlauten und Zeilenumbruechen
             # zerlegt die Shell, und diealten Texte enthalten doppelte CRs.
