@@ -1592,6 +1592,31 @@ class Gate5EngineRuheTest(unittest.TestCase):
         self.assertEqual(aufrufe, ["Gate 4/5"])
         self.assertNotIn("wiederholt", lauf.ausgabe.text)
 
+    def test_retry_erkennung_traegt_den_diagnose_anhang(self):
+        """verify_anchor.cmd haengt seit dem 29.09.2026 WB-DIAGNOSE-Zeilen
+        an die Fehlermeldung (letzte Logzeilen + laufende Engines). Die
+        Retry-Erkennung matched TEILTEXT - dieser Test pinnt das mit dem
+        ECHT gemessenen Ausgabe-Anfang, damit eine Formal-Aenderung im
+        Werkzeug hier laut scheitert statt den Retry still zu verlieren.
+        """
+        echt = (
+            "FEHLER: Engine endete mit Exit -1 und hat NICHTS geschrieben.\n"
+            "  Gemessene Exit-Codes: 127, wenn die Engine das Skript nicht findet,\n"
+            "  Log: ...\\Saved\\Logs\\verify_anchor_224055.log\n"
+            "WB-DIAGNOSE: stiller Engine-Tod - letzte Logzeilen:\n"
+            "WB-DIAGNOSE:   [2026.09.29-20.41.03]LogShaderCompilers: ...\n"
+            "WB-DIAGNOSE:   KEINE Engine laeuft mehr - der Tod kam nicht (mehr) "
+            "von einer parallelen Engine.\n")
+        lauf = _Gate5LaufDoppel(
+            erste=False,
+            erste_fertig=type("F", (), {"stdout": echt, "stderr": ""})(),
+            zweite=True)
+        aufrufe = self.fahre_voll(lauf, [True, True])
+        self.assertIn("Gate 5  Ankerzustand (WP) - Retry", lauf.gefahren,
+                      "die DIAGNOSE-Zeilen duerfen die Retry-Erkennung "
+                      "nicht brechen")
+        self.assertEqual(aufrufe, ["Gate 4/5", "Gate 5 Retry"])
+
     def test_die_schnelle_stufe_wartet_auf_keine_engine(self):
         lauf = _Gate5LaufDoppel(erste=True)
         import gate_worktree
@@ -1642,6 +1667,26 @@ class EngineFreiWarteTest(unittest.TestCase):
             self.assertTrue(gate_worktree.engine_frei(
                 "T", warte_s=60, schlaf=schlaf.append, uhr=uhr))
         self.assertEqual(len(schlaf), 1, "warten statt sofortiges Aufgeben")
+
+    def test_fremde_engines_filter_nennt_auch_cmd(self):
+        """Fremde COOKS heissen UnrealEditor-Cmd.exe (GEMESSEN 15:53 am
+        29.09.2026: genau so lief der Cook, der Gate 5 toetete). Sie
+        muessen im CIM-Filter stehen - sonst sieht engine_frei sie
+        nicht und wartet hinter ihnen nicht.
+        """
+        import gate_worktree
+        befehl = {}
+
+        def fang(befehlsliste, **k):
+            befehl.update(befehlsliste=befehlsliste)
+            return type("F", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        with mock.patch.object(gate_worktree.subprocess, "run", side_effect=fang):
+            self.assertEqual(gate_worktree.fremde_engines(), [])
+        filter_text = " ".join(befehl.get("befehlsliste", []))
+        self.assertIn("UnrealEditor.exe", filter_text)
+        self.assertIn("UnrealEditor-Cmd.exe", filter_text,
+                      "der Filter verpasst Cooks und Commandlets")
 
     def test_frist_endet_mit_false(self):
         import gate_worktree

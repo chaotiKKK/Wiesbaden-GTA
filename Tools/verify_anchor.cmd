@@ -198,6 +198,20 @@ echo   Gemessene Exit-Codes: 127, wenn die Engine das Skript nicht findet,
 echo   -1, wenn das Skript selbst abbrach (beides mit "Python script
 echo   executed with errors" im Log, dort steht auch der Grund).
 echo   Log: %LOG%
+rem -- DIAGNOSE des stillen Engine-Tods (nach dem 29.09.2026):
+rem dieser Zweig heisst "Exit -1 und hat NICHTS geschrieben" - ohne
+rem Logzeile blieb unklar, WARUM die Engine starb. Gemessen: Gate 5
+rem starb zweimal so, je ~4 s nach Start, jeweils WAEHREND parallel
+rem eine fremde Engine lief (ein Cook, ein interaktiver Editor -
+rem beide ohne Gate-Worktree-Pfad, fuer den Worktree-Filter unsicht-
+rem bar). Diese Zeilen machen den Moment sichtbar: die letzten
+rem Logzeilen nennen die Stelle, der Engine-Snapshot die Begleit-
+rem umstaende. Jede Zeile traegt das Merkmal WB-DIAGNOSE: - der
+rem Gate-Bericht zeigt sie, ein Retry kann sie gezielt suchen.
+echo WB-DIAGNOSE: stiller Engine-Tod - letzte Logzeilen (Engine-Log in UTC):
+powershell -NoProfile -Command "if (Test-Path -LiteralPath '%LOG%') { Get-Content -LiteralPath '%LOG%' -Tail 3 | ForEach-Object { 'WB-DIAGNOSE:   ' + $_ } } else { 'WB-DIAGNOSE:   Logdatei fehlt: %LOG%' }"
+echo WB-DIAGNOSE: laufende Engines jetzt:
+powershell -NoProfile -Command "$e = Get-CimInstance Win32_Process -Filter \"Name='UnrealEditor.exe' or Name='UnrealEditor-Cmd.exe'\" | Select-Object ProcessId,CommandLine; if ($e) { $e | ForEach-Object { if ($_.CommandLine) { 'WB-DIAGNOSE:   PID ' + $_.ProcessId + ': ' + $_.CommandLine.Substring(0, [Math]::Min(160, $_.CommandLine.Length)) } else { 'WB-DIAGNOSE:   PID ' + $_.ProcessId + ': (ohne Commandline)' } } } else { 'WB-DIAGNOSE:   KEINE Engine laeuft mehr - der Tod kam nicht (mehr) von einer parallelen Engine.' }"
 exit /b 3
 
 :kein_ergebnis

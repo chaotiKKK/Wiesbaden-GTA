@@ -256,7 +256,8 @@ def fremde_engines(filter_path=None):
             ["powershell", "-NoProfile", "-Command",
              "Get-CimInstance Win32_Process "
              "-Filter \"Name='UnrealEditor.exe' or Name='UnrealEditor-Win64-DebugGame.exe' "
-             "or Name='UnrealEditor-Win64-Development.exe' or Name='UnrealEditor-Win64-Shipping.exe' or Name='zenserver.exe'\" "
+             "or Name='UnrealEditor-Win64-Development.exe' or Name='UnrealEditor-Win64-Shipping.exe' "
+         "or Name='UnrealEditor-Cmd.exe' or Name='zenserver.exe'\" "
              "| Select-Object ProcessId,CommandLine "
              "| ConvertTo-Json -Compress"],
             capture_output=True, text=True, encoding="utf-8", errors="replace")
