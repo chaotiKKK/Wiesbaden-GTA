@@ -564,6 +564,85 @@ class AnkerGateTest(unittest.TestCase):
                       "kann dann einen kaputten Zustand nicht ablehnen")
 
 
+class FahrphysikGateTest(unittest.TestCase):
+    """Gate 7 (Fahrphysik-Messfahrt): dieselbe Zuordnung wie Gate 4/5.
+
+    Voll ja, schnell nein (startet das Spiel), ohne Dateifilter, und es
+    befiehlt genau die Messfahrt mit der Sollwert-Pruefung.
+    """
+
+    LaufDoppel = AnkerGateTest.LaufDoppel
+    zuordnung = AnkerGateTest.zuordnung
+
+    @staticmethod
+    def gate7(namen):
+        return [n for n in namen if "Gate 7" in n]
+
+    def test_es_faehrt_in_der_vollen_stufe_auch_ohne_dateien(self):
+        for dateien in ([], ["Tools/Doku/x.md"], ["Source/X.cpp"]):
+            d = self.zuordnung("voll", dateien)
+            self.assertTrue(self.gate7(d.gefahren),
+                            "Gate 7 laeuft in der vollen Stufe nicht (Dateien %s)" % dateien)
+
+    def test_es_laeuft_in_der_schnellen_stufe_nicht(self):
+        d = self.zuordnung("schnell", ["Source/X.cpp"])
+        self.assertFalse(self.gate7(d.gefahren),
+                         "die Messfahrt startet das Spiel und gehoert nicht vor jeden Commit")
+        self.assertTrue(self.gate7(d.uebersprungen),
+                        "sie muss als uebersprungen sichtbar sein")
+
+    def test_es_befiehlt_die_messfahrt(self):
+        d = self.zuordnung("voll", ["Source/X.cpp"])
+        befehle = [str(b) for name, b in d.befehle.items() if "Gate 7" in name]
+        self.assertTrue(befehle, "kein Befehl fuer Gate 7 aufgezeichnet")
+        for befehl in befehle:
+            self.assertIn("verify_fahrphysik.cmd", befehl)
+
+    def test_das_werkzeug_prueft_die_sollwerte(self):
+        """Der Starter faehrt UND prueft - ein Exit 0 ohne Pruefung waere wertlos."""
+        text = (WURZEL / "Tools" / "verify_fahrphysik.cmd").read_text(
+            encoding="utf-8", errors="replace")
+        self.assertIn("fahrmessung.cmd", text)
+        self.assertIn("verify_fahrphysik.py", text)
+        self.assertIn("goto :nicht_gemessen", text,
+                      "'nicht gemessen' (Exit 2) muss rot werden, nicht gruen")
+
+    def test_die_messfahrt_gibt_die_gehaltene_sperre_nicht_frei(self):
+        """Im Push haelt der Hook die Sperre; die Fahrt darf sie nicht loeschen."""
+        text = (WURZEL / "Tools" / "fahrmessung.cmd").read_text(
+            encoding="utf-8", errors="replace")
+        self.assertIn("bereits gehalten", text)
+        self.assertIn('if "%SCHON_GEHALTEN%"=="0" call', text)
+
+    def test_ohne_neues_ergebnis_ist_es_rot(self):
+        doppel = AnkerBeweisTest.LaufDoppel(0)
+        with tempfile.TemporaryDirectory() as tmp:
+            ziel = os.path.join(tmp, "fahrphysik_gate.txt")
+            with open(ziel, "w", encoding="utf-8") as f:
+                f.write("Gate 7 Fahrphysik: GRUEN - von gestern\n")
+            altzeit = time.time() - 3600.0
+            os.utime(ziel, (altzeit, altzeit))
+            ok = vdc.fahrphysik_gate_fahren(doppel, ziel=ziel)
+        self.assertFalse(ok, "ein Ergebnis von gestern gilt als Messung")
+        self.assertEqual(doppel.bericht(), 1, "der Eintrag bleibt gruen")
+
+    def test_mit_neuem_ergebnis_ist_es_gruen(self):
+        doppel = AnkerBeweisTest.LaufDoppel(0)
+        with tempfile.TemporaryDirectory() as tmp:
+            ziel = os.path.join(tmp, "fahrphysik_gate.txt")
+
+            def fahre(name, befehl, shell_cmd=False):
+                doppel.ergebnisse.append((name, True, 0.0, None))
+                with open(ziel, "w", encoding="utf-8") as f:
+                    f.write("Gate 7 Fahrphysik: GRUEN\n")
+                return True
+
+            doppel.fahre = fahre
+            ok = vdc.fahrphysik_gate_fahren(doppel, ziel=ziel)
+        self.assertTrue(ok)
+        self.assertEqual(doppel.bericht(), 0)
+
+
 class AnkerBeweisTest(unittest.TestCase):
     """Gate 5 verlangt eine NEUE Messung, nicht nur einen Exit-Code.
 

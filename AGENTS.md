@@ -5183,3 +5183,21 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
 - Ein Clip mit fester Zeitschrittweite (10 fps = 0,1 s) aendert die Runde kaum
   (41,5 statt 42,1 s), verlangsamt aber das Spiel gegen die Wanduhr:
   -WbQuitAfter grosszuegig setzen, sonst endet der Lauf vor dem Ziel.
+
+## Gate 7: Fahrphysik-Messfahrt gegen die Sollwerte (29.09.2026)
+
+- Push-Gate (volle Stufe, ohne Dateifilter): `Toolserify_fahrphysik.cmd` faehrt
+  `fahrmessung.cmd gate_fahrphysik 40` (~160 s) und prueft mit
+  `Tools/verify_fahrphysik.py` die Kennzahlen gegen SOLLWERTE: Radspin <= 0,2 s,
+  0-60 mph 16,4..20 s (R&T 18,2), Kurvengrip 0,65..0,76 g je Seite (0,704),
+  Bremsweg 48..57 m (~52), Verzoegerung 0,68..0,84 g (0,76), gleitende Raeder
+  <= 5 %. Exit 2 = NICHT GEMESSEN (kein "Messlauf beendet", < 500 Proben,
+  Kennzahl fehlt) - wird rot. Gegenprobe an echten Logs: vor der Grip-
+  Kalibrierung 4 x ROT, mit 820 kg 0-60 ROT, kalibriert GRUEN.
+- Sollwerte AENDERN heisst neu kalibrieren und belegen - nicht das Band
+  weiten, bis ein Rueckfall durchpasst.
+- `fahrmessung.cmd` gibt eine Sperre, die es beim Start SCHON hielt
+  ("bereits gehalten"), am Ende NICHT frei. `run_cut_shots.cmd` (Gate 4) tut
+  das noch: sein `Freigeben` loescht die Sperre des Push-Hooks (eigene
+  Prozesskette), die Gates danach laufen ohne Sperre - offen, nicht behoben.
+
