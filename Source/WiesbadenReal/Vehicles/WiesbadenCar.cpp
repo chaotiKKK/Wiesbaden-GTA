@@ -323,6 +323,8 @@ void AWiesbadenCar::BeginPlay()
 		UE_LOG(LogWbVehicles, Log, TEXT("WbDev: Belags-Griffigkeit fest auf %.2f (Override)."), SurfaceGripOverride);
 	}
 
+	bDriveTelemetry = FParse::Param(FCommandLine::Get(), TEXT("WbFahrTelemetrie"));
+
 	// Herbie-Lackierung - NUR fuer das Spielerauto.
 	//
 	// Die Instanzen MI_VWBeetleHerbie_<Kachel> (Tools/import_herbie.py)
@@ -1036,6 +1038,7 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 
 			float DesiredZ = Hit.Location.Z + GroundClearanceCm;
 			const float CurrentZ = GetActorLocation().Z;
+			TelemetryHeaveCm = CurrentZ - DesiredZ;
 
 			if (bFlyingOverBuilding)
 			{
@@ -1091,6 +1094,27 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 			// Regression einen ECHTEN Karosserie-Sturz statt einer Fehl-Null.
 			FallSpeedCmS = AdvanceFallSpeedCmS(FallSpeedCmS, FallGravityCmS2, DeltaSeconds);
 			AddActorWorldOffset(FVector(0.0f, 0.0f, -FallSpeedCmS * DeltaSeconds), false);
+		}
+	}
+
+	// Fahrtelemetrie: eine Zeile je 0,1 s Spielzeit. Querbeschleunigung wie beim
+	// Wanken als v * Gierrate; Nicken/Wanken sind die sichtbare Karosserie-
+	// Neigung, Hub der Abstand der Wurzel zu ihrer Sollhoehe. "gleit" ist der
+	// innere Zustand "Raeder gleiten" (blockiert, keine Seitenfuehrung) - anders
+	// als "block", das auch meldet, wenn die Bremse nur an der Haftgrenze regelt.
+	if (bDriveTelemetry && GetWorld())
+	{
+		const double Now = GetWorld()->GetTimeSeconds();
+		if (Now >= DriveTelemetryNextTime)
+		{
+			DriveTelemetryNextTime = Now + 0.1;
+			UE_LOG(LogWbVehicles, Log,
+				TEXT("WbFahrt t=%.2f v=%.2f ax=%.2f ay=%.2f gier=%.2f schwimm=%.2f lenk=%.3f gas=%.2f bremse=%.2f nick=%.2f wank=%.2f hub=%.2f spin=%d block=%d gleit=%d gang=%d"),
+				Now, Output.SpeedKmh, Output.ForwardAccelerationMetersPerS2, LateralAccelMs2,
+				FMath::RadiansToDegrees(Output.YawRateRadPerS), Output.SlipAngleDeg,
+				Output.SteerAngleNorm, ThrottleInput, BrakeInput, BodyPitchDeg, BodyRollDeg,
+				TelemetryHeaveCm, Output.bWheelSpin ? 1 : 0, Output.bWheelLock ? 1 : 0,
+				VehiclePhysics.bBrakeLockState ? 1 : 0, Output.Gear);
 		}
 	}
 }

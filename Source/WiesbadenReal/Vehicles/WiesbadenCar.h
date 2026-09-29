@@ -403,6 +403,18 @@ private:
 	float BodyPitchDeg = 0.0f;
 	float BodyRollDeg = 0.0f;
 
+	/**
+	 * Fahrtelemetrie (-WbFahrTelemetrie): zehn Messzeilen je Sekunde mit
+	 * Laengs-/Querdynamik, Karosseriebewegung und Hub - die Grundlage fuer
+	 * Vorher/Nachher-Vergleiche der Fahrphysik (Tools/fahrmessung_auswerten.py).
+	 * Ohne den Schalter wird nichts gemessen und nichts geloggt.
+	 */
+	bool bDriveTelemetry = false;
+	double DriveTelemetryNextTime = 0.0;
+
+	/** Abstand der Wurzel zu ihrer Sollhoehe ueber der Fahrbahn (cm, + = zu hoch). */
+	float TelemetryHeaveCm = 0.0f;
+
 	/** Aktuelle Fallgeschwindigkeit (cm/s), wenn kein Boden unter dem Wagen liegt. */
 	float FallSpeedCmS = 0.0f;
 
