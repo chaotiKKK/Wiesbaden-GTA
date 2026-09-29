@@ -14,10 +14,13 @@ Netz "alles in Ordnung" sagt, ist schlimmer als keines.
 import io
 import json
 import contextlib
+import os
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -472,8 +475,13 @@ class AbgleichTest(unittest.TestCase):
         """Der Fall aus dem Audit vom 29.09.2026: 14 oeffentliche Downloads,
         acht davon gleichzeitig, das Netz ist 12 s weg. Mit einem Pausenbudget
         je Thread (b645e2f) waren das 8 x 5 + 8 x 15 s "Warten" und Exit 3 -
-        vergangen sind aber nur 20 s. Die Uhr laeuft hier echt, 1:100
-        gestaucht, damit acht Threads wirklich gleichzeitig warten."""
+        vergangen sind aber nur 20 s.
+
+        Deterministisch, unabhaengig von der CPU-Last: jeder Thread hat seine
+        eigene simulierte Zeit, die nur seine eigenen Pausen vorruecken (so
+        vergeht Zeit fuer parallele Threads), und eine Barriere zwingt die
+        ersten acht Downloads auf acht verschiedene Threads. Eine 1:100
+        gestauchte Echtzeit-Uhr war unter Volllast 10 von 10 Mal rot."""
         text = SEITE.replace(
             "![Eins](meilensteine/bilder/01-eins.jpg)",
             "\n".join("![Eins](meilensteine/bilder/01-eins-%02d.jpg)" % i
@@ -483,21 +491,32 @@ class AbgleichTest(unittest.TestCase):
         self.seite_schreiben(text)
         self.ref_seite = text
 
-        stauchung = 100.0
+        eigene = threading.local()
+        sperre = threading.Lock()
         geschlafen = []
-        self.zeit_ersetzen(lambda: time.monotonic() * stauchung,
-                           lambda s: (geschlafen.append(s), time.sleep(s / stauchung)))
-        ausfall_ab = []
+
+        def uhr():
+            return getattr(eigene, "t", 0.0)
+
+        def schlafen(sekunden):
+            with sperre:
+                geschlafen.append(sekunden)
+            eigene.t = uhr() + sekunden
+
+        self.zeit_ersetzen(uhr, schlafen)
+        zugleich = threading.Barrier(ra.ABRUFE_PARALLEL, timeout=30)
         downloads = []
 
         def http(url):
             if "/releases/download/" not in url:
                 return 200, "1"
-            jetzt = ra.UHR()
-            if not ausfall_ab:
-                ausfall_ab.append(jetzt)
-            downloads.append(url)
-            if jetzt - ausfall_ab[0] < 12:
+            with sperre:
+                erster = url not in downloads
+                downloads.append(url)
+                vorn = len(set(downloads)) <= ra.ABRUFE_PARALLEL
+            if erster and vorn:
+                zugleich.wait()
+            if uhr() < 12:
                 raise ra.NichtMessbar("oeffentlicher Abruf %s: <urlopen error timed out>" % url)
             return 200, "1"
 
@@ -505,8 +524,8 @@ class AbgleichTest(unittest.TestCase):
         code = self.laufen(releases=self.releases(text))
         self.assertEqual(code, 0, self.raus)
         self.assertEqual(len(set(downloads)), 14, "die Download-Phase lief nicht")  # 13 x M01, 1 x M02
-        self.assertGreaterEqual(geschlafen.count(15), 8,
-                                "der Ausfall traf nicht acht Downloads gleichzeitig")
+        self.assertEqual(sorted(geschlafen), [5] * 8 + [15] * 8,
+                         "der Ausfall muss acht Downloads gleichzeitig treffen")
 
     def test_ein_haengendes_gh_ist_exit_3_innerhalb_der_frist(self):
         """Ein ECHTER Prozess, der nie antwortet, statt gh: seine Zeitgrenze
@@ -530,17 +549,32 @@ class AbgleichTest(unittest.TestCase):
         self.assertIn("Frist von 3 s fuer diesen Lauf abgelaufen", self.raus)
         self.assertLess(dauer, 3 + 2, "die Frist wurde ueberzogen: %.1f s" % dauer)
 
-    def test_ein_gh_timeout_ist_ein_transportfehler(self):
+    @unittest.skipUnless(os.name == "nt", "prueft taskkill /T")
+    def test_ein_gh_timeout_beendet_den_ganzen_prozessbaum(self):
+        """gh startet einen Enkel, der die Pipes erbt. subprocess.run(timeout)
+        kam erst nach dessen Ende zurueck (15 s statt 2 s) und liess ihn
+        weiterlaufen. Jetzt: zurueck an der Grenze, Enkel beendet."""
         self.zeit_ersetzen(time.monotonic, time.sleep)
+        ra.frist_setzen()
+        pid_datei = self.wurzel / "enkel.pid"
         self.addCleanup(setattr, ra, "GH_BEFEHL", ra.GH_BEFEHL)
         self.addCleanup(setattr, ra, "GH_TIMEOUT_S", ra.GH_TIMEOUT_S)
-        ra.GH_BEFEHL = (sys.executable, "-c", "import time; time.sleep(30)")
-        ra.GH_TIMEOUT_S = 0.5
+        ra.GH_BEFEHL = (sys.executable, "-c",
+                        "import subprocess, sys, time\n"
+                        "enkel = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                        "open(%r, 'w').write(str(enkel.pid))\n"
+                        "time.sleep(30)\n" % str(pid_datei))
+        ra.GH_TIMEOUT_S = 2
         beginn = time.monotonic()
         code, _raus, fehler = ra.gh_echt("release", "list")
-        self.assertLess(time.monotonic() - beginn, 5)
+        dauer = time.monotonic() - beginn
         self.assertEqual(code, ra.GH_ZEITUEBERSCHREITUNG, fehler)
         self.assertTrue(ra.ist_aussetzer(fehler), fehler)
+        self.assertLess(dauer, 2 + 1, "Aufruf kam erst nach %.1f s zurueck" % dauer)
+        enkel = pid_datei.read_text()
+        liste = subprocess.run(["tasklist", "/FI", "PID eq %s" % enkel, "/NH"],
+                               capture_output=True, text=True, errors="replace").stdout
+        self.assertNotIn(" %s " % enkel, liste, "der Enkel lebt noch")
 
     def test_ein_kurzer_http_aussetzer_wird_wiederholt_und_ist_gruen(self):
         gescheitert = []

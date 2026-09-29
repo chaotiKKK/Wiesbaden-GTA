@@ -90,18 +90,40 @@ def gh_echt(*args):
     Mit Zeitgrenze: ein haengendes gh (Verbindung steht, Antwort kommt nie)
     haette sonst jede Obergrenze des Laufs ausgehebelt. Die Grenze ist
     hoechstens die Restzeit der Frist; ihr Ablauf ist ein Transportfehler.
+
+    Nicht subprocess.run(timeout=...): das beendet nur gh selbst und wartet
+    danach, bis die Pipes schliessen. Haelt ein Kindprozess von gh sie offen,
+    kam der Aufruf erst mit dessen Ende zurueck (gemessen 29.09.2026: 15 s
+    statt 2 s). Hier endet der ganze Baum, und auf die Pipes wird nicht
+    mehr gewartet.
     """
     grenze = versuchszeit(GH_TIMEOUT_S)
     try:
-        fertig = subprocess.run([*GH_BEFEHL, *args], cwd=REPO, capture_output=True,
-                                text=True, encoding="utf-8", errors="replace",
-                                timeout=grenze)
+        prozess = subprocess.Popen([*GH_BEFEHL, *args], cwd=REPO,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, encoding="utf-8", errors="replace")
     except FileNotFoundError:
         return 127, "", "gh nicht gefunden"
+    try:
+        raus, fehler = prozess.communicate(timeout=grenze)
     except subprocess.TimeoutExpired:
+        prozessbaum_beenden(prozess)
         return (GH_ZEITUEBERSCHREITUNG, "",
                 "gh antwortete nicht binnen %.0f s (timed out)" % grenze)
-    return fertig.returncode, fertig.stdout, fertig.stderr
+    return prozess.returncode, raus, fehler
+
+
+def prozessbaum_beenden(prozess):
+    """Beendet den Prozess samt allen Nachkommen, die noch an ihm haengen."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(prozess.pid)],
+                       capture_output=True)
+    else:
+        prozess.kill()
+    try:
+        prozess.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 GH_LAUF = gh_echt  # der Selbsttest setzt das auf eine Attrappe
