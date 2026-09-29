@@ -14,10 +14,14 @@ Netz "alles in Ordnung" sagt, ist schlimmer als keines.
 import io
 import json
 import contextlib
+import os
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -71,7 +75,7 @@ class Attrappe:
         self.fehler = fehler
         self.aufrufe = []
 
-    def __call__(self, *args):
+    def __call__(self, _grenze_s, *args):
         self.aufrufe.append(args)
         if self.fehler is not None:
             return self.fehler
@@ -108,7 +112,7 @@ class AbgleichTest(unittest.TestCase):
         ra.SEITE_ARBEIT = self.seite
         ra.BILDER_ARBEIT = self.bilder
         # Kein echter Abruf im Test: HTTP 200 gilt als "oeffentlich".
-        ra.HTTP_LAUF = lambda url: (200, "123")
+        ra.HTTP_LAUF = lambda url, _grenze_s: (200, "123")
         ra.rba.TAGS = dict(TAGS)
         ra.rta.SEITEN_TITEL = dict(TITEL)
         # Die Seite aus dem Ref ist im Test dieselbe wie im Arbeitsbaum, nur
@@ -119,6 +123,34 @@ class AbgleichTest(unittest.TestCase):
         self.attrappe = None
         self.raus = ""
         self._oeffentlich = None
+        # Simulierte Zeit: eine Pause rueckt die Uhr vor, sonst steht sie.
+        self.geschlafen = []
+        self.jetzt = 0.0
+
+        def schlafen(sekunden):
+            self.geschlafen.append(sekunden)
+            self.jetzt += sekunden
+
+        self.zeit_ersetzen(lambda: self.jetzt, schlafen)
+
+    def zeit_ersetzen(self, uhr, schlaf):
+        for name, wert in (("UHR", uhr), ("SCHLAF", schlaf)):
+            if not hasattr(self, "_zeit_alt_" + name):
+                setattr(self, "_zeit_alt_" + name, getattr(ra, name, None))
+                self.addCleanup(self._zeit_zurueck, name)
+            setattr(ra, name, wert)
+
+    def _zeit_zurueck(self, name):
+        alt = getattr(self, "_zeit_alt_" + name)
+        if alt is None:
+            delattr(ra, name)
+        else:
+            setattr(ra, name, alt)
+
+    def frist_auf(self, sekunden):
+        alt = ra.FRIST_S
+        ra.FRIST_S = sekunden
+        self.addCleanup(setattr, ra, "FRIST_S", alt)
 
     def tearDown(self):
         (ra.SEITE_ARBEIT, ra.BILDER_ARBEIT, ra.GH_LAUF, ra.HTTP_LAUF,
@@ -204,6 +236,7 @@ class AbgleichTest(unittest.TestCase):
         del rel[TAGS[2]]
         self.assertEqual(self.laufen(releases=rel), 1, self.raus)
         self.assertIn("Release fehlt ganz", self.raus)
+        self.assertEqual(self.geschlafen, [], "ein fehlendes Release ist eine Antwort, kein Aussetzer")
 
     # -- 3. Abweichungen im Text -------------------------------------------
 
@@ -303,7 +336,7 @@ class AbgleichTest(unittest.TestCase):
         # Eine FREIE Funktion als gh, nicht die Attrappe: `__call__` am
         # Instanzattribut nimmt Python beim Aufruf nicht her - die Attrappe
         # wuerde weiterlaufen und der Test pruefte die falsche Sache.
-        def kaputt(*args):
+        def kaputt(_grenze_s, *args):
             return 0, "kein json", ""
 
         ra.GH_LAUF = kaputt
@@ -357,19 +390,214 @@ class AbgleichTest(unittest.TestCase):
     def test_ein_totes_oeffentliches_bild_ist_rot(self):
         """Der Text ist richtig, das Bild liegt aber nicht im Schaufenster -
         das faellt nur, wenn man es wirklich abruft."""
-        ra.HTTP_LAUF = lambda url: (404, None)
+        ra.HTTP_LAUF = lambda url, _grenze_s: (404, None)
         code = self.laufen(releases=self.releases())
         self.assertEqual(code, 1, self.raus)
         self.assertIn("ohne Konto nicht abrufbar (HTTP 404)", self.raus)
 
     def test_ein_netzfehler_beim_abruf_ist_nicht_messbar(self):
-        def kaputt(url):
+        def kaputt(url, _grenze_s):
             raise ra.NichtMessbar("Timeout")
 
         ra.HTTP_LAUF = kaputt
         code = self.laufen(releases=self.releases())
         self.assertEqual(code, 3, self.raus)
         self.assertIn("nicht abfragbar", self.raus)
+
+    # -- 5b. Kurze Netzaussetzer: wiederholen, aber nie einen Befund -----
+    #
+    # GEMESSEN am 28.09.2026: drei volle Push-Gates scheiterten allein an
+    # kurzen Verbindungsabbruechen zu GitHub (Exit 3), der zweite Versuch
+    # Sekunden spaeter war gruen. Die Meldungen hier sind die echten.
+
+    DIAL = ('Post "https://api.github.com/graphql": dial tcp 140.82.121.6:443: '
+            'connectex: Ein Verbindungsversuch ist fehlgeschlagen, da die '
+            'Gegenstelle nach einer bestimmten Zeitspanne nicht richtig reagiert hat')
+
+    def laufen_mit_aussetzern(self, fehlschlaege, meldung=DIAL, releases=None, flattern=False):
+        """Die ersten `fehlschlaege` gh-Aufrufe scheitern am Transport, der
+        Rest antwortet wie die Attrappe. `flattern`: jeder ERSTE Versuch
+        eines Aufrufs scheitert, die Wiederholung klappt - ein Netz, das
+        immer wieder kurz wegbricht."""
+        self.attrappe = Attrappe(self.releases() if releases is None else releases)
+        zaehler = {"n": 0}
+        attrappe = self.attrappe
+
+        def gh(grenze_s, *args):
+            zaehler["n"] += 1
+            if zaehler["n"] <= fehlschlaege or (flattern and zaehler["n"] % 2):
+                return 1, "", meldung
+            return attrappe(grenze_s, *args)
+
+        ra.GH_LAUF = gh
+        puffer = io.StringIO()
+        with contextlib.redirect_stdout(puffer):
+            code = ra.hauptprogramm([])
+        self.raus = puffer.getvalue()
+        return code
+
+    def test_ein_kurzer_gh_aussetzer_wird_wiederholt_und_ist_gruen(self):
+        code = self.laufen_mit_aussetzern(1)
+        self.assertEqual(code, 0, self.raus)
+        self.assertEqual(self.geschlafen, [5])
+        self.assertIn("Wiederholung 1/3", self.raus)
+
+    def test_ein_dauerhafter_gh_aussetzer_bleibt_nicht_gemessen(self):
+        code = self.laufen_mit_aussetzern(10 ** 6)
+        self.assertEqual(code, 3, self.raus)
+        self.assertEqual(self.geschlafen, [5, 15, 30], "begrenzt: drei Wiederholungen")
+        self.assertIn("auch nach 3 Wiederholungen", self.raus)
+        self.assertIn("NICHT 'alles in Ordnung'", self.raus)
+
+    def test_ein_aussetzer_dann_abweichender_text_ist_rot(self):
+        """Wiederholen darf einen Befund nie verschwinden lassen: nach dem
+        Aussetzer antwortet GitHub - mit einem veralteten Release-Text."""
+        rel = self.releases()
+        rel[TAGS[1]]["body"] = rel[TAGS[1]]["body"].replace(
+            "Der erste Meilenstein mit einem Bild.", "Ein alter Satz.")
+        code = self.laufen_mit_aussetzern(1, releases=rel)
+        self.assertEqual(code, 1, self.raus)
+        self.assertEqual(self.geschlafen, [5])
+        self.assertIn("weicht", self.raus)
+
+    def test_eine_abgelaufene_frist_ist_exit_3(self):
+        """Ein flatterndes Netz: jeder Abruf klappt erst beim zweiten Versuch.
+        Nach zwei Pausen laesst die Frist des Laufs keine dritte mehr zu -
+        der Aussetzer endet mit Exit 3 statt weiter zu warten."""
+        self.frist_auf(12)
+        code = self.laufen_mit_aussetzern(0, flattern=True)
+        self.assertEqual(code, 3, self.raus)
+        self.assertEqual(self.geschlafen, [5, 5])
+        self.assertIn("Frist von 12 s fuer diesen Lauf abgelaufen", self.raus)
+        self.assertIn("NICHT 'alles in Ordnung'", self.raus)
+
+    def test_ein_12s_ausfall_in_der_parallelen_download_phase_ist_gruen(self):
+        """Der Fall aus dem Audit vom 29.09.2026: 14 oeffentliche Downloads,
+        acht davon gleichzeitig, das Netz ist 12 s weg. Mit einem Pausenbudget
+        je Thread (b645e2f) waren das 8 x 5 + 8 x 15 s "Warten" und Exit 3 -
+        vergangen sind aber nur 20 s.
+
+        Deterministisch, unabhaengig von der CPU-Last: jeder Thread hat seine
+        eigene simulierte Zeit, die nur seine eigenen Pausen vorruecken (so
+        vergeht Zeit fuer parallele Threads), und eine Barriere zwingt die
+        ersten acht Downloads auf acht verschiedene Threads. Eine 1:100
+        gestauchte Echtzeit-Uhr war unter Volllast 10 von 10 Mal rot."""
+        text = SEITE.replace(
+            "![Eins](meilensteine/bilder/01-eins.jpg)",
+            "\n".join("![Eins](meilensteine/bilder/01-eins-%02d.jpg)" % i
+                      for i in range(12)) + "\n![Eins](meilensteine/bilder/01-eins.jpg)")
+        for i in range(12):
+            (self.bilder / ("01-eins-%02d.jpg" % i)).write_bytes(b"x")
+        self.seite_schreiben(text)
+        self.ref_seite = text
+
+        eigene = threading.local()
+        sperre = threading.Lock()
+        geschlafen = []
+
+        def uhr():
+            return getattr(eigene, "t", 0.0)
+
+        def schlafen(sekunden):
+            with sperre:
+                geschlafen.append(sekunden)
+            eigene.t = uhr() + sekunden
+
+        self.zeit_ersetzen(uhr, schlafen)
+        zugleich = threading.Barrier(ra.ABRUFE_PARALLEL, timeout=30)
+        downloads = []
+
+        def http(url, _grenze_s):
+            if "/releases/download/" not in url:
+                return 200, "1"
+            with sperre:
+                erster = url not in downloads
+                downloads.append(url)
+                vorn = len(set(downloads)) <= ra.ABRUFE_PARALLEL
+            if erster and vorn:
+                zugleich.wait()
+            if uhr() < 12:
+                raise ra.NichtMessbar("oeffentlicher Abruf %s: <urlopen error timed out>" % url)
+            return 200, "1"
+
+        ra.HTTP_LAUF = http
+        code = self.laufen(releases=self.releases(text))
+        self.assertEqual(code, 0, self.raus)
+        self.assertEqual(len(set(downloads)), 14, "die Download-Phase lief nicht")  # 13 x M01, 1 x M02
+        self.assertEqual(sorted(geschlafen), [5] * 8 + [15] * 8,
+                         "der Ausfall muss acht Downloads gleichzeitig treffen")
+
+    def test_ein_haengendes_gh_ist_exit_3_innerhalb_der_frist(self):
+        """Ein ECHTER Prozess, der nie antwortet, statt gh: seine Zeitgrenze
+        ist die Restzeit der Frist, ihr Ablauf ist ein Transportfehler - und
+        nach der Frist ist Schluss. Ohne Zeitgrenze hinge der Lauf hier so
+        lange wie der Prozess."""
+        self.zeit_ersetzen(time.monotonic, time.sleep)
+        self.frist_auf(3)
+        alt = ra.GH_BEFEHL
+        ra.GH_BEFEHL = (sys.executable, "-c", "import time; time.sleep(30)")
+        self.addCleanup(setattr, ra, "GH_BEFEHL", alt)
+        ra.GH_LAUF = ra.gh_echt
+        beginn = time.monotonic()
+        puffer = io.StringIO()
+        with contextlib.redirect_stdout(puffer):
+            code = ra.hauptprogramm([])
+        dauer = time.monotonic() - beginn
+        self.raus = puffer.getvalue()
+        self.assertEqual(code, 3, self.raus)
+        self.assertIn("antwortete nicht binnen", self.raus)
+        self.assertIn("Frist von 3 s fuer diesen Lauf abgelaufen", self.raus)
+        self.assertLess(dauer, 3 + 2, "die Frist wurde ueberzogen: %.1f s" % dauer)
+
+    @unittest.skipUnless(os.name == "nt", "prueft taskkill /T")
+    def test_ein_gh_timeout_beendet_den_ganzen_prozessbaum(self):
+        """gh startet einen Enkel, der die Pipes erbt. subprocess.run(timeout)
+        kam erst nach dessen Ende zurueck (15 s statt 2 s) und liess ihn
+        weiterlaufen. Jetzt: zurueck an der Grenze, Enkel beendet."""
+        pid_datei = self.wurzel / "enkel.pid"
+        self.addCleanup(setattr, ra, "GH_BEFEHL", ra.GH_BEFEHL)
+        ra.GH_BEFEHL = (sys.executable, "-c",
+                        "import subprocess, sys, time\n"
+                        "enkel = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                        "open(%r, 'w').write(str(enkel.pid))\n"
+                        "time.sleep(30)\n" % str(pid_datei))
+        beginn = time.monotonic()
+        code, _raus, fehler = ra.gh_echt(2, "release", "list")
+        dauer = time.monotonic() - beginn
+        self.assertEqual(code, ra.GH_ZEITUEBERSCHREITUNG, fehler)
+        self.assertLess(dauer, 2 + 1, "Aufruf kam erst nach %.1f s zurueck" % dauer)
+        enkel = pid_datei.read_text()
+        liste = subprocess.run(["tasklist", "/FI", "PID eq %s" % enkel, "/NH"],
+                               capture_output=True, text=True, errors="replace").stdout
+        self.assertNotIn(" %s " % enkel, liste, "der Enkel lebt noch")
+
+    def test_ein_kurzer_http_aussetzer_wird_wiederholt_und_ist_gruen(self):
+        gescheitert = []
+
+        def http(url, _grenze_s):
+            if not gescheitert:
+                gescheitert.append(url)
+                raise ra.NichtMessbar("oeffentlicher Abruf %s: <urlopen error timed out>" % url)
+            return 200, "123"
+
+        ra.HTTP_LAUF = http
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 0, self.raus)
+        self.assertEqual(self.geschlafen, [5])
+
+    def test_ein_http_404_ist_sofort_rot_ohne_wiederholung(self):
+        ra.HTTP_LAUF = lambda url, _grenze_s: (404, None)
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 1, self.raus)
+        self.assertIn("HTTP 404", self.raus)
+        self.assertEqual(self.geschlafen, [], "ein 404 ist ein Befund, kein Aussetzer")
+
+    def test_ein_dauerhaftes_http_503_ist_nicht_gemessen_statt_toter_link(self):
+        ra.HTTP_LAUF = lambda url, _grenze_s: (503, None)
+        code = self.laufen(releases=self.releases())
+        self.assertEqual(code, 3, self.raus)
+        self.assertNotIn("HTTP 503)", self.raus, "ein 5xx ist kein toter Link")
+        self.assertTrue(0 < sum(self.geschlafen) <= ra.FRIST_S, self.geschlafen)
 
     def test_der_abruf_erfolgt_ohne_anmeldung_und_oeffentlich(self):
         """Der Aufruf darf keine Anmeldedaten mitschicken - sonst wuerde
@@ -378,7 +606,7 @@ class AbgleichTest(unittest.TestCase):
         Repo liegen."""
         gesehen = []
 
-        def merker(url):
+        def merker(url, _grenze_s):
             gesehen.append(url)
             return 200, "1"
 
@@ -415,7 +643,7 @@ class AbgleichTest(unittest.TestCase):
     def test_ein_toter_oeffentlicher_download_ist_rot(self):
         """Nur die Download-Wege sind tot, die Bildlinks sind gesund: der Fall,
         den ein reiner Textvergleich nie sieht."""
-        def teilweise(url):
+        def teilweise(url, _grenze_s):
             return (404, None) if "/releases/download/" in url else (200, "1")
 
         ra.HTTP_LAUF = teilweise
@@ -471,6 +699,23 @@ class HilfsfunktionTest(unittest.TestCase):
         self.assertEqual(len(zeilen), 2, zeilen)
         self.assertTrue(any("neu.jpg" in z for z in zeilen))
         self.assertTrue(any("alt.jpg" in z for z in zeilen))
+
+
+class AussetzerErkennungTest(unittest.TestCase):
+    """Die Erkennung an den echten Meldungen vom 28.09.2026."""
+
+    def test_transportfehler(self):
+        for text in (AbgleichTest.DIAL,
+                     "error connecting to api.github.com\ncheck your internet connection",
+                     "HTTP 502: Bad Gateway", "HTTP 503: Service Unavailable",
+                     "read tcp: i/o timeout", "TLS handshake timeout"):
+            self.assertTrue(ra.ist_aussetzer(text), text)
+
+    def test_antworten_sind_keine_aussetzer(self):
+        for text in ("release not found", "HTTP 404: Not Found",
+                     "HTTP 401: Bad credentials", "HTTP 403: Forbidden",
+                     "gh nicht gefunden", "", None):
+            self.assertFalse(ra.ist_aussetzer(text), text)
 
 
 if __name__ == "__main__":
