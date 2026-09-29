@@ -241,6 +241,81 @@ LOCK_BELEGT = 3
 LOCK_PLATTE = 4
 
 
+def fremde_engines(filter_path=None):
+    """Laufende Engine-Prozesse mit Commandline - fuer Engine-Beweise in Tests.
+
+    Mit filter_path werden nur Prozesse gemeldet, deren Commandline den
+    Pfad des GEMEINSAMEN Gate-Worktrees nennt (in Gross-/Kleinschreibung
+    und Schraegstrichen toleriert). Genau der Filter, den das ausschliessliche
+    Gate braucht: ein fremder Editor IM Gate-Worktree kollidiert mit dem
+    eigenen Lauf, einer im Hauptbaum tut es nicht.
+    """
+    import json as _json
+    try:
+        fertig = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process "
+             "-Filter \"Name='UnrealEditor.exe' or Name='UnrealEditor-Win64-DebugGame.exe' "
+             "or Name='UnrealEditor-Win64-Development.exe' or Name='UnrealEditor-Win64-Shipping.exe' or Name='zenserver.exe'\" "
+             "| Select-Object ProcessId,CommandLine "
+             "| ConvertTo-Json -Compress"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    if fertig.returncode != 0 or not fertig.stdout.strip():
+        return []
+    try:
+        daten = _json.loads(fertig.stdout)
+    except ValueError:
+        return []
+    if isinstance(daten, dict):
+        daten = [daten]
+    prozesse = []
+    for p in daten or []:
+        pid, kommando = p.get("ProcessId"), p.get("CommandLine") or ""
+        if filter_path:
+            norm = kommando.lower().replace("/", "\\")
+            if str(filter_path).lower().replace("/", "\\") not in norm:
+                continue
+        prozesse.append({"pid": pid, "commandline": kommando})
+    return prozesse
+
+
+def worktree_exklusiv(name, warte_s=None, schlaf=time.sleep, uhr=time.monotonic,
+                      filter_path=None):
+    """Warten, bis keine fremde Engine im GEMEINSAMEN Gate-Worktree laeuft.
+
+    GEMESSEN am 28.09.2026, 20:06: zwei Pushes mit vollen Gates liefen
+    parallel; mein Gate 4 starb an "Datei von anderem Prozess verwendet"
+    und Gate 5 an "hat NICHTS geschrieben" - die Engine-Bereinigungen und
+    Log-Schreibarbeit des fremden Laufs (Label push_gate, PID 38444)
+    trafen genau den Moment meiner Editor-Laeufe im selben Worktree.
+    Der Engine-Lock half nicht: er war zur Abfrage schon "eigen".
+
+    "Eigen" heisst: die verschachtelten Laeufe finden ihn in ihrer
+    Prozesskette und gelten als eigene - genau dafuer gebaut. Die
+    exklusive Phase muss darum SELBST nachsehen, ob eine fremde Engine
+    auf den Worktree zeigt (Commandline-Filter), und nur dann warten.
+    """
+    if warte_s is None:
+        warte_s = float(os.environ.get("WB_GATE_LOCK_WARTEN", "3600"))
+    frist = uhr() + warte_s
+    while True:
+        fremd = fremde_engines(filter_path=filter_path)
+        if not fremd:
+            return True
+        if uhr() >= frist:
+            drucke("Engine-Konflikt: %d fremde Engine(s) im Gate-Worktree - "
+                   "dieser Lauf gibt auf: %s"
+                   % (len(fremd), "; ".join(
+                       "PID %s" % (e.get("pid"),) for e in fremd[:3])))
+            return False
+        drucke("%s: %d fremde Engine(s) im Gate-Worktree - warte "
+               "(hoechstens noch %.0f min) ..."
+               % (name, len(fremd), max(0.0, (frist - uhr()) / 60.0)))
+        schlaf(10.0)
+
+
 def motor_sperre(name, warte_s=None, lock_pfad=None, platten_grenze=None,
                  schlaf=time.sleep, uhr=time.monotonic):
     """Den maschinenweiten Engine-Lock fuer DIESEN Prozess nehmen.

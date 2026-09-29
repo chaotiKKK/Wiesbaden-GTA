@@ -249,6 +249,20 @@ def braucht_compiler(dateien):
     return any(d.lower().endswith(CPP_ENDUNGEN) for d in dateien)
 
 
+def gate_worktree_pfad():
+    """Der Pfad des gemeinsamen Gate-Worktrees - oder None.
+
+    None ist hier "kein Ort zum Beanspruchen", nicht "kein Konflikt
+    moeglich": ein fehlendes Werkzeug darf den Lauf nicht sterben lassen
+    (dieselbe Lehre wie beim Platten-Hinweis und seinem Import im try).
+    """
+    try:
+        import gate_worktree
+        return str(gate_worktree.gate_projekt(WURZEL))
+    except Exception:
+        return None
+
+
 # --------------------------------------------------------------------------
 # BESITZ: WER DARF WAS COMMITTEN
 #
@@ -817,6 +831,22 @@ def gates_fahren(stufe, dateien, thread=None):
     # in dieselbe Stufe - den Engine-Lock haelt vor_dem_commit von Gate 0 an,
     # der Lauf muss ihn nicht selbst beanspruchen.
     if stufe == "voll":
+        # EXKLUSIVITAET vor dem ersten Editor-Lauf im gemeinsamen Worktree.
+        # GEMESSEN am 28.09.2026, 20:06: zwei Pushes mit vollen Gates
+        # liefen parallel; mein Gate 4 starb an "Datei von anderem Prozess
+        # verwendet" und Gate 5 an "hat NICHTS geschrieben" - die
+        # Bereinigungen des fremden Laufs trafen genau den Moment meiner
+        # Editor-Laeufe im selben Worktree. Der Engine-Lock schuetzt hier
+        # nicht: er ist zu diesem Zeitpunkt schon "eigen". Darum der
+        # eigene Blick auf die Prozesse - warten, bis keine FREMDE Engine
+        # mehr auf diesen Pfad zeigt. Gate 5 startet dieselbe Art Lauf im
+        # selben Worktree und reitet auf dieser Exklusivitaet mit.
+        if not gate_worktree.worktree_exklusiv("Gate 4",
+                                               filter_path=gate_worktree_pfad()):
+            lauf.fahre_gate("Gate 4  Gate-Worktree exklusiv", False, 0.0,
+                            "Fremde Engine im Gate-Worktree - Frist ohne "
+                            "Ruhe abgelaufen (Einzelheiten oben).")
+            return lauf.bericht()
         lauf.fahre("Gate 4  Plasmacutter-Bildfolge",
                    r"Tools\verify_cuttable.cmd", shell_cmd=True)
     else:

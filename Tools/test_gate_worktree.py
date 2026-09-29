@@ -7,6 +7,7 @@ und der pre-push-Hook geht diesen Weg.
     python -m unittest discover -s Tools -p "test_gate_worktree.py"
 """
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -911,6 +912,104 @@ class VerwaistMeldungTest(unittest.TestCase):
         text = self.LOCK.read_text(encoding="utf-8")
         self.assertIn("NORMALZUSTAND", text)
         self.assertIn("planmaessig", text)
+
+
+class WorktreeExklusivTest(unittest.TestCase):
+    """Zwei Pushes, ein gemeinsamer Gate-Worktree - der zweite wartet.
+
+    GEMESSEN am 28.09.2026, 20:06: mein Gate 4 starb an "Datei von anderem
+    Prozess verwendet", Gate 5 an "hat NICHTS geschrieben" - ein fremder
+    push_gate-Lauf raeumte im selben Worktree auf, waehrend meine Editor-
+    laeufe liefen. Die Exklusivitaet ist ein ZUSTAND, kein Anspruch:
+    gewartet wird, bis keine fremde Engine mehr auf den Worktree zeigt
+    (Frist wie beim Lock-Warten), statt einen Anspruch zu kaempfen.
+    """
+
+    def setUp(self):
+        self.alt = (gw.fremde_engines, gw.drucke)
+        self.pausen = []
+        self.uhr_t = [1000.0]
+
+        def uhr():
+            self.uhr_t[0] += 11.0  # je Abfrage: ueber die 10-s-Pause hinaus
+            return self.uhr_t[0]
+
+        self.uhr = uhr
+        self.gelesen = io.StringIO()
+
+        def drucke(text, file=None):
+            self.gelesen.write(text + "\n")
+
+        self.drucke = drucke
+
+    def tearDown(self):
+        (gw.fremde_engines, gw.drucke) = self.alt
+
+    def test_frei_sofort_durchlassen(self):
+        gw.fremde_engines = lambda filter_path=None: []
+        gw.drucke = self.drucke
+        self.assertTrue(gw.worktree_exklusiv(
+            "Gate 4", warte_s=60.0, schlaf=self.pausen.append, uhr=self.uhr))
+        self.assertEqual(self.pausen, [])
+        self.assertEqual(self.gelesen.getvalue(), "")
+
+    def test_fremde_engine_wird_abgewartet(self):
+        zustand = [1]
+        empfangen = []
+
+        def engines(filter_path=None):
+            empfangen.append(filter_path)
+            alt = zustand[0]
+            zustand[0] -= 1
+            if alt:
+                return [{"pid": 999, "commandline": "UnrealEditor"}]
+            return []
+
+        gw.fremde_engines = engines
+        gw.drucke = self.drucke
+        self.assertTrue(gw.worktree_exklusiv(
+            "Gate 4", warte_s=600.0, schlaf=self.pausen.append, uhr=self.uhr,
+            filter_path="C:/wt/WiesbadenReal"))
+        self.assertEqual(self.pausen, [10.0])
+        self.assertIn("1 fremde Engine(s)", self.gelesen.getvalue())
+        self.assertIn("Gate 4", self.gelesen.getvalue())
+        # Der Filter-Pfad wird DURCHGEREICHT - sonst waere das Gate blind.
+        self.assertEqual(empfangen, ["C:/wt/WiesbadenReal"] * 2)
+
+    def test_frist_endet_mit_aufgeben(self):
+        gw.fremde_engines = lambda filter_path=None: [
+            {"pid": 999, "commandline": "UnrealEditor"}]
+        gw.drucke = self.drucke
+        self.assertFalse(gw.worktree_exklusiv(
+            "Gate 4", warte_s=50.0, schlaf=self.pausen.append, uhr=self.uhr))
+        self.assertIn("gibt auf", self.gelesen.getvalue())
+        self.assertIn("PID 999", self.gelesen.getvalue())
+
+    def test_pfadfilter_trennt_fremden_worktree(self):
+        # Der ECHTE Filter (fremde_engines): ein Editor, dessen Commandline
+        # den Gate-Worktree-Pfad nennt, wird gemeldet - ein Editor im
+        # HAUPTBAUM nicht. Getestet am gemockten PowerShell-Lauf, in
+        # Gross-/Kleinschreibung und Schraegstrichen toleriert.
+        worktree = "C:\\freebuff\\WiesbadenReal_Sicherung\\.gate-worktree\\WiesbadenReal"
+        prozesse = [
+            {"ProcessId": 11,
+             "CommandLine": "UnrealEditor-Cmd.exe -project=" + worktree + "\\WiesbadenReal.uproject"},
+            {"ProcessId": 22,
+             "CommandLine": "UnrealEditor.exe -project=C:\\freebuff\\WiesbadenReal_Sicherung\\WiesbadenReal\\WiesbadenReal.uproject"},
+        ]
+        antwort = mock.Mock(returncode=0, stdout=json.dumps(prozesse), stderr="")
+        with mock.patch.object(gw.subprocess, "run", return_value=antwort):
+            gemeldet = gw.fremde_engines(filter_path=worktree)
+        self.assertEqual([p["pid"] for p in gemeldet], [11])
+        # Ohne Filter: beide - der Filter ist die Grenze, nicht die Liste.
+        with mock.patch.object(gw.subprocess, "run", return_value=antwort):
+            alle = gw.fremde_engines()
+        self.assertEqual(sorted(p["pid"] for p in alle), [11, 22])
+        # Schraegstriche und Kleinschreibung im Pfad treffen trotzdem.
+        with mock.patch.object(gw.subprocess, "run", return_value=antwort):
+            gemeldet2 = gw.fremde_engines(
+                filter_path=worktree.replace("\\", "/").lower())
+        self.assertEqual([p["pid"] for p in gemeldet2], [11])
 
 
 if __name__ == "__main__":
