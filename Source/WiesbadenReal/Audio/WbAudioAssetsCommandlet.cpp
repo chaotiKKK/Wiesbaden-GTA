@@ -3,6 +3,7 @@
 #include "Audio/WbAudioAssetsCommandlet.h"
 
 #include "Audio/WiesbadenAudioPropagation.h"
+#include "Audio/WiesbadenAudioZones.h"
 #include "HAL/FileManager.h"
 #include "MetasoundBuilderSubsystem.h"
 #include "MetasoundFrontendDocument.h"
@@ -144,6 +145,17 @@ namespace
 
 namespace
 {
+	/**
+	 * Bausteine, die NICHT gebaut wurden.
+	 *
+	 * Ohne diesen Zaehler war "WbAudioAssets fertig: 12/12 Pakete gespeichert"
+	 * eine FALSCHE Erfolgsmeldung: ein nicht gebautes Asset legt gar kein
+	 * Paket an, also stimmte "gespeichert == gesammelt" auch dann, wenn vier
+	 * MetaSounds fehlten (28.09.2026: genau so blieben die MS_Step_* aus, und
+	 * der Pool-Test verglich 0 mit 0). Jedes "nicht gebaut" zaehlt hier.
+	 */
+	int32 GBuildFehler = 0;
+
 	// -- MetaSound-Kleinkram ---------------------------------------------
 	//
 	// Kleine Huelle um den UMetaSoundSourceBuilder: jedes Node und jeder Pin
@@ -156,16 +168,28 @@ namespace
 		FMetaSoundBuilderNodeInputHandle AudioOut;
 		bool bOk = true;
 
+		/**
+		 * Node (ueber Klasse) hinzufuegen.
+		 *
+		 * Die Hauptversion gehoert zum Node: ein Standard-Node kann in einer
+		 * neuen Hauptversion umbenannte Pins bekommen, und der Builder sucht
+		 * GENAU die angefragte Version. `AddNodeByClassName` hat als Vorgabe 1;
+		 * der "Biquad Filter" steht auf 2 (`MetasoundBasicFilters.cpp:820`,
+		 * `Info.MajorVersion = 2`) - mit der 1 meldet die Suche "Class not
+		 * found" und der ganze Graph faellt aus.
+		 */
 		FMetaSoundNodeHandle Node(FName Name, FName Variant,
-			FName InNamespace = Metasound::StandardNodes::Namespace)
+			FName InNamespace = Metasound::StandardNodes::Namespace,
+			int32 MajorVersion = 1)
 		{
 			EMetaSoundBuilderResult Result = EMetaSoundBuilderResult::Succeeded;
 			const FMetaSoundNodeHandle Handle = Builder->AddNodeByClassName(
-				FMetasoundFrontendClassName(InNamespace, Name, Variant), Result, 1);
+				FMetasoundFrontendClassName(InNamespace, Name, Variant), Result, MajorVersion);
 			if (Result != EMetaSoundBuilderResult::Succeeded)
 			{
 				UE_LOG(LogWbAudioAssets, Error,
-					TEXT("Baustein %s (Variante '%s') fehlt."), *Name.ToString(), *Variant.ToString());
+					TEXT("Baustein %s (Variante '%s', Hauptversion %d) fehlt."),
+					*Name.ToString(), *Variant.ToString(), MajorVersion);
 				bOk = false;
 			}
 			return Handle;
@@ -281,6 +305,7 @@ namespace
 		{
 			if (!bOk)
 			{
+				++GBuildFehler;
 				UE_LOG(LogWbAudioAssets, Error,
 					TEXT("%s nicht gebaut (siehe Fehler oben)."), *AssetName);
 				return nullptr;
@@ -289,6 +314,9 @@ namespace
 				PackageName, FName(*AssetName), Packages);
 			if (!Source)
 			{
+				++GBuildFehler;
+				UE_LOG(LogWbAudioAssets, Error,
+					TEXT("%s konnte nicht angelegt werden."), *AssetName);
 				return nullptr;
 			}
 #if WITH_EDITORONLY_DATA
@@ -305,6 +333,7 @@ namespace
 				TScriptInterface<IMetaSoundDocumentInterface>(Source);
 			if (!Builder->Build(Options).GetObject())
 			{
+				++GBuildFehler;
 				UE_LOG(LogWbAudioAssets, Error,
 					TEXT("Build fuer %s fehlgeschlagen."), *AssetName);
 				return nullptr;
@@ -327,6 +356,7 @@ namespace
 			EMetaSoundOutputAudioFormat::Mono, false);
 		if (!Builder || Result != EMetaSoundBuilderResult::Succeeded || AudioOuts.IsEmpty())
 		{
+			++GBuildFehler;
 			UE_LOG(LogWbAudioAssets, Error,
 				TEXT("Source-Geruest fuer %s fehlgeschlagen."), *AssetName);
 			return false;
@@ -368,6 +398,69 @@ namespace
 		BuildBed(Packages, TEXT("Room"), TEXT("One-Pole Low Pass Filter"), 90.0f);
 		BuildBed(Packages, TEXT("Birds"), TEXT("One-Pole High Pass Filter"), 1800.0f);
 		BuildBed(Packages, TEXT("Night"), TEXT("One-Pole High Pass Filter"), 3800.0f);
+	}
+
+	/**
+	 * Fussschritt: Rauschen -> Biquad-Bandpass (Material) -> Ausgang.
+	 *
+	 * Kein Sample, sondern parametrisch: die Bandpass-Mitte kommt aus
+	 * WiesbadenAudioZones::BandpassHzForSurface. Damit steht die
+	 * Materialunterscheidung im getesteten Code statt in einer WAV-Datei, und
+	 * eine spaeter gekaufte Aufnahme ersetzt genau diese eine Lage.
+	 *
+	 * Node- und Pin-Namen sind am Engine-Quelltext geprueft (UE 5.8,
+	 * MetasoundStandardNodes/Private/):
+	 *   Noise          -> Ausgang "Audio"          (MetasoundNoiseGenerator.cpp:215)
+	 *   Biquad Filter  -> "In", "Cutoff Frequency", "Type", Ausgang "Out"
+	 *                     (MetasoundBasicFilters.cpp:819ff) - und der Node
+	 *                     steht auf HAUPTVERSION 2 (siehe unten, ohne sie
+	 *                     findet der Builder die Klasse nicht)
+	 * Es gibt KEINEN Node "Band Pass Filter"; der heisst "Biquad Filter".
+	 * "One-Pole Low/High Pass Filter" sind eigene Nodes (Zeilen 529/664).
+	 *
+	 * Der "Type"-Pin ist ein Enum-Eingang und nicht ueber Graph.Input(float)
+	 * erreichbar - er wird ueber den Default(int32)-Helfer gesetzt (dasselbe
+	 * Muster wie beim WaveShaper-Typ des Motors).
+	 */
+	void BuildFootsteps(TArray<UPackage*>& Packages)
+	{
+		for (uint8 Index = 0; Index < static_cast<uint8>(EWbFootstepSurface::MAX); ++Index)
+		{
+			const EWbFootstepSurface Surface = static_cast<EWbFootstepSurface>(Index);
+			const FString SurfaceLabel = WiesbadenAudioZones::SurfaceName(Surface);
+			const FString AssetName = FString::Printf(TEXT("MS_Step_%s"), *SurfaceLabel);
+
+			FGraph Graph;
+			if (!StartGraph(Graph, AssetName))
+			{
+				continue;
+			}
+
+			const FMetaSoundNodeHandle Noise =
+				Graph.Node(FName(TEXT("Noise")), Metasound::StandardNodes::AudioVariant);
+			// Hauptversion 2 - siehe FGraph::Node. Mit der Vorgabe 1 meldet die
+			// Suche "Class not found" und der ganze Schritt faellt aus.
+			const FMetaSoundNodeHandle Filter = Graph.Node(
+				FName(TEXT("Biquad Filter")), Metasound::StandardNodes::AudioVariant,
+				Metasound::StandardNodes::Namespace, /*MajorVersion*/ 2);
+
+			Graph.Wire(Noise, TEXT("Audio"), Filter, TEXT("In"));
+			Graph.Input(TEXT("Cutoff Hz"), Filter, TEXT("Cutoff Frequency"),
+				WiesbadenAudioZones::BandpassHzForSurface(Surface), true);
+
+			// Filtertyp AUSDRUECKLICH auf Bandpass. Der Vorgabewert des Datentyps
+			// ist Lowpass (`DECLARE_METASOUND_ENUM(Audio::EBiquadFilter::Type,
+			// Audio::EBiquadFilter::Lowpass, ...)` in MetasoundBasicFilters.cpp,
+			// und der "Type"-Vertex hat keinen eigenen Vorgabewert). Ohne diese
+			// Zeile waere aus dem gemeinten Bandpass (2200/1400/620/900 Hz) ein
+			// Tiefpass bei derselben Grenze geworden - Klang, aber nicht der
+			// geplante. 2 = Audio::EBiquadFilter::Bandpass (Lowpass 0, Highpass 1).
+			Graph.Default(Filter, TEXT("Type"), 2);
+			Graph.ToAudioOut(Filter, TEXT("Out"));
+
+			Graph.Finish(FString::Printf(TEXT("/Game/Audio/Meta/%s"), *AssetName),
+				AssetName, Packages);
+		}
 	}
 
 	/**
@@ -696,10 +789,14 @@ int32 UWbAudioAssetsCommandlet::Main(const FString& Params)
 	TArray<UPackage*> Packages;
 	BuildPropagationAssets(Packages);
 	BuildAmbienceBeds(Packages);
+	BuildFootsteps(Packages);
 	BuildEngineSource(Packages);
 
 	const int32 Saved = SaveAll(Packages);
+	// Die Fehlerzahl steht in DERSELBEN Zeile wie die Pakete: sonst liest sich
+	// "12/12" wie ein voller Erfolg, obwohl vier Bausteine fehlen.
 	UE_LOG(LogWbAudioAssets, Display,
-		TEXT("WbAudioAssets fertig: %d/%d Pakete gespeichert."), Saved, Packages.Num());
-	return (Saved == Packages.Num()) ? 0 : 1;
+		TEXT("WbAudioAssets fertig: %d/%d Pakete gespeichert, %d Baustein(e) nicht gebaut."),
+		Saved, Packages.Num(), GBuildFehler);
+	return (GBuildFehler == 0 && Saved == Packages.Num()) ? 0 : 1;
 }

@@ -14,7 +14,12 @@
  *   /Game/Audio/Mix/SFXP_Reverb        Hall-Preset (Raumklassen-Parameter)
  *   /Game/Audio/Mix/CON_WbSfx          Concurrency-Defaults
  *   /Game/Audio/Meta/MS_Amb*           Ambience-Betten (MetaSound)
+ *   /Game/Audio/Meta/MS_Step*          Fussschritte je Oberflaeche (MetaSound)
  *   /Game/Audio/Meta/MS_EngineBoxer    Fahrzeug-Layer (MetaSound)
+ *
+ * Rueckgabe 0 heisst: JEDES Paket gespeichert UND kein Baustein ausgefallen.
+ * Ein nicht gebauter Graph taucht sonst nirgends auf - die Paketzahl allein
+ * war schon einmal eine falsche Erfolgsmeldung (siehe GBuildFehler im .cpp).
  *
  * Als Commandlet statt Python, weil die Struct-Felder (Attenuation-Settings,
  * Reverb-Settings) hier typgeprueft sind und die MetaSound-Graphen ueber den
