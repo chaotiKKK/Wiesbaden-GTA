@@ -138,6 +138,11 @@ AWiesbadenCar::AWiesbadenCar()
 
 	BodyMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BodyMesh"));
 	BodyMesh->SetupAttachment(SprungRoot);
+	// Die Bremsspuren (UWiesbadenTireEffectsComponent) werden mit 60 cm
+	// Projektionstiefe unter die Raeder gelegt - ohne diese Zeile landeten sie
+	// als dunkle Flecken auf Tuer und Schweller (Clip 29.09.2026). Im Konstruktor
+	// das Flag direkt setzen, wie bei jedem Standardwert eines Unterobjekts.
+	BodyMesh->bReceivesDecals = false;
 
 	switch (Assembly.Body)
 	{
@@ -213,6 +218,7 @@ AWiesbadenCar::AWiesbadenCar()
 		Wheel->SetupAttachment(VisualRoot);
 		Wheel->SetRelativeLocation(WheelPositions[Index]);
 		Wheel->SetRelativeScale3D(WheelScale);
+		Wheel->bReceivesDecals = false;   // Bremsspuren gehoeren auf die Strasse
 
 		if (BeetleWheel)
 		{
