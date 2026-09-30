@@ -78,6 +78,13 @@ private:
 	TWeakObjectPtr<APawn> Wagen;
 	bool bMitFahrer = false;
 	bool bFahrerFehler = false;
+	/** Der Fahrer hat die externe Steuerung gesetzt und noch nicht geloest -
+	 *  nur dann loest der Parcours sie (einmal), nie eine fremde (WbDrive). */
+	bool bSteuertWagen = false;
+	/** Pose des letzten Ticks: ein Sprung > 50 m in einem Bild ist ein
+	 *  Versetzen (-WbGoto, WbTeleport), kein Wegfahren. */
+	FVector LetztePos = FVector::ZeroVector;
+	bool bHatLetztePos = false;
 	bool bAufgebaut = false;
 
 	// Aufbau erst, wenn der Wagen 1 s ruhig steht - ein -WbGoto versetzt ihn

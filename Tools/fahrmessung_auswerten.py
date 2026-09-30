@@ -46,7 +46,11 @@ def zeit_aus_dem_stand(proben, start, kmh):
     Erreichen von kmh wird zwischen zwei Zeilen interpoliert.
     """
     p0 = proben[start]
-    t0 = p0["t"] - (p0["v"] / 3.6) / p0["ax"] if p0["ax"] > 0.1 else p0["t"]
+    # Hoechstens 1 s zurueck: die Zeilen kommen mit 10 Hz, die erste Gaszeile
+    # liegt ~0,4 s nach dem Anfahren. Rollt der Wagen dort schon mit wenig
+    # Beschleunigung (Gefaelle), wuerde v/ax sonst Sekunden erfinden.
+    zurueck = (p0["v"] / 3.6) / p0["ax"] if p0["ax"] > 0.1 else 0.0
+    t0 = p0["t"] - min(zurueck, 1.0)
     for a, b in zip(proben[start:], proben[start + 1:]):
         if a["v"] < kmh <= b["v"]:
             return a["t"] + (b["t"] - a["t"]) * (kmh - a["v"]) / (b["v"] - a["v"]) - t0

@@ -59,9 +59,10 @@ void AWiesbadenParcours::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (IWiesbadenVehicleControl* Ctrl = Cast<IWiesbadenVehicleControl>(Wagen.Get()))
 	{
-		if (bMitFahrer)
+		if (bSteuertWagen)
 		{
 			Ctrl->ClearExternalControl();
+			bSteuertWagen = false;
 		}
 	}
 	Super::EndPlay(EndPlayReason);
@@ -186,6 +187,7 @@ void AWiesbadenParcours::Aufbauen()
 		Kegel.Add(K);
 	}
 	bAufgebaut = true;
+	bHatLetztePos = false;
 	TaktSekunden = 0.0f;
 	NachZielSekunden = -1.0f;
 	UE_LOG(LogWbCore, Log,
@@ -252,8 +254,14 @@ void AWiesbadenParcours::Tick(float DeltaSeconds)
 	P.bHandbremse = Ctrl && Ctrl->IsHandbrakeApplied();
 	P.DtSekunden = DeltaSeconds;
 
-	// Vor dem Start versetzt (-WbGoto, WbTeleport): an der neuen Stelle neu aufbauen.
-	if (Bewertung.GetAbschnitt() == EWbParcoursAbschnitt::Bereit && P.PosCm.Size() > 20000.0f)
+	// Vor dem Start VERSETZT (-WbGoto, WbTeleport - ein Sprung in einem Bild):
+	// an der neuen Stelle neu aufbauen. Wegfahren vor dem Start ist erlaubt;
+	// frueher zaehlte schon "200 m weg", und der Parcours landete an der
+	// naechsten roten Ampel quer auf der Strasse (Review PR #27).
+	const bool bVersetzt = bHatLetztePos && FVector::Dist2D(Pos, LetztePos) > 5000.0f;
+	LetztePos = Pos;
+	bHatLetztePos = true;
+	if (Bewertung.GetAbschnitt() == EWbParcoursAbschnitt::Bereit && bVersetzt)
 	{
 		bAufgebaut = false;
 		RuheSekunden = 0.0f;
@@ -287,16 +295,21 @@ void AWiesbadenParcours::Tick(float DeltaSeconds)
 			C.Steering = S.Lenkung;
 			C.bHandbrake = S.bHandbremse;
 			Ctrl->SetExternalControl(C);
+			bSteuertWagen = true;
 		}
 		else if (NachZielSekunden < 3.0f)
 		{
 			FWiesbadenCarControl C;
 			C.Brake = 1.0f;
 			Ctrl->SetExternalControl(C);
+			bSteuertWagen = true;
 		}
-		else if (Ctrl->IsExternalControlActive())
+		else if (bSteuertWagen)
 		{
+			// EINMAL loesen - danach gehoert die Steuerung wieder anderen
+			// (Tastatur, WbDrive, Bus). Vorher loeste er jede fremde je Bild.
 			Ctrl->ClearExternalControl();
+			bSteuertWagen = false;
 		}
 
 		// Fahrer-Takt im Log: so laesst sich ein Nachweislauf ohne Bild verfolgen.
@@ -337,7 +350,7 @@ void AWiesbadenParcours::AmZiel()
 
 bool AWiesbadenParcours::HudSichtbar() const
 {
-	return bAufgebaut && (NachZielSekunden < 0.0f || NachZielSekunden < 20.0f);
+	return bAufgebaut && NachZielSekunden < 20.0f;   // -1 = noch nicht im Ziel
 }
 
 FString AWiesbadenParcours::HudTitel() const

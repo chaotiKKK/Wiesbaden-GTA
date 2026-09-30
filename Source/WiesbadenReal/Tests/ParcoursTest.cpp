@@ -152,6 +152,31 @@ bool FParcoursBewertungTest::RunTest(const FString& Parameters)
 			&& B.GetStrafSekunden() == FWbParcoursBewertung::StrafeZuLangsam);
 	}
 
+	// -- Zurueck und erneut vorbei: ein Slalomkegel zaehlt nur einmal ---------
+	{
+		FWbParcoursBewertung B(L);
+		Fahre(B, FVector2D(-500, 0), FVector2D(1500, 0), 30.0f);
+		Fahre(B, FVector2D(1500, 250), FVector2D(3000, 250), 30.0f);    // rechts vorbei: Fehler
+		Fahre(B, FVector2D(3000, 250), FVector2D(1500, 250), 10.0f);    // zurueckgesetzt
+		Fahre(B, FVector2D(1500, 250), FVector2D(3000, 250), 30.0f);    // noch einmal rechts
+		TestEqual(TEXT("Derselbe Kegel zaehlt nur einmal"), B.GetErgebnis().TorFehler, 1);
+	}
+
+	// -- Sauberkeit folgt dem GEWERTETEN Layout, nicht dem Standard ------------
+	{
+		FWbParcoursLayout Streng = L;
+		Streng.MindestKmhAnBremslinie = 50.0f;
+		FWbParcoursBewertung B(Streng);
+		const float X = Slalom(B);
+		Fahre(B, FVector2D(X, 0), FVector2D(Streng.BremslinieX + 200.0f, 0), 45.0f);
+		const FWbParcoursErgebnis E = B.GetErgebnis();
+		TestTrue(TEXT("45 km/h bei Mindestens 50: Strafe"), E.bZuLangsam && E.StrafSekunden == FWbParcoursBewertung::StrafeZuLangsam);
+		FWbParcoursErgebnis Nur = E;
+		Nur.bAngehalten = true;   // nur die Linie bewerten
+		Nur.bHandbremseGenutzt = true;
+		TestEqual(TEXT("... und dieselbe Sauberkeitsminderung"), FWbParcoursBewertung::BerechneSauberkeit(Nur), 90);
+	}
+
 	// -- Medaillen ------------------------------------------------------------
 	TestEqual(TEXT("Gold braucht Sauberkeit"), FWbParcoursBewertung::BerechneMedaille(44.0f, 80), FString(TEXT("Silber")));
 	TestEqual(TEXT("Gold"), FWbParcoursBewertung::BerechneMedaille(44.0f, 100), FString(TEXT("Gold")));

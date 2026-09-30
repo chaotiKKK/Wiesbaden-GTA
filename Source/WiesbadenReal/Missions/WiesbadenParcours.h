@@ -83,6 +83,8 @@ struct WIESBADENREAL_API FWbParcoursErgebnis
 	int32 TorFehler = 0;
 	float KmhAnBremslinie = 0.0f;
 	bool bAngehalten = false;
+	bool bNichtAngehalten = false;
+	bool bZuLangsam = false;
 	/** Abstand des Haltepunkts zur Stoppbox (m), 0 = in der Box. */
 	float StoppAbweichungM = 0.0f;
 	bool bHandbremseGenutzt = false;
@@ -139,6 +141,7 @@ private:
 	FWbParcoursLayout Layout;
 	TArray<FVector2D> Kegel;
 	TArray<bool> KegelUmgefahren;
+	TArray<bool> SlalomGewertet;   // jede Seite nur beim ersten Passieren
 	TArray<int32> NeuUmgefahren;
 	TArray<FString> NeueMeldungen;
 

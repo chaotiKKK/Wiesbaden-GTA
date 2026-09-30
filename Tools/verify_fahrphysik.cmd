@@ -22,6 +22,9 @@ REM (Tools\test_cmd_exitcode.py).
 set "RUNRC=0"
 if /i not "%~1"=="-NurPruefen" (
   echo == Fahrphysik-Gate: Messfahrt
+  REM Altes Log weg: endet der Editor ohne neues Log, darf das Gate nicht
+  REM die gruene Fahrt von gestern bewerten (Review PR #27).
+  if exist "!LOG!" del "!LOG!"
   call "%PROJ%\Tools\fahrmessung.cmd" gate_fahrphysik 40
   set "RUNRC=!errorlevel!"
 )

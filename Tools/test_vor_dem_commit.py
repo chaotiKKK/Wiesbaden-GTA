@@ -607,6 +607,14 @@ class FahrphysikGateTest(unittest.TestCase):
         self.assertIn("goto :nicht_gemessen", text,
                       "'nicht gemessen' (Exit 2) muss rot werden, nicht gruen")
 
+    def test_der_starter_bewertet_kein_altes_log(self):
+        """Endet der Editor ohne neues Log, darf die gruene Fahrt von gestern
+        nicht bewertet werden - der Starter raeumt das Log vor der Fahrt."""
+        text = (WURZEL / "Tools" / "verify_fahrphysik.cmd").read_text(
+            encoding="utf-8", errors="replace")
+        self.assertIn('if exist "!LOG!" del "!LOG!"', text)
+        self.assertLess(text.index('del "!LOG!"'), text.index("fahrmessung.cmd\" gate_fahrphysik"))
+
     def test_die_sperre_bleibt_beim_umschliessenden_lauf(self):
         """Im Push haelt der Hook die Sperre; Unterlaeufe (Gate 4, Gate 7)
         rufen Freigeben - das Sperr-Skript muss die Sperre dann stehen lassen.

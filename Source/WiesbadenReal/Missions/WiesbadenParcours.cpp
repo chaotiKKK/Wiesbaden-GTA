@@ -58,6 +58,7 @@ FWbParcoursBewertung::FWbParcoursBewertung(const FWbParcoursLayout& InLayout)
 	, Kegel(InLayout.AlleKegel())
 {
 	KegelUmgefahren.Init(false, Kegel.Num());
+	SlalomGewertet.Init(false, Layout.SlalomKegel.Num());
 }
 
 bool FWbParcoursBewertung::IstAktiv() const
@@ -137,8 +138,11 @@ void FWbParcoursBewertung::Schritt(const FWbParcoursProbe& P)
 		for (int32 I = 0; I < Layout.SlalomKegel.Num(); ++I)
 		{
 			const FVector2D& K = Layout.SlalomKegel[I];
-			if (Vorige.X < K.X && Pos.X >= K.X)
+			// Nur das ERSTE Passieren zaehlt - zurueckgesetzt und erneut
+			// vorbei kostet nicht noch einmal (Review PR #27).
+			if (!SlalomGewertet[I] && Vorige.X < K.X && Pos.X >= K.X)
 			{
+				SlalomGewertet[I] = true;
 				const bool bLinks = Pos.Y < K.Y;
 				const bool bSollLinks = (I % 2) == 0;
 				if (bLinks != bSollLinks)
@@ -268,7 +272,7 @@ int32 FWbParcoursBewertung::BerechneSauberkeit(const FWbParcoursErgebnis& E)
 	S -= 8.0f * E.KegelGetroffen;
 	S -= 15.0f * E.TorFehler;
 	S -= E.bAngehalten ? FMath::Min(6.0f * E.StoppAbweichungM, 30.0f) : 20.0f;
-	S -= E.KmhAnBremslinie > 0.0f && E.KmhAnBremslinie < FWbParcoursLayout().MindestKmhAnBremslinie ? 10.0f : 0.0f;
+	S -= E.bZuLangsam ? 10.0f : 0.0f;   // aus dem gewerteten Lauf, nicht aus einem Standard-Layout
 	S -= E.bHandbremseGenutzt ? 0.0f : 10.0f;
 	S -= E.bWendezoneVerfehlt ? 10.0f : 0.0f;
 	return FMath::Clamp(FMath::RoundToInt(S), 0, 100);
@@ -294,6 +298,8 @@ FWbParcoursErgebnis FWbParcoursBewertung::GetErgebnis() const
 	E.TorFehler = TorFehler;
 	E.KmhAnBremslinie = KmhAnBremslinie;
 	E.bAngehalten = bAngehalten;
+	E.bNichtAngehalten = bNichtAngehalten;
+	E.bZuLangsam = bZuLangsam;
 	E.StoppAbweichungM = StoppAbweichungM;
 	E.bHandbremseGenutzt = bHandbremseInWende;
 	E.bWendezoneVerfehlt = bWendezoneVerfehlt;

@@ -25,6 +25,13 @@ class ZeitAusDemStand(unittest.TestCase):
         # 50 km/h = 13,89 m/s -> 6,94 s bei 2 m/s^2
         self.assertAlmostEqual(fa.zeit_aus_dem_stand(proben, start, 50.0), 50.0 / 3.6 / 2.0, places=2)
 
+    def test_rueckrechnung_hoechstens_eine_sekunde(self):
+        """Rollt der Wagen an der ersten Gaszeile schon (Gefaelle), erfindet
+        v/ax sonst Sekunden: 3 km/h bei 0,15 m/s2 waeren 5,6 s."""
+        proben = [probe(1.0, 3.0, 0.15), probe(1.1, 3.1, 0.15), probe(1.2, 60.0, 5.0)]
+        zeit = fa.zeit_aus_dem_stand(proben, 0, 50.0)
+        self.assertLess(zeit, 2.5, "Start %.1f s zurueckgerechnet" % zeit)
+
     def test_nie_erreicht(self):
         proben = [probe(0.5, 5.0, 3.0), probe(0.6, 6.0, 3.0)]
         self.assertIsNone(fa.zeit_aus_dem_stand(proben, 0, 100.0))
