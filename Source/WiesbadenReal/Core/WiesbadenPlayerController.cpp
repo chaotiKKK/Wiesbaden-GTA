@@ -514,7 +514,7 @@ void AWiesbadenPlayerController::WbDrive(int32 Sekunden)
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbDrive - Fahrprofil fuer %d s gestartet."), Dauer);
 }
 
-void AWiesbadenPlayerController::WbParcours(int32 Fahrer)
+void AWiesbadenPlayerController::WbParcours(int32 Fahrer, int32 Regen)
 {
 	APawn* ControlledPawn = GetPawn();
 	if (!Cast<IWiesbadenVehicleControl>(ControlledPawn) || !GetWorld())
@@ -531,11 +531,19 @@ void AWiesbadenPlayerController::WbParcours(int32 Fahrer)
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	AWiesbadenParcours* Parcours = GetWorld()->SpawnActor<AWiesbadenParcours>(
 		ControlledPawn->GetActorLocation(), FRotator::ZeroRotator, Params);
+	if (Regen != 0)
+	{
+		if (UWiesbadenCitySubsystem* City = GetWorld()->GetSubsystem<UWiesbadenCitySubsystem>())
+		{
+			City->SetWeatherTarget(ECityWeatherPreset::Rain);
+		}
+	}
 	if (Parcours)
 	{
-		Parcours->Starten(ControlledPawn, Fahrer);
+		Parcours->Starten(ControlledPawn, Fahrer, Regen != 0);
 	}
-	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbParcours - Parcours wird vor dem Wagen aufgebaut (Fahrer %d)."), Fahrer);
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbParcours - Parcours wird vor dem Wagen aufgebaut (Fahrer %d%s)."),
+		Fahrer, Regen != 0 ? TEXT(", Regen") : TEXT(""));
 }
 
 // Autopilot-Komponente on-demand am Helikopter anlegen (wie der Test-Harness):

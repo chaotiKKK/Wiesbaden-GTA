@@ -2,6 +2,8 @@
 
 #include "Missions/WiesbadenParcours.h"
 
+#include "Misc/ConfigCacheIni.h"
+
 const TCHAR* WbParcoursAbschnittName(EWbParcoursAbschnitt Abschnitt)
 {
 	switch (Abschnitt)
@@ -122,13 +124,15 @@ void FWbParcoursBewertung::Schritt(const FWbParcoursProbe& P)
 		{
 			Abschnitt = EWbParcoursAbschnitt::Slalom;
 			Fahrzeit = 0.0f;
-			NeueMeldungen.Add(TEXT("Start"));
+			MaxBelagsGrip = P.BelagsGrip;
+			NeueMeldungen.Add(IstRegen() ? TEXT("Start - Regenwertung") : TEXT("Start"));
 		}
 		Vorige = Pos;
 		return;
 	}
 
 	Fahrzeit += P.DtSekunden;
+	MaxBelagsGrip = FMath::Max(MaxBelagsGrip, P.BelagsGrip);
 	PruefeKegel(P);
 
 	switch (Abschnitt)
@@ -266,6 +270,11 @@ TArray<FString> FWbParcoursBewertung::HoleNeueMeldungen()
 	return Out;
 }
 
+bool FWbParcoursBewertung::IstRegen() const
+{
+	return Abschnitt != EWbParcoursAbschnitt::Bereit && MaxBelagsGrip <= RegenGripBis;
+}
+
 int32 FWbParcoursBewertung::BerechneSauberkeit(const FWbParcoursErgebnis& E)
 {
 	float S = 100.0f;
@@ -278,11 +287,11 @@ int32 FWbParcoursBewertung::BerechneSauberkeit(const FWbParcoursErgebnis& E)
 	return FMath::Clamp(FMath::RoundToInt(S), 0, 100);
 }
 
-FString FWbParcoursBewertung::BerechneMedaille(float GesamtSekunden, int32 Sauberkeit)
+FString FWbParcoursBewertung::BerechneMedaille(float GesamtSekunden, int32 Sauberkeit, bool bRegen)
 {
-	if (GesamtSekunden <= GoldSekunden && Sauberkeit >= 90) { return TEXT("Gold"); }
-	if (GesamtSekunden <= SilberSekunden) { return TEXT("Silber"); }
-	if (GesamtSekunden <= BronzeSekunden) { return TEXT("Bronze"); }
+	if (GesamtSekunden <= (bRegen ? GoldSekundenRegen : GoldSekunden) && Sauberkeit >= 90) { return TEXT("Gold"); }
+	if (GesamtSekunden <= (bRegen ? SilberSekundenRegen : SilberSekunden)) { return TEXT("Silber"); }
+	if (GesamtSekunden <= (bRegen ? BronzeSekundenRegen : BronzeSekunden)) { return TEXT("Bronze"); }
 	return TEXT("ohne Medaille");
 }
 
@@ -304,8 +313,39 @@ FWbParcoursErgebnis FWbParcoursBewertung::GetErgebnis() const
 	E.bHandbremseGenutzt = bHandbremseInWende;
 	E.bWendezoneVerfehlt = bWendezoneVerfehlt;
 	E.Sauberkeit = BerechneSauberkeit(E);
-	E.Medaille = E.bImZiel ? BerechneMedaille(E.GesamtSekunden, E.Sauberkeit) : FString();
+	E.bRegen = IstRegen();
+	E.BelagsGripMax = MaxBelagsGrip;
+	E.Medaille = E.bImZiel ? BerechneMedaille(E.GesamtSekunden, E.Sauberkeit, E.bRegen) : FString();
 	return E;
+}
+
+// -- Bestzeit ---------------------------------------------------------------
+
+namespace
+{
+	const TCHAR* const BestzeitAbschnitt = TEXT("WiesbadenReal.Parcours");
+
+	const TCHAR* BestzeitSchluessel(bool bRegen)
+	{
+		return bRegen ? TEXT("BestzeitRegen") : TEXT("BestzeitTrocken");
+	}
+}
+
+float FWbParcoursBestzeit::Lesen(const FConfigFile& Ini, bool bRegen)
+{
+	float Sekunden = 0.0f;
+	return Ini.GetFloat(BestzeitAbschnitt, BestzeitSchluessel(bRegen), Sekunden) && Sekunden > 0.0f ? Sekunden : 0.0f;
+}
+
+bool FWbParcoursBestzeit::Eintragen(FConfigFile& Ini, bool bRegen, float GesamtSekunden)
+{
+	const float Bisher = Lesen(Ini, bRegen);
+	if (GesamtSekunden <= 0.0f || (Bisher > 0.0f && GesamtSekunden >= Bisher))
+	{
+		return false;
+	}
+	Ini.SetFloat(BestzeitAbschnitt, BestzeitSchluessel(bRegen), GesamtSekunden);
+	return true;
 }
 
 // -- Fahrer -----------------------------------------------------------------
@@ -366,6 +406,7 @@ FWbParcoursSteuerung FWbParcoursFahrer::Steuern(const FWbParcoursProbe& P, EWbPa
 	FWbParcoursSteuerung S;
 	const float X = P.PosCm.X;
 	const float Vorausschau = FMath::Clamp(P.Kmh / 3.6f * 80.0f, 450.0f, 1200.0f);
+	const float Nass = FMath::Sqrt(FMath::Clamp(P.BelagsGrip, 0.1f, 1.0f));
 
 	switch (Abschnitt)
 	{
@@ -380,7 +421,7 @@ FWbParcoursSteuerung FWbParcoursFahrer::Steuern(const FWbParcoursProbe& P, EWbPa
 			Zy = Layout.SlalomKegel[1].Y;   // geradewegs ueber Kegel 2
 		}
 		S.Lenkung = LenkungZu(P, FVector2D(Zx, Zy));
-		TempoHalten(S, P.Kmh, 27.0f);
+		TempoHalten(S, P.Kmh, 27.0f * Nass);
 		break;
 	}
 	case EWbParcoursAbschnitt::Bremsen:
@@ -390,7 +431,7 @@ FWbParcoursSteuerung FWbParcoursFahrer::Steuern(const FWbParcoursProbe& P, EWbPa
 		{
 			// 55 km/h an der Linie: Bremsweg ~16 m -> Halt mitten in der Box
 			// (mit Vollgas kam er mit 64 km/h an und stand 10 cm dahinter).
-			TempoHalten(S, P.Kmh, bFehlerMachen ? 30.0f : 55.0f);
+			TempoHalten(S, P.Kmh, bFehlerMachen ? 30.0f : 55.0f * Nass);
 		}
 		else
 		{
@@ -407,7 +448,7 @@ FWbParcoursSteuerung FWbParcoursFahrer::Steuern(const FWbParcoursProbe& P, EWbPa
 		if (!bWendeBegonnen)
 		{
 			S.Lenkung = LenkungZu(P, FVector2D(X + Vorausschau, 0.0f));
-			TempoHalten(S, P.Kmh, 38.0f);
+			TempoHalten(S, P.Kmh, 38.0f * Nass);
 		}
 		else if (FMath::Abs(P.KursGrad) < 120.0f && P.Kmh > 8.0f)
 		{

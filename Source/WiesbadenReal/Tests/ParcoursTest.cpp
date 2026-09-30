@@ -3,13 +3,15 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 
+#include "Misc/ConfigCacheIni.h"
 #include "Missions/WiesbadenParcours.h"
 #include "Vehicles/WiesbadenVehiclePhysics.h"
 
 namespace
 {
 	// Faehrt die Bewertung geradlinig von A nach B (10-cm-Schritte, 0,01 s je Schritt).
-	void Fahre(FWbParcoursBewertung& B, FVector2D Von, FVector2D Bis, float Kmh, float Kurs = 0.0f, bool bHandbremse = false)
+	void Fahre(FWbParcoursBewertung& B, FVector2D Von, FVector2D Bis, float Kmh, float Kurs = 0.0f, bool bHandbremse = false,
+		float Grip = 1.0f)
 	{
 		const int32 Schritte = FMath::Max(1, FMath::CeilToInt(FVector2D::Distance(Von, Bis) / 10.0f));
 		for (int32 I = 1; I <= Schritte; ++I)
@@ -20,6 +22,7 @@ namespace
 			P.Kmh = Kmh;
 			P.bHandbremse = bHandbremse;
 			P.DtSekunden = 0.01f;
+			P.BelagsGrip = Grip;
 			B.Schritt(P);
 		}
 	}
@@ -177,11 +180,56 @@ bool FParcoursBewertungTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("... und dieselbe Sauberkeitsminderung"), FWbParcoursBewertung::BerechneSauberkeit(Nur), 90);
 	}
 
+	// -- Regen-Variante: nur, wenn die GANZE Runde nass war --------------------
+	{
+		FWbParcoursBewertung B(L);
+		Fahre(B, FVector2D(-500, 0), FVector2D(-100, 0), 30.0f);   // vor dem Start trocken: zaehlt nicht
+		Fahre(B, FVector2D(-100, 0), FVector2D(1500, 0), 30.0f, 0.0f, false, 0.65f);
+		TestTrue(TEXT("Nass ab dem Start: Regenwertung"), B.IstRegen() && B.GetErgebnis().bRegen);
+		Fahre(B, FVector2D(1500, 0), FVector2D(1600, 0), 30.0f, 0.0f, false, 0.9f);
+		Fahre(B, FVector2D(1600, 0), FVector2D(1700, 0), 30.0f, 0.0f, false, 0.65f);
+		TestFalse(TEXT("Wird die Strasse unterwegs trocken: trockene Wertung"), B.IstRegen());
+		TestEqual(TEXT("... das Ergebnis traegt das Maximum der Runde"), B.GetErgebnis().BelagsGripMax, 0.9f);
+	}
+	{
+		FWbParcoursBewertung B(L);
+		Fahre(B, FVector2D(-500, 0), FVector2D(1500, 0), 30.0f, 0.0f, false, 0.79f);
+		TestFalse(TEXT("Schnee (Grip 0,79) ist keine Regenwertung"), B.IstRegen());
+	}
+
 	// -- Medaillen ------------------------------------------------------------
 	TestEqual(TEXT("Gold braucht Sauberkeit"), FWbParcoursBewertung::BerechneMedaille(44.0f, 80), FString(TEXT("Silber")));
 	TestEqual(TEXT("Gold"), FWbParcoursBewertung::BerechneMedaille(44.0f, 100), FString(TEXT("Gold")));
 	TestEqual(TEXT("Bronze"), FWbParcoursBewertung::BerechneMedaille(60.0f, 100), FString(TEXT("Bronze")));
 	TestEqual(TEXT("Zu langsam: keine Medaille"), FWbParcoursBewertung::BerechneMedaille(90.0f, 100), FString(TEXT("ohne Medaille")));
+	using FB = FWbParcoursBewertung;
+	TestTrue(TEXT("Regengrenzen liegen hinter den trockenen"), FB::GoldSekundenRegen > FB::GoldSekunden
+		&& FB::SilberSekundenRegen > FB::SilberSekunden && FB::BronzeSekundenRegen > FB::BronzeSekunden);
+	const float ZwischenGold = 0.5f * (FB::GoldSekunden + FB::GoldSekundenRegen);
+	TestEqual(TEXT("Zwischen den Goldgrenzen: trocken Silber"), FB::BerechneMedaille(ZwischenGold, 100, false), FString(TEXT("Silber")));
+	TestEqual(TEXT("... im Regen Gold"), FB::BerechneMedaille(ZwischenGold, 100, true), FString(TEXT("Gold")));
+	TestEqual(TEXT("Regen-Gold braucht auch Sauberkeit"), FB::BerechneMedaille(ZwischenGold, 80, true), FString(TEXT("Silber")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FParcoursBestzeitTest,
+	"WiesbadenReal.Missions.Parcours.Bestzeit",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FParcoursBestzeitTest::RunTest(const FString& Parameters)
+{
+	// Eigene Ini im Speicher - die Spieler-Einstellungen bleiben unberuehrt.
+	FConfigFile Ini;
+	TestEqual(TEXT("Anfangs keine Bestzeit"), FWbParcoursBestzeit::Lesen(Ini, false), 0.0f);
+	TestTrue(TEXT("Die erste Zeit ist Bestzeit"), FWbParcoursBestzeit::Eintragen(Ini, false, 50.0f));
+	TestFalse(TEXT("Langsamer: keine Bestzeit"), FWbParcoursBestzeit::Eintragen(Ini, false, 55.0f));
+	TestFalse(TEXT("Gleich schnell: keine Bestzeit"), FWbParcoursBestzeit::Eintragen(Ini, false, 50.0f));
+	TestTrue(TEXT("Schneller: neue Bestzeit"), FWbParcoursBestzeit::Eintragen(Ini, false, 48.5f));
+	TestEqual(TEXT("... und sie steht drin"), FWbParcoursBestzeit::Lesen(Ini, false), 48.5f);
+	TestEqual(TEXT("Regen hat eine eigene Bestzeit"), FWbParcoursBestzeit::Lesen(Ini, true), 0.0f);
+	TestTrue(TEXT("Regen: erste Zeit ist Bestzeit"), FWbParcoursBestzeit::Eintragen(Ini, true, 60.0f));
+	TestEqual(TEXT("... die trockene bleibt"), FWbParcoursBestzeit::Lesen(Ini, false), 48.5f);
+	TestFalse(TEXT("Keine Zeit (0 s) traegt nichts ein"), FWbParcoursBestzeit::Eintragen(Ini, true, 0.0f));
 	return true;
 }
 
@@ -198,7 +246,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FParcoursFahrerTest,
 bool FParcoursFahrerTest::RunTest(const FString& Parameters)
 {
 	// Eine Runde mit der echten Kaefer-Physik; die Pose wird wie im Spiel integriert.
-	auto Runde = [](bool bFehler, FString& Info)
+	auto Runde = [](bool bFehler, float Grip, FString& Info)
 	{
 		const FWbParcoursLayout L = FWbParcoursLayout::Standard();
 		FWbParcoursBewertung B(L);
@@ -221,6 +269,7 @@ bool FParcoursFahrerTest::RunTest(const FString& Parameters)
 			P.KursGrad = FMath::UnwindDegrees(KursGrad);
 			P.Kmh = FMath::Abs(V.SpeedMetersPerS) * 3.6f;
 			P.DtSekunden = Dt;
+			P.BelagsGrip = Grip;
 			const FWbParcoursSteuerung S = Fahrer.Steuern(P, B.GetAbschnitt());
 			P.bHandbremse = S.bHandbremse;
 			B.Schritt(P);
@@ -230,6 +279,7 @@ bool FParcoursFahrerTest::RunTest(const FString& Parameters)
 			In.Brake = S.Bremse;
 			In.Steering = S.Lenkung;
 			In.bHandbrake = S.bHandbremse;
+			In.SurfaceGripScale = Grip;
 			V.Tick(In, Dt, Out);
 			const float Rad = FMath::DegreesToRadians(KursGrad);
 			const FVector2D Vor(FMath::Cos(Rad), FMath::Sin(Rad));
@@ -239,15 +289,15 @@ bool FParcoursFahrerTest::RunTest(const FString& Parameters)
 			MaxSchwimm = FMath::Max(MaxSchwimm, FMath::Abs(Out.SlipAngleDeg));
 		}
 		const FWbParcoursErgebnis E = B.GetErgebnis();
-		Info = FString::Printf(TEXT("Parcours-Fahrer%s: %s, Fahrzeit %.1f s, Strafe %.0f s, Kegel %d, Tore %d, Linie %.0f km/h, Halt %.1f m neben der Box, Handbremse %d, Wendezone verfehlt %d, Sauberkeit %d, %s, max Schwimmwinkel %.0f Grad"),
-			bFehler ? TEXT(" (mit Fehlern)") : TEXT(""), WbParcoursAbschnittName(B.GetAbschnitt()), E.FahrzeitSekunden,
+		Info = FString::Printf(TEXT("Parcours-Fahrer%s%s: %s, Fahrzeit %.1f s, Strafe %.0f s, Kegel %d, Tore %d, Linie %.0f km/h, Halt %.1f m neben der Box, Handbremse %d, Wendezone verfehlt %d, Sauberkeit %d, %s, max Schwimmwinkel %.0f Grad"),
+			bFehler ? TEXT(" (mit Fehlern)") : TEXT(""), E.bRegen ? TEXT(" (Regen)") : TEXT(""), WbParcoursAbschnittName(B.GetAbschnitt()), E.FahrzeitSekunden,
 			E.StrafSekunden, E.KegelGetroffen, E.TorFehler, E.KmhAnBremslinie, E.StoppAbweichungM,
 			E.bHandbremseGenutzt ? 1 : 0, E.bWendezoneVerfehlt ? 1 : 0, E.Sauberkeit, *E.Medaille, MaxSchwimm);
 		return E;
 	};
 
 	FString Info;
-	const FWbParcoursErgebnis E = Runde(false, Info);
+	const FWbParcoursErgebnis E = Runde(false, 1.0f, Info);
 	AddInfo(Info);
 	TestTrue(TEXT("Fahrer erreicht das Ziel"), E.bImZiel);
 	TestEqual(TEXT("Fahrer beruehrt keinen Kegel"), E.KegelGetroffen, 0);
@@ -258,12 +308,28 @@ bool FParcoursFahrerTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Referenzzeit ergibt Gold"), E.Medaille == TEXT("Gold"));
 
 	// Mit Absicht-Fehlern: die Wertung muss sie finden, die Runde endet trotzdem.
-	const FWbParcoursErgebnis F = Runde(true, Info);
+	const FWbParcoursErgebnis F = Runde(true, 1.0f, Info);
 	AddInfo(Info);
 	TestTrue(TEXT("Fehlerlauf: im Ziel"), F.bImZiel);
 	TestTrue(TEXT("Fehlerlauf: Kegel 2 umgefahren"), F.KegelGetroffen >= 1);
 	TestTrue(TEXT("Fehlerlauf: zu langsam an der Linie"), F.KmhAnBremslinie < FWbParcoursLayout::Standard().MindestKmhAnBremslinie);
 	TestTrue(TEXT("Fehlerlauf: Strafe und Sauberkeit unter 100"), F.StrafSekunden > 0.0f && F.Sauberkeit < 100);
 	TestFalse(TEXT("Fehlerlauf: kein Gold"), F.Medaille == TEXT("Gold"));
+
+	// Nasse Fahrbahn (Grip 0,65, kalibriert): sauber fahrbar, Regenwertung, und
+	// die Referenzzeit ist Gold nur mit den Regen-Grenzen.
+	const FWbParcoursErgebnis R = Runde(false, 0.65f, Info);
+	AddInfo(Info);
+	TestTrue(TEXT("Regen: im Ziel, Regenwertung"), R.bImZiel && R.bRegen);
+	TestEqual(TEXT("Regen: kein Kegel"), R.KegelGetroffen, 0);
+	TestEqual(TEXT("Regen: kein Torfehler"), R.TorFehler, 0);
+	TestTrue(TEXT("Regen: ueber 40 km/h an der Linie, Halt in der Box"),
+		!R.bZuLangsam && R.bAngehalten && R.StoppAbweichungM == 0.0f);
+	TestTrue(TEXT("Regen: Handbremswende in der Zone"), R.bHandbremseGenutzt && !R.bWendezoneVerfehlt);
+	TestEqual(TEXT("Regen: Sauberkeit 100"), R.Sauberkeit, 100);
+	TestTrue(TEXT("Regen: Referenzzeit ergibt Gold"), R.Medaille == TEXT("Gold"));
+	TestTrue(TEXT("Regen ist langsamer als trocken"), R.FahrzeitSekunden > E.FahrzeitSekunden);
+	TestFalse(TEXT("... mit den trockenen Grenzen waere es kein Gold"),
+		FWbParcoursBewertung::BerechneMedaille(R.GesamtSekunden, R.Sauberkeit, false) == TEXT("Gold"));
 	return true;
 }

@@ -18,7 +18,13 @@
  * abwechselnd) -> mit mindestens 40 km/h ueber die Bremslinie, dahinter in der
  * Stoppbox zum Stehen kommen -> in der Wendezone per Handbremse wenden ->
  * zurueck ueber die Startlinie ins Ziel.
+ *
+ * Regen-Variante: dieselbe Strecke auf nasser Fahrbahn, mit eigenen
+ * Medaillengrenzen und eigener Bestzeit. Sie gilt, wenn der Belagsgrip des
+ * Wagens die ganze Runde nass war (FWbParcoursBewertung::RegenGripBis).
  */
+
+class FConfigFile;
 
 enum class EWbParcoursAbschnitt : uint8
 {
@@ -70,6 +76,8 @@ struct FWbParcoursProbe
 	float Kmh = 0.0f;
 	bool bHandbremse = false;
 	float DtSekunden = 0.0f;
+	/** Belags-Griffigkeit unter dem Wagen (1 = trocken, nasse Fahrbahn 0,65). */
+	float BelagsGrip = 1.0f;
 };
 
 struct WIESBADENREAL_API FWbParcoursErgebnis
@@ -91,6 +99,10 @@ struct WIESBADENREAL_API FWbParcoursErgebnis
 	bool bWendezoneVerfehlt = false;
 	/** 0..100 - 100 = keine Beruehrung, kein Fehler. */
 	int32 Sauberkeit = 100;
+	/** Regen-Variante: die ganze Runde auf nasser Fahrbahn. */
+	bool bRegen = false;
+	/** Hoechster Belagsgrip seit dem Start (entscheidet die Variante). */
+	float BelagsGripMax = 1.0f;
 	FString Medaille;
 };
 
@@ -126,13 +138,25 @@ public:
 
 	FWbParcoursErgebnis GetErgebnis() const;
 
+	/** Laeuft die Runde (bisher) ganz auf nasser Fahrbahn? */
+	bool IstRegen() const;
+
 	static int32 BerechneSauberkeit(const FWbParcoursErgebnis& E);
 	/** Gold/Silber/Bronze nach Gesamtzeit; Gold nur mit Sauberkeit >= 90.
 	 *  Bezug: der Parcours-Fahrer braucht mit der Kaefer-Physik ~42 s. */
-	static FString BerechneMedaille(float GesamtSekunden, int32 Sauberkeit);
+	static FString BerechneMedaille(float GesamtSekunden, int32 Sauberkeit, bool bRegen = false);
 	static constexpr float GoldSekunden = 46.0f;
 	static constexpr float SilberSekunden = 55.0f;
 	static constexpr float BronzeSekunden = 70.0f;
+	/** Regen: derselbe Abstand zur Referenz wie trocken (46/55/70 zu ~42 s),
+	 *  Bezug ist der Fahrer auf nasser Fahrbahn (Grip 0,65): 47,6 s. */
+	static constexpr float GoldSekundenRegen = 52.0f;
+	static constexpr float SilberSekundenRegen = 62.0f;
+	static constexpr float BronzeSekundenRegen = 79.0f;
+	/** Regenwertung nur, wenn der Belagsgrip die GANZE Runde hoechstens hier
+	 *  lag: nasse Fahrbahn ist 0,65; Schnee (0,79) und halb eingeblendeter
+	 *  Regen zaehlen trocken, damit die Regen-Grenzen zum Grip passen. */
+	static constexpr float RegenGripBis = 0.70f;
 
 private:
 	void StrafeDazu(float Sekunden, const FString& Grund);
@@ -162,6 +186,16 @@ private:
 	bool bHandbremseInWende = false;
 	bool bWendezoneBetreten = false;
 	bool bWendezoneVerfehlt = false;
+	float MaxBelagsGrip = 1.0f;
+};
+
+/** Bestzeit je Variante (trocken/Regen), Abschnitt [WiesbadenReal.Parcours]. */
+struct WIESBADENREAL_API FWbParcoursBestzeit
+{
+	/** Gesamtzeit in Sekunden, 0 = noch keine. */
+	static float Lesen(const FConfigFile& Ini, bool bRegen);
+	/** Traegt die Zeit ein, wenn sie schneller ist; true = neue Bestzeit. */
+	static bool Eintragen(FConfigFile& Ini, bool bRegen, float GesamtSekunden);
 };
 
 /** Steuerbefehl des Parcours-Fahrers (wie FWiesbadenCarControl). */
@@ -177,7 +211,9 @@ struct FWbParcoursSteuerung
  * Fahrer fuer Nachweislaeufe (-WbParcours 1): faehrt die Ideallinie ueber die
  * NORMALE Steuernaht, damit Parcours und Wertung ohne Tastatur belegbar sind.
  * Reine Verfolgung eines Zielpunkts (Pure Pursuit) mit Tempo-Vorgabe je
- * Abschnitt; die Wende faehrt er mit Vollausschlag und Handbremse.
+ * Abschnitt; die Wende faehrt er mit Vollausschlag und Handbremse. Auf
+ * nasser Fahrbahn nimmt er Slalom-, Brems- und Wendetempo mit Wurzel(Grip)
+ * zurueck: Quer- und Bremsweg-Bedarf wachsen mit v^2, der Grip nur linear.
  */
 class WIESBADENREAL_API FWbParcoursFahrer
 {

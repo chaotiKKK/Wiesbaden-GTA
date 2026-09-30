@@ -125,8 +125,9 @@ public:
 	// Geschicklichkeitsparcours (Slalom, Vollbremsung, Handbremswende) vor dem
 	// besessenen Wagen aufbauen; Fahrer = 1 laesst ihn selbst fahren (Nachweis),
 	// Fahrer = 2 faehrt mit Absicht Fehler (Kegel, zu langsam an der Linie).
+	// Regen = 1: Regen-Variante - laesst es regnen, aufgebaut wird auf nasser Strasse.
 	UFUNCTION(Exec)
-	void WbParcours(int32 Fahrer = 0);
+	void WbParcours(int32 Fahrer = 0, int32 Regen = 0);
 
 	// Autopilot: fliegt den besessenen Helikopter zu einem Punkt <dx dy dz> Meter
 	// relativ zur aktuellen Position (Weltachsen) und haelt ihn dort.
