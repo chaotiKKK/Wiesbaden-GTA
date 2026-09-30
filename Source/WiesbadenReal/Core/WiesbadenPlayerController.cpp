@@ -24,6 +24,7 @@
 #include "NPC/WiesbadenPursuerActor.h"
 #include "HAL/IConsoleManager.h"
 #include "World/WiesbadenDennoShop.h"
+#include "World/WiesbadenParcoursActor.h"
 #include "Vehicles/WiesbadenFootPawn.h"
 #include "Weapons/WiesbadenWeaponComponent.h"
 #include "Weapons/WiesbadenWeaponSpec.h"
@@ -511,6 +512,30 @@ void AWiesbadenPlayerController::WbDrive(int32 Sekunden)
 	const int32 Dauer = WbSekundenOderVorgabe(Sekunden);
 	GetOrAddHarness(ControlledPawn)->StartDriveProfile(static_cast<float>(Dauer));
 	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbDrive - Fahrprofil fuer %d s gestartet."), Dauer);
+}
+
+void AWiesbadenPlayerController::WbParcours(int32 Fahrer)
+{
+	APawn* ControlledPawn = GetPawn();
+	if (!Cast<IWiesbadenVehicleControl>(ControlledPawn) || !GetWorld())
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbParcours erkannt, aber kein Fahrzeug besessen."));
+		return;
+	}
+	// Ein Parcours je Welt: ein neuer Aufruf baut neu auf (Neustart).
+	if (AWiesbadenParcours* Alt = AWiesbadenParcours::Aktiver(GetWorld()))
+	{
+		Alt->Destroy();
+	}
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AWiesbadenParcours* Parcours = GetWorld()->SpawnActor<AWiesbadenParcours>(
+		ControlledPawn->GetActorLocation(), FRotator::ZeroRotator, Params);
+	if (Parcours)
+	{
+		Parcours->Starten(ControlledPawn, Fahrer);
+	}
+	UE_LOG(LogWbCore, Log, TEXT("WbDev: WbParcours - Parcours wird vor dem Wagen aufgebaut (Fahrer %d)."), Fahrer);
 }
 
 // Autopilot-Komponente on-demand am Helikopter anlegen (wie der Test-Harness):

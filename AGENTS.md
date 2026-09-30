@@ -4253,7 +4253,7 @@ dieselbe Karte** – ein weiterer Bake derselben Daten aendert nichts messbares.
   dieser Zellen ist pro Bake anders, ihr Inhalt nicht. Wer die %-Zahl als
   Inhaltswechsel liest, zieht den falschen Schluss.
 - **Ankermessung, beide Karten, dasselbe Werkzeug, zwei Minuten auseinander**
-  (`Toolserify_anchor.cmd Alkis31` bzw. ohne Argument): je **2010 Zell-Actors,
+  (`Tools\verify_anchor.cmd Alkis31` bzw. ohne Argument): je **2010 Zell-Actors,
   23799 leere Komponenten, 0 am Kartenursprung**, 82-zeilige Ergebnisse, die sich
   nur im Kartennamen und in der Reihenfolge der Beispielzellen unterscheiden
   (`Saved/Diagnose/anchor_verify.txt`, `anchor_verify_WiesbadenCity_Alkis31.txt`).
@@ -5118,10 +5118,11 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   Vorher/Nachher nebeneinander. `kurve` = Vollbremsung mit gehaltener
   Lenkung. Zeiten sind auf 0,1 s gerastert - Unterschiede von einer Probe
   sind Abtastung, keine Physik.
-- `bWheelLock` heisst seit dem ABS "Bremse an der Haftgrenze" (blockiert ODER
-  ABS regelt, HUD "ABS"). Ob die Raeder wirklich GLEITEN, sagt nur
-  `bBrakeLockState` (Telemetrie `gleit`). Tests zum Blockiermodell setzen
-  `bAbsEnabled = false`.
+- Seit eaa7820 (Review PR #26): `bWheelLock` = Raeder GLEITEN wirklich (Spuren,
+  Quietschen; je Achse `bFrontAxleSliding`/`bRearAxleSliding`, die Handbremse
+  laesst nur das Heck gleiten), `bAbsActive` = ABS regelt (nur die HUD-Leuchte).
+  Telemetrie: `block` = Haftgrenze (gleiten ODER ABS), `gleit` = gleiten. Tests
+  zum Blockiermodell setzen `bAbsEnabled = false`; Verkehr und Bus fahren ohne ABS.
 - Der Kaefer ist schon statisch uebersteuernd (a*Cf > b*Cr, kritische
   Geschwindigkeit ~142 km/h). Alles, was beim Bremsen HINTEN Seitenfuehrung
   nimmt, senkt sie unter Betriebstempo: die lastabhaengige Steifigkeit (+-20 %
@@ -5155,5 +5156,51 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   18,2 s. Kaefer: MuTraction 0,9 (laengs), LateralGripFactor 0,8 (quer),
   BrakeForceN 7000 mit Verteilung 0,74 (0,7 war damit instabil, s.o.),
   DrivetrainEfficiency 0,9. Verkehr/Bus setzen die beiden neuen Faktoren auf
-  1,0. Offen: Masse 820 statt ~970 kg (Leergewicht + Fahrer) -> 0-100 noch
-  ~2 s zu schnell.
+  1,0. Masse seit 29.09. 970 kg (R&T: Leergewicht 1.960/1.970 lb + Fahrer);
+  BrakeForceN (8.300 N), Seitensteifigkeiten und Giertraegheit wuchsen mit
+  (x1,183), damit Bremsen in g und Kurvenverhalten gleich bleiben. Vergleich
+  mit R&T in mph: 0-60 mph 18,2 s (Spiel 18,2-18,3 s), 0-100 km/h daraus
+  ~20,3 s - NICHT "0-100 in 18,2 s". fahrmessung_auswerten.py misst seit dem
+  ab Stillstand (die erste Gaszeile faehrt schon, vorher fehlten 0,4 s).
+
+## Geschicklichkeitsparcours (WbParcours, 29.09.2026)
+
+- `WbParcours [0/1/2]` baut Slalom, Bremslinie+Stoppbox und Wendezone in
+  Blickrichtung des Wagens auf (~250 x 30 m frei; Wiese -WbGoto=-180086,899031),
+  sobald er 1 s ruhig steht - ein -WbGoto vor dem Start baut dort neu auf.
+  Logik ohne Welt in `Missions/WiesbadenParcours` (Bewertung + Fahrer), Welt in
+  `World/WiesbadenParcoursActor`. 1 = Fahrer sauber (Referenz 41-42 s, Gold),
+  2 = mit Absicht Fehlern. Nachweis: `Tools\parcours_lauf.cmd <Name> [s] [1/2]`,
+  Zeile `Parcours-Ergebnis:` im Log; Kamera per WBCAM, Clip/Tageszeit per
+  WBARGS (`-WbTime=14`, sonst Systemzeit = oft Nacht).
+- Kegel OHNE Kollision (der kinematische Wagen bliebe haengen); Beruehrung
+  entscheidet der Grundriss in der Wertung, der Kegel kippt dann um.
+- Kegel-Material: BasicShapeMaterial stand im Gegenlicht schwarz und war nachts
+  unsichtbar, das Lampenglas (M_WbStreetLampGlass) ist in der Sonne milchweiss
+  (Grundfarbe fest, LensColor nur Leuchten). Darum M_WbLeitkegel
+  (`Tools/create_leitkegel_material.py`): Farbe = Grundfarbe UND Leuchten x Glow.
+  Orange (1, 0,16, 0,01) mit Glow 0,25 - mehr Gruen/Glow ueberstrahlt gelb.
+- Ein Clip mit fester Zeitschrittweite (10 fps = 0,1 s) aendert die Runde kaum
+  (41,5 statt 42,1 s), verlangsamt aber das Spiel gegen die Wanduhr:
+  -WbQuitAfter grosszuegig setzen, sonst endet der Lauf vor dem Ziel.
+
+## Gate 7: Fahrphysik-Messfahrt gegen die Sollwerte (29.09.2026)
+
+- Push-Gate (volle Stufe, ohne Dateifilter): `Tools\verify_fahrphysik.cmd` faehrt
+  `fahrmessung.cmd gate_fahrphysik 40` (~160 s) und prueft mit
+  `Tools/verify_fahrphysik.py` die Kennzahlen gegen SOLLWERTE: Radspin <= 0,2 s,
+  0-60 mph 16,4..20 s (R&T 18,2), Kurvengrip 0,65..0,76 g je Seite (0,704),
+  Bremsweg 48..57 m (~52), Verzoegerung 0,68..0,84 g (0,76), gleitende Raeder
+  <= 5 %. Exit 2 = NICHT GEMESSEN (kein "Messlauf beendet", < 500 Proben,
+  Kennzahl fehlt) - wird rot. Gegenprobe an echten Logs: vor der Grip-
+  Kalibrierung 4 x ROT, mit 820 kg 0-60 ROT, kalibriert GRUEN.
+- Sollwerte AENDERN heisst neu kalibrieren und belegen - nicht das Band
+  weiten, bis ein Rueckfall durchpasst.
+- Engine-Sperre im Push: der Hook haelt sie ab Gate 0. Seit 30.09.2026 gibt
+  `engine_run_lock.ps1 -Modus Freigeben` nur die Sperre des EIGENEN Laufs frei
+  (Besitzer = Elternprozess des Aufrufs); gehoert sie einem umschliessenden
+  Lauf, bleibt sie ("gehoert dem umschliessenden Lauf - bleibt gehalten").
+  Vorher loeschte Gate 4 (run_cut_shots.cmd: Start + Freigeben) die Sperre des
+  Hooks, und alle Gates danach liefen ohne. Beleg:
+  Tools/test_engine_run_lock_freigabe.py (gegen den alten Stand rot).
+

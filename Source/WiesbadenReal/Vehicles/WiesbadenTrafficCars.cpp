@@ -223,8 +223,10 @@ namespace
 		Kaefer.DragCoeffAreaM2 = 1.05f;
 		Kaefer.FrontWeightFraction = 0.42f;
 		Kaefer.CgHeightM = 0.45f;
-		Kaefer.YawInertiaKgM2 = 1150.0f;
-		Kaefer.CorneringStiffnessNPerRad = 33000.0f;
+		// Masse aus der Kaefer-Spec (970 kg seit 29.09.2026); Traegheit und
+		// Steifigkeit wachsen mit (x1,183), das Kurvenverhalten bleibt gleich.
+		Kaefer.YawInertiaKgM2 = 1360.0f;
+		Kaefer.CorneringStiffnessNPerRad = 39000.0f;
 		Kaefer.MaxSteerAngleDeg = 35.0f;
 		Types.Add(Kaefer);
 

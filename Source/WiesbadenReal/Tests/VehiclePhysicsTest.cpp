@@ -70,27 +70,30 @@ bool FVehiclePhysicsAccelerationTest::RunTest(const FString& Parameters)
 	In.Throttle = 1.0f;
 	FWiesbadenVehiclePhysicsOutput Out;
 
-	// Vollgas aus dem Stand; Zeit bis 100 km/h messen.
+	// Vollgas aus dem Stand; Zeiten bis 60 mph und 100 km/h messen.
+	float TimeTo60Mph = -1.0f;
 	float TimeTo100 = -1.0f;
 	for (float T = 0.0f; T < 60.0f; T += VehicleDt)
 	{
 		Vehicle.Tick(In, VehicleDt, Out);
+		if (TimeTo60Mph < 0.0f && Out.SpeedKmh >= 96.56f)
+		{
+			TimeTo60Mph = T;
+		}
 		if (TimeTo100 < 0.0f && Out.SpeedKmh >= 100.0f)
 		{
 			TimeTo100 = T;
 		}
 	}
 
-	// Das kinematische Modell ist BEWUSST idealisiert (kein Schlupf, keine
-	// Schaltzeit, keine Antriebsstrangverluste) - "berechenbar und stabil". Mit
-	// der jetzt geteilten, echten Drehmomentkurve (102 Nm @ 2600) faehrt es 0-100
-	// in gut 13 s. Die realen ~23 s eines 44-PS-Kaefers entstehen erst in der
-	// verlustmodellierenden Chaos-Physik (AWiesbadenChaosCar::TickSelfTest) - das
-	// gehoert dorthin, nicht in dieses reine Modell. Hier wird deshalb nur ein
-	// plausibler Rahmen geprueft, nicht die exakte Werksangabe.
+	// Vorlage: Road & Track 9/1973 (VW Sports Bug) 0-60 mph in 18,2 s. Seit der
+	// Massekorrektur (970 kg mit Fahrer, 29.09.2026) trifft das Modell das mit
+	// Schaltpausen, Schlupf und Triebstrangverlusten (Fahrmessung im Spiel:
+	// 18,2-18,3 s; mit 820 kg waren es 15,4 s). +-10 % Rahmen.
+	AddInfo(FString::Printf(TEXT("0-60 mph %.1f s, 0-100 km/h %.1f s"), TimeTo60Mph, TimeTo100));
 	TestTrue(TEXT("0-100 km/h erreicht"), TimeTo100 > 0.0f);
-	TestTrue(TEXT("0-100 zuegig, aber nicht sportwagenhaft (8..20 s)"),
-		TimeTo100 > 8.0f && TimeTo100 < 20.0f);
+	TestTrue(FString::Printf(TEXT("0-60 mph wie Road & Track 9/1973, 18,2 s +-10 %% (%.1f s)"), TimeTo60Mph),
+		TimeTo60Mph > 16.4f && TimeTo60Mph < 20.0f);
 	TestTrue(TEXT("Hoechstgeschwindigkeit wie Kaefer 1302 (125..140 km/h)"),
 		Out.SpeedKmh > 125.0f && Out.SpeedKmh < 140.0f);
 	TestTrue(TEXT("Automatik schaltet in den hoechsten Gang"), Out.Gear >= 4);
@@ -559,7 +562,7 @@ bool FVehicleLongitudinalSlipTest::RunTest(const FString& Parameters)
 		// Normalbremse ist der KALIBRIERTE Wert (R&T 9/1973, 29.09.2026) - eine
 		// Aenderung braucht eine neue Messung als Begruendung.
 		TestTrue(FString::Printf(TEXT("BrakeForceN auf kalibriertem Wert (%.0f N)"), V.BrakeForceN),
-			FMath::IsNearlyEqual(V.BrakeForceN, 7000.0f, 0.5f));
+			FMath::IsNearlyEqual(V.BrakeForceN, 8300.0f, 0.5f));
 
 		// Geradeaus: voller Grip mu*g -> Grip-Kraft ueber der Anforderung -> kein Block.
 		const float GripStraightN = V.Powertrain.MassKg *

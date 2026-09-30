@@ -20,6 +20,7 @@ WARUM ZWEI STUFEN - und das ist eine gemessene Entscheidung, keine Meinung:
     Gate B  Besitz               0 s   (Registry, kein Prozess)
     Gate 4  Plasmacutter-Bild   1 min  (startet den Unreal-Editor)
     Gate 5  Ankerzustand (WP)   3 min  (startet den Unreal-Editor)
+    Gate 7  Fahrphysik          3 min  (startet das Spiel: Messfahrt auf der Wiese)
 
     Plattenplatz                0 s   (HINWEIS, kein Gate: Tools/platten_waechter.py.
                                          Im gesunden Fall ein Syscall, unter 20 Prozent
@@ -747,7 +748,17 @@ def anker_gate_fahren(lauf, ziel=None):
     start = time.time()
     ok = lauf.fahre("Gate 5  Ankerzustand (WP)",
                     r"Tools\verify_anchor.cmd", shell_cmd=True)
+    return ergebnis_aus_diesem_lauf(lauf, "Gate 5", ziel, start) and ok
 
+
+def ergebnis_aus_diesem_lauf(lauf, gate, ziel, start):
+    """Stammt die Ergebnisdatei aus diesem Lauf? Sonst wird das Gate rot.
+
+    Der Exit-Code allein beweist nicht, dass gemessen wurde (Gate 5 am
+    27.09.2026: "gruen" nach 10 s ohne Log). Darum entscheidet der
+    Zeitstempel der Ergebnisdatei, und ein gruen vermerkter Schritt wird
+    nachtraeglich auf rot gezogen.
+    """
     # Eine Sekunde Toleranz: die Dateisysteme runden die Zeitstempel je
     # nach Plattform, und eine Messung, die im selben Lauf endet, darf
     # nicht daran scheitern, dass ihr Zeitstempel eine Hauchsekunde
@@ -767,10 +778,25 @@ def anker_gate_fahren(lauf, ziel=None):
         ergebnisse = getattr(lauf, "ergebnisse", None)
         if isinstance(ergebnisse, list) and ergebnisse:
             name, _ok, dauer, fertig = ergebnisse[-1]
-            if name.startswith("Gate 5"):
+            if name.startswith(gate):
                 ergebnisse[-1] = (name, False, dauer, fertig)
         return False
-    return ok
+    return True
+
+
+def fahrphysik_gate_fahren(lauf, ziel=None):
+    """Gate 7: Messfahrt im Spiel gegen die kalibrierten Sollwerte.
+
+    Dieselbe Beweispflicht wie Gate 5: gruen nur mit einem Ergebnis aus
+    diesem Lauf (Saved/Diagnose/fahrphysik_gate.txt, geschrieben von
+    Tools/verify_fahrphysik.py). `ziel` ist nur fuer die Tests da.
+    """
+    if ziel is None:
+        ziel = os.path.join(WURZEL, "Saved", "Diagnose", "fahrphysik_gate.txt")
+    start = time.time()
+    ok = lauf.fahre("Gate 7  Fahrphysik-Messfahrt",
+                    r"Tools\verify_fahrphysik.cmd", shell_cmd=True)
+    return ergebnis_aus_diesem_lauf(lauf, "Gate 7", ziel, start) and ok
 
 
 def gate0_befehl(dateien):
@@ -1068,6 +1094,21 @@ def gates_fahren(stufe, dateien, thread=None):
         anker_gate_fahren(lauf)
     else:
         lauf.ueberspringe("Gate 5  Ankerzustand (WP)",
+                          "Stufe schnell - sie laeuft vor dem Push")
+
+    # Gate 7: die Fahrphysik IM SPIEL gegen die kalibrierten Sollwerte des
+    # Kaefers (Road & Track 1971/1973, AMS 1302 LS): Messfahrt auf der Wiese,
+    # dann 0-60 mph, Radspin, Kurvengrip, Bremsweg, Verzoegerung und
+    # gleitende Raeder gegen ihre Sollbaender. Die Unit-Tests pruefen das
+    # Modell; eine verschobene Einbindung (Masse, Bodenkontakt, Zeitschritt,
+    # Federung) sehen nur sie nicht. Ohne Dateifilter wie Gate 4/5 - was das
+    # Fahrgefuehl verschiebt, ist nicht immer eine Fahrzeugdatei. Startet das
+    # Spiel, also volle Stufe; die Sperre haelt vor_dem_commit, und die
+    # Messfahrt gibt eine schon gehaltene Sperre nicht frei.
+    if stufe == "voll":
+        fahrphysik_gate_fahren(lauf)
+    else:
+        lauf.ueberspringe("Gate 7  Fahrphysik-Messfahrt",
                           "Stufe schnell - sie laeuft vor dem Push")
 
     # Gate 6: die Releases gegen die Meilenstein-Seite. Seitenbild, Asset-

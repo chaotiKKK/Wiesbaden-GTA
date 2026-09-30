@@ -248,10 +248,12 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	// Das ist die BremsANFORDERUNG bei vollem Pedal, NICHT die am Reifen
 	// wirksame Kraft. Kalibriert am 29.09.2026 auf Road & Track 9/1973 (VW Sports
 	// Bug, Radialreifen 175/70 HR 15): kuerzester Anhalteweg 158 ft aus 60 mph =
-	// 0,76 g, also rund 52 m aus 100 km/h. 7.000 N bei 820 kg fordern 0,87 g; mit
+	// 0,76 g, also rund 52 m aus 100 km/h. 8.300 N bei 970 kg fordern 0,87 g (bis
+	// zur Massekorrektur 29.09.2026: 7.000 N bei 820 kg, dieselben 0,87 g); mit
 	// Bremsverteilung 0,74 und ABS-Anteil 0,9 regelt die Vorderachse. Gemessen
 	// (Fahrmessung Wiese): 0,74 g im Mittel, 52,5 m aus 100 km/h (vorher 5.600 N:
-	// 0,64 g, 60 m). Unter mu*Gewicht (0,9 g) - geradeaus blockiert das
+	// 0,64 g, 60 m); mit 970 kg 0,73 g und 53,5 m (der Luftwiderstand waechst
+	// nicht mit). Unter mu*Gewicht (0,9 g) - geradeaus blockiert das
 	// Blockiermodell ohne ABS darum weiterhin nicht.
 	//
 	// Das Blockieren haengt NICHT an diesem Wert: der Tick prueft die Anforderung
@@ -260,7 +262,7 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	// 0,7 g), das Pedal blockiert dort NICHT; beim Bremsen in der Kurve oder auf
 	// griffarmem Belag faellt der verfuegbare Grip unter die Anforderung und die
 	// Raeder blockieren - grip-abgeleitet, robust gegen Aenderungen von Masse/mu.
-	float BrakeForceN = 7000.0f;
+	float BrakeForceN = 8300.0f;
 
 	// -- Querdynamik ------------------------------------------------------
 	/** Maximaler Lenkeinschlag der Vorderraeder (Grad). */
@@ -361,9 +363,17 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	// Reifen-Seitenkraefte aus den Schraeglaufwinkeln und laesst den Wagen quer
 	// rutschen. Ab LowSpeedBlend aktiv (bei v->0 ist das Modell singulaer).
 
-	/** Schraeglaufsteifigkeit Vorderachse (N je rad Schraeglaufwinkel). */
+	/**
+	 * Schraeglaufsteifigkeit Vorderachse (N je rad Schraeglaufwinkel).
+	 *
+	 * Steifigkeiten und Giertraegheit sind am 29.09.2026 mit der Masse von 820
+	 * auf 970 kg um denselben Faktor (1,183) gewachsen: die Seitensteifigkeit
+	 * eines Reifens waechst mit seiner Last, die Traegheit mit der Masse. So
+	 * bleibt das in Fahrmessungen abgestimmte Einlenken und die kritische
+	 * Geschwindigkeit (Cf*Cr*L^2 / (m*(a*Cf - b*Cr))) unveraendert.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1000.0"))
-	float CorneringStiffnessFrontNPerRad = 30000.0f;
+	float CorneringStiffnessFrontNPerRad = 35500.0f;
 
 	/**
 	 * Schraeglaufsteifigkeit Hinterachse. Bewusst HOEHER als vorn: der Kaefer
@@ -373,7 +383,7 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 	 * unter Last/hartem Einlenken das Heck gutmuetig kommen.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1000.0"))
-	float CorneringStiffnessRearNPerRad = 36000.0f;
+	float CorneringStiffnessRearNPerRad = 42600.0f;
 
 	/**
 	 * Maximale lastabhaengige Skalierung der Schraeglaufsteifigkeit (Anteil).
@@ -389,7 +399,7 @@ struct WIESBADENREAL_API FWiesbadenVehiclePhysics
 
 	/** Giertraegheitsmoment um die Hochachse (kg*m^2). ~ m*a*b fuer einen PKW. */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "1.0"))
-	float YawInertiaKgM2 = 1150.0f;
+	float YawInertiaKgM2 = 1360.0f;
 
 	/** Gewichtsanteil auf der Vorderachse (Kaefer hecklastig: ~0,42). */
 	UPROPERTY(EditAnywhere, Category = "Vehicle|Physik", meta = (ClampMin = "0.1", ClampMax = "0.9"))

@@ -17,7 +17,7 @@ bool FPowertrainSpecKaefer1302Test::RunTest(const FString& Parameters)
     TestEqual(TEXT("Max-Drehmoment 102 Nm"), S.MaxTorqueNm, 102.0f);
     TestEqual(TEXT("Hoechstdrehzahl 4600"), S.MaxRpm, 4600.0f);
     TestEqual(TEXT("Achsantrieb 4.375"), S.FinalDriveRatio, 4.375f);
-    TestEqual(TEXT("Masse 820 kg"), S.MassKg, 820.0f);
+    TestEqual(TEXT("Masse 970 kg (Leergewicht laut R&T + Fahrer)"), S.MassKg, 970.0f);
     if (TestEqual(TEXT("Vier Vorwaertsgaenge"), S.ForwardGearRatios.Num(), 4))
     {
         TestEqual(TEXT("1. Gang 3.80"), S.ForwardGearRatios[0], 3.80f);

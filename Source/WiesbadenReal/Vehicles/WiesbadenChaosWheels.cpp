@@ -50,8 +50,10 @@ UWiesbadenWheelBase::UWiesbadenWheelBase()
 	SuspensionMaxRaise = 15.0f;
 	SuspensionMaxDrop = 40.0f;
 
-	// Federrate je Rad in N/cm-Naeherung der Engine. 820 kg auf vier Raedern
-	// sind rund 205 kg je Rad; mit der weichen Auslegung des Kaefers ergibt
+	// Federrate je Rad in N/cm-Naeherung der Engine. Ausgelegt auf 820 kg (rund
+	// 205 kg je Rad); seit 29.09.2026 traegt die Spec 970 kg mit Fahrer - der
+	// Chaos-Wagen (nur -WbChaosCar) federt damit tiefer ein, ungemessen. Mit
+	// der weichen Auslegung des Kaefers ergibt
 	// das eine deutlich niedrigere Rate als bei einem modernen Fahrzeug.
 	SpringRate = 180.0f;
 	SpringPreload = 50.0f;

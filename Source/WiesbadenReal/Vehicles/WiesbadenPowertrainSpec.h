@@ -53,9 +53,9 @@ struct WIESBADENREAL_API FWiesbadenPowertrainSpec
     float FinalDriveRatio = 4.375f;
 
     // -- Fahrgestell ------------------------------------------------------
-    /** Fahrgestell-Masse (kg). */
+    /** Fahrfertige Masse mit Fahrer (kg). */
     UPROPERTY(EditAnywhere, Category = "Powertrain")
-    float MassKg = 820.0f;
+    float MassKg = 970.0f;
 
     /**
      * Absolutes Motordrehmoment (Nm) bei einer Drehzahl - lineare Interpolation
