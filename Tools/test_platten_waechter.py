@@ -1074,8 +1074,9 @@ class DevBuildsAltlastenTest(unittest.TestCase):
         self.assertEqual(a["klasse"], "dev-builds")
         self.assertGreater(a["bytes"], 0)
         self.assertIn("docs/plattenstrategie.md", a["grund"])
-        self.assertIn("24.09.2026", a["grund"], "die Begruendung nennt das "
-                                                  "Build-Datum (deutsches Format)")
+        erwartet = (now - datetime.timedelta(days=5.0)).strftime("%d.%m.%Y")
+        self.assertIn(erwartet, a["grund"], "die Begruendung nennt das "
+                                           "Build-Datum (deutsches Format)")
 
     def test_single_file_im_basisordner_zaehlt_nicht(self):
         import datetime as dt
