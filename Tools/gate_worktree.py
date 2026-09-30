@@ -416,7 +416,9 @@ def motor_sperre(name, warte_s=None, lock_pfad=None, platten_grenze=None,
             # ZUSTAND. Genau wie bei BELEGT gilt: abwarten, bis zur selben
             # Frist; der naechste Raeumlauf oder ein endender Cook heilt es.
             if uhr() >= frist:
-                for zeile in text[:2]:
+                # Die ABBRUCH-Zeile wird GESUCHT, nicht nach Index gedruckt:
+                # seit der Vorreinigung (30.09.2026) stehen Meldungen davor.
+                for zeile in [z for z in text if "ABBRUCH" in z] or text[:2]:
                     drucke(zeile)
                 drucke("Engine-Lock: Platte bleibt zu voll - dieser Lauf gibt auf.")
                 return False

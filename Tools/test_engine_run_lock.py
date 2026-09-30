@@ -114,7 +114,8 @@ class NachkommenTest(unittest.TestCase):
         pfad = str(Path(tmp) / "engine_run.lock")
         lauf = subprocess.run(
             [sys.executable, "-c", HELFER, pfad, "kind" if mit_kind else "ohne", str(dauer)],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, timeout=120,
+            encoding="utf-8", errors="replace")
         self.assertEqual(lauf.returncode, 0, lauf.stdout + lauf.stderr)
         kind_pid = None
         if mit_kind:
