@@ -4772,6 +4772,23 @@ Gate-Lauf rot.
   neben dem HAUPT-Projekt liegen muss; das ist aus einem Neben-Worktree jetzt
   zwar richtig, aber der Push-Hook erwartet den Hauptordner.
 
+## Ein Commit WAEHREND des Push-Gates ging ungeprueft hinaus (30.09.2026)
+
+Ueber HTTPS gibt git dem Transport-Helfer (`git-remote-https`) die Refs per
+NAMEN; der loest sie erst NACH dem pre-push-Hook auf. Gemessen: das Gate pruefte
+af8a523, GitHub legte feature/fahrphysik-nass mit b86ab49 an (ein Commit, der
+waehrend der 24 Gate-Minuten entstand); der naechste Push meldete "Everything
+up-to-date". Nachgebaut mit `git http-backend` (`.planning/push-luecke`): ueber
+HTTP kommt der neue Stand an, ueber einen lokalen Pfad der gepruefte - ein Test
+mit Pfad-Remote sieht die Luecke also NICHT.
+
+* `push_pruefen` vergleicht nach gruenem Gate jeden Ref mit dem geprueften Sha
+  (`verschobene_refs`) und weist den Push ab, wenn er sich bewegt hat - erneut
+  pushen, dann wird der neue Stand geprueft.
+* Offen bleibt nur der Augenblick zwischen dieser Pruefung und dem Senden.
+  Wer waehrend eines Pushes committet, sollte trotzdem danach pruefen, dass
+  der Remote auf dem erwarteten Sha steht.
+
 ## Ein Test darf die Datei, ueber die er etwas wissen will, nicht anfassen (27.09.2026)
 
 `test_zeilenenden.ChurnUnmoeglichTest` verglich `git diff --numstat` VOR und
