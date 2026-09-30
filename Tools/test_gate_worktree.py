@@ -58,9 +58,18 @@ class EndstandTest(unittest.TestCase):
         self.assertEqual(gw.verschobene_refs(".", self.EINGABE, {"refs/heads/x": B}.get),
                          [("refs/heads/x", A, B)])
 
-    def test_loeschungen_und_unaufloesbare_namen_zaehlen_nicht(self):
-        text = "(delete) %s refs/heads/y %s\n%s %s refs/heads/z %s\n" % (gw.NULL_SHA, A, A, A, gw.NULL_SHA)
-        self.assertEqual(gw.verschobene_refs(".", text, lambda ref: ""), [])
+    def test_loeschungen_zaehlen_nicht(self):
+        # Die Attrappe meldete JEDEN Namen als bewegt - nur der Filter haelt ihn raus.
+        text = "(delete) %s refs/heads/y %s\n" % (gw.NULL_SHA, A)
+        self.assertEqual(gw.verschobene_refs(".", text, lambda ref: B), [])
+
+    def test_ein_sha_als_quelle_ist_unbewegt(self):
+        # rev-parse eines Sha liefert ihn selbst (gegen git 2.55 geprueft).
+        text = "%s %s refs/heads/z %s\n" % (A, A, gw.NULL_SHA)
+        self.assertEqual(gw.verschobene_refs(".", text, lambda ref: ref), [])
+
+    def test_nicht_mehr_aufloesbar_gilt_als_verschoben(self):
+        self.assertEqual(gw.verschobene_refs(".", self.EINGABE, lambda ref: ""), [("refs/heads/x", A, "")])
 
     def push(self, jetzt):
         """push_pruefen mit gruenem Gate; der Zweig zeigt danach auf `jetzt`."""
@@ -95,11 +104,14 @@ class EndstandTest(unittest.TestCase):
         git("config", "user.name", "t")
         git("commit", "-q", "--allow-empty", "-m", "eins")
         eins = git("rev-parse", "HEAD")
-        eingabe = "refs/heads/main %s refs/heads/main %s\n" % (eins, gw.NULL_SHA)
+        # So kommen "git push origin main", "... HEAD" und "... <sha>:..." im Hook an.
+        eingabe = "".join("%s %s refs/heads/main %s\n" % (quelle, eins, gw.NULL_SHA)
+                          for quelle in ("refs/heads/main", "HEAD", eins))
         self.assertEqual(gw.verschobene_refs(tmp, eingabe), [])
         git("commit", "-q", "--allow-empty", "-m", "zwei (waehrend des Gates)")
         zwei = git("rev-parse", "HEAD")
-        self.assertEqual(gw.verschobene_refs(tmp, eingabe), [("refs/heads/main", eins, zwei)])
+        self.assertEqual(gw.verschobene_refs(tmp, eingabe),
+                         [("refs/heads/main", eins, zwei), ("HEAD", eins, zwei)])
 
 
 class StadtinhaltTest(unittest.TestCase):

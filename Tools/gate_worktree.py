@@ -121,8 +121,12 @@ def verschobene_refs(projekt, stdin_text, aufloesen=None):
     git http-backend (.planning/push-luecke): ueber HTTP kam der neue Stand an,
     ueber einen lokalen Pfad der gepruefte.
 
-    Liefert (Ref, geprueft, jetzt). Laesst sich ein Name nicht aufloesen (etwa
-    ein Sha als Quelle), gibt es nichts nachzuloesen.
+    Liefert (Ref, geprueft, jetzt). Ein Sha oder Ausdruck als Quelle loest
+    sich zu sich selbst bzw. zum gleichen Commit auf. Laesst sich ein Name
+    NICHT mehr aufloesen (Zweig geloescht, git-Fehler), gilt er als verschoben
+    ("jetzt" leer): lieber einmal zu oft abweisen als still durchlassen. Auch
+    ueber SSH oder einen lokalen Pfad wird abgewiesen, obwohl dort der
+    gepruefte Stand hinausginge - bewusst einfach.
     """
     if aufloesen is None:
         def aufloesen(ref):
@@ -130,7 +134,7 @@ def verschobene_refs(projekt, stdin_text, aufloesen=None):
     verschoben = []
     for ref, sha in push_zeilen(stdin_text):
         jetzt = aufloesen(ref)
-        if jetzt and jetzt != sha:
+        if jetzt != sha:
             verschoben.append((ref, sha, jetzt))
     return verschoben
 
@@ -530,7 +534,7 @@ def push_pruefen(projekt, stdin_text):
     if verschoben:
         print("\nWaehrend des Gates hat sich der Zweig bewegt - der Push wird abgewiesen:")
         for ref, geprueft, jetzt in verschoben:
-            print("  %s: geprueft %s, jetzt %s" % (ref, geprueft[:10], jetzt[:10]))
+            print("  %s: geprueft %s, jetzt %s" % (ref, geprueft[:10], jetzt[:10] or "nicht aufloesbar"))
         print("Ueber HTTPS ginge der NEUE Stand hinaus - ungeprueft. Erneut pushen,")
         print("dann prueft das Gate ihn.")
         return 1
