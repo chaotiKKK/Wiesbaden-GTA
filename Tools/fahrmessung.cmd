@@ -1,6 +1,9 @@
 @echo off
 REM fahrmessung.cmd [Name] [Fahrsekunden] [kurve]
 REM
+REM   Weitere Spielargumente per Umgebungsvariable WBARGS, z. B. nass:
+REM     set WBARGS=-WbWeather=Rain
+REM
 REM   kurve   Bremsphase mit gehaltener Linkslenkung (-WbDriveKurvenbremsung):
 REM           Vollbremsung mitten in der Kurve - zeigt, ob der Wagen beim
 REM           Bremsen lenkbar bleibt.
@@ -38,7 +41,7 @@ set PROJ=%WURZEL%\WiesbadenReal.uproject
 set LOG=%WURZEL%\Saved\Logs\wb_fahrmessung_%NAME%.log
 if not exist "%WURZEL%\Saved\Logs" mkdir "%WURZEL%\Saved\Logs"
 
-"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" -game -WbKeinIntro -WbGoto=-180086,899031 -WbFahrTelemetrie %MANOEVER% -WbQuitAfter=%QUIT% -windowed -ResX=1280 -ResY=720 -unattended -nop4 -ExecCmds="WbCam 1,WbDrive %DAUER%" -abslog="%LOG%" > "%LOG%.out" 2>&1
+"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%PROJ%" -game -WbKeinIntro -WbGoto=-180086,899031 -WbFahrTelemetrie %MANOEVER% %WBARGS% -WbQuitAfter=%QUIT% -windowed -ResX=1280 -ResY=720 -unattended -nop4 -ExecCmds="WbCam 1,WbDrive %DAUER%" -abslog="%LOG%" > "%LOG%.out" 2>&1
 set RC=%ERRORLEVEL%
 echo EXITCODE %RC% >> "%LOG%.out"
 call "%~dp0engine_run_lock.cmd" -Modus Freigeben > nul

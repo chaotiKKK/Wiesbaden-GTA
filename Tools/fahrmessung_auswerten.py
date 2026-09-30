@@ -134,6 +134,13 @@ def auswerten(proben):
         frueh = [p for p in bereich if p["t"] - proben[bremse]["t"] <= 2.0]
         k["Querbeschl. erste 2 s Bremsen [g]"] = sum(abs(p["ay"]) for p in frueh) / max(len(frueh), 1) / G
         k["Nicken Bremsen max [Grad]"] = max(abs(p["nick"]) for p in bereich)
+        # Belags-Griffigkeit (Telemetrie "grip"): auf welchem Belag Kurve und
+        # Bremsung WIRKLICH lagen - bei -WbWeather=Rain blendet der Regen erst
+        # ueber 8 s ein.
+        if "grip" in proben[bremse]:
+            kurve = [p for p in proben[(lenk_re or bremse):bremse] if "grip" in p]
+            if kurve:
+                k["Belagsgrip Kurve + Bremsen max"] = max(p["grip"] for p in kurve + bereich)
         # Federung: was tut die Karosserie NACH dem Stillstand? Ein Feder-Masse-
         # System schwingt zurueck (Vorzeichenwechsel des Nickens), eine reine
         # Glaettung kriecht ohne Umkehr auf null.

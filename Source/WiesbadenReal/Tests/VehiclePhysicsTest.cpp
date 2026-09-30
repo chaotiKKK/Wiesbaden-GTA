@@ -1423,7 +1423,13 @@ bool FVehicleSurfaceGripFromWorldTest::RunTest(const FString& Parameters)
 
 	TestTrue(FString::Printf(TEXT("Trocken = voller Grip (%.2f)"), Dry), FMath::IsNearlyEqual(Dry, 1.0f, 0.001f));
 	TestTrue(FString::Printf(TEXT("Regen senkt den Grip spuerbar (%.2f < 1)"), Wet), Wet < 0.85f);
-	TestTrue(TEXT("Grip faellt monoton mit der Naesse"), Half < Dry && Wet < Half);
+	TestTrue(TEXT("Grip faellt mit der Naesse (nie steigend)"), Half < Dry && Wet <= Half);
+
+	// Die Wetterlagen "Regen" (0,7) und "Gewitter" (1,0) sind gleich nass: 0,65,
+	// im Spiel gegen das Nass-Band von Gate 7 gemessen.
+	const float Regen = AWiesbadenCar::ComputeSurfaceGripScale(0.7f);
+	TestTrue(FString::Printf(TEXT("Regen (0,7) ist nass: %.3f"), Regen), FMath::IsNearlyEqual(Regen, 0.65f, 0.005f));
+	TestTrue(FString::Printf(TEXT("Gewitter (1,0) ebenso nass: %.3f"), Wet), FMath::IsNearlyEqual(Wet, 0.65f, 0.005f));
 	TestTrue(FString::Printf(TEXT("Grip bleibt fahrbar begrenzt (%.2f >= 0.1)"), Wet), Wet >= 0.1f);
 
 	// Eingaben werden geklemmt (robust gegen ueberzogene Intensitaeten).

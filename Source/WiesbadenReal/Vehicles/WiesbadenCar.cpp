@@ -307,11 +307,12 @@ AWiesbadenCar::AWiesbadenCar()
 
 float AWiesbadenCar::ComputeSurfaceGripScale(float RainIntensity)
 {
-	// Nasser Asphalt haelt deutlich weniger als trockener: bis 35 % Gripverlust
-	// bei vollem Niederschlag, linear mit der Naesse. Trocken -> 1,0.
-	const float WetGripLoss = 0.35f;
+	// Nasse Fahrbahn haelt 65 % des trockenen Grips - das Verhaeltnis nass/trocken
+	// der Literatur, auf die R&T-Werte des Kaefers uebertragen (Band und Quellen:
+	// SOLLWERTE_NASS in Tools/verify_fahrphysik.py). Ab mittlerem Regen (0,5) ist
+	// die Strasse nass, staerkerer Regen aendert nichts (kein Aquaplaning).
 	const float Rain = FMath::Clamp(RainIntensity, 0.0f, 1.0f);
-	return FMath::Clamp(1.0f - WetGripLoss * Rain, 0.1f, 1.0f);
+	return FMath::Clamp(1.0f - 0.35f * FMath::Min(Rain / 0.5f, 1.0f), 0.1f, 1.0f);
 }
 
 void AWiesbadenCar::BeginPlay()
@@ -1226,13 +1227,13 @@ void AWiesbadenCar::ApplyVehiclePhysics(float DeltaSeconds)
 				if (bWheelGroundHit[Index]) { GroundSum += WheelGroundZ[Index]; ++GroundHits; }
 			}
 			UE_LOG(LogWbVehicles, Log,
-				TEXT("WbFahrt t=%.2f v=%.2f ax=%.2f ay=%.2f gier=%.2f schwimm=%.2f lenk=%.3f gas=%.2f bremse=%.2f nick=%.2f wank=%.2f hub=%.2f spin=%d block=%d gleit=%d gang=%d boden=%.1f spalt=%.2f fz=%.2f"),
+				TEXT("WbFahrt t=%.2f v=%.2f ax=%.2f ay=%.2f gier=%.2f schwimm=%.2f lenk=%.3f gas=%.2f bremse=%.2f nick=%.2f wank=%.2f hub=%.2f spin=%d block=%d gleit=%d gang=%d boden=%.1f spalt=%.2f fz=%.2f grip=%.2f"),
 				Now, Output.SpeedKmh, Output.ForwardAccelerationMetersPerS2, LateralAccelMs2,
 				FMath::RadiansToDegrees(Output.YawRateRadPerS), Output.SlipAngleDeg,
 				Output.SteerAngleNorm, ThrottleInput, BrakeInput, BodyPitchDeg, BodyRollDeg,
 				TelemetryHeaveCm, Output.bWheelSpin ? 1 : 0, (Output.bWheelLock || Output.bAbsActive) ? 1 : 0,
 				Output.bWheelLock ? 1 : 0, Output.Gear,
-				GroundHits > 0 ? GroundSum / GroundHits : 0.0f, ComputeMaxWheelGapCm(), BodyHeaveCm);
+				GroundHits > 0 ? GroundSum / GroundHits : 0.0f, ComputeMaxWheelGapCm(), BodyHeaveCm, VehiclePhysics.SurfaceGripScale);
 		}
 	}
 }

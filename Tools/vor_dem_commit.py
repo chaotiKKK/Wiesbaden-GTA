@@ -20,7 +20,7 @@ WARUM ZWEI STUFEN - und das ist eine gemessene Entscheidung, keine Meinung:
     Gate B  Besitz               0 s   (Registry, kein Prozess)
     Gate 4  Plasmacutter-Bild   1 min  (startet den Unreal-Editor)
     Gate 5  Ankerzustand (WP)   3 min  (startet den Unreal-Editor)
-    Gate 7  Fahrphysik          3 min  (startet das Spiel: Messfahrt auf der Wiese)
+    Gate 7  Fahrphysik          6 min  (startet das Spiel: Messfahrten trocken + nass)
 
     Plattenplatz                0 s   (HINWEIS, kein Gate: Tools/platten_waechter.py.
                                          Im gesunden Fall ein Syscall, unter 20 Prozent

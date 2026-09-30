@@ -607,6 +607,14 @@ class FahrphysikGateTest(unittest.TestCase):
         self.assertIn("goto :nicht_gemessen", text,
                       "'nicht gemessen' (Exit 2) muss rot werden, nicht gruen")
 
+    def test_der_starter_faehrt_auch_nass(self):
+        """Seit 30.09.2026: zweite Messfahrt bei Regen, gegen das Nass-Band."""
+        text = (WURZEL / "Tools" / "verify_fahrphysik.cmd").read_text(
+            encoding="utf-8", errors="replace")
+        self.assertIn('set "WBARGS=-WbWeather=Rain"', text)
+        self.assertIn('--nass "!LOGNASS!"', text)
+        self.assertIn('if exist "!LOGNASS!" del "!LOGNASS!"', text)
+
     def test_der_starter_bewertet_kein_altes_log(self):
         """Endet der Editor ohne neues Log, darf die gruene Fahrt von gestern
         nicht bewertet werden - der Starter raeumt das Log vor der Fahrt."""
