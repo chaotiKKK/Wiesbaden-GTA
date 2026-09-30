@@ -332,19 +332,34 @@ class AusgabeKlasseTest(unittest.TestCase):
         self.assertNotIn(stamm, wurzeln, "der Stammordner ist loeschbar")
 
     def test_der_gate_worktree_durchlaesst_die_wurzelpruefung(self):
-        """Gegenprobe am echten Pfad - im Trockenlauf, es wird nichts geloescht."""
-        pfad = os.path.normpath(os.path.join(pw._gate_worktree_ordner(), "Intermediate"))
-        # Die Lock-Bremse ist an anderer Stelle getestet, mit Tempordnern. Hier
-        # wird sie abgeschaltet: sonst hiengt der Test daran, ob gerade ein
-        # fremder Gate-Lauf laeuft - der Test darf nicht von der Tagesform
-        # einer anderen Sitzung abhaengen.
-        with mock.patch.object(pw, "engine_lock_aktiv", return_value=False):
-            geloescht, abgewiesen = pw.reinigen(
-                [{"pfad": pfad, "klasse": pw.REGENERIERBAR, "grund": "Test",
-                  "bytes": 1, "dateien": 1, "vollstaendig": True}],
-                trocken=True, klassen=pw.MIT_AUSGABE)
-        self.assertEqual(geloescht, [pfad],
-                         "der Pfad wurde abgewiesen: %r" % (abgewiesen,))
+        """Gegenprobe am Pfad-MUSTER - im Trockenlauf, es wird nichts geloescht.
+
+        GEMESSEN 30.09.2026 (Push-Lauf wb_push18): mit dem REALen Pfad
+        hing der Test an der Tagesform einer fremden Sitzung. Raeumt
+        die den gemeinsamen Gate-Worktree genau zwischen Suite-Start
+        und Test, verschluckt reinigen() den Eintrag still (isdir-
+        Zweig) und der Test faellt OHNE Abgewiesen-Grund. Jetzt
+        spiegelt ein Tempordner das Muster (erlaubte Wurzel, darunter
+        der Projektordner mit Intermediate). Dass der echte Gate-
+        Worktree in den erlaubten Wurzeln liegt und sein Stamm nicht,
+        pinnt der Test davor - der braucht keine Existenz.
+        """
+        with tempfile_tmp() as t:
+            os.makedirs(os.path.join(t, "Projekt"))
+            pfad = os.path.normpath(os.path.join(t, "Projekt", "Intermediate"))
+            os.makedirs(pfad)
+            # Die Lock-Bremse ist an anderer Stelle getestet, mit Tempordnern.
+            # Hier wird sie abgeschaltet: sonst haengt der Test daran, ob
+            # gerade ein fremder Gate-Lauf laeuft.
+            with mock.patch.object(pw, "erlaubte_wurzeln",
+                                   return_value=(os.path.normpath(t).lower(),)), \
+                 mock.patch.object(pw, "engine_lock_aktiv", return_value=False):
+                geloescht, abgewiesen = pw.reinigen(
+                    [{"pfad": pfad, "klasse": pw.REGENERIERBAR, "grund": "Test",
+                      "bytes": 1, "dateien": 1, "vollstaendig": True}],
+                    trocken=True, wurzel=t, klassen=pw.MIT_AUSGABE)
+            self.assertEqual(geloescht, [pfad],
+                             "der Pfad wurde abgewiesen: %r" % (abgewiesen,))
 
     def test_der_cache_kennt_die_gemessene_kandidatenliste(self):
         """Ein alter Messstand darf nicht fuer eine neue Liste sprechen.
