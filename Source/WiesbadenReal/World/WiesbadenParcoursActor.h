@@ -36,8 +36,9 @@ public:
 	AWiesbadenParcours();
 
 	/** Fuer diesen Wagen aufbauen, sobald er ruhig steht (nach -WbGoto).
-	 *  FahrerModus: 0 = selbst fahren, 1 = Fahrer sauber, 2 = Fahrer mit Fehlern. */
-	void Starten(APawn* Fahrzeug, int32 FahrerModus);
+	 *  FahrerModus: 0 = selbst fahren, 1 = Fahrer sauber, 2 = Fahrer mit Fehlern.
+	 *  bRegen: erst aufbauen, wenn die Strasse nass ist (Regen-Variante). */
+	void Starten(APawn* Fahrzeug, int32 FahrerModus, bool bRegen = false);
 
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -61,6 +62,7 @@ private:
 	void KegelUmwerfen(int32 Index);
 	void Melden(const FString& Text);
 	void AmZiel();
+	static float BelagsGripVon(const APawn* Pawn);
 
 	UPROPERTY()
 	TObjectPtr<UStaticMesh> KegelMesh;
@@ -78,6 +80,11 @@ private:
 	TWeakObjectPtr<APawn> Wagen;
 	bool bMitFahrer = false;
 	bool bFahrerFehler = false;
+	bool bRegenVerlangt = false;
+	bool bWarteAufNaesseGemeldet = false;
+	/** Bestzeit der gefahrenen Variante VOR diesem Lauf (0 = keine). */
+	float BestzeitVorher = 0.0f;
+	bool bNeueBestzeit = false;
 	/** Der Fahrer hat die externe Steuerung gesetzt und noch nicht geloest -
 	 *  nur dann loest der Parcours sie (einmal), nie eine fremde (WbDrive). */
 	bool bSteuertWagen = false;
@@ -90,6 +97,7 @@ private:
 	// Aufbau erst, wenn der Wagen 1 s ruhig steht - ein -WbGoto versetzt ihn
 	// nach dem Start; springt er vor dem Start weiter weg, wird neu aufgebaut.
 	FVector RuhePos = FVector::ZeroVector;
+	float RuheGrip = 1.0f;
 	float RuheSekunden = 0.0f;
 
 	FVector2D Ursprung = FVector2D::ZeroVector;   // Startlinie (Welt-XY, cm)

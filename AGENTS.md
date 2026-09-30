@@ -5183,6 +5183,19 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
 - Ein Clip mit fester Zeitschrittweite (10 fps = 0,1 s) aendert die Runde kaum
   (41,5 statt 42,1 s), verlangsamt aber das Spiel gegen die Wanduhr:
   -WbQuitAfter grosszuegig setzen, sonst endet der Lauf vor dem Ziel.
+- REGEN-VARIANTE (30.09.2026): `WbParcours <Fahrer> 1` laesst es regnen
+  (`parcours_lauf.cmd ... regen`); Regenwertung, wenn der Belagsgrip die GANZE
+  Runde <= 0,70 war (auch mit -WbWeather=Rain). Eigene Grenzen 52/62/79 s
+  (Fahrer 47,6 s, trocken 42,1 s) und je Variante eine Bestzeit in
+  GameUserSettings `[WiesbadenReal.Parcours]` - der Fahrer (1/2) traegt NIE ein.
+  Falle: der Regen blendet ueber 8 s ein; ohne Warten auf ruhigen Belag baute
+  der Parcours nach 2 s auf, und eine volle Regenfahrt zaehlte trocken (Silber).
+- Mehrere Engine-Laeufe in EINEM .cmd mit `>> datei` hintereinander: nach dem
+  Spielende blieb die Ausgabedatei einige Minuten gesperrt ("Der Prozess kann
+  nicht auf die Datei zugreifen", vermutlich ein Hilfsprozess mit geerbtem
+  Handle - nicht belegt) - die naechste Umleitung scheitert, und cmd fuehrt den
+  Befehl dann GAR NICHT aus (Lauf 2 fehlte still). Je Lauf eigene Datei/eigener
+  Start; wohl dieselbe Ursache wie die leere `.out` (EXITCODE) der Fahrmessung.
 
 ## Gate 7: Fahrphysik-Messfahrt gegen die Sollwerte (29.09.2026)
 
@@ -5196,6 +5209,12 @@ ddagrab - bricht ab, sobald ein Fenster vor dem Spiel liegt), sondern mit
   Kalibrierung 4 x ROT, mit 820 kg 0-60 ROT, kalibriert GRUEN.
 - Sollwerte AENDERN heisst neu kalibrieren und belegen - nicht das Band
   weiten, bis ein Rueckfall durchpasst.
+- NASS (30.09.2026): zweite Messfahrt mit `-WbWeather=Rain` (per WBARGS an
+  fahrmessung.cmd), Gate 7 dauert damit ~6 min. Das Nass-Band ist aus
+  Literatur-Verhaeltnissen ABGELEITET (`SOLLWERTE_NASS`) - eine
+  zeitgenoessische Kaefer-Nassmessung gibt es nicht. Die Telemetrie fuehrt
+  `grip=`; ohne Belagsgrip <= 0,80 in Kurve und Bremsung zaehlt eine Fahrt
+  nicht als nass.
 - Engine-Sperre im Push: der Hook haelt sie ab Gate 0. Seit 30.09.2026 gibt
   `engine_run_lock.ps1 -Modus Freigeben` nur die Sperre des EIGENEN Laufs frei
   (Besitzer = Elternprozess des Aufrufs); gehoert sie einem umschliessenden

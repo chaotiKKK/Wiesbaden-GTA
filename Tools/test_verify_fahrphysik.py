@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -33,6 +34,23 @@ VOR_GRIP = dict(KALIBRIERT, **{  # feder_nachher1: mu 0,75, Bremse 5600 N
     "mittl. Verzoegerung [g]": 0.64,
 })
 MIT_820_KG = dict(KALIBRIERT, **{"0-60 mph (96,6 km/h) [s]": 15.44})
+
+# Nass (-WbWeather=Rain), gemessen am 30.09.2026.
+NASS_VORHER = {  # nass_vorher1: linearer Verlust, Regen 0,7 -> Grip 0,75
+    "Belagsgrip Kurve + Bremsen max": 0.75,
+    "Querbeschl. max rechts [g]": 0.544,
+    "Querbeschl. max links [g]": 0.53,
+    "Bremsweg auf 100 km/h normiert [m]": 63.99,
+    "mittl. Verzoegerung [g]": 0.61,
+    "Raeder gleiten beim Bremsen [%]": 0.0,
+}
+NASS_KALIBRIERT = dict(NASS_VORHER, **{  # Grip 0,65 (sturm_vorher1 = neuer Regenwert)
+    "Belagsgrip Kurve + Bremsen max": 0.65,
+    "Querbeschl. max rechts [g]": 0.47,
+    "Querbeschl. max links [g]": 0.46,
+    "Bremsweg auf 100 km/h normiert [m]": 69.66,
+    "mittl. Verzoegerung [g]": 0.56,
+})
 
 
 class Kennzahlen(unittest.TestCase):
@@ -70,6 +88,61 @@ class Kennzahlen(unittest.TestCase):
         self.assertEqual(vf.pruefe_kennzahlen(k)[0], vf.NICHT_GEMESSEN)
         del k["0-60 mph (96,6 km/h) [s]"]
         self.assertEqual(vf.pruefe_kennzahlen(k)[0], vf.NICHT_GEMESSEN)
+
+
+class Nass(unittest.TestCase):
+    def test_kalibriert_nass_ist_gruen(self):
+        code, zeilen = vf.pruefe_kennzahlen(NASS_KALIBRIERT, vf.SOLLWERTE_NASS)
+        self.assertEqual(code, vf.GRUEN, "\n".join(zeilen))
+
+    def test_vor_der_nass_kalibrierung_ist_rot(self):
+        code, zeilen = vf.pruefe_kennzahlen(NASS_VORHER, vf.SOLLWERTE_NASS)
+        self.assertEqual(code, vf.ROT)
+        rot = [z for z in zeilen if "[ROT]" in z]
+        for name in ("Bremsweg", "Verzoegerung"):
+            self.assertTrue(any(name in z for z in rot), "%s nicht rot: %s" % (name, rot))
+
+    def test_eine_trockene_fahrt_zaehlt_nicht_als_nass(self):
+        """Erreicht der Regen die Strasse nicht (Grip 1,0), ist das rot - auch
+        wenn die Werte zufaellig passen wuerden."""
+        k = dict(NASS_KALIBRIERT, **{"Belagsgrip Kurve + Bremsen max": 1.0})
+        self.assertEqual(vf.pruefe_kennzahlen(k, vf.SOLLWERTE_NASS)[0], vf.ROT)
+
+    def test_ohne_grip_telemetrie_nicht_gemessen(self):
+        k = dict(NASS_KALIBRIERT)
+        del k["Belagsgrip Kurve + Bremsen max"]
+        self.assertEqual(vf.pruefe_kennzahlen(k, vf.SOLLWERTE_NASS)[0], vf.NICHT_GEMESSEN)
+
+    def test_gesamt(self):
+        self.assertEqual(vf.gesamt([vf.GRUEN, vf.GRUEN]), vf.GRUEN)
+        self.assertEqual(vf.gesamt([vf.GRUEN, vf.ROT]), vf.ROT)
+        self.assertEqual(vf.gesamt([vf.ROT, vf.NICHT_GEMESSEN]), vf.NICHT_GEMESSEN)
+
+    def gate(self, code_nass):
+        """main() mit GRUENER trockener Fahrt - das Urteil haengt dann allein
+        an der Nass-Fahrt (Review: fehlten beide Logs, kam "nicht gemessen"
+        schon aus der trockenen, und ein verworfenes Nass-Ergebnis fiel nicht auf)."""
+        def pruefe_log(pfad, sollwerte=None):
+            if sollwerte is vf.SOLLWERTE_NASS:
+                return code_nass, ["  nass"]
+            return vf.GRUEN, ["  trocken"]
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(vf, "ERGEBNIS", os.path.join(tmp, "fahrphysik_gate.txt")), \
+                mock.patch.object(vf, "pruefe_log", side_effect=pruefe_log):
+            code = vf.main(["x", "trocken.log", "--nass", "nass.log"])
+            with open(vf.ERGEBNIS, encoding="utf-8") as f:
+                return code, f.read()
+
+    def test_fehlt_die_nass_fahrt_ist_das_gate_nicht_gemessen(self):
+        code, text = self.gate(vf.NICHT_GEMESSEN)
+        self.assertEqual(code, vf.NICHT_GEMESSEN)
+        self.assertIn("Nass (-WbWeather=Rain):", text)
+
+    def test_rote_nass_fahrt_macht_das_gate_rot(self):
+        self.assertEqual(self.gate(vf.ROT)[0], vf.ROT)
+
+    def test_beide_gruen_ist_gruen(self):
+        self.assertEqual(self.gate(vf.GRUEN)[0], vf.GRUEN)
 
 
 class Logdatei(unittest.TestCase):

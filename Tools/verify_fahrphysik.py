@@ -8,7 +8,9 @@ Ein Umbau an Masse, Grip, Bremse, Antrieb oder an der Einbindung in die Welt
 (Bodenkontakt, Federung, Zeitschritt), der das Fahrgefuehl verschiebt, faellt
 so vor dem Push auf und nicht Wochen spaeter.
 
-    python Tools/verify_fahrphysik.py [Saved/Logs/wb_fahrmessung_<Name>.log]
+    python Tools/verify_fahrphysik.py [trocken.log] [--nass nass.log]
+
+--nass prueft zusaetzlich die Regenfahrt (-WbWeather=Rain) gegen SOLLWERTE_NASS.
 
 Rueckgabe: 0 = alle Kennzahlen im Sollband, 1 = mindestens eine daneben,
 2 = NICHT GEMESSEN (Log fehlt, Lauf nicht zu Ende, zu wenige Proben,
@@ -26,6 +28,7 @@ import fahrmessung_auswerten as fa  # noqa: E402
 
 WURZEL = os.path.dirname(HIER)
 STANDARD_LOG = os.path.join(WURZEL, "Saved", "Logs", "wb_fahrmessung_gate_fahrphysik.log")
+STANDARD_LOG_NASS = os.path.join(WURZEL, "Saved", "Logs", "wb_fahrmessung_gate_fahrphysik_nass.log")
 ERGEBNIS = os.path.join(WURZEL, "Saved", "Diagnose", "fahrphysik_gate.txt")
 
 GRUEN, ROT, NICHT_GEMESSEN = 0, 1, 2
@@ -54,12 +57,33 @@ SOLLWERTE = [
 ]
 
 
-def pruefe_kennzahlen(k):
+# Nasse Fahrbahn (-WbWeather=Rain): keine zeitgenoessische Nassmessung des
+# Kaefers gefunden - das Band ist das Verhaeltnis nass/trocken der Literatur
+# (Wong, Theory of Ground Vehicles: Haftbeiwert 0,80-0,90 trocken, 0,50-0,70
+# nass; Unfallaufnahme-Anhaltwerte Asphalt 7,5-8,0 / 6,0 m/s^2; moderne Pkw
+# 9,5 / 6 m/s^2), angewandt auf die trockenen R&T-Werte (0,76 g, 0,704 g).
+SOLLWERTE_NASS = [
+    ("Belagsgrip Kurve + Bremsen max", None, 0.80,
+     "nass gefahren - der Regen muss die Strasse erreichen"),
+    ("Querbeschl. max rechts [g]", 0.44, 0.54,
+     "nass: 0,704 g x 0,63..0,77"),
+    ("Querbeschl. max links [g]", 0.44, 0.54,
+     "nass: 0,704 g x 0,63..0,77"),
+    ("Bremsweg auf 100 km/h normiert [m]", 66.0, 82.0,
+     "nass: 0,48..0,59 g aus 100 km/h"),
+    ("mittl. Verzoegerung [g]", 0.48, 0.59,
+     "nass: 0,76 g x 0,63..0,77"),
+    ("Raeder gleiten beim Bremsen [%]", None, 5.0,
+     "ABS: die Raeder gleiten auch nass nicht"),
+]
+
+
+def pruefe_kennzahlen(k, sollwerte=None):
     """(Code, Zeilen) fuer die Kennzahlen einer Fahrt."""
     zeilen = []
     fehlt = []
     rot = []
-    for name, unten, oben, bezug in SOLLWERTE:
+    for name, unten, oben, bezug in (SOLLWERTE if sollwerte is None else sollwerte):
         wert = k.get(name)
         if not isinstance(wert, (int, float)):
             fehlt.append(name)
@@ -76,7 +100,7 @@ def pruefe_kennzahlen(k):
     return (ROT if rot else GRUEN), zeilen
 
 
-def pruefe_log(pfad):
+def pruefe_log(pfad, sollwerte=None):
     """(Code, Zeilen) fuer eine Messfahrt-Logdatei."""
     if not os.path.isfile(pfad):
         return NICHT_GEMESSEN, ["  [fehlt] Log %s - die Messfahrt lief nicht" % pfad]
@@ -92,13 +116,30 @@ def pruefe_log(pfad):
     kennzahlen = fa.auswerten(proben)
     if "Fehler" in kennzahlen:
         return NICHT_GEMESSEN, ["  [fehlt] %s" % kennzahlen["Fehler"]]
-    code, zeilen = pruefe_kennzahlen(kennzahlen)
+    code, zeilen = pruefe_kennzahlen(kennzahlen, sollwerte)
     return code, ["  %d Proben aus %s" % (len(proben), pfad)] + zeilen
 
 
+def gesamt(codes):
+    """Nicht gemessen schlaegt rot, rot schlaegt gruen."""
+    if NICHT_GEMESSEN in codes:
+        return NICHT_GEMESSEN
+    return ROT if ROT in codes else GRUEN
+
+
 def main(argv):
-    pfad = argv[1] if len(argv) > 1 else STANDARD_LOG
+    args = list(argv[1:])
+    nass = None
+    if "--nass" in args:
+        i = args.index("--nass")
+        nass = args[i + 1] if i + 1 < len(args) else STANDARD_LOG_NASS
+        del args[i:i + 2]
+    pfad = args[0] if args else STANDARD_LOG
     code, zeilen = pruefe_log(pfad)
+    if nass is not None:
+        code_nass, zeilen_nass = pruefe_log(nass, SOLLWERTE_NASS)
+        zeilen = ["  Trocken:"] + zeilen + ["  Nass (-WbWeather=Rain):"] + zeilen_nass
+        code = gesamt([code, code_nass])
     kopf = {GRUEN: "GRUEN - Fahrphysik im Sollband",
             ROT: "ROT - Fahrphysik ausserhalb der Sollwerte",
             NICHT_GEMESSEN: "ROT - nicht gemessen"}[code]

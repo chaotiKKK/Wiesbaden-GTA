@@ -9,6 +9,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "Misc/ConfigCacheIni.h"
 #include "UObject/ConstructorHelpers.h"
 
 #include "UI/WiesbadenVehicleHUD.h"
@@ -44,13 +45,16 @@ AWiesbadenParcours* AWiesbadenParcours::Aktiver(const UWorld* World)
 	return (P && P->GetWorld() == World) ? P : nullptr;
 }
 
-void AWiesbadenParcours::Starten(APawn* Fahrzeug, int32 FahrerModus)
+void AWiesbadenParcours::Starten(APawn* Fahrzeug, int32 FahrerModus, bool bRegen)
 {
 	Wagen = Fahrzeug;
 	bMitFahrer = FahrerModus != 0;
 	bFahrerFehler = FahrerModus == 2;
+	bRegenVerlangt = bRegen;
+	bWarteAufNaesseGemeldet = false;
 	bAufgebaut = false;
 	RuhePos = Fahrzeug ? Fahrzeug->GetActorLocation() : FVector::ZeroVector;
+	RuheGrip = BelagsGripVon(Fahrzeug);
 	RuheSekunden = 0.0f;
 	Zuletzt = this;
 }
@@ -196,6 +200,12 @@ void AWiesbadenParcours::Aufbauen()
 	Melden(TEXT("Durchs Starttor - Kegel 1 links umfahren"));
 }
 
+float AWiesbadenParcours::BelagsGripVon(const APawn* Pawn)
+{
+	const AWiesbadenCar* Car = Cast<AWiesbadenCar>(Pawn);
+	return Car ? Car->VehiclePhysics.SurfaceGripScale : 1.0f;
+}
+
 void AWiesbadenParcours::KegelUmwerfen(int32 Index)
 {
 	if (!Kegel.IsValidIndex(Index) || !Kegel[Index] || !Wagen.IsValid())
@@ -231,7 +241,11 @@ void AWiesbadenParcours::Tick(float DeltaSeconds)
 
 	if (!bAufgebaut)
 	{
-		if (FVector::Dist(Pos, RuhePos) < 20.0f)
+		// Ruhig = Wagen UND Belag: blendet der Regen gerade ein (8 s), startete
+		// die Runde halb trocken und zaehlte trocken - gemessen mit
+		// -WbWeather=Rain, Aufbau nach 2 s: 47,6 s Regenfahrt, trocken gewertet.
+		const float Grip = BelagsGripVon(Pawn);
+		if (FVector::Dist(Pos, RuhePos) < 20.0f && FMath::Abs(Grip - RuheGrip) < 0.01f)
 		{
 			RuheSekunden += DeltaSeconds;
 		}
@@ -239,8 +253,16 @@ void AWiesbadenParcours::Tick(float DeltaSeconds)
 		{
 			RuheSekunden = 0.0f;
 			RuhePos = Pos;
+			RuheGrip = Grip;
 		}
-		if (RuheSekunden >= 1.0f)
+		// Regen verlangt: erst aufbauen, wenn die Strasse nass ist.
+		const bool bNass = Grip <= FWbParcoursBewertung::RegenGripBis;
+		if (RuheSekunden >= 1.0f && bRegenVerlangt && !bNass && !bWarteAufNaesseGemeldet)
+		{
+			bWarteAufNaesseGemeldet = true;
+			Melden(TEXT("Warte auf nasse Strasse"));
+		}
+		if (RuheSekunden >= 1.0f && (!bRegenVerlangt || bNass))
 		{
 			Aufbauen();
 		}
@@ -253,6 +275,7 @@ void AWiesbadenParcours::Tick(float DeltaSeconds)
 	P.Kmh = Ctrl ? FMath::Abs(Ctrl->GetSpeedKmh()) : 0.0f;
 	P.bHandbremse = Ctrl && Ctrl->IsHandbrakeApplied();
 	P.DtSekunden = DeltaSeconds;
+	P.BelagsGrip = BelagsGripVon(Pawn);
 
 	// Vor dem Start VERSETZT (-WbGoto, WbTeleport - ein Sprung in einem Bild):
 	// an der neuen Stelle neu aufbauen. Wegfahren vor dem Start ist erlaubt;
@@ -332,18 +355,33 @@ void AWiesbadenParcours::AmZiel()
 {
 	NachZielSekunden = 0.0f;
 	const FWbParcoursErgebnis E = Bewertung.GetErgebnis();
+
+	// Bestzeit je Variante in den Spieler-Einstellungen. Nur eigene Runden:
+	// der Nachweis-Fahrer (WbParcours 1/2) liest, traegt aber nie ein.
+	FConfigFile* Ini = GConfig ? GConfig->FindConfigFile(GGameUserSettingsIni) : nullptr;
+	BestzeitVorher = Ini ? FWbParcoursBestzeit::Lesen(*Ini, E.bRegen) : 0.0f;
+	bNeueBestzeit = false;
+	if (E.bImZiel && !bMitFahrer && Ini && FWbParcoursBestzeit::Eintragen(*Ini, E.bRegen, E.GesamtSekunden))
+	{
+		bNeueBestzeit = true;
+		GConfig->Flush(false, GGameUserSettingsIni);
+	}
+
 	UE_LOG(LogWbCore, Log,
-		TEXT("Parcours-Ergebnis: %s, Fahrzeit %.1f s, Strafe %.0f s, Gesamt %.1f s, Kegel %d, Tore %d, Linie %.0f km/h, Box %.1f m, Handbremse %d, Wendezone verfehlt %d, Sauberkeit %d, Medaille %s."),
-		E.bImZiel ? TEXT("im Ziel") : TEXT("abgebrochen"), E.FahrzeitSekunden, E.StrafSekunden, E.GesamtSekunden,
+		TEXT("Parcours-Ergebnis: %s, %s (Belagsgrip max %.2f), Fahrzeit %.1f s, Strafe %.0f s, Gesamt %.1f s, Kegel %d, Tore %d, Linie %.0f km/h, Box %.1f m, Handbremse %d, Wendezone verfehlt %d, Sauberkeit %d, Medaille %s, Bestzeit vorher %.1f s%s."),
+		E.bImZiel ? TEXT("im Ziel") : TEXT("abgebrochen"), E.bRegen ? TEXT("Regen") : TEXT("trocken"),
+		E.BelagsGripMax, E.FahrzeitSekunden, E.StrafSekunden, E.GesamtSekunden,
 		E.KegelGetroffen, E.TorFehler, E.KmhAnBremslinie, E.StoppAbweichungM, E.bHandbremseGenutzt ? 1 : 0,
-		E.bWendezoneVerfehlt ? 1 : 0, E.Sauberkeit, E.Medaille.IsEmpty() ? TEXT("-") : *E.Medaille);
+		E.bWendezoneVerfehlt ? 1 : 0, E.Sauberkeit, E.Medaille.IsEmpty() ? TEXT("-") : *E.Medaille, BestzeitVorher,
+		bNeueBestzeit ? TEXT(", NEUE BESTZEIT") : (bMitFahrer ? TEXT(", Fahrer-Lauf traegt nicht ein") : TEXT("")));
 
 	const APawn* Pawn = Wagen.Get();
 	const APlayerController* PC = Pawn ? Cast<APlayerController>(Pawn->GetController()) : nullptr;
 	if (AWiesbadenVehicleHUD* HUD = PC ? Cast<AWiesbadenVehicleHUD>(PC->GetHUD()) : nullptr)
 	{
 		HUD->ShowTransientHint(E.bImZiel
-			? FString::Printf(TEXT("Parcours: %.1f s - Sauberkeit %d %% - %s"), E.GesamtSekunden, E.Sauberkeit, *E.Medaille)
+			? FString::Printf(TEXT("Parcours%s: %.1f s - Sauberkeit %d %% - %s%s"), E.bRegen ? TEXT(" (Regen)") : TEXT(""),
+				E.GesamtSekunden, E.Sauberkeit, *E.Medaille, bNeueBestzeit ? TEXT(" - neue Bestzeit!") : TEXT(""))
 			: FString(TEXT("Parcours abgebrochen (Zeitlimit)")));
 	}
 }
@@ -356,11 +394,12 @@ bool AWiesbadenParcours::HudSichtbar() const
 FString AWiesbadenParcours::HudTitel() const
 {
 	const FWbParcoursErgebnis E = Bewertung.GetErgebnis();
+	const TCHAR* Variante = E.bRegen ? TEXT("Parcours (Regen)") : TEXT("Parcours");
 	if (E.bImZiel)
 	{
-		return FString::Printf(TEXT("Parcours - Ziel: %s"), *E.Medaille);
+		return FString::Printf(TEXT("%s - Ziel: %s"), Variante, *E.Medaille);
 	}
-	return FString::Printf(TEXT("Parcours - %s"), WbParcoursAbschnittName(Bewertung.GetAbschnitt()));
+	return FString::Printf(TEXT("%s - %s"), Variante, WbParcoursAbschnittName(Bewertung.GetAbschnitt()));
 }
 
 FString AWiesbadenParcours::HudZeile() const
@@ -368,8 +407,10 @@ FString AWiesbadenParcours::HudZeile() const
 	const FWbParcoursErgebnis E = Bewertung.GetErgebnis();
 	if (Bewertung.IstFertig())
 	{
-		return FString::Printf(TEXT("Gesamt %.1f s (Fahrt %.1f + Strafe %.0f)  -  Sauberkeit %d %%"),
-			E.GesamtSekunden, E.FahrzeitSekunden, E.StrafSekunden, E.Sauberkeit);
+		const FString Bestzeit = bNeueBestzeit ? FString(TEXT("  -  neue Bestzeit!"))
+			: (BestzeitVorher > 0.0f ? FString::Printf(TEXT("  -  Bestzeit %.1f s"), BestzeitVorher) : FString());
+		return FString::Printf(TEXT("Gesamt %.1f s (Fahrt %.1f + Strafe %.0f)  -  Sauberkeit %d %%%s"),
+			E.GesamtSekunden, E.FahrzeitSekunden, E.StrafSekunden, E.Sauberkeit, *Bestzeit);
 	}
 	return FString::Printf(TEXT("Zeit %.1f s  -  Strafe +%.0f s  -  Kegel %d"),
 		E.FahrzeitSekunden, E.StrafSekunden, E.KegelGetroffen);
