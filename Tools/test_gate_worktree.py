@@ -45,6 +45,63 @@ class PushEingabeTest(unittest.TestCase):
         self.assertEqual(gw.je_baum_einer([A, B, "c" * 40], baeume.get), [A, "c" * 40])
 
 
+class EndstandTest(unittest.TestCase):
+    """Ein Commit, der WAEHREND des Gates entsteht, darf nicht ungeprueft
+    hinausgehen: ueber HTTPS loest git die Refs erst nach dem Hook auf."""
+
+    EINGABE = "refs/heads/x %s refs/heads/x %s\n" % (A, gw.NULL_SHA)
+
+    def test_unbewegter_zweig_ist_in_ordnung(self):
+        self.assertEqual(gw.verschobene_refs(".", self.EINGABE, {"refs/heads/x": A}.get), [])
+
+    def test_ein_neuer_commit_auf_dem_zweig_wird_gemeldet(self):
+        self.assertEqual(gw.verschobene_refs(".", self.EINGABE, {"refs/heads/x": B}.get),
+                         [("refs/heads/x", A, B)])
+
+    def test_loeschungen_und_unaufloesbare_namen_zaehlen_nicht(self):
+        text = "(delete) %s refs/heads/y %s\n%s %s refs/heads/z %s\n" % (gw.NULL_SHA, A, A, A, gw.NULL_SHA)
+        self.assertEqual(gw.verschobene_refs(".", text, lambda ref: ""), [])
+
+    def push(self, jetzt):
+        """push_pruefen mit gruenem Gate; der Zweig zeigt danach auf `jetzt`."""
+        def git(cwd, *args, pruefen=True):
+            return "baum\n" if args[-1].endswith("^{tree}") else jetzt + "\n"
+        with mock.patch.object(gw, "ist_im_gate_worktree", return_value=False), \
+                mock.patch.object(gw, "motor_sperre", return_value=True), \
+                mock.patch.object(gw, "pruefen", return_value=0), \
+                mock.patch.object(gw, "git", side_effect=git), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            return gw.push_pruefen(Path("."), self.EINGABE), out.getvalue()
+
+    def test_bewegt_sich_der_zweig_waehrend_des_gates_wird_abgewiesen(self):
+        code, text = self.push(B)
+        self.assertEqual(code, 1, text)
+        self.assertIn("refs/heads/x: geprueft %s, jetzt %s" % (A[:10], B[:10]), text)
+
+    def test_unbewegt_geht_der_push_durch(self):
+        code, text = self.push(A)
+        self.assertEqual(code, 0, text)
+
+    def test_mit_echtem_git(self):
+        """Echtes Repo: geprueft Commit 1, dann entsteht Commit 2 auf dem Zweig."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+
+        def git(*args):
+            return subprocess.run(["git", *args], cwd=str(tmp), check=True, capture_output=True,
+                                  text=True, env=gw.saubere_umgebung()).stdout.strip()
+        git("init", "-q", "-b", "main")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        git("commit", "-q", "--allow-empty", "-m", "eins")
+        eins = git("rev-parse", "HEAD")
+        eingabe = "refs/heads/main %s refs/heads/main %s\n" % (eins, gw.NULL_SHA)
+        self.assertEqual(gw.verschobene_refs(tmp, eingabe), [])
+        git("commit", "-q", "--allow-empty", "-m", "zwei (waehrend des Gates)")
+        zwei = git("rev-parse", "HEAD")
+        self.assertEqual(gw.verschobene_refs(tmp, eingabe), [("refs/heads/main", eins, zwei)])
+
+
 class StadtinhaltTest(unittest.TestCase):
     """Verlinkt wird die gebackene Stadt - nie fremde Einzeldateien."""
 
@@ -559,7 +616,8 @@ class PipelineLockTest(unittest.TestCase):
         folge = []
         with mock.patch.object(gw, "motor_sperre", side_effect=lambda name: folge.append("lock") or True), \
                 mock.patch.object(gw, "pruefen", side_effect=lambda p, sha: folge.append(sha) or 0), \
-                mock.patch.object(gw, "git", side_effect=lambda cwd, *a, **k: a[1] + "\n"), \
+                mock.patch.object(gw, "git", side_effect=lambda cwd, *a, **k:
+                                  {"refs/heads/x": A, "refs/heads/y": B}.get(a[-1], a[1]) + "\n"), \
                 mock.patch("sys.stdout", io.StringIO()):
             rc = gw.push_pruefen(WURZEL, "refs/heads/x %s refs/heads/x %s\nrefs/heads/y %s refs/heads/y %s\n"
                                  % (A, B, B, A))

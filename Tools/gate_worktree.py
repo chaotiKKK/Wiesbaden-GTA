@@ -89,19 +89,50 @@ def git(cwd, *args, pruefen=True):
     return fertig.stdout
 
 
-def push_shas(stdin_text):
-    """Die lokalen Commits aus der pre-push-Eingabe ("<ref> <sha> <ref> <sha>" je Zeile).
-
-    Loeschungen (lokaler Sha nur Nullen) pruefen nichts; jeder Commit nur einmal.
-    """
-    shas = []
+def push_zeilen(stdin_text):
+    """(lokaler Ref, lokaler Sha) je Zeile der pre-push-Eingabe
+    ("<ref> <sha> <ref> <sha>"). Loeschungen (lokaler Sha nur Nullen) und
+    unvollstaendige Zeilen fallen weg."""
+    zeilen = []
     for zeile in stdin_text.splitlines():
         teile = zeile.split()
-        if len(teile) < 4 or teile[1] == NULL_SHA:
-            continue
-        if teile[1] not in shas:
-            shas.append(teile[1])
+        if len(teile) >= 4 and teile[1] != NULL_SHA:
+            zeilen.append((teile[0], teile[1]))
+    return zeilen
+
+
+def push_shas(stdin_text):
+    """Die lokalen Commits aus der pre-push-Eingabe, jeder nur einmal."""
+    shas = []
+    for _ref, sha in push_zeilen(stdin_text):
+        if sha not in shas:
+            shas.append(sha)
     return shas
+
+
+def verschobene_refs(projekt, stdin_text, aufloesen=None):
+    """Refs, die inzwischen auf einen anderen Commit zeigen als geprueft wurde.
+
+    WARUM: ueber HTTPS reicht git die Refs dem Transport-Helfer
+    (git-remote-https) per NAMEN weiter, und der loest sie erst NACH diesem
+    Hook auf. Entsteht waehrend des Gates ein Commit auf dem Zweig, geht DER
+    hinaus - ungeprueft. Gemessen am 30.09.2026: das Gate pruefte af8a523,
+    GitHub legte feature/fahrphysik-nass mit b86ab49 an. Lokal nachgebaut mit
+    git http-backend (.planning/push-luecke): ueber HTTP kam der neue Stand an,
+    ueber einen lokalen Pfad der gepruefte.
+
+    Liefert (Ref, geprueft, jetzt). Laesst sich ein Name nicht aufloesen (etwa
+    ein Sha als Quelle), gibt es nichts nachzuloesen.
+    """
+    if aufloesen is None:
+        def aufloesen(ref):
+            return git(projekt, "rev-parse", "--verify", "-q", ref, pruefen=False).strip()
+    verschoben = []
+    for ref, sha in push_zeilen(stdin_text):
+        jetzt = aufloesen(ref)
+        if jetzt and jetzt != sha:
+            verschoben.append((ref, sha, jetzt))
+    return verschoben
 
 
 def je_baum_einer(shas, baum_von):
@@ -492,6 +523,17 @@ def push_pruefen(projekt, stdin_text):
             print("\nGate ROT fuer %s - der Push wird abgewiesen." % sha[:10])
             print("Wenn das so gewollt ist: git push --no-verify")
             return 1
+    # Erst JETZT, nach dem Gate: hat sich ein Zweig bewegt, wuerde git ueber
+    # HTTPS den neuen Stand senden (verschobene_refs). Die Pruefung kurz vor
+    # dem Ende laesst nur noch den Augenblick bis zum Senden offen.
+    verschoben = verschobene_refs(projekt, stdin_text)
+    if verschoben:
+        print("\nWaehrend des Gates hat sich der Zweig bewegt - der Push wird abgewiesen:")
+        for ref, geprueft, jetzt in verschoben:
+            print("  %s: geprueft %s, jetzt %s" % (ref, geprueft[:10], jetzt[:10]))
+        print("Ueber HTTPS ginge der NEUE Stand hinaus - ungeprueft. Erneut pushen,")
+        print("dann prueft das Gate ihn.")
+        return 1
     print("Gate gruen fuer %d Commit(s) im sauberen Worktree." % len(auswahl))
     return 0
 
