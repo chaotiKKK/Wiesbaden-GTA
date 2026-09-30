@@ -20,7 +20,14 @@ Jeder Löschlauf schreibt sein Protokoll VOR dem Eingriff nach
 
 ## Die drei Schwellen
 
-- **20 %** — der Wächter meldet (Hinweis im Gate-Log, kein Gate).
+- **20 %** — der Wächter meldet (Hinweis im Gate-Log, kein Gate). Seit
+  30.09.2026 räumt bei dieser Zahl auch jeder **Engine-Start** selbst: liegt
+  `engine_run_lock.ps1` unter 20 % frei, räumt er VOR dem Lock die
+  Cache-Klasse (`platten_waechter.py --reinigen`, nur `cache`) und misst
+  danach neu — erst dann wartet er oder bricht ab. Die dritte Antwort neben
+  Warten und Abbrechen, und die einzige, die die Lage ändert. Einmal je
+  Lauf, fail-open (fehlt der Wächter: eine Zeile im Log), abschaltbar mit
+  `-PlattenReinigungsGrenze 0`; `Status` und `Freigeben` räumen nie.
 - **14 %** — der Platten-Hinweis in vor_dem_commit räumt **automatisch
   in zwei Stufen** (fail-open, abschaltbar mit
   `WB_PLATTEN_AUTO_REINIGUNG=0`; die Testsuite schaltet so ab):
@@ -49,6 +56,12 @@ StagedBuilds und Gate-Intermediate baut Cook bzw. nächster Gate-Lauf neu.
   `ausgabe` — beide nur unter 14 %, nur mit Protokoll; Stufe 2 nur nach
   der Zeitkosten-Warnung und nie unter Engine-Lock. Fehlt der Wächter
   oder bricht er, ist das eine Zeile im Log — niemals ein rotes Gate.
+- **Der Engine-Start (automatisch):** unter 20 % nur `cache`, VOR dem
+  Lock, einmal je Lauf (`engine_run_lock.ps1`). Dieselbe Klasse wie
+  Stufe 1, nur früher — dort ist Warten noch billig und ein Abbruch
+  noch fern. Der Lock ist für die Caches keine Schranke (sie sind nichts,
+  woran ein laufender Editor hängt); für die `ausgabe`-Klasse bleibt er
+  eine.
 - **Der Bediener (manuell):** `--auch-ausgabe` nach Abwägung der
   Bauzeit-Kosten, im Fehlerfall mit der Protokoll-Datei als Beleg.
 - **Niemand allein — aber vorbereitet:** `Saved/Package/dev-builds`
