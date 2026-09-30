@@ -29,10 +29,12 @@ if /i not "%~1"=="-NurPruefen" (
   if exist "!LOG!" del "!LOG!"
   if exist "!LOGNASS!" del "!LOGNASS!"
   set "WBARGS="
+  set "FAHRLOG=!LOG!"
   call "%PROJ%\Tools\fahrmessung.cmd" gate_fahrphysik 40
   set "RUNRC=!errorlevel!"
   if "!RUNRC!"=="0" (
     echo == Fahrphysik-Gate: Messfahrt nass
+    set "FAHRLOG=!LOGNASS!"
     set "WBARGS=-WbWeather=Rain"
     call "%PROJ%\Tools\fahrmessung.cmd" gate_fahrphysik_nass 40
     set "RUNRC=!errorlevel!"
@@ -61,7 +63,7 @@ echo      NICHT geprueft.
 exit /b 1
 
 :abgebrochen
-echo ROT  Die Messfahrt ist mit Fehlercode !RUNRC! abgebrochen - siehe "!LOG!.out".
+echo ROT  Die Messfahrt ist mit Fehlercode !RUNRC! abgebrochen - siehe "!FAHRLOG!".
 exit /b 1
 
 :nicht_gemessen

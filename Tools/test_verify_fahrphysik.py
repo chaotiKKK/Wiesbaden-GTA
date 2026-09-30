@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -117,19 +118,31 @@ class Nass(unittest.TestCase):
         self.assertEqual(vf.gesamt([vf.GRUEN, vf.ROT]), vf.ROT)
         self.assertEqual(vf.gesamt([vf.ROT, vf.NICHT_GEMESSEN]), vf.NICHT_GEMESSEN)
 
+    def gate(self, code_nass):
+        """main() mit GRUENER trockener Fahrt - das Urteil haengt dann allein
+        an der Nass-Fahrt (Review: fehlten beide Logs, kam "nicht gemessen"
+        schon aus der trockenen, und ein verworfenes Nass-Ergebnis fiel nicht auf)."""
+        def pruefe_log(pfad, sollwerte=None):
+            if sollwerte is vf.SOLLWERTE_NASS:
+                return code_nass, ["  nass"]
+            return vf.GRUEN, ["  trocken"]
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(vf, "ERGEBNIS", os.path.join(tmp, "fahrphysik_gate.txt")), \
+                mock.patch.object(vf, "pruefe_log", side_effect=pruefe_log):
+            code = vf.main(["x", "trocken.log", "--nass", "nass.log"])
+            with open(vf.ERGEBNIS, encoding="utf-8") as f:
+                return code, f.read()
+
     def test_fehlt_die_nass_fahrt_ist_das_gate_nicht_gemessen(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            alt = vf.ERGEBNIS
-            vf.ERGEBNIS = os.path.join(tmp, "fahrphysik_gate.txt")
-            try:
-                code = vf.main(["x", os.path.join(tmp, "trocken.log"), "--nass",
-                                os.path.join(tmp, "nass.log")])
-                with open(vf.ERGEBNIS, encoding="utf-8") as f:
-                    text = f.read()
-            finally:
-                vf.ERGEBNIS = alt
+        code, text = self.gate(vf.NICHT_GEMESSEN)
         self.assertEqual(code, vf.NICHT_GEMESSEN)
         self.assertIn("Nass (-WbWeather=Rain):", text)
+
+    def test_rote_nass_fahrt_macht_das_gate_rot(self):
+        self.assertEqual(self.gate(vf.ROT)[0], vf.ROT)
+
+    def test_beide_gruen_ist_gruen(self):
+        self.assertEqual(self.gate(vf.GRUEN)[0], vf.GRUEN)
 
 
 class Logdatei(unittest.TestCase):
