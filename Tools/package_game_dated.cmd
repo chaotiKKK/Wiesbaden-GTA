@@ -10,6 +10,11 @@ REM Ergebnis:   <Zielordner>\Windows\WiesbadenReal.exe
 REM
 REM Dieselben Flags wie package_game.cmd (-build -cook -stage -pak -package
 REM -archive), nur die Ablage ist eine andere - am 01.10.2026 geprueft.
+REM
+REM -map ist NOETIG (gemessen 01.10.2026): ohne -map kocht der Cook-Commandlet
+REM nur die Default-Karte plus die DirectoriesToAlwaysCook - die MapsToCook-
+REM Eintraege aus DefaultGame.ini werden von UAT NICHT als -map durchgereicht.
+REM Trenner der Kartennamen ist das Pluszeichen.
 setlocal
 set PROJDIR=C:\freebuff\WiesbadenReal_Sicherung\WiesbadenReal
 set PROJ=%PROJDIR%\WiesbadenReal.uproject
@@ -21,6 +26,6 @@ if "%~1"=="" (
 set LOG=%PROJDIR%\package_game_dated.log
 echo Ziel: %OUT%> "%LOG%"
 echo Start: %DATE% %TIME%>> "%LOG%"
-call "C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\RunUAT.bat" BuildCookRun -project="%PROJ%" -platform=Win64 -clientconfig=Development -build -cook -stage -pak -package -archive -archivedirectory="%OUT%" -unattended -noP4 >> "%LOG%" 2>&1
+call "C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\RunUAT.bat" BuildCookRun -project="%PROJ%" -platform=Win64 -clientconfig=Development -map=WiesbadenCity_Alkis31+WiesbadenCity_Alkis32 -build -cook -stage -pak -package -archive -archivedirectory="%OUT%" -unattended -noP4 >> "%LOG%" 2>&1
 echo Ende: %DATE% %TIME% Exit %ERRORLEVEL%>> "%LOG%"
 exit /b %ERRORLEVEL%

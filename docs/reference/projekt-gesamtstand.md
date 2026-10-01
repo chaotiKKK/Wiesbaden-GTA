@@ -27,10 +27,10 @@ Code. Der folgende Abgleich trennt Quellstand, Testergebnis und Spielabnahme.
 | BugTank-Insekt | 15 Teile, Pawn, Bewegung und Tests sind gruen (BugTank-Suite 7/7; breiter Lauf 112/112 am 01.10.2026). `/Game/Vehicles/BugTank` steht jetzt im Cook-Vertrag. | Der Blender-Exporter (`export_bugtank_teile.py`) hat bekannte Fehler (majority tie, polygon material vertexindex); ein Re-Import ist bewusst nicht durchgefuehrt. |
 | Fussschritte | FootstepPool, Oberflaechen-Aufloesung und Passanten-Anbindung sind integriert (Tests Pedestrians/Pool/Surface gruen am 01.10.2026). | Klaenge aus der gebauten EXE nachweisen - Teil der Paket-Abnahme. |
 | SebboTower | Innenausbau ist vorhanden; Licht-Tick und Intensitaetskorrekturen sind uebernommen (`WiesbadenSebboHq.cpp`), Tower-Aufzug-Probe/Treppe waren am 27.09. gruen. | Etagenwechsel, Innenlicht und Nachtansicht im Spiel belegen; dekorative Tueren sind noch keine Interaktion. |
-| Runtime-Paketinhalt | Gezielte Cook-Gruppen (jetzt inkl. `/Game/Vehicles/BugTank`) und neun UFS-JSON; Vertragstest gruen (13 Checks). Ein datiertes Development-Paket wird gebaut (`Saved/Package_2026-10-01`), alte Pakete bleiben liegen. | EXE-Abnahme steht aus: Buslinien, Audio, Missions-/Store-Kataloge und dynamische Assets aus der gebauten EXE pruefen. |
+| Runtime-Paketinhalt | Datiertes Development-Paket `Saved/Package_2026-10-01` (3,6 GB, alte Pakete unangetastet) mit Alkis31 (1464) + Alkis32 (1463) + BugTank (35) Manifest-Eintraegen; Vertragstest gruen (13 Checks). Gemessen: ohne `-map=` kocht UAT nur die Default-Karte, die `MapsToCook`-Eintraege allein reichen nicht (`Tools/package_game_dated.cmd` setzt darum `-map=`). Paket-Smoke ueber die Heli-Verknuepfung gruen (0 leere Chunks, sauberes Ende). | Buslinien/Audio/Missions-/Store-Kataloge einzeln aus der EXE pruefen (im Smoke-Lauf nicht einzeln geprueft). |
 | Fahndung | Konto 0-6 mit frameunabhaengigem Abbau, Polizei-Streifenwagen (Blaaulicht, Sirene, POLIZEI-Beschriftung), Verfolgung, Festnahme mit Respawn, HUD-Anzeige (Sterne/Fortschritt) und Dev-Befehl `WbWanted` sind umgesetzt; Polizei-Tests gruen (01.10.2026). | Sicht-/Verfolgungs-Integrationstests und die optionale Heli-Eskalation ab Stufe 4 sind nicht umgesetzt. |
-| Strassenmarkierungen | P3-P7 (Zebra, Abbiegepfeile, Haifischzaehne, BUS-Schriftzug, Radflaechen) sind implementiert; Materialzuordnung korrigiert (M_WbLaneMarking/M_WbBikeLaneSurface); Test `SupplementaryPaint` gruen; in Alkis32 gebacken. | Sichtabnahme der Markierungen im Spiel steht aus. |
-| Bewuchs-Freihaltung | `ClearObstacles` (Gebaeudegrundrisse, Bahnkorridor aus `railway=funicular`, Bauplaetze, Strassenmoebel) ist implementiert; Test `ObstacleClearance` gruen; Alkis32 am 01.10.2026 neu gebacken. | Sichtabnahme der Freihaltung im Spiel steht aus. |
+| Strassenmarkierungen | P3-P7 (Zebra, Abbiegepfeile, Haifischzaehne, BUS-Schriftzug, Radflaechen) sind implementiert; Materialzuordnung korrigiert (M_WbLaneMarking/M_WbBikeLaneSurface); Test `SupplementaryPaint` gruen; in Alkis32 gebacken und dort spielbar (Verknuepfungen). | Sichtabnahme der Markierungen im Bild steht aus. |
+| Bewuchs-Freihaltung | `ClearObstacles` (Gebaeudegrundrisse, Bahnkorridor aus `railway=funicular`, Bauplaetze, Strassenmoebel) ist implementiert; Test `ObstacleClearance` gruen; Alkis32 am 01.10.2026 neu gebacken und in der Bake-Abnahme ANGENOMMEN (externe Actors -1,3 % gegen Alkis31, sonst Netz/Laternen/Schilder identisch). | Sichtabnahme der Freihaltung im Bild steht aus. |
 | Ortsabhaengiges Ambiente | Zonenindex (Industrie/Gewerbe in 12-km-Zellen) und frameaufloesende Bedpegel sind umgesetzt; Test `Zones` gruen. | Die Klanglagen sind weiter ein Pegel-Mix (Noise-Betten) - echte Samples/Speech fehlen. Section-Strassenklassen (3b) sind nicht angefasst. |
 | Wetter, Chaos-Kaefer, Wochenende-Fahrplan | Alte Berichte nennen weitere offene oder optionale Themen. | Nicht als fertig oder erneut fehlend behaupten: vor Umsetzung jeweils aktuellen Code, Assets und Daten pruefen. |
 
@@ -45,13 +45,19 @@ bewusst nicht umgesetzten Optionalteile (jeweils in der Tabelle oben).
 1. **Release-Abschluss:** Heli-Feuersicherheit, BugTank-Darstellung sowie
    Kamera-, Schritt-, Tower-Licht- und Runtime-Staging-Arbeiten sind
    integriert und getestet. Das datierte Development-Paket
-   (`Saved/Package_2026-10-01`, alte Pakete unangetastet) wird gebaut; die
-   drei Spiel-Verknuepfungen (Stadt/Heli/BugTank) kommen auf die EXE-Abnahme.
+   (`Saved/Package_2026-10-01`, alte Pakete unangetastet) ist gebaut und
+   per Paket-Smoke abgenommen; die drei Desktop-Verknuepfungen
+   (Stadt/Heli/BugTank) starten das Paket auf Alkis32 - Heli und BugTank
+   direkt im jeweiligen Fahrzeug (`-WbHeliStart` / `-WbBugTank`).
 2. **Stadt-Bake:** Markierungen P3-P7 und Bewuchs-Freihaltung sind umgesetzt.
    `WiesbadenCity_Alkis32` ist am 01.10.2026 aus Alkis16 neu gebacken
    (2010 Chunks, `ok` in `Saved/BuildHistory/CityBuilds.csv`); Alkis16 und
-   Alkis31 sind unveraendert. Die Default-Karte wird erst nach der Abnahme
-   umgestellt (`WB_LIVE_SCHALTEN=1`).
+   Alkis31 sind unveraendert. Die Bake-Abnahme (`Tools/bake_abnahme.py --neu
+   WiesbadenCity_Alkis32`) ist ANGENOMMEN: 0 leere Chunks, Netz/Laternen/
+   Schilder/Ampeln identisch, externe Actors -1,3 %, 60 fps, 0 GPU-Timeouts.
+   Die Default-Karte bleibt vorerst Alkis31 - die Umstellung
+   (`WB_LIVE_SCHALTEN=1` bzw. `Config/DefaultEngine.ini`) ist der letzte
+   offene Schritt und wartet auf die Sichtabnahme durch den Nutzer.
 3. **Polizei-Gameplay:** Streifenwagen (Blaaulicht/Sirene), Verfolger mit
    Sichtpruefung, Festnahme mit Respawn, FAHNDUNG-HUD und der Dev-Befehl
    `WbWanted` stehen auf dem 0-6-Konto; die Polizei-Tests sind gruen.
