@@ -67,6 +67,8 @@ void UWiesbadenAmbienceSubsystem::Deinitialize()
 	DestroyBeds(DiffuseBeds);
 	DestroyBeds(LocalBirdBeds);
 	DestroyBeds(LocalNightBeds);
+	DestroyBeds(LocalCrowdBeds);
+	DestroyBeds(LocalChildBeds);
 	if (RigActor)
 	{
 		RigActor->Destroy();
@@ -98,18 +100,35 @@ float UWiesbadenAmbienceSubsystem::ResolveTimeOfDayHours() const
 }
 
 UAudioComponent* UWiesbadenAmbienceSubsystem::MakeBed(
-	AActor* Rig, const TCHAR* BedName, bool bSpatialized, EWbAudioRange Range)
+	AActor* Rig, const TCHAR* BedName, const TCHAR* SampleName,
+	bool bSpatialized, EWbAudioRange Range)
 {
 	if (!Rig)
 	{
 		return nullptr;
 	}
 
-	USoundBase* Bed = LoadObject<USoundBase>(
-		nullptr, *WiesbadenAudioPropagation::AmbienceBedPath(FName(BedName)));
+	// Zuerst die ECHTE Aufnahme (/Game/Audio/Samples/A_Amb*); erst wenn sie
+	// fehlt, faellt die Lage auf das synthetische MetaSound-Bett zurueck.
+	USoundBase* Bed = nullptr;
+	if (SampleName && FCString::Strlen(SampleName) > 0)
+	{
+		Bed = LoadObject<USoundBase>(
+			nullptr, *WiesbadenAudioPropagation::AmbienceSamplePath(FName(SampleName)));
+		if (Bed)
+		{
+			UE_LOG(LogWbAmbience, Log,
+				TEXT("Ambience-Lage %s als echte Aufnahme aktiv."), SampleName);
+		}
+	}
 	if (!Bed)
 	{
-		// MetaSound-Bett fehlt noch (Tools/make_audio_assets.cmd) - still, kein Fehler.
+		Bed = LoadObject<USoundBase>(
+			nullptr, *WiesbadenAudioPropagation::AmbienceBedPath(FName(BedName)));
+	}
+	if (!Bed)
+	{
+		// Weder Sample noch MetaSound-Bett vorhanden - still, kein Fehler.
 		return nullptr;
 	}
 
@@ -141,18 +160,21 @@ void UWiesbadenAmbienceSubsystem::EnsureRig()
 		return;
 	}
 
-	// Feste Schleussen: [0] Wind, [1] Stadtsummen, [2] Innen-Roomtone.
-	// Ein fehlendes Bett bleibt leer (nullptr) - die Reihenfolge bleibt stabil.
-	DiffuseBeds.SetNum(3);
-	DiffuseBeds[0] = MakeBed(RigActor, TEXT("Wind"), false, EWbAudioRange::Far);
-	DiffuseBeds[1] = MakeBed(RigActor, TEXT("City"), false, EWbAudioRange::Far);
-	DiffuseBeds[2] = MakeBed(RigActor, TEXT("Room"), false, EWbAudioRange::Far);
+	// Feste Schleussen: [0] Wind, [1] Verkehr, [2] Innen-Roomtone, [3] Industrie.
+	// Eine fehlende Lage bleibt leer (nullptr) - die Reihenfolge bleibt stabil.
+	DiffuseBeds.SetNum(4);
+	DiffuseBeds[0] = MakeBed(RigActor, TEXT("Wind"), TEXT("A_AmbWind"), false, EWbAudioRange::Far);
+	DiffuseBeds[1] = MakeBed(RigActor, TEXT("City"), TEXT("A_AmbTraffic"), false, EWbAudioRange::Far);
+	DiffuseBeds[2] = MakeBed(RigActor, TEXT("Room"), nullptr, false, EWbAudioRange::Far);
+	DiffuseBeds[3] = MakeBed(RigActor, TEXT("Industry"), TEXT("A_AmbIndustry"), false, EWbAudioRange::Far);
 
 	if (DiffuseBeds[0] == nullptr && !bWarnedMissingBeds)
 	{
 		bWarnedMissingBeds = true;
 		UE_LOG(LogWbAmbience, Warning,
-			TEXT("Ambience-Betten fehlen unter /Game/Audio/Meta - erst Tools/make_audio_assets.cmd ausfuehren."));
+			TEXT("Ambience-Lagen fehlen: Tools/fetch_ambience_samples.py + ")
+			TEXT("Tools/import_audio_samples.py ausfuehren (echte Samples); ")
+			TEXT("Rueckfall Tools/make_audio_assets.cmd (synthetische Betten)."));
 	}
 
 	// Sofort neu setzen, damit die lokalen Betten gleich danach entstehen.
@@ -170,9 +192,12 @@ void UWiesbadenAmbienceSubsystem::ReseedLocalEmitters(const FVector& ListenerLoc
 	}
 
 	// Drei Bodenpunkte im Ring um den Hoerer (Spawner-Prinzip; die Anbindung
-	// an echte Region-/POI-Punkte bleibt die offene Naht dafuer).
+	// an echte Region-/POI-Punkte bleibt die offene Naht dafuer). Je Punkt
+	// vier lokale Lagen: Voegel, Nacht, Menschenmenge, Strassenleben.
 	LocalBirdBeds.SetNum(3);
 	LocalNightBeds.SetNum(3);
+	LocalCrowdBeds.SetNum(3);
+	LocalChildBeds.SetNum(3);
 	for (int32 Index = 0; Index < 3; ++Index)
 	{
 		const float AngleRad = FMath::DegreesToRadians(30.0f + 120.0f * Index);
@@ -188,15 +213,25 @@ void UWiesbadenAmbienceSubsystem::ReseedLocalEmitters(const FVector& ListenerLoc
 			Place = Hit.ImpactPoint + FVector(0, 0, LocalBedHeightCm);
 		}
 
-		if (UAudioComponent* Birds = MakeBed(RigActor, TEXT("Birds"), true, EWbAudioRange::Mid))
+		if (UAudioComponent* Birds = MakeBed(RigActor, TEXT("Birds"), TEXT("A_AmbBirds"), true, EWbAudioRange::Mid))
 		{
 			Birds->SetWorldLocation(Place);
 			LocalBirdBeds[Index] = Birds;
 		}
-		if (UAudioComponent* Night = MakeBed(RigActor, TEXT("Night"), true, EWbAudioRange::Mid))
+		if (UAudioComponent* Night = MakeBed(RigActor, TEXT("Night"), TEXT("A_AmbNight"), true, EWbAudioRange::Mid))
 		{
 			Night->SetWorldLocation(Place);
 			LocalNightBeds[Index] = Night;
+		}
+		if (UAudioComponent* Crowd = MakeBed(RigActor, TEXT("Crowd"), TEXT("A_AmbCrowd"), true, EWbAudioRange::Mid))
+		{
+			Crowd->SetWorldLocation(Place);
+			LocalCrowdBeds[Index] = Crowd;
+		}
+		if (UAudioComponent* Children = MakeBed(RigActor, TEXT("Children"), TEXT("A_AmbChildren"), true, EWbAudioRange::Mid))
+		{
+			Children->SetWorldLocation(Place);
+			LocalChildBeds[Index] = Children;
 		}
 	}
 	LastSeedLocation = ListenerLoc;
@@ -226,6 +261,9 @@ void UWiesbadenAmbienceSubsystem::ProbeSpaceAndTime(float DeltaSeconds)
 	CurrentZoneMix.City = FMath::FInterpTo(CurrentZoneMix.City, TargetZoneMix.City, DeltaSeconds, 1.5f);
 	CurrentZoneMix.Birds = FMath::FInterpTo(CurrentZoneMix.Birds, TargetZoneMix.Birds, DeltaSeconds, 1.5f);
 	CurrentZoneMix.Night = FMath::FInterpTo(CurrentZoneMix.Night, TargetZoneMix.Night, DeltaSeconds, 1.5f);
+	CurrentZoneMix.Crowd = FMath::FInterpTo(CurrentZoneMix.Crowd, TargetZoneMix.Crowd, DeltaSeconds, 1.5f);
+	CurrentZoneMix.Children = FMath::FInterpTo(CurrentZoneMix.Children, TargetZoneMix.Children, DeltaSeconds, 1.5f);
+	CurrentZoneMix.Industry = FMath::FInterpTo(CurrentZoneMix.Industry, TargetZoneMix.Industry, DeltaSeconds, 1.5f);
 	// Nur Klassifikation/Strahlen im Halbsekundentakt, Pegel jeden Frame:
 	// andernfalls war die weiche Interpolation eine hoerbare Treppe.
 	UpdateBeds(ResolveTimeOfDayHours(), CurrentSpace);
@@ -297,7 +335,7 @@ void UWiesbadenAmbienceSubsystem::UpdateBeds(float TimeOfDayHours, EWbReverbSpac
 	const float Indoor = (Space == EWbReverbSpace::Indoor || Space == EWbReverbSpace::Tunnel)
 		? 1.0f : (Space == EWbReverbSpace::Hall ? 0.5f : 0.0f);
 
-	if (DiffuseBeds.Num() >= 3)
+	if (DiffuseBeds.Num() >= 4)
 	{
 		if (UAudioComponent* Wind = DiffuseBeds[0])
 		{
@@ -310,6 +348,10 @@ void UWiesbadenAmbienceSubsystem::UpdateBeds(float TimeOfDayHours, EWbReverbSpac
 		if (UAudioComponent* Room = DiffuseBeds[2])
 		{
 			Room->SetVolumeMultiplier(0.1f + 0.7f * Indoor);
+		}
+		if (UAudioComponent* Industry = DiffuseBeds[3])
+		{
+			Industry->SetVolumeMultiplier(CurrentZoneMix.Industry * (1.0f - 0.6f * Indoor));
 		}
 	}
 	for (const TObjectPtr<UAudioComponent>& Bed : LocalBirdBeds)
@@ -324,6 +366,22 @@ void UWiesbadenAmbienceSubsystem::UpdateBeds(float TimeOfDayHours, EWbReverbSpac
 		if (Bed)
 		{
 			Bed->SetVolumeMultiplier(CurrentZoneMix.Night * Night * (1.0f - 0.8f * Indoor));
+		}
+	}
+	for (const TObjectPtr<UAudioComponent>& Bed : LocalCrowdBeds)
+	{
+		if (Bed)
+		{
+			// Menschenmurmeln: tagsueber belebter, aber auch abends in der Stadt.
+			Bed->SetVolumeMultiplier(CurrentZoneMix.Crowd * (0.4f + 0.6f * Day) * (1.0f - 0.85f * Indoor));
+		}
+	}
+	for (const TObjectPtr<UAudioComponent>& Bed : LocalChildBeds)
+	{
+		if (Bed)
+		{
+			// Strassenleben (Kinder) ist ein Tag-Phaenomen.
+			Bed->SetVolumeMultiplier(CurrentZoneMix.Children * Day * (1.0f - 0.85f * Indoor));
 		}
 	}
 }

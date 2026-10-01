@@ -14,9 +14,12 @@ class UAudioComponent;
 /**
  * Ambience-Layer und Raumklang.
  *
- * - Diffuse Betten (Wind, Stadtsummen, Innen-Roomtone) und raeumliche
- *   Quellen (Voegel bei Tag, Nachtambiente) auf SC_Ambience; die
- *   MetaSound-Betten aus /Game/Audio/Meta fehlen sie, bleibt es still.
+ * - Die Klanglagen sind ECHTE Field-Recordings (/Game/Audio/Samples/A_Amb*,
+ *   Import: Tools/fetch_ambience_samples.py + Tools/import_audio_samples.py):
+ *   diffus Wind/Verkehr/Industrie + Innen-Roomtone, lokal Voegel, Nacht,
+ *   Menschenmenge und Strassenleben. Fehlt eine Sample-Lage, faellt die
+ *   Bett-Erzeugung auf das synthetische MetaSound-Bett zurueck (/Game/Audio/
+ *   Meta); fehlt beides, bleibt die Lage still (kein Fehler).
  * - Tag/Nacht-Mischung ueber die Spieluhr, weich ueberblendet.
  * - Raumsonde (Strahlen um den Hoerer) -> Hall-Preset + Sendepegel ueber
  *   WiesbadenAudioPropagation::ApplySpaceState.
@@ -42,12 +45,20 @@ private:
 	void ReseedLocalEmitters(const FVector& ListenerLoc);
 	float ResolveTimeOfDayHours() const;
 
-	/** Erzeugt eine Bett-Quelle am Rig; nullptr, wenn das Bett fehlt. */
-	UAudioComponent* MakeBed(AActor* Rig, const TCHAR* BedName, bool bSpatialized, EWbAudioRange Range);
+	/**
+	 * Erzeugt eine Bett-Quelle am Rig; nullptr, wenn keine Klanglage existiert.
+	 * Zuerst wird das echte Sample (/Game/Audio/Samples/<SampleName>) geladen,
+	 * dann das synthetische MetaSound-Bett (<BedName>) als Rueckfall.
+	 */
+	UAudioComponent* MakeBed(AActor* Rig, const TCHAR* BedName, const TCHAR* SampleName,
+		bool bSpatialized, EWbAudioRange Range);
 
+	/** Diffuse Lagen: [0] Wind, [1] Verkehr, [2] Innen-Roomtone, [3] Industrie. */
 	UPROPERTY(Transient) TArray<TObjectPtr<UAudioComponent>> DiffuseBeds;
 	UPROPERTY(Transient) TArray<TObjectPtr<UAudioComponent>> LocalBirdBeds;
 	UPROPERTY(Transient) TArray<TObjectPtr<UAudioComponent>> LocalNightBeds;
+	UPROPERTY(Transient) TArray<TObjectPtr<UAudioComponent>> LocalCrowdBeds;
+	UPROPERTY(Transient) TArray<TObjectPtr<UAudioComponent>> LocalChildBeds;
 	UPROPERTY(Transient) TObjectPtr<AActor> RigActor = nullptr;
 
 	FWbAmbienceMix CurrentZoneMix;

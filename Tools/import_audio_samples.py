@@ -1,6 +1,9 @@
 # Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 """Importiert die WAVs aus Data/Raw/AudioSamples nach /Game/Audio/Samples.
 
+Enthaelt auch die Ambience-Lagen A_Amb* (echte Stadtklang-Aufnahmen,
+Tools/fetch_ambience_samples.py) - alle als Dauerlaeufer.
+
 Ergebnis je Clip: ein SoundWave-Asset mit:
   - bLooping = True fuer die Dauerlaeufer (Motoren, Reifen) - siehe CLIPS
   - Kompression der Dauerlaeufer BINK/PCM-frei (Speicherdeckel via
@@ -39,6 +42,15 @@ CLIPS = {
     "A_PedestrianBurst": False,
     "A_PedestrianHit": False,
     "A_PedestrianHitHeavy": False,
+    # Stadtklang-Lagen der Audio-Zonen (Tools/fetch_ambience_samples.py,
+    # echte Field-Recordings, alle Dauerlaeufer):
+    "A_AmbTraffic": True,
+    "A_AmbCrowd": True,
+    "A_AmbIndustry": True,
+    "A_AmbBirds": True,
+    "A_AmbWind": True,
+    "A_AmbNight": True,
+    "A_AmbChildren": True,
 }
 
 report_path = os.path.join(unreal.Paths.project_saved_dir(), "Diagnose", "audio_samples_import.txt")

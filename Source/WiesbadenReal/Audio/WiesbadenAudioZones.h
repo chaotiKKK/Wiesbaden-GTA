@@ -41,13 +41,35 @@ enum class EWbAudioZone : uint8
 	MAX UMETA(Hidden)
 };
 
-/** Pegel der vorhandenen Klanglagen; keine erfundenen Sprachausgaben. */
+/**
+ * Pegel der Klanglagen; jede Lage ist eine ECHTE Aufnahme aus
+ * /Game/Audio/Samples (A_Amb*, Field-Recordings von BigSoundBank, Import:
+ * Tools/fetch_ambience_samples.py + Tools/import_audio_samples.py), keine
+ * synthetische Noise-Lage mehr. Der Mix bleibt reine Mathematik, damit die
+ * Zonen-Zuordnung headless testbar ist.
+ */
 struct FWbAmbienceMix
 {
+	/** A_AmbWind - Windbett, ueberall hoerbar. */
 	float Wind = 0.5f;
+
+	/** A_AmbTraffic - Verkehrssummen (alte "City"-Lage, jetzt echte Strasse). */
 	float City = 0.45f;
+
+	/** A_AmbBirds - Vogelchor (Tag/Gruen). */
 	float Birds = 0.3f;
+
+	/** A_AmbNight - Nachtambiente (Nachtstunden). */
 	float Night = 0.3f;
+
+	/** A_AmbCrowd - Menschenmurmeln (Innenstadt). */
+	float Crowd = 0.0f;
+
+	/** A_AmbChildren - Strassenleben mit Kindern (Wohngebiet). */
+	float Children = 0.0f;
+
+	/** A_AmbIndustry - Maschinen/Handwerk (Industrie). */
+	float Industry = 0.0f;
 };
 
 /**

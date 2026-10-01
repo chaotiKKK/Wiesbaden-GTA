@@ -198,6 +198,12 @@ FString AmbienceBedPath(FName BedName)
 	return FString::Printf(TEXT("/Game/Audio/Meta/%s.%s"), *Name, *Name);
 }
 
+FString AmbienceSamplePath(FName SampleName)
+{
+	const FString Name = SampleName.ToString();
+	return FString::Printf(TEXT("/Game/Audio/Samples/%s.%s"), *Name, *Name);
+}
+
 FString EngineMetaSoundPath()
 {
 	return TEXT("/Game/Audio/Meta/MS_EngineBoxer.MS_EngineBoxer");

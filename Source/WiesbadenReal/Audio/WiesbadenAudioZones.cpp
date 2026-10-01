@@ -12,12 +12,24 @@ EWbAudioZone WiesbadenAudioZones::ClassifyZone(int32 NearbyTrees, int32 NearbyIn
 
 FWbAmbienceMix WiesbadenAudioZones::AmbienceMix(EWbAudioZone Zone)
 {
+	// Reihenfolge der Felder: Wind, City, Birds, Night, Crowd, Children,
+	// Industry (FWbAmbienceMix). Jede Lage ist eine echte Aufnahme; die Zonen
+	// unterscheiden sich damit im KLANGBILD (welche Lagen spielen), nicht nur
+	// im Pegel.
 	switch (Zone)
 	{
-	case EWbAudioZone::Quiet: return { 0.65f, 0.08f, 0.65f, 0.55f };
-	case EWbAudioZone::Commercial: return { 0.3f, 0.85f, 0.15f, 0.2f };
-	case EWbAudioZone::Industrial: return { 0.4f, 0.65f, 0.08f, 0.15f };
-	default: return { 0.5f, 0.45f, 0.3f, 0.3f };
+	case EWbAudioZone::Quiet:
+		// Wald/Wiese: Wind und Voegel tragen, Verkehr nur als fernes Summen.
+		return { 0.65f, 0.10f, 0.65f, 0.55f, 0.05f, 0.05f, 0.00f };
+	case EWbAudioZone::Commercial:
+		// Innenstadt: Verkehr und Menschenmenge dominieren, Voegel treten zurueck.
+		return { 0.30f, 0.85f, 0.15f, 0.20f, 0.75f, 0.35f, 0.10f };
+	case EWbAudioZone::Industrial:
+		// Industrie: Maschinenlage ist die Signatur, kaum Natur, wenig Menschen.
+		return { 0.40f, 0.55f, 0.08f, 0.15f, 0.15f, 0.05f, 0.85f };
+	default:
+		// Wohngebiet: ausgeglichen, mit Strassenleben (Kinder) als Merkmal.
+		return { 0.50f, 0.45f, 0.30f, 0.30f, 0.25f, 0.55f, 0.05f };
 	}
 }
 

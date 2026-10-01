@@ -118,5 +118,31 @@ bool FAudioAmbienceZoneTest::RunTest(const FString& Parameters)
 		AmbienceMix(EWbAudioZone::Quiet).Birds > AmbienceMix(EWbAudioZone::Industrial).Birds);
 	TestEqual(TEXT("ungueltige Zone faellt auf Wohnpegel"),
 		AmbienceMix(EWbAudioZone::MAX).City, AmbienceMix(EWbAudioZone::Residential).City);
+
+	// Echte Sample-Lagen (A_Amb*): die Zonen muessen sich im KLANGBILD
+	// unterscheiden (welche Lagen spielen), nicht nur im Pegel.
+	TestTrue(TEXT("Industrie traegt die Maschinenlage"),
+		AmbienceMix(EWbAudioZone::Industrial).Industry > 0.5f);
+	TestTrue(TEXT("Maschinen sind in der Innenstadt Nebensache"),
+		AmbienceMix(EWbAudioZone::Industrial).Industry > AmbienceMix(EWbAudioZone::Commercial).Industry);
+	TestTrue(TEXT("Innenstadt hat Menschenmurmeln, Wald kaum"),
+		AmbienceMix(EWbAudioZone::Commercial).Crowd > AmbienceMix(EWbAudioZone::Quiet).Crowd);
+	TestTrue(TEXT("Strassenleben (Kinder) ist ein Merkmal des Wohngebiets"),
+		AmbienceMix(EWbAudioZone::Residential).Children > AmbienceMix(EWbAudioZone::Industrial).Children);
+	TestTrue(TEXT("Wohngebiet hat mehr Strassenleben als die Innenstadt..."),
+		AmbienceMix(EWbAudioZone::Residential).Children >= AmbienceMix(EWbAudioZone::Commercial).Children);
+
+	// Alle Lagen bleiben im Bereich 0..1 - sonst regelt der Interpolator
+	// gegen unerreichbare Ziele und die Lage klingt still oder uebersteuert.
+	for (EWbAudioZone Zone : { EWbAudioZone::Quiet, EWbAudioZone::Commercial,
+		EWbAudioZone::Industrial, EWbAudioZone::Residential, EWbAudioZone::MAX })
+	{
+		const FWbAmbienceMix Mix = AmbienceMix(Zone);
+		for (float Pegel : { Mix.Wind, Mix.City, Mix.Birds, Mix.Night,
+			Mix.Crowd, Mix.Children, Mix.Industry })
+		{
+			TestTrue(TEXT("Lagen-Pegel in 0..1"), Pegel >= 0.0f && Pegel <= 1.0f);
+		}
+	}
 	return true;
 }

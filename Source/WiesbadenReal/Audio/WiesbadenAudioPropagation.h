@@ -113,6 +113,8 @@ namespace WiesbadenAudioPropagation
 	FString ReverbSubmixPath();						// /Game/Audio/Mix/SBX_Reverb
 	FString ReverbPresetPath();						// /Game/Audio/Mix/SFXP_Reverb
 	FString AmbienceBedPath(FName BedName);			// /Game/Audio/Meta/MS_Amb<Bett>
+	/** Echte Sample-Lage (Field-Recording) der Ambience: /Game/Audio/Samples/<Name>. */
+	FString AmbienceSamplePath(FName SampleName);
 	FString EngineMetaSoundPath();					// /Game/Audio/Meta/MS_EngineBoxer
 
 	// -- Engine-Kopplung ----------------------------------------------------
