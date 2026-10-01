@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
+#include "Audio/WiesbadenAudioZones.h"
 #include "WiesbadenFootPawn.generated.h"
 
 class UCameraComponent;
@@ -368,6 +369,13 @@ private:
 	/** Meldet der Figur Tempo, Luft, Mitfahrt, Blick und Gesundheit. */
 	void UpdateFigure(float DeltaSeconds, float SpeedMps);
 
+	/**
+	 * Fussschritte: Schrittlaenge aus dem gemessenen Tempo, Untergrund per
+	 * Materialabfrage am Fuss. Getrennt von UpdateFigure, weil der Schritt
+	 * nichts mit der Animation zu tun hat und eigene Grenzen hat.
+	 */
+	void UpdateFootsteps(float DeltaSeconds, float SpeedMps);
+
 	/** Restzeit bis zum naechsten moeglichen Schuss. */
 	float FireCooldownSeconds = 0.0f;
 
@@ -434,4 +442,10 @@ private:
 
 	/** Standort im letzten Bild - fuer das gemessene Tempo. */
 	FVector PreviousLocation = FVector::ZeroVector;
+
+	/** Seit dem letzten Schritt zurueckgelegte Strecke (cm). */
+	float StepDistanceAccumulatedCm = 0.0f;
+
+	/** Untergrund des letzten Schritts - nur fuer den Laufbeleg. */
+	EWbFootstepSurface LastFootstepSurface = EWbFootstepSurface::Pflaster;
 };

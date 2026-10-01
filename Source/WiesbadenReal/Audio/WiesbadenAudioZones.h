@@ -31,12 +31,34 @@ enum class EWbFootstepSurface : uint8
 	MAX UMETA(Hidden)
 };
 
+UENUM(BlueprintType)
+enum class EWbAudioZone : uint8
+{
+	Residential,
+	Commercial,
+	Quiet,
+	Industrial,
+	MAX UMETA(Hidden)
+};
+
+/** Pegel der vorhandenen Klanglagen; keine erfundenen Sprachausgaben. */
+struct FWbAmbienceMix
+{
+	float Wind = 0.5f;
+	float City = 0.45f;
+	float Birds = 0.3f;
+	float Night = 0.3f;
+};
+
 /**
  * Reine Zuordnung Ort -> Klang. Kein UObject-Zugriff, damit die Zuordnung
  * headless unit-testbar bleibt.
  */
 namespace WiesbadenAudioZones
 {
+	EWbAudioZone ClassifyZone(int32 NearbyTrees, int32 NearbyIndustry, int32 CommercialBuildings);
+	FWbAmbienceMix AmbienceMix(EWbAudioZone Zone);
+	FString ZoneName(EWbAudioZone Zone);
 	/**
 	 * Untergrund aus dem Materialnamen.
 	 *

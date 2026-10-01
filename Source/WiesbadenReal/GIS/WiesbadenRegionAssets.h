@@ -255,6 +255,13 @@ public:
 		const FRegionAssetSettings& Settings,
 		FRegionAssetLayout& OutLayout);
 
+	/** Nach dem Gebaeudepass: Streuobjekte aus Grundrissen, Bauplaetzen und
+	 *  Nerobergbahn-Trasse entfernen. Gibt die entfernte Anzahl zurueck. */
+	static int32 ClearObstacles(const TArray<struct FGeneratedBuilding>& Buildings,
+		const struct FOSMDataSet& OSMData, const class UGeoCoordinateConverter& Converter,
+		const TArray<struct FTerrainSitePad>& SitePads, FRegionAssetLayout& Layout,
+		struct FRoadFurnitureLayout* Furniture = nullptr);
+
 	/** Asset-Kategorien, die eine Region liefert (leer = keine Assets). */
 	static void GetCategoriesForRegion(ECityRegionType Type, TArray<ERegionAssetCategory>& OutCategories);
 

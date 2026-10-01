@@ -53,6 +53,9 @@ public:
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void UnPossessed() override;
 
+	/** Actor-Ende beendet Trockenmodus, Abzug und lokale Loslass-Sperre. */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 	/**
 	 * Schaden annehmen - mit Folgen fuer den Flug.
 	 *
@@ -268,6 +271,54 @@ public:
 
 	/** Externe Steuerung abschalten - der Rumpf hoert wieder auf Tastatur/Gamepad. */
 	virtual void ClearExternalControl() override { bExternalControlActive = false; }
+
+	/** Bordgeschuetz-Komponente (Schusszaehler fuer Flugstunden-Sicherheit). */
+	UWiesbadenHeliGunComponent* GetGunComponent() const { return Gun; }
+
+	/** Aktiviert den schadensfreien Feuer-Trockentest der Flugstunde. */
+	void SetLessonDryFireActive(bool bActive)
+	{
+		// Annahme/Abschluss per Gamepad-A ist zugleich Feuer. Deshalb bei
+		// jedem Wechsel erst eine echte Loslass-Eingabe abwarten, auch wenn
+		// der Pawn die Taste in diesem Frame noch nicht gelesen hat.
+		if (bActive != bLessonDryFireActive)
+		{
+			bDryFireReleasePending = true;
+		}
+		bLessonDryFireActive = bActive;
+		if (Gun && (bActive || bDryFireReleasePending))
+		{
+			Gun->SetTriggerHeld(false);
+		}
+	}
+	bool IsLessonDryFireActive() const { return bLessonDryFireActive; }
+
+	/** True, solange ein unterbrochener Schuss noch das Loslassen abwartet. */
+	bool IsDryFireReleasePending() const { return bDryFireReleasePending; }
+
+	/** Respawn stoppt das Geschuetz; physischer Abzug muss erst los.
+	 *  Ein bestehender Trockenmodus bleibt erhalten. */
+	void ReleaseFireForRespawn()
+	{
+		bDryFireReleasePending = true;
+		bTriggerHeld = false;
+		if (Gun)
+		{
+			Gun->SetTriggerHeld(false);
+		}
+	}
+
+	/**
+	 * Darf der Abzug scharf schiessen? Reiner Vertrag, damit die Flugstunden-
+	 * Sicherheit ohne Welt pruefbar ist.
+	 *
+	 * Zwei Sperren: der Trockenmodus der Lektion und ein beim Beenden
+	 * unterbrochener Schuss, der erst das Loslassen abwarten muss.
+	 */
+	static bool AllowsLiveFire(bool bLessonDryFireActive, bool bReleasePending)
+	{
+		return !bLessonDryFireActive && !bReleasePending;
+	}
 
 	/** True, solange die externe Steuerung aktiv ist (Familien-Naht). */
 	virtual bool IsExternalControlActive() const override { return bExternalControlActive; }
@@ -698,6 +749,8 @@ private:
 	bool bSearchlightToggleHeld = false;
 	bool bLandingLightToggleHeld = false;
 	bool bTriggerHeld = false;
+	bool bLessonDryFireActive = false;
+	bool bDryFireReleasePending = false;
 
 	// Boden-Cache: ApplyGroundConstraint fuellt ihn einmal pro Frame; der
 	// visuelle Pfad (GetAltitudeMeters, Downwash-Staub) liest ihn, statt eigene

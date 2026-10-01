@@ -72,9 +72,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Kamera")
 	void SetCameraMode(EWiesbadenVehicleCameraMode Mode) { CameraMode = Mode; ApplyCameraMode(); }
 
-	/** Taste zum Umschalten der Kamera. */
+	/** Tastaturtaste zum Umschalten der Kamera. */
 	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera")
 	FKey ToggleKey = EKeys::C;
+
+	/** Optionaler Gamepad-Klick zum Umschalten, z. B. R3 beim Helikopter. */
+	UPROPERTY(EditAnywhere, Category = "Wiesbaden|Kamera")
+	FKey PadToggleKey;
+
+	/** Staerke der zuletzt gelesenen Blick-Eingabe (Flugstunden-Rueckmeldung). */
+	float GetLastLookInputMagnitude() const { return LastLookInputMagnitude; }
 
 	/**
 	 * Wenn true, bleibt die Kamera fest im Follow-Modus hinter dem Fahrzeug:
@@ -210,6 +217,19 @@ public:
 	/** Kamera-Rig an einen bewegten Unterpunkt, z. B. einen Bahnwagen, haengen. */
 	void SetCameraAnchor(USceneComponent* Anchor);
 
+	/**
+	 * Glaettung des Ausleger-Yaw auf dem kuerzesten Weg.
+	 *
+	 * GEMESSEN am 30.09.2026: die rohe Differenz 179 -> -179 ergibt -358 Grad,
+	 * die Kamera schwenkt beim Herumschwenken ueber +-180 Grad den langen Weg
+	 * zurueck. FindDeltaAngleDegrees liefert die kuerzeste Differenz; das
+	 * Ergebnis bleibt normalisiert, damit der Wert kanonisch bleibt
+	 * (am Pol konvergiert das monoton, ohne Pendeln - nachgemessen).
+	 *
+	 * Datenrein und statisch, damit der Weg ohne Welt pruefbar ist.
+	 */
+	static float SmoothYaw(float CurrentYaw, float DesiredYaw, float DeltaTime, float Response);
+
 	/** Aktiviert das Rig fuer einen nicht besessenen Rideable-Actor. */
 	void ActivateExternalView(APlayerController* Controller, USceneComponent* Anchor, AActor* RestoreTarget);
 	void DeactivateExternalView();
@@ -245,6 +265,7 @@ private:
 	bool bExternalViewActive = false;
 	FRotator OrbitOffset = FRotator::ZeroRotator;
 	bool bCameraToggleHeld = false;
+	float LastLookInputMagnitude = 0.0f;
 	bool bRigCreated = false;
 	/** Einmalige Anwendung des Dev-Schalters -WbCamMode (Sichtprobe). */
 	bool bDevModeApplied = false;

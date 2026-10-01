@@ -2,6 +2,36 @@
 
 #include "Audio/WiesbadenAudioZones.h"
 
+EWbAudioZone WiesbadenAudioZones::ClassifyZone(int32 NearbyTrees, int32 NearbyIndustry, int32 CommercialBuildings)
+{
+	if (NearbyIndustry > 0) { return EWbAudioZone::Industrial; }
+	if (NearbyTrees >= 12) { return EWbAudioZone::Quiet; }
+	if (CommercialBuildings >= 3) { return EWbAudioZone::Commercial; }
+	return EWbAudioZone::Residential;
+}
+
+FWbAmbienceMix WiesbadenAudioZones::AmbienceMix(EWbAudioZone Zone)
+{
+	switch (Zone)
+	{
+	case EWbAudioZone::Quiet: return { 0.65f, 0.08f, 0.65f, 0.55f };
+	case EWbAudioZone::Commercial: return { 0.3f, 0.85f, 0.15f, 0.2f };
+	case EWbAudioZone::Industrial: return { 0.4f, 0.65f, 0.08f, 0.15f };
+	default: return { 0.5f, 0.45f, 0.3f, 0.3f };
+	}
+}
+
+FString WiesbadenAudioZones::ZoneName(EWbAudioZone Zone)
+{
+	switch (Zone)
+	{
+	case EWbAudioZone::Quiet: return TEXT("Gruen/Wald");
+	case EWbAudioZone::Commercial: return TEXT("Innenstadt/Gewerbe");
+	case EWbAudioZone::Industrial: return TEXT("Industrie");
+	default: return TEXT("Wohngebiet");
+	}
+}
+
 EWbFootstepSurface WiesbadenAudioZones::SurfaceFromMaterialName(const FString& MaterialName)
 {
 	// Reihenfolge = Prioritaet. Gras steht vor Asphalt, weil ein gemischter

@@ -141,6 +141,16 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|MG")
 	int32 GetShotsFired() const { return ShotsFired; }
 
+	/**
+	 * Haelt der Abzug noch gedrueckt?
+	 *
+	 * Nötig, weil die Flugstunde den Abzug beim Abbruch selbst loslassen muss:
+	 * bleibt er gedrueckt, feuert der Hubschrauber beim naechsten Aufsteigen
+	 * weiter, ohne dass der Spieler es merkt.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|MG")
+	bool IsTriggerHeld() const { return bTriggerHeld; }
+
 	/** Weltort der Mündung - dort blitzt es, dort kommt der Ton her. */
 	UFUNCTION(BlueprintPure, Category = "Wiesbaden|Heli|MG")
 	FVector GetMuzzleLocation() const;

@@ -6,6 +6,7 @@
 #include "GameFramework/HUD.h"
 #include "UI/WiesbadenMenuFlow.h"
 #include "UI/WiesbadenMinimap.h"
+#include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "WiesbadenVehicleHUD.generated.h"
 
 class AWiesbadenCar;
@@ -38,6 +39,10 @@ public:
 
 	virtual void DrawHUD() override;
 
+	/** Lifecycle-Abbau laeuft auch bei verborgenem HUD und in der Pause. */
+	virtual void Tick(float DeltaSeconds) override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 	/** Zeigt kurz einen Hinweistext oben mittig (z. B. "Helikopter-Hangar
 	 *  erforderlich"). Von aussen (GameMode) bei gesperrten Aktionen aufgerufen. */
 	void ShowTransientHint(const FString& Text);
@@ -58,6 +63,9 @@ public:
 
 	/** Gangstufe als Text: "R" rueckwaerts, "N" Leerlauf, sonst die Zahl. */
 	static FString FormatGear(int32 Gear);
+
+	/** Beschriftung eines Pawn-Wechsels; datenrein fuer HUD-Regressionstests. */
+	static FString ResolveVehicleTransitionBanner(const APawn* CurrentPawn);
 
 	/**
 	 * Wasserstand des Nerobergbahn-Wagens als Text, z. B.
@@ -107,6 +115,92 @@ public:
 	 * die tragenden Tasten aufgefuehrt bleiben.
 	 */
 	static void GetControlLegendLines(bool bInVehicle, TArray<FString>& OutLines);
+	static FString GetHelicopterLessonStepTitle(int32 Step);
+	static FString GetHelicopterLessonInstructions(int32 Step);
+	static int32 AdvanceHelicopterLessonStep(int32 Step, bool bSatisfied, bool bSkip);
+
+	/** "Enter / A" im Abschlussschritt, sonst leer (Bestaetigung per Taste). */
+	static FString GetHelicopterLessonConfirmKeys(int32 Step);
+
+	/** "Tab / B ueberspringen" nur in den Uebungen; der Abschluss laesst es nicht. */
+	static FString GetHelicopterLessonSkipHint(int32 Step);
+
+	/**
+	 * Muss beim Pawn-Wechsel abgebaut werden?
+	 *
+	 * GEMESSEN am 30.09.2026: der Abbau lag nur unter bHelicopterLessonActive -
+	 * eine noch nicht angenommene Einladung blieb beim Aussteigen sichtbar.
+	 * Die Einladung ist genauso ein Zustand und wird deshalb mit abgebaut.
+	 */
+	static bool ShouldLessonBreakOnPawnChange(bool bLessonActive, bool bOfferVisible)
+	{
+		return bLessonActive || bOfferVisible;
+	}
+
+	/** Absturz/Actorverlust beendet Einladung und Lektion auch ohne Pawnwechsel. */
+	static bool ShouldLessonBreakOnHeliLoss(bool bLessonActive, bool bOfferVisible,
+		bool bHeliUsable)
+	{
+		return bHeliUsable ? false : (bLessonActive || bOfferVisible);
+	}
+
+	/**
+	 * Beschriftung des GESCHUETZ-Feldes auf der Instrumententafel.
+	 *
+	 * Reiner Text, damit die Anzeige ohne Canvas pruefbar ist. Reihenfolge ist
+	 * bewusst "sperrend zuerst": solange die Lektion laeuft, ist die Munition
+	 * egal - der Spieler soll nicht auf Zahlentexte schauen, sondern auf den
+	 * Grund, warum sein Abzug nichts tut.
+	 */
+	static FString GetHelicopterGunStatus(bool bDryFire, bool bReleasePending,
+		bool bOverheated, int32 RoundsLeft)
+	{
+		if (bDryFire)
+		{
+			return TEXT("TROCKEN");
+		}
+		if (bReleasePending)
+		{
+			return TEXT("ABZUG LOS");
+		}
+		if (bOverheated)
+		{
+			return TEXT("UEBERHITZT");
+		}
+		if (RoundsLeft <= 0)
+		{
+			return TEXT("LEER");
+		}
+		return FString::Printf(TEXT("BEREIT %d"), RoundsLeft);
+	}
+
+	/**
+	 * Bau die Flugstunde restlos ab: Feuersperre loesen, Einladung schliessen,
+	 * diese Sitzung als verschoben markieren.
+	 *
+	 * Ein Ort statt fuenf. Jede Abbruchstelle (Aussteigen, Pausenmenue,
+	 * Pawnwechsel, Absturz, HUD-Ende) muss exakt dasselbe tun - und genau
+	 * darin lag der Restfehler: die Stellen waren fuer sich genommen richtig,
+	 * aber nicht alle beendeten auch die Feuersperre.
+	 *
+	 * @param Hinweis  Text fuer den Spieler; leer laesst das Feld stumm.
+	 * @param ZusaetzlichHeli  Actor, der die Sperre eventuell noch haelt
+	 *        (beim Pawnwechsel der vorherige, beim HUD-Ende der letzte).
+	 */
+	void EndHelicopterLesson(const FString& Hinweis,
+		AWiesbadenHelicopter* ZusaetzlichHeli = nullptr);
+
+	/**
+	 * Umsehschritt: braucht eine Aussenansicht.
+	 *
+	 * Im Cockpit gibt es kein Umsehen (HandleInput kehrt dort zurueck), eine
+	 * Kameraschaltung davor kann aber genau dort enden - der Schritt waere
+	 * sonst unerfuellbar. Reine Funktion, damit das ohne Welt pruefbar ist.
+	 */
+	static bool IsLessonLookStepSatisfied(float LookMagnitude, EWiesbadenVehicleCameraMode CameraMode);
+
+	void RespondToHelicopterLessonOffer(bool bStart);
+	void StartHelicopterLesson();
 
 	/**
 	 * Sichtbarkeit der Legende NACH einem F1-Druck - datenrein.
@@ -205,6 +299,11 @@ private:
 	 * Erscheint automatisch beim Start und laesst sich mit F1 umschalten.
 	 */
 	void DrawControlLegend(bool bInVehicle, float X, float Y);
+	void DrawHelicopterLesson(float Width, float Height);
+	void UpdateHelicopterLesson();
+	void DrawHelicopterLessonOffer(float Width, float Height);
+	void SaveHelicopterLessonCompletion();
+	bool IsHelicopterLessonStepSatisfied(const AWiesbadenHelicopter& Heli) const;
 
 	/** Missions-Ziel-Panel (Titel + Ziel-Label + Distanz), oben mittig. */
 	void DrawMissionPanel(float Width, float Height);
@@ -498,6 +597,8 @@ private:
 
 	/** Ausgewaehlter Eintrag. */
 	int32 PauseSelection = 0;
+	/** Variabler Pausemenue-Index fuer den Helikopter-Unterricht. */
+	int32 HelicopterLessonMenuIndex = INDEX_NONE;
 
 	/**
 	 * WAS GERADE UEBER DEM SPIEL LIEGT - ein Zustand, ein Eigentuemer.
@@ -544,6 +645,24 @@ private:
 
 	/** Einmal-Merker: die gespeicherten Optionen wurden schon gelesen. */
 	bool bOptionsLoaded = false;
+	bool bHelicopterLessonCompleted = false;
+	bool bHelicopterLessonOverlayVisible = false;
+	bool bHelicopterLessonPreferenceLoaded = false;
+	bool bHelicopterLessonDeferredThisSession = false;
+	bool bHelicopterLessonOffered = false;
+	bool bHelicopterLessonActive = false;
+	bool bHelicopterLessonCollectiveUp = false;
+	bool bHelicopterLessonCollectiveDown = false;
+	bool bHelicopterLessonEngineChanged = false;
+	bool bHelicopterLessonFireObserved = false;
+	bool bHelicopterLessonStartSearchlightState = false;
+	bool bHelicopterLessonStartLandingLightState = false;
+	bool bHelicopterLessonStartEngineState = false;
+	int32 HelicopterLessonInitialShots = 0;
+	int32 HelicopterLessonStep = 0;
+	float HelicopterLessonStableTime = 0.0f;
+	EWiesbadenVehicleCameraMode HelicopterLessonStartCamera = EWiesbadenVehicleCameraMode::Follow;
+	TWeakObjectPtr<AWiesbadenHelicopter> LastHelicopterPawn;
 
 	/**
 	 * Gespeicherte Tageszeit: -2 = nichts gespeichert (Weltwert nicht anfassen),

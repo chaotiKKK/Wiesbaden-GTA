@@ -9,6 +9,7 @@
 
 class UAudioComponent;
 class USoundBase;
+class AWiesbadenWorldBuilder;
 
 /**
  * Ort -> Klang. Die einzige Stelle, die weiss, welcher Ton an welcher
@@ -30,6 +31,10 @@ public:
 	virtual void Deinitialize() override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual TStatId GetStatId() const override;
+
+	/** Ort aus geladenen Chunk-/Gebaeudedaten klassifizieren, ohne Rohdaten. */
+	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Audio")
+	EWbAudioZone ZoneAt(const FVector& Location);
 
 	/** Legt den Schritt-Pool an. Idempotent. */
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Audio")
@@ -88,6 +93,12 @@ private:
 	UPROPERTY()
 	int32 PlayedFootsteps = 0;
 
+	/** Gewerbe/Industrie einmal indexieren, dann nur Nachbarzellen abfragen. */
+	TWeakObjectPtr<AWiesbadenWorldBuilder> IndexedBuilder;
+	int32 IndexedBuildingCount = INDEX_NONE;
+	TMap<FIntPoint, TArray<FVector2D>> IndustrialCells;
+	TMap<FIntPoint, TArray<FVector2D>> CommercialCells;
+	EWbAudioZone LastReportedZone = EWbAudioZone::MAX;
 	bool bRigReady = false;
 	bool bFootstepsEnabled = true;
 	bool bWarnedMissingBeds = false;

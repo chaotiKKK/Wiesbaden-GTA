@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "UI/WiesbadenVehicleHUD.h"
+#include "Core/WiesbadenInputMap.h"
 #include "Audio/WiesbadenAudioSubsystem.h"
 #include "GIS/BuildingGenerator.h"
 #include "UI/WiesbadenWorldMapView.h"
@@ -117,6 +118,27 @@ bool FVehicleHUDTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("23 Grad -> NO"), AWiesbadenVehicleHUD::FormatHeading(23.0f), FString(TEXT("NO 023")));
 	}
 
+	// Lesson steps are a bounded progression: action steps wait for satisfaction,
+	// skip advances one step, and completion remains clamped.
+	TestEqual(TEXT("Lesson has 10 practice steps plus final confirmation"),
+		WiesbadenHelicopterLesson::Steps().Num(), WiesbadenHelicopterLesson::StepCount);
+	TestEqual(TEXT("unsatisfied action waits"),
+		AWiesbadenVehicleHUD::AdvanceHelicopterLessonStep(3, false, false), 3);
+	TestEqual(TEXT("satisfied action advances"),
+		AWiesbadenVehicleHUD::AdvanceHelicopterLessonStep(3, true, false), 4);
+	TestEqual(TEXT("skip advances only once"),
+		AWiesbadenVehicleHUD::AdvanceHelicopterLessonStep(3, false, true), 4);
+	TestEqual(TEXT("final confirm advances to completed sentinel"),
+		AWiesbadenVehicleHUD::AdvanceHelicopterLessonStep(
+			WiesbadenHelicopterLesson::PracticeStepCount, true, false),
+		WiesbadenHelicopterLesson::StepCount);
+	TestEqual(TEXT("completed step stays clamped"),
+		AWiesbadenVehicleHUD::AdvanceHelicopterLessonStep(
+			WiesbadenHelicopterLesson::StepCount, true, true), WiesbadenHelicopterLesson::StepCount);
+	TestTrue(TEXT("Final lesson step documents F/Y exit"),
+		AWiesbadenVehicleHUD::GetHelicopterLessonInstructions(
+			WiesbadenHelicopterLesson::PracticeStepCount).Contains(TEXT("F / Y")));
+
 	return true;
 }
 
@@ -164,11 +186,15 @@ bool FVehicleHUDControlLegendTest::RunTest(const FString& Parameters)
 	// Leertaste/Strg fuer das Kollektiv), aber das stand nirgends im Spiel - er
 	// galt deshalb als "nicht fliegbar". Der Test haelt die Tasten fest, die der
 	// Heli wirklich liest.
-	TestTrue(TEXT("Heli: Kollektiv hoch genannt"), VehicleText.Contains(TEXT("Kollektiv hoch")));
-	TestTrue(TEXT("Heli: Kollektiv runter genannt"), VehicleText.Contains(TEXT("Kollektiv runter")));
-	TestTrue(TEXT("Heli: Strg genannt"), VehicleText.Contains(TEXT("Strg")));
-	TestTrue(TEXT("Heli: Gieren genannt"), VehicleText.Contains(TEXT("Gieren")));
-	TestTrue(TEXT("Heli: Triebwerk genannt"), VehicleText.Contains(TEXT("Triebwerk")));
+	TestTrue(TEXT("Heli: pitch W/S"), VehicleText.Contains(TEXT("W/S")));
+	TestTrue(TEXT("Heli: roll A/D"), VehicleText.Contains(TEXT("A/D")));
+	TestTrue(TEXT("Heli: yaw Q/E"), VehicleText.Contains(TEXT("Q/E")));
+	TestTrue(TEXT("Heli: Kollektiv Leertaste/Strg"), VehicleText.Contains(TEXT("Leertaste/Strg")));
+	TestTrue(TEXT("Heli: Gamepad LB/RB yaw"), VehicleText.Contains(TEXT("LB/RB")));
+	TestTrue(TEXT("Heli: RT/LT Kollektiv"), VehicleText.Contains(TEXT("RT/LT")));
+	TestTrue(TEXT("Heli: X engine and A fire"), VehicleText.Contains(TEXT("X Motor")) && VehicleText.Contains(TEXT("/A")));
+	TestTrue(TEXT("Heli: R3 camera and right-stick look"), VehicleText.Contains(TEXT("R3")) && VehicleText.Contains(TEXT("rechter Stick")));
+	TestTrue(TEXT("Heli: L/B lights and F/Y exit"), VehicleText.Contains(TEXT("L/B")) && VehicleText.Contains(TEXT("F/Y")));
 
 	TArray<FString> FootLines;
 	AWiesbadenVehicleHUD::GetControlLegendLines(/*bInVehicle=*/false, FootLines);

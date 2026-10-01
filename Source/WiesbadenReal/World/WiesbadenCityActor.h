@@ -7,6 +7,7 @@
 
 #include "Core/WiesbadenCityData.h"
 #include "GIS/WiesbadenPedestrianSimulation.h"
+#include "Audio/WiesbadenFootstepPool.h"
 
 #include "WiesbadenCityActor.generated.h"
 
@@ -276,4 +277,14 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Wiesbaden|Fussgaenger")
 	UPedestrianSpawnerComponent* PedestrianSpawner = nullptr;
+
+	/**
+	 * Reiner C++-Zustandspool fuer die Schritte der Passanten.
+	 *
+	 * Kein UPROPERTY: FWiesbadenFootstepPool ist kein UObject, sondern eine
+	 * Klasse mit Phasenspeicher. Der TUniquePtr besitzt sie eindeutig, der GC
+	 * hat damit nichts zu tun (und darf es auch nicht - er wuerde eine
+	 * UPROPERTY-lose UObject-Instanz unter dem Zeiger wegziehen).
+	 */
+	TUniquePtr<FWiesbadenFootstepPool> PedestrianSteps;
 };

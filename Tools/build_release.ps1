@@ -15,7 +15,9 @@
 #   Gate 3  Rauchtest     (Tools\smoke_test.ps1 -> Exit 0)
 #   ----- ab hier nur bei komplett gruenem Ergebnis -----
 #   Schritt 4  Paketieren (package_game.cmd -> Saved\Package\Windows\...)
-#   Schritt 5  Verknuepfung 'Wiesbaden Real (Paket)' auf das neue Paket ziehen
+#   Gate 5     BugTank     (Development-Abnahme im frisch gebauten Paket,
+#                           mit archivierten Trace-Logs und Bildern)
+#   Schritt 6  Verknuepfung 'Wiesbaden Real (Paket)' auf das neue Paket ziehen
 #
 # Vor dem Ueberschreiben wird das bisherige Paket nach Saved\Package_previous
 # gesichert, damit eine schlechte Release umkehrbar ist.
@@ -26,7 +28,8 @@
 #                                              Paket, KEIN Qualitaets-Gate)
 #          Tools\build_release.cmd -Rollback  (Sekunden: aktuelles <-> vorheriges
 #                                              Paket tauschen, Verknuepfung folgt)
-# Exit 0 = paketiert (bzw. Gates gruen bei -GatesOnly / Rollback ok), sonst Exit 1.
+# Exit 0 = Paket und BugTank-Abnahme gruen (bzw. Gates gruen bei -GatesOnly /
+# Rollback ok), sonst Exit 1.
 
 # CmdletBinding: unbekannte Flags (z. B. Tippfehler '-GateOnly' statt '-GatesOnly')
 # werden abgewiesen statt still ignoriert - sonst laeuft versehentlich der VOLLE,
@@ -148,7 +151,7 @@ function Fail([string]$Gate, [string]$Detail, [string]$LogHint) {
     Write-Host ("XXXX PIPELINE GESTOPPT: {0} FEHLGESCHLAGEN" -f $Gate)
     Write-Host ("     {0}" -f $Detail)
     if ($LogHint) { Write-Host ("     Log: {0}" -f $LogHint) }
-    Write-Host ("     Kein Paket wird gebaut. Ursache beheben und erneut laufen lassen.")
+    Write-Host ("     Release wird nicht freigegeben. Ursache beheben und erneut laufen lassen.")
     exit 1
 }
 
@@ -309,13 +312,50 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $PackageExe)) {
 }
 Write-Host "  Paket gebaut: $PackageExe"
 
-# ---- Schritt 5: Desktop-Verknuepfung erneuern ---------------------------
-Section 5 "Desktop-Verknuepfung auf das neue Paket ziehen"
+# ---- Gate 5: BugTank-Abnahme im gerade gebauten Paket -------------------
+Section 5 "BugTank-Development-Abnahme im frischen Paket"
+$AcceptanceScript = Join-Path $ProjDir "Tools\bugtank_acceptance.py"
+if (-not (Test-Path $AcceptanceScript)) {
+    Fail "Gate 5 (BugTank-Development-Abnahme)" "bugtank_acceptance.py fehlt." ""
+}
+$AcceptancePackage = Join-Path $PackageDir "Windows\WiesbadenReal"
+$AcceptanceLog = Join-Path $LogDir "release_bugtank_acceptance.log"
+Remove-Beleg $AcceptanceLog
+$AcceptanceStart = Get-Date
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+& python $AcceptanceScript --run --package-dir $AcceptancePackage 2>&1 |
+    Tee-Object -FilePath $AcceptanceLog | Select-Object -Last 12
+$acceptanceExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEAP
+$acceptanceFresh = Test-Frisch $AcceptanceLog $AcceptanceStart
+if ($acceptanceExit -ne 0 -or -not $acceptanceFresh) {
+    $restoreDetail = ""
+    $previousExe = Join-Path $PrevPackageDir "Windows\WiesbadenReal.exe"
+    if (Test-Path $previousExe) {
+        # Erst die Belege sichern (der Runner schreibt sie nach Saved\Diagnose),
+        # dann den abgenommenen Kandidaten entfernen und das vorherige Paket an
+        # denselben Pfad zurueckholen. Die Desktop-Verknuepfung bleibt unangetastet.
+        Remove-Beleg $PackageDir
+        Move-Item $PrevPackageDir $PackageDir -Force
+        $restoreDetail = "Vorheriges Paket wiederhergestellt; die Verknuepfung blieb unveraendert."
+    } else {
+        $restoreDetail = "Kein vorheriges Paket zum Wiederherstellen vorhanden; das neue Paket bleibt fuer Diagnose unter Saved\Package."
+    }
+    Fail "Gate 5 (BugTank-Development-Abnahme)" `
+        ("Runner-Exit {0}, frisches Gate-Log: {1}. {2}" -f $acceptanceExit, $acceptanceFresh, $restoreDetail) `
+        $AcceptanceLog
+}
+Write-Host "  Gate 5 gruen: Boden-, Fassaden- und Deckenbewegung trace-bestaetigt; Logs und Bilder sind archiviert."
+Write-Host ("  Gate-Log: {0}" -f $AcceptanceLog)
+
+# ---- Schritt 6: Desktop-Verknuepfung erneuern ---------------------------
+Section 6 "Desktop-Verknuepfung auf das neue Paket ziehen"
 Set-PackageShortcut
 Write-Host "  Verknuepfung erneuert: $LinkPath -> $PackageExe"
 
 Write-Host ""
-Write-Host "======== RELEASE FERTIG: getestet, paketiert, Verknuepfung aktuell ========"
+Write-Host "======== RELEASE FERTIG: getestet, BugTank-abgenommen, Verknuepfung aktuell ========"
 Write-Host ("Dauer gesamt: {0:N1} min" -f ((Get-Date) - $Start).TotalMinutes)
 Write-Host "Rueckrollen bei Problemen:  Tools\build_release.cmd -Rollback"
 exit 0

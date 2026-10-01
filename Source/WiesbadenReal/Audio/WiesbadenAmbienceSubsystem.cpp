@@ -3,6 +3,7 @@
 #include "Audio/WiesbadenAmbienceSubsystem.h"
 
 #include "Audio/WiesbadenAudioSubsystem.h"
+#include "Audio/WiesbadenAudioZonesSubsystem.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/AudioComponent.h"
 #include "Engine/World.h"
@@ -221,12 +222,24 @@ void UWiesbadenAmbienceSubsystem::ProbeSpaceAndTime(float DeltaSeconds)
 		ReseedLocalEmitters(Listener);
 	}
 
+	CurrentZoneMix.Wind = FMath::FInterpTo(CurrentZoneMix.Wind, TargetZoneMix.Wind, DeltaSeconds, 1.5f);
+	CurrentZoneMix.City = FMath::FInterpTo(CurrentZoneMix.City, TargetZoneMix.City, DeltaSeconds, 1.5f);
+	CurrentZoneMix.Birds = FMath::FInterpTo(CurrentZoneMix.Birds, TargetZoneMix.Birds, DeltaSeconds, 1.5f);
+	CurrentZoneMix.Night = FMath::FInterpTo(CurrentZoneMix.Night, TargetZoneMix.Night, DeltaSeconds, 1.5f);
+	// Nur Klassifikation/Strahlen im Halbsekundentakt, Pegel jeden Frame:
+	// andernfalls war die weiche Interpolation eine hoerbare Treppe.
+	UpdateBeds(ResolveTimeOfDayHours(), CurrentSpace);
+
 	ProbeAccumulator += DeltaSeconds;
 	if (ProbeAccumulator < ProbeIntervalSeconds)
 	{
 		return;
 	}
 	ProbeAccumulator = 0.0f;
+	if (UWiesbadenAudioZonesSubsystem* Zones = World->GetSubsystem<UWiesbadenAudioZonesSubsystem>())
+	{
+		TargetZoneMix = WiesbadenAudioZones::AmbienceMix(Zones->ZoneAt(Listener));
+	}
 
 	// Raumsonde: 5 Aufwaerts- und 8 Horizontalstrahlen. Der Hoerer steckt
 	// haeufig im Fahrzeug - der eigene Rumpf wird ignoriert.
@@ -273,10 +286,8 @@ void UWiesbadenAmbienceSubsystem::ProbeSpaceAndTime(float DeltaSeconds)
 		}
 	}
 
-	const EWbReverbSpace Space =
-		WiesbadenAudioPropagation::ClassifySpace(SkyBlocked01, WallHits / 8.0f, CeilingHeightM);
-	WiesbadenAudioPropagation::ApplySpaceState(Space);
-	UpdateBeds(ResolveTimeOfDayHours(), Space);
+	CurrentSpace = WiesbadenAudioPropagation::ClassifySpace(SkyBlocked01, WallHits / 8.0f, CeilingHeightM);
+	WiesbadenAudioPropagation::ApplySpaceState(CurrentSpace);
 }
 
 void UWiesbadenAmbienceSubsystem::UpdateBeds(float TimeOfDayHours, EWbReverbSpace Space)
@@ -290,11 +301,11 @@ void UWiesbadenAmbienceSubsystem::UpdateBeds(float TimeOfDayHours, EWbReverbSpac
 	{
 		if (UAudioComponent* Wind = DiffuseBeds[0])
 		{
-			Wind->SetVolumeMultiplier(1.0f - 0.65f * Indoor);
+			Wind->SetVolumeMultiplier(CurrentZoneMix.Wind * (1.0f - 0.65f * Indoor));
 		}
 		if (UAudioComponent* City = DiffuseBeds[1])
 		{
-			City->SetVolumeMultiplier(0.9f - 0.6f * Indoor);
+			City->SetVolumeMultiplier(CurrentZoneMix.City * (1.0f - 0.7f * Indoor));
 		}
 		if (UAudioComponent* Room = DiffuseBeds[2])
 		{
@@ -305,14 +316,14 @@ void UWiesbadenAmbienceSubsystem::UpdateBeds(float TimeOfDayHours, EWbReverbSpac
 	{
 		if (Bed)
 		{
-			Bed->SetVolumeMultiplier(0.55f * Day * (1.0f - 0.8f * Indoor));
+			Bed->SetVolumeMultiplier(CurrentZoneMix.Birds * Day * (1.0f - 0.8f * Indoor));
 		}
 	}
 	for (const TObjectPtr<UAudioComponent>& Bed : LocalNightBeds)
 	{
 		if (Bed)
 		{
-			Bed->SetVolumeMultiplier(0.5f * Night * (1.0f - 0.8f * Indoor));
+			Bed->SetVolumeMultiplier(CurrentZoneMix.Night * Night * (1.0f - 0.8f * Indoor));
 		}
 	}
 }

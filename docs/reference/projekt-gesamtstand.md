@@ -1,5 +1,84 @@
 # WiesbadenReal — Gesamtstand, offene Punkte und Vorschläge
 
+## Aktueller Abgleich fuer den Ausbau (01.10.2026)
+
+**Auftrag:** Projektweiten Ausbau eingrenzen, freigegebene Reste ins Spiel
+integrieren, ein neues eigenstaendiges Development-Paket pruefen, passende
+Aenderungen lokal committen und neue Spiel-Verknuepfungen bereitstellen.
+Kein Push und keine Veroeffentlichung sind beauftragt.
+
+**Bestand:** Branch `uebernahme/2026-09-27`, Default-Karte
+`WiesbadenCity_Alkis31`. Bei der Bestandsaufnahme: 46 geaenderte versionierte
+Dateien und weitere unversionierte Features. Der Index ist leer. Der
+Engine-Lock war frei; auf C: waren rund 165 GB frei. Das sind Momentaufnahmen,
+keine Freigabe fuer einen spaeteren Build.
+
+**Wichtig:** Der Bericht unterhalb dieses Abschnitts beschreibt vorwiegend
+September 23. Seine Karten-, Feature- und Offen-Aussagen sind teilweise
+ueberholt. Eine offene Checkbox in einem alten Plan beweist keinen fehlenden
+Code. Der folgende Abgleich trennt Quellstand, Testergebnis und Spielabnahme.
+
+| Thema | Aktueller Befund | Noch benoetigt |
+| --- | --- | --- |
+| Live-Karte | `Config/DefaultEngine.ini` verwendet Alkis31, nicht Alkis16/17. | Alkis17 nicht erneut live schalten; neues Paket auf aktueller Karte pruefen. |
+| Verkehrsvielfalt | `WiesbadenTrafficCars::Types()` enthaelt Golf, Peugeot, Transporter, Kaefer und zwei BMW-Varianten. | Verfuegbarkeit und Darstellung im neuen Paket pruefen, keine zweite Implementierung beginnen. |
+| Verkehrsverteilung | Der Spawn gewichtet bereits nach Strassenklasse und Spurlaenge (`NearbySpawnCumulativeWeights`). | Alten Vorschlag zum Round-Robin-Spawn als ueberholt behandeln; `TrafficDensityFactor` ist davon getrennt. |
+| Heli-Fluglektion | Einladung, Uebungen, Abschluss, Geschuetzanzeige, Feuersperre und Lifecycle-Abbau sind integriert; LessonFire/LessonHeldFire/LessonSafety gruen (01.10.2026). Nachweis-Doku: `how-to/helikopter-flugstunde-sicherheit.md`. | HUD-Layout-Abnahme im Bild steht aus. |
+| BugTank-Insekt | 15 Teile, Pawn, Bewegung und Tests sind gruen (BugTank-Suite 7/7; breiter Lauf 112/112 am 01.10.2026). `/Game/Vehicles/BugTank` steht jetzt im Cook-Vertrag. | Der Blender-Exporter (`export_bugtank_teile.py`) hat bekannte Fehler (majority tie, polygon material vertexindex); ein Re-Import ist bewusst nicht durchgefuehrt. |
+| Fussschritte | FootstepPool, Oberflaechen-Aufloesung und Passanten-Anbindung sind integriert (Tests Pedestrians/Pool/Surface gruen am 01.10.2026). | Klaenge aus der gebauten EXE nachweisen - Teil der Paket-Abnahme. |
+| SebboTower | Innenausbau ist vorhanden; Licht-Tick und Intensitaetskorrekturen sind uebernommen (`WiesbadenSebboHq.cpp`), Tower-Aufzug-Probe/Treppe waren am 27.09. gruen. | Etagenwechsel, Innenlicht und Nachtansicht im Spiel belegen; dekorative Tueren sind noch keine Interaktion. |
+| Runtime-Paketinhalt | Gezielte Cook-Gruppen (jetzt inkl. `/Game/Vehicles/BugTank`) und neun UFS-JSON; Vertragstest gruen (13 Checks). Ein datiertes Development-Paket wird gebaut (`Saved/Package_2026-10-01`), alte Pakete bleiben liegen. | EXE-Abnahme steht aus: Buslinien, Audio, Missions-/Store-Kataloge und dynamische Assets aus der gebauten EXE pruefen. |
+| Fahndung | Konto 0-6 mit frameunabhaengigem Abbau, Polizei-Streifenwagen (Blaaulicht, Sirene, POLIZEI-Beschriftung), Verfolgung, Festnahme mit Respawn, HUD-Anzeige (Sterne/Fortschritt) und Dev-Befehl `WbWanted` sind umgesetzt; Polizei-Tests gruen (01.10.2026). | Sicht-/Verfolgungs-Integrationstests und die optionale Heli-Eskalation ab Stufe 4 sind nicht umgesetzt. |
+| Strassenmarkierungen | P3-P7 (Zebra, Abbiegepfeile, Haifischzaehne, BUS-Schriftzug, Radflaechen) sind implementiert; Materialzuordnung korrigiert (M_WbLaneMarking/M_WbBikeLaneSurface); Test `SupplementaryPaint` gruen; in Alkis32 gebacken. | Sichtabnahme der Markierungen im Spiel steht aus. |
+| Bewuchs-Freihaltung | `ClearObstacles` (Gebaeudegrundrisse, Bahnkorridor aus `railway=funicular`, Bauplaetze, Strassenmoebel) ist implementiert; Test `ObstacleClearance` gruen; Alkis32 am 01.10.2026 neu gebacken. | Sichtabnahme der Freihaltung im Spiel steht aus. |
+| Ortsabhaengiges Ambiente | Zonenindex (Industrie/Gewerbe in 12-km-Zellen) und frameaufloesende Bedpegel sind umgesetzt; Test `Zones` gruen. | Die Klanglagen sind weiter ein Pegel-Mix (Noise-Betten) - echte Samples/Speech fehlen. Section-Strassenklassen (3b) sind nicht angefasst. |
+| Wetter, Chaos-Kaefer, Wochenende-Fahrplan | Alte Berichte nennen weitere offene oder optionale Themen. | Nicht als fertig oder erneut fehlend behaupten: vor Umsetzung jeweils aktuellen Code, Assets und Daten pruefen. |
+
+### Ausbau-Bloecke (am 01.10.2026 freigegeben und umgesetzt)
+
+Alle vier Bloecke sind im Arbeitsbaum gelandet. Grün gemessen am 01.10.2026:
+Editor-Build, Game-Target-Build, Ausbau-Suite (`SupplementaryPaint`,
+`ObstacleClearance`, `Zones`) und die breite Suite (Vehicles/Polizei/Audio/
+Input/UI, 112/112). Offen sind nur die Abnahmen im laufenden Spiel und die
+bewusst nicht umgesetzten Optionalteile (jeweils in der Tabelle oben).
+
+1. **Release-Abschluss:** Heli-Feuersicherheit, BugTank-Darstellung sowie
+   Kamera-, Schritt-, Tower-Licht- und Runtime-Staging-Arbeiten sind
+   integriert und getestet. Das datierte Development-Paket
+   (`Saved/Package_2026-10-01`, alte Pakete unangetastet) wird gebaut; die
+   drei Spiel-Verknuepfungen (Stadt/Heli/BugTank) kommen auf die EXE-Abnahme.
+2. **Stadt-Bake:** Markierungen P3-P7 und Bewuchs-Freihaltung sind umgesetzt.
+   `WiesbadenCity_Alkis32` ist am 01.10.2026 aus Alkis16 neu gebacken
+   (2010 Chunks, `ok` in `Saved/BuildHistory/CityBuilds.csv`); Alkis16 und
+   Alkis31 sind unveraendert. Die Default-Karte wird erst nach der Abnahme
+   umgestellt (`WB_LIVE_SCHALTEN=1`).
+3. **Polizei-Gameplay:** Streifenwagen (Blaaulicht/Sirene), Verfolger mit
+   Sichtpruefung, Festnahme mit Respawn, FAHNDUNG-HUD und der Dev-Befehl
+   `WbWanted` stehen auf dem 0-6-Konto; die Polizei-Tests sind gruen.
+   Nicht umgesetzt: optionale Heli-Eskalation ab Stufe 4, Integrations-
+   tests der Sichtverfolgung.
+4. **Stadtklang:** Zonenindex und hoerbare, frameaufloesend interpolierte
+   Klanglagen sind umgesetzt. Die Klanglagen bleiben ein Pegel-Mix:
+   echte Samples/Speech fehlen. Audio 3b (serialisierte Strassenklassen)
+   ist nicht angefasst.
+
+Nicht uebernommen (unzugehoerig, unangetastet im Arbeitsbaum):
+Android-Compilerflags in `WiesbadenReal.Target.cs`, die Worktree-Werkzeuge
+(`worktree_raeumen.py`, `worktree_zeitstrahl.py`, `gate_worktree.py`-WIP) und
+`.mcp.json`.
+
+**Nebenbefund:** Trotz Freebuff-Neustart lief PID 26024 mit
+`.planning/push-waechter/waechter4.ps1` weiter. Dieser alte Waechter beobachtet
+`feature/gates-vor-dem-commit`, nicht den aktuellen Branch, kann aber selbst
+Push/Gate-Ketten starten. Er wurde in diesem Abgleich weder beendet noch neu
+gestartet. Keine fremden Prozesse oder bestehenden Pakete wurden veraendert.
+(Nachtrag: `waechter4.ps1` wurde am 30.09.2026 gestoppt; der Autostart blieb
+unveraendert.)
+
+---
+
+## Historischer Bericht (ab 23.09.2026)
+
 - **Stand:** 2026-09-23, Quellstand `e9dcd96` auf `main` (Squash von PR #12)
 - **Zweck:** Ein Dokument statt vieler Gesprächsfäden. Pro Thema: was läuft,
   was fehlt, was es blockiert.

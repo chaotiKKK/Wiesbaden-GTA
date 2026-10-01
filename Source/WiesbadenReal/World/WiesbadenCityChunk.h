@@ -174,6 +174,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Wiesbaden|Chunk")
 	int32 GetRegionAssetCount() const { return RegionAssets.Num(); }
 
+	/** Nur serialisierte Daten lesen: Audio braucht keinen CityData-Neubau. */
+	const TArray<FPlacedRegionAsset>& GetRegionAssets() const { return RegionAssets; }
+
 	/**
 	 * Haelt die Actor-Bounds auf dem Zell-Inhalt.
 	 *

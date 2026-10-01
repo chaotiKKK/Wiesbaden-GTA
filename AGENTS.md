@@ -4540,7 +4540,8 @@ Ergebnis nach `Saved/Diagnose/ka52/build_test_ergebnis.txt`.
 - Nicht committet: alles Ka-52 liegt uncommitted im Arbeitsbaum. Fuer den
   Build war nur `git add` der neuen **Quell**dateien noetig (adaptive
   Non-Unity-Build nimmt `git status` als Arbeitsmenge, untracked wird nicht
-  gebaut); `Content/Audio/Ka52/` und die Ka-52-Assets sind weiterhin
+  gebaut - **KORREKTUR 28.09.2026: das ist FALSCH, siehe den Abschnitt
+  "KORREKTUR: untracked Dateien WERDEN im adaptiven Build kompiliert"**); `Content/Audio/Ka52/` und die Ka-52-Assets sind weiterhin
   untracked.
 - Spielprobe im laufenden Editor steht aus: Kamerawechsel C, Cockpit mit
   ausgeblendetem Rumpf, Nachtfahrt mit den beiden Suchscheinwerfern,
@@ -4548,7 +4549,8 @@ Ergebnis nach `Saved/Diagnose/ka52/build_test_ergebnis.txt`.
 - Nicht committet: alles Ka-52 liegt uncommitted im Arbeitsbaum. Fuer den
   Build war nur `git add` der neuen **Quell**dateien noetig (adaptive
   Non-Unity-Build nimmt `git status` als Arbeitsmenge, untracked wird nicht
-  gebaut); `Content/Audio/Ka52/` und die Ka-52-Assets sind weiterhin
+  gebaut - **KORREKTUR 28.09.2026: das ist FALSCH, siehe den Abschnitt
+  "KORREKTUR: untracked Dateien WERDEN im adaptiven Build kompiliert"**); `Content/Audio/Ka52/` und die Ka-52-Assets sind weiterhin
   untracked.
 - Spielprobe im laufenden Editor steht aus: Kamerawechsel C, Cockpit mit
   ausgeblendetem Rumpf, Nachtfahrt mit den beiden Suchscheinwerfern,
@@ -5084,3 +5086,265 @@ sauberem Baum gruen, bei Bearbeitung rot, und er sagt etwas Falsches aus.
 - **Tests:** `Tools/test_releases_ausrichten.py` (20) - `LAUF` ist eine
   Attrappe, `git archive` liefert ein gebautes tar, also kein git, kein gh,
   kein Netz.
+
+## Lock: die Wartemeldung wird entzerrt, die Information nicht (27.09.2026)
+- **GEMESSEN vorher: die Warteschleife in `Sperre-Nehmen` fragt alle 2 s ab und
+  meldete JEDES Mal.** Bei `-WarteSekunden 900` sind das bis zu 450 Zeilen
+  `"Lock: belegt durch ... warte auf Freigabe ..."` - die den eigentlichen Befund
+  erschlagen. `gate_worktree.py` hatte die Entzerrung schon (`naechste_meldung =
+  uhr() + 60.0`); nur die ps1 brullte.
+- **Gesperrt ist die WIEDERHOLUNG, nicht die Information.** Zwei Faelle melden
+  sofort: der erste Eintrag und jeder **Wechsel des Besitzers**. Wer eine
+  Warteschleife sieht, will wissen, OB es Fortschritt gibt. GEMESSEN:
+  Besitzerwechsel nach 5 s -> zweite Meldung mit dem neuen PID und Label,
+  obwohl die 60-Sekunden-Schranke noch lief.
+- **Die Meldung sagt die Restzeit mit** (`(2 min Rest)`, `(0 min Rest)`). GEMESSEN:
+  125 s Wartezeit -> **3** Zeilen (vorher ~60). 8 s Wartezeit -> hoechstens 2.
+- **Ein Test, der ohne Wartezeit auskommt, prueft die Schranke selbst**
+  (`AddSeconds(60)`, `letzterBesitzer`) - lauter als ein Raten auf Zeilenzahl.
+- **KOSTEN: `test_gate_worktree.py` braucht jetzt 182 s statt 39 s** (53 statt 48
+  Tests), die ganze Suite 334 s statt 143 s. Das ist der Preis des Messens: die
+  Drosselung ist nur an einer echten Warteschleife nachweisbar, nicht an einer
+  nachgestellten Uhr. Wer die Suite oft braucht, sollte diese fuenf Tests als
+  `-k langsam` markieren und im Normalfall ueberspringen.
+- **Beim Schreiben solcher Tests: `&` in Bash kehrt die Reihenfolge um.** Der
+  erste Wechsel-Test meldete 1 statt 2 Zeilen, weil der nebenlaeufige Schreiber
+  NACH dem Lesen lief. Der Test pruefte sich selbst - das Skript muss die
+  Reihenfolge haben, nicht der Aufruf.
+
+## Engine-Lock: toter Besitzer mit lebenden Kindern ist ein eigener Zustand (28.09.2026)
+- **`verwaist` war zu grob - die Kinder koennen weiterlaufen.** GEMESSEN 27./28.09.:
+  Besitzer ist der aufrufende `cmd.exe`; stirbt er, laufen `UnrealEditor-Cmd.exe` und
+  `python` als seine Kinder weiter. Der alte Stand las das als `verwaist`, und
+  `Tools/cleanup_unreal_processes.ps1` raeumt bei `verwaist` auf - ein falsches
+  `verwaist` loescht also einem LAUFENDEN fremden Lauf die DLL weg.
+- **Neuer Zustand `Nachkommen` verhaelt sich wie `Fremd`:** `Status` Exit 3, `Nehmen`/
+  `Start` warten, `Freigeben` verweigert ohne `-Gewalt`, und er loest sich selbst auf,
+  sobald der Baum leer ist. Dass er auf 3 abbildet, ist kein Zufall: genau daran bricht
+  `cleanup_unreal_processes.ps1` ab - der Schutz haengt an diesem Code.
+- **`Get-Nachkommen($OwnerPid, $MaxTiefe=16, $ErstAb)`** laeuft BFS ueber
+  `ParentProcessId` mit besuchter Menge (ein Prozess kann mehrfach auftauchen).
+- **Windows vergibt PIDs wieder - dann sieht JEDER neue Prozess wie ein Nachkomme aus.**
+  GEMESSEN: ohne Schnitt standen Prozesse in der Liste, die erst nach dem Tod des
+  Besitzers gestartet waren. Regel: stimmt `OwnerStart` aus der Sperrdatei nicht mit der
+  Startzeit des heutigen Prozesses dieser PID ueberein, zaehlen NUR Kinder, die nach dem
+  neuen Besitzbeginn starten (`$ErstAb`). Meldung: `Lock: verwaist ... Die PID ist
+  inzwischen an einen anderen Prozess vergeben; seine Kinder zaehlen nicht als
+  Nachkommen des Laufs.`
+- **`Kette=` in der Sperrdatei ist ein Befund, kein Beweis.** `Get-KettenZeilen` schreibt
+  `PID|Startzeit` von Besitzer und Vorfahren mit; daraus "eigen" abzuleiten wurde
+  ABSICHTLICH NICHT gebaut: dieselbe Shell ist Vorfahr eines fremden Laufs, eine
+  gemeinsame Ahnenkette wuerde einen fremden Lock in einen eigenen verwandeln. Alte
+  Sperrdateien ohne `Kette=` funktionieren unveraendert.
+- **Gegenproben statt Zutrauen** (`Tools/test_engine_run_lock.py`, 7 Tests, 38,9 s):
+  schaltet man die Nachkommenabfrage ab, kippt der geschuetzte Fall zurueck auf
+  `verwaist`; schaltet man den Recyclingschnitt ab, sind die Phantom-Nachkommen wieder
+  da. Die Baseline (`git show HEAD:Tools/engine_run_lock.ps1`, Lauf ueber
+  `baseline_runner.py`) hat denselben roten Satz wie die Aenderung - kein Rueckschritt.
+
+## `tasklist` schickt das Byte 0x81 - und `stdout` ist dann None, nicht leer (28.09.2026)
+- **GEMESSEN:** `tasklist` gibt auf diesem Rechner (deutsche Codepage) Byte 0x81 aus.
+  `subprocess.Popen(..., text=True)` ohne `encoding` decodiert mit cp1252, der
+  Leser-Thread stirbt mit `UnicodeDecodeError: 'charmap' codec can't decode byte 0x81`
+  - und `proc.stdout` bleibt **`None`**.
+- **Darauf faellt jede Abfrage herein:** `stdout == ""` ist nie wahr, `"x" in stdout`
+  wirft `TypeError`, und ein `except` darum liest einen LAUFENDEN Prozess als "kein
+  Prozess". Die eigene Waechterabfrage stufte so einen laufenden Lauf als frei ein -
+  still, ohne Fehlerzeile.
+- **Heilung:** `Popen([...], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+  text=True, encoding="utf-8", errors="replace")`. `errors="replace"` ist Pflicht - ein
+  blosses `encoding="utf-8"` wirft an denselben Bytes genauso.
+- **`taskkill /F` ist synchron und meldet Exit 128, wenn die PID schon weg ist.** 128
+  heisst hier "war schon tot", nicht "Abbruch" - wer 128 als Fehler behandelt, bricht
+  genau im harmlosen Fall ab.
+- **Ein Waechter muss gegen den Fehlschlag pruefen, nicht nur gegen den Zustand:**
+  misslungene Abfrage = `UNBEKANNT` (fail-closed), niemals "frei". Gegenprobe im
+  Sitzungs-Temp: `wb_check_waechter.py`.
+
+## Platten-Gate und Engine-Lock: "frei" heisst nicht "startbar" (28.09.2026)
+- **Zwei Ursachen, zwei Codes - und wer nur eine fragt, sieht nur eine.** GEMESSEN
+  28.09.: die Platte lag bei 9,3-9,5 % frei, das Gate (`-PlattenGrenze`, Vorgabe 10 %)
+  brach JEDEN Engine-Start mit Exit 4 ab, waehrend der Lock in derselben Minute `frei`
+  meldete. 3 = Lock belegt, 4 = Platte.
+- **Das Platten-Gate machte 8 von 27 Lock-Tests rot - ohne eine Zeile Codeaenderung.**
+  Beweis: derselbe rote Satz mit dem HEAD-Stand des Skripts (`git show
+  HEAD:Tools/engine_run_lock.ps1`, Baseline-Lauf `baseline_runner.py`). Nachdem ein
+  fremder Cook fertig war, ging es von 9,4 % auf 18,5 % frei - und derselbe Satz Tests
+  war gruen. **Vor der Diagnose "mein Code ist kaputt" erst den Platz messen.**
+- **Ein Warteprogramm prueft die Platte ZUERST.** Die erste Fassung von
+  `wb_relink_warten.py` verbrannte alle vier Versuche in vier Sekunden: Sperre frei,
+  Platte nicht. Danach: erst Platte (>= 10,5 %), dann keine Engine-/Compiler-Prozesse,
+  dann Lock Exit 0 - mit Meldungen im Minutenabstand und Zeitfenster statt Zaehler.
+- **Der Link ist die dritte Ursache (LNK1104).** GEMESSEN 28.09.: die eigenen TUs sind
+  einzeln durchgelaufen, 0 Warnungen, UHT nahm UENUM/UCLASS/UFUNCTION an - dann `fatal
+  error LNK1104: Datei ...UnrealEditor-WiesbadenReal.dll ... (win32 error 32)`, weil
+  ein fremdes `UnrealEditor-Cmd.exe` (Android-Cook) die DLL hielt. Das ist KEIN
+  Codefehler: warten und neu LINKEN (8 s), nicht neu uebersetzen. Fremde Halter raeumt
+  niemand von allein weg - auch der Watchdog nicht.
+- **Seit 28.09.2026 WARTET `-Modus Start` auf Platz, statt sofort abzubrechen**
+  (`-PlattenWarteSekunden`, Vorgabe 1800 s, Meldung gedrosselt auf eine je Minute,
+  `0` = das alte Verhalten). Der Anlass ist genau der gemessene Fall von oben:
+  zwanzig Minuten nach dem Abbruch war die Platte wieder frei.
+- **Gewartet wird nur, wo sich die Messung AENDERN kann - und nur in `Start`.**
+  `-PlattenTestGiga` ist ein FESTER Wert: auf ihn zu warten waere sinnlos, und der
+  Selbsttest haenge 30 Minuten an einer Zahl, die nie heilt. Dafuer gibt es
+  `-PlattenTestReihe` (`0.5,400` = erst zu voll, dann Heilung) - der einzige
+  Selbsttest-Weg, auf dem das Warten ueberhaupt messbar ist. `-Modus Nehmen` wartet
+  NIE: `motor_sperre` faehrt diesen Modus und bringt seine eigene Frist in 15-s-Takten
+  mit - ein zweites Warten hier wuerde deren Frist verdoppeln und die Attrappen-Uhr
+  entwerten.
+- **Nachweis:** `Tools/test_engine_run_lock.py` (12 Tests, 5 davon neu: die heilende
+  Reihe laeuft nach ~4 s Wartezeit durch und haelt den Lock, ein fester Testwert wartet
+  nie, `Nehmen` wartet nie, der Fristablauf hinterlaesst keine Sperrdatei). Die fremden
+  `PlattenGateTest` (7) bleiben gruen - sie messen weiter denselben Vertrag: Exit 4,
+  keine Sperrdatei, `Status`/`Freigeben` blockieren nie.
+- **Der Erfolgsweg von `-Modus Start` faehrt danach die ECHTE Prozessbereinigung.**
+  Ein Test nimmt darum `-DryRun` - ohne den Schalter schiesst er einem fremden Editor
+  die Arbeit weg, sobald das Gate einmal gruen ist.
+
+## KORREKTUR: untracked Dateien WERDEN im adaptiven Build kompiliert (28.09.2026)
+- **Die Notiz vom 26.09. (Ka-52, steht zweimal im Text) ist falsch.** Im Quelltext von
+  UBT 5.8 nachgelesen: `SourceFileWorkingSet.cs:120` startet `git --no-optional-locks
+  status --porcelain`, und der Parser `OutputDataReceived` (Zeile 236) nimmt JEDE Zeile
+  mit `Args.Data[2] == ' '` ab Index 3 als Pfad - ohne Statusfilter. `?? Neu.cpp`
+  erfuellt das genau wie ` M Alt.cpp`; nur Umbenennungen bekommen ueber `" -> "` einen
+  zweiten Pfad.
+- **Folge: `git add` ist fuer den adaptiven Build NICHT noetig.** Am eigenen Lauf vom
+  28.09. standen die neuen, untracked Audio-Dateien als "Excluded from ... unity file"
+  im Build-Log - also im Arbeitssatz - und wurden danach einzeln uebersetzt. (Das Log
+  hat der anschliessende Relink ueberschrieben; der Quelltextbeleg oben bleibt pruefbar.)
+- **Offen, nicht weggedeutet:** Am 26.09. fehlte eine Datei wirklich im Build. Mit dem
+  jetzigen Wissen ist der Grund NICHT geklaert (am naechsten liegt ein
+  zurueckgebliebener Makefile-Stand, nicht das Tracking). Wer das wieder sieht: Log
+  aufbewahren, bevor ein naechster Lauf es ueberschreibt - der Relink von heute hat
+  genau das getan.
+
+## Engine-Lock: `Start` wartet, `Nehmen` nicht - und warum die Null Vorgabe bleibt (28.09.2026)
+- **Die Asymmetrie des Vormittags ist geschlossen.** Die Plattennot war bereits
+  wait-tolerant gemacht, ein BELEGTER Lock brach aber weiterhin sofort mit Exit 3 ab -
+  obwohl die Lage dieselbe ist: ein zu Ende gehender fremder Lauf gibt die Sperre mit
+  seinem Prozess von selbst frei. `-Modus Start` hat jetzt eine eigene Frist
+  (`-StartWarteSekunden`, Vorgabe 1800 s, gedrosselte Meldung `belegt durch ... warte
+  auf Freigabe (N min Rest) ...`); erst zur Frist kommt Exit 3, und dann steht die
+  gewartete Zeit im Text (`N s auf die Freigabe gewartet - sie blieb bis zur Frist
+  belegt.` + `sofort abbrechen statt warten: -WarteSekunden 0`). Grund fuer die Frist
+  IM Skript: die ~31 .cmd-Wrapper sind Starts Aufrufer und bringen keine eigene mit.
+- **`-Modus Nehmen` wartet weiterhin nie - die Vorgabe `-WarteSekunden = 0` ist Vertrag,
+  nicht Versehen.** `motor_sperre` (gate_worktree.py) uebergibt `-WarteSekunden` NICHT
+  (belegt: der `befehl`-Aufbau dort enthaelt den Schalter nicht) und wartet selbst in
+  15-s-Takten bis `WB_GATE_LOCK_WARTEN` (3600 s). Wer diese Vorgabe auf >0 zieht,
+  verdoppelt still die Frist JEDES Push-Laufs und entwertet die Attrappen-Uhr in
+  `test_gate_worktree.py`. Ein AUSDRUECKLICHES `-WarteSekunden 0` schaltet auch das
+  Warten von `Start` ab (Notausgang).
+- **Falle `$PSBoundParameters`:** in einer FUNKTION meint es die Parameter DER FUNKTION -
+  die Abfrage "wurde `-WarteSekunden` gesetzt?" waere dort still immer "nein" und
+  `Start` wartete nie auf einen ausdruecklich verlangten Sofortabbruch. Sie steht
+  deshalb einmal oben im Skriptkoerper (`$script:WarteSekundenGesetzt`).
+- **Nachweis:** `Tools/test_engine_run_lock.py` 17/17 (5 neue: Warten bis zur Frist,
+  dabei bleibt die fremde Sperre unangetastet und die Prozessbereinigung laeuft nicht;
+  `Nehmen` und `Start -WarteSekunden 0` brechen sofort ab; eine Freigabe WAEHREND des
+  Wartens wird uebernommen; eine Sabotage-Kopie ohne die neue Abfrage bricht sofort ab;
+  Textvertrag beider Fristen). Fremd weiter gruen: `LockAusgabeTest` + `PipelineLockTest`
+  10/10 (129 s), `PlattenGateTest` 7/7. Am echten, fremd belegten Maschinen-Lock
+  gemessen (PID 39872, Label push_gate): `Start -PlattenGrenze 0 -StartWarteSekunden 3
+  -DryRun` wartete 4 s, Exit 3, Lock danach unveraendert.
+
+## MetaSound-Asset fehlt, und der Commandlet meldet "12/12" (28.09.2026)
+
+- **Ein Standard-Node kann eine HAUPTVERSION groesser 1 haben.**
+  `AddNodeByClassName(Klasse, Result, MajorVersion = 1)` sucht GENAU die angefragte Version; der "Biquad Filter"
+  steht auf 2 (`MetasoundStandardNodes/Private/MetasoundBasicFilters.cpp:820`, `Info.MajorVersion = 2`). Mit der
+  Vorgabe 1 meldet MetaSound "Failed to add new node by class name 'UE.Biquad Filter.Audio' and major version '1':
+  Class not found" - es sieht aus, als gaebe es den Node nicht, obwohl Namespace, Variante und Plugin stimmen. Die
+  Geschwister "One-Pole Low/High Pass Filter" sind Version 1, deshalb faellt es nur bei einzelnen Bausteinen auf.
+  Die Version steht im Engine-Quelltext direkt neben `Info.ClassName`; danach ist der Fehler eine Zeile Arbeit.
+- **Der "Type"-Pin des Biquad-Filters ist per Vorgabe LOWPASS, nicht Bandpass.**
+  `DECLARE_METASOUND_ENUM(Audio::EBiquadFilter::Type, Audio::EBiquadFilter::Lowpass, ...)` setzt den
+  Datentyp-Vorgabewert, und der "Type"-Vertex hat keinen eigenen. Ein "Biquad-Bandpass" im Kommentar ist ohne
+  `Graph.Default(Filter, TEXT("Type"), 2)` (2 = `Audio::EBiquadFilter::Bandpass`, Lowpass 0, Highpass 1) ein
+  Tiefpass bei derselben Grenze - Klang, aber nicht der geplante. Enum-Pins gehen ueber den Default(int32)-Helfer
+  (dasselbe Muster wie `EWaveShaperType::Tanh` beim Motor).
+- **Ein nicht gebauter Graph erzeugt KEIN Paket - "gespeichert == gesammelt" beweist also nichts.** Der Commandlet
+  meldete um 13:28 "WbAudioAssets fertig: 12/12 Pakete gespeichert" und Exit 0, waehrend im SELBEN Lauf 24 Fehler
+  standen: die vier `MS_Step_*` waren nie entstanden (und `Content/Audio/Meta` hatte sie auch nicht). Seit 28.09.
+  zaehlt `GBuildFehler` jedes "nicht gebaut"; die Beweiszeile lautet jetzt "WbAudioAssets fertig: N/M Pakete
+  gespeichert, K Baustein(e) nicht gebaut.", und der Rueckgabewert ist nur bei K = 0 UND Saved == Packages.Num()
+  gleich 0. Merksatz fuer Asset-Commandlets: die Zahl der GESPEICHERTEN Pakete sagt nichts ueber die Zahl der
+  VERLANGTEN Assets.
+- **Ein Test, dessen Gegenstand fehlen DARF, misst nichts.** Der Pool-Test verglich `GetActiveStepCount()` mit sich
+  selbst (0 == 0) und war mit einem leeren Pool trivial gruen - 3/3 Success, obwohl `PlayFootstepAt` jeden Schritt
+  ablehnte. Jetzt sind die GELADENEN Klaenge eine harte Zusicherung (vier) und alle 40 Schritte muessen ankommen;
+  fehlt ein Asset, wird der Test rot statt still (Hinweis im Meldungstext: `Tools/make_audio_assets.cmd`).
+- **`Tools/make_audio_assets.cmd` nimmt jetzt den Engine-Lock** (`call "%~dp0engine_run_lock.cmd" -Modus Start -Name
+  make_audio_assets` VOR Build und Commandlet): der Editor-Target-Build schreibt die DLL, die ein fremder Lauf
+  geladen haelt. Beweise weiter nur aus `Saved/Logs/make_audio_assets.log` (stdout-Redirect des Wrappers).
+- **Gemessen (28.09.2026, 20:21:54-20:23:28, ein Lauf):** 6 Build-Aktionen (u. a. `WbAudioAssetsCommandlet.cpp` und
+  `AudioZonesSubsystemTest.cpp` ueber den adaptiven Non-Unity-Pfad) -> "Success - 0 error(s), 16 warning(s)" ->
+  "WbAudioAssets fertig: 16/16 Pakete gespeichert, 0 Baustein(e) nicht gebaut." Die vier neuen Assets liegen mit
+  44.753 / 44.761 / 44.757 / 44.745 Byte in `Content/Audio/Meta` (leere MetaSound-Huellen waeren ~2 KB - Groesse
+  pruefen, nicht Existenz).
+
+## Engine-Lock: die UEBERNAHME einer verwaisten Sperre war ein Zweischritt (28.09.2026)
+
+- GEMESSEN am 28.09.2026: mein Commandlet-Lauf (Log "=== Build startet: 28.09.2026 20:21:54") und eine fremde
+  `bugtank_runtime_validation`-Pruefung (Sperrdatei `TakenAt` 20:21:53) nahmen die Sperre im selben Moment; die
+  Sperrdatei trug danach den fremden Besitzer, MEIN Lauf baute trotzdem das Editor-Target neu - neben einem fremden
+  Editorlauf, also genau der Fall, den die Sperre verhindern soll. Deshalb ist jede Start-Zeile im Wrapper-Log eine
+  belastbare Spur: `=== Build startet: ...` gegen `TakenAt` in der Sperrdatei. Die Uhrzeiten in solchen Zeilen sind
+  LOKAL, die Engine-Logzeilen in `Saved/Logs` dagegen UTC (2 h Versatz im Sommer).
+- Ursache: die Uebernahme raeumte die verwaiste Datei erst mit `Remove-Item` WEG und legte sie danach mit `CreateNew`
+  an. Zwei Schritte entscheiden kein Rennen: der zweite Uebernehmer loescht die FRISCHE Sperre des ersten und legt
+  seine eigene an - beide laufen weiter. Der Zweischritt ist der Fehler, `CreateNew` selbst ist atomar. Solange nur
+  `motor_sperre` wartete, war das Fenster selten; seit ALLE .cmd-Wrapper auf einen belegten Lock warten (Wartezeit
+  fuer `-Modus Start`, 28.09.), stehen regelmaessig mehrere Uebernehmer gleichzeitig an derselben verwaisten Datei.
+- Fix: die verwaiste Datei wird mit `Move-Item` auf einen eindeutigen Namen WEGBEWEGT (atomar auf derselben Platte);
+  wer den Move verliert, faellt in den catch, wartet 200 ms und fragt neu ab - dann gehoert die Sperre dem Gewinner.
+  `Remove-Item` gibt es nur noch fuer die weggeraeumte Kopie, NIEMALS fuer den Sperrpfad selbst.
+- Nachweis (`Tools/test_engine_run_lock.py`, Klasse `UebernahmeRennenTest`, 3 neue Faelle, Suite 20/20 gruen in
+  140 s): (a) vier gleichzeitige Starts auf eine verwaiste Sperre - genau EIN Gewinner, die Verlierer brechen erst
+  an ihrer Frist ab und die Sperre traegt danach das Label des Gewinners; (b) Positivkontrolle: derselbe 4-s-Spalt
+  VOR der Uebernahme, aber mit `Move-Item` - weiter genau ein Gewinner (sonst waere die Verzoegerung schuld, nicht
+  der Zweischritt); (c) Sabotage-Kopie mit dem alten Zweischritt und demselben Spalt - ALLE vier uebernehmen
+  nacheinander. Der Testaufbau ist Teil des Nachweises: der Startprozess jedes Wartenden schlaeft nach dem
+  Skriptende weiter (so macht es der Wrapper, dessen Besitzer der cmd.exe ist, den das Skript als Besitzer
+  eintraegt) - sonst waere die Sperre sofort wieder verwaist und die naechste Uebernahme waere zu Recht erlaubt.
+- **Ein fremder Test haengt an der Uhr, nicht am Skript:**
+  `Tools/test_gate_worktree.py::EngineLockTest::test_motor_sperre_gehoert_dem_python_lauf_und_wartet_auf_den_fremden`
+  setzt eine Sperre auf einen Fremdprozess, der 4 s lebt, und erwartet, dass der ZWEITE Aufruf noch "warte" meldet.
+  GEMESSEN am 28.09.2026: ein PowerShell-Aufruf dieses Skripts kostet hier 2,33 s (3 Messungen, `-Modus Status`),
+  der erste `motor_sperre`-Aufruf 2,5 s - der zweite liest den Zustand also erst nach ~4,8 s; da ist der
+  Fremdprozess tot und die Uebernahme ist RICHTIG. Der Test kippt damit unter Last auf "Lock: gehalten". Er sagt
+  nichts ueber den Zustandswechsel aus (die Unterscheidung Fremd/Verwaist blieb unberuehrt) - wer ihn rot sieht,
+  sucht an der 4-s-Annahme des Tests, nicht am Skript. Gegenprobe mit Zahlen: `Tools\test_engine_run_lock.py`
+  und `EngineLockTest` bis auf diesen einen Fall gruen (9 Tests, 63 s; 8/9).
+
+## Ohne Besitzer-Actor ist `RegisterComponent()` still - der erste echte Ton im Pool (29.09.2026)
+
+- **`UActorComponent::RegisterComponent()` holt die Welt aus dem BESITZER-Actor:**
+  `AActor* MyOwner = GetOwner(); UWorld* MyOwnerWorld = (MyOwner ? MyOwner->GetWorld() : nullptr); if (ensure(MyOwnerWorld)) { RegisterComponentWithWorld(MyOwnerWorld); }`
+  (`ActorComponent.cpp:2083`). Ist der Outer kein Actor - typisch fuer eine per `NewObject<UAudioComponent>(Subsystem)`
+  gebaute Komponente -, ist `MyOwnerWorld` null: die Zusicherung schlaegt an UND die Registrierung faellt KOMPLETT aus.
+  Ein nicht registrierter `UAudioComponent` haengt nicht am Audio-Geraet. Der `ensure` ist "handled", toetet nichts und
+  steht im Editor-Log als Error - genau deshalb bleibt der Fehler lange unsichtbar.
+- **Ein `ensure` macht einen Automation-Test rot.** Der Lauf endete mit `Result={Fail}`, `GIsCriticalError` und Exit -1,
+  obwohl JEDE Zusicherung des Tests erfuellt war; die einzige Fehlerquelle stand als `LogAutomationController: Error:
+  EnsureFailed: Ensure condition failed: MyOwnerWorld ... [Callstack] ...WiesbadenAudioZonesSubsystem::EnsureRig()` im
+  Log. Achtung: die Callstack-Zeile nennt die Inline-Zuordnung (hier `WiesbadenAudioZonesSubsystem.cpp:131`,
+  `ConfigureSource`), nicht die tatsaechlich schuldige Anweisung - nicht an der Zeile kleben, sondern die Engine-Quelle
+  zur `File:Line`-Angabe lesen.
+- **Aufgetaucht ist er erst, als die vier `MS_Step_*` endlich geladen waren:** solange `if (!Sound) continue;` die
+  Schleife vorher verliess, entstand keine einzige Komponente - der Fehler war nicht neu, nur unsichtbar (vakuum-gruen).
+  Genau deshalb ist die Zahl der GELADENEN Klaenge eine harte Zusicherung: sie ist der Schalter, der die uebrigen
+  Pruefungen ueberhaupt erst anwirft.
+- Fix in `UWiesbadenAudioZonesSubsystem::EnsureRig()`: `Component->RegisterComponentWithWorld(World)`. Der Schritt-Pool
+  haengt an keiner Figur, seine Position setzt jeder Schritt selbst (`SetWorldLocation`). `UWiesbadenAmbienceSubsystem::MakeBed`
+  loest dasselbe anders (Rig-Actor als Outer) - beide Wege setzen `MyOwnerWorld`. Regel: eine audiokomponente ohne
+  Besitzer gehoert ausdruecklich in die Welt registriert, `RegisterComponent()` ist dort ein stiller No-Op.
+- Messung 29.09.2026: `Tools/build_gate1.cmd` (Editor-Target, EINE geaenderte Datei) 23,7 s, `Result: Succeeded`; danach
+  `Tools/run_automation_test.cmd WiesbadenReal.Audio.Footsteps footsteps_assets` -> `LogWbZones: Fussschritt-Pool: 4 von 4
+  Klangen geladen.`, alle drei Tests `Result={Success}`, 0 Automation-Fehler, `GIsCriticalError=0`,
+  `**** TEST COMPLETE. EXIT CODE: 0 ****`.
+- Kleinigkeit mit Zeitverlust: `run_automation_test.cmd <Filter> <Name>` setzt selbst `wb_test_` vorweg und schreibt
+  `Saved/Logs/wb_test_<Name>.log` - mit `Name=wb_test_footsteps_assets` landete der Lauf in `wb_test_wb_test_footsteps_assets.log`.
+  Merksatz: `Name` OHNE `wb_test_` uebergeben. Und: der Wrapper raeumt die Sperre nicht auf, der naechste `-Modus Status`
+  meldet sie als "verwaist" (planmaessig, `-Modus Start` uebernimmt sie).

@@ -1912,6 +1912,12 @@ UMaterialInterface* AWiesbadenWorldBuilder::ResolveRoadMaterial(ERoadMeshChannel
 		// Zebrastreifen auf dem dunklen Asphalt nicht zu erkennen.
 		return LaneMarkingMaterial ? LaneMarkingMaterial : RoadMaterial;
 
+	case ERoadMeshChannel::BikeLaneSurface:
+	{
+		UMaterialInterface* Paint = LoadObject<UMaterialInterface>(nullptr,
+			TEXT("/Game/Materials/City/M_WbBikeLaneSurface.M_WbBikeLaneSurface"));
+		return Paint ? Paint : (CyclewayMaterial ? CyclewayMaterial : RoadMaterial);
+	}
 	case ERoadMeshChannel::Cycleway:
 		return CyclewayMaterial ? CyclewayMaterial : RoadMaterial;
 

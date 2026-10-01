@@ -12,6 +12,9 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Sound/SoundBase.h"
+#include "EngineUtils.h"
+#include "GIS/WiesbadenWorldBuilder.h"
+#include "World/WiesbadenCityChunk.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogWbZones, Log, All);
 
@@ -43,6 +46,10 @@ void UWiesbadenAudioZonesSubsystem::Deinitialize()
 			Component->DestroyComponent();
 		}
 	}
+	IndustrialCells.Reset();
+	CommercialCells.Reset();
+	IndexedBuilder.Reset();
+	IndexedBuildingCount = INDEX_NONE;
 	StepPool.Reset();
 	StepSounds.Reset();
 	StepSoundSurfaces.Reset();
@@ -68,6 +75,78 @@ void UWiesbadenAudioZonesSubsystem::Tick(float DeltaSeconds)
 	{
 		EnsureRig();
 	}
+}
+
+EWbAudioZone UWiesbadenAudioZonesSubsystem::ZoneAt(const FVector& Location)
+{
+	UWorld* World = GetWorld();
+	if (!World) { return EWbAudioZone::Residential; }
+	int32 Trees = 0;
+	int32 Industry = 0;
+	int32 Commercial = 0;
+	constexpr double RadiusSq = 12000.0 * 12000.0;
+	for (TActorIterator<AWiesbadenCityChunk> It(World); It; ++It)
+	{
+		if (It->HasStreamingAnchor()
+			&& FVector::DistSquared2D(It->GetStreamingAnchor(), Location) > FMath::Square(45000.0))
+		{
+			continue;
+		}
+		for (const FPlacedRegionAsset& Asset : It->GetRegionAssets())
+		{
+			if (FVector::DistSquared2D(Asset.Location, Location) > RadiusSq) { continue; }
+			Trees += Asset.Category == ERegionAssetCategory::Tree ? 1 : 0;
+			Industry += Asset.Category == ERegionAssetCategory::Industrial ? 1 : 0;
+			if (Trees >= 12 && Industry > 0) { break; }
+		}
+	}
+	AWiesbadenWorldBuilder* Builder = nullptr;
+	for (TActorIterator<AWiesbadenWorldBuilder> It(World); It; ++It) { Builder = *It; break; }
+	auto CellOf = [](const FVector2D& P) { return FIntPoint(FMath::FloorToInt(P.X / 12000.0), FMath::FloorToInt(P.Y / 12000.0)); };
+	if (IndexedBuilder.Get() != Builder || IndexedBuildingCount != (Builder ? Builder->Buildings.Num() : 0))
+	{
+		IndustrialCells.Reset(); CommercialCells.Reset();
+		IndexedBuilder = Builder;
+		IndexedBuildingCount = Builder ? Builder->Buildings.Num() : 0;
+		if (Builder)
+		{
+			for (const FGeneratedBuilding& Building : Builder->Buildings)
+			{
+				const FVector2D P = !Building.FootprintExtentCm.IsNearlyZero()
+					? Building.FootprintCenterCm : FVector2D(Building.Bounds.GetCenter());
+				if (Building.RegionType == ECityRegionType::Industrial) { IndustrialCells.FindOrAdd(CellOf(P)).Add(P); }
+				if (Building.RegionType == ECityRegionType::Commercial) { CommercialCells.FindOrAdd(CellOf(P)).Add(P); }
+			}
+		}
+	}
+	const FVector2D Listener(Location);
+	const FIntPoint Cell = CellOf(Listener);
+	auto NearbyCount = [&](const TMap<FIntPoint, TArray<FVector2D>>& Cells, int32 Limit)
+	{
+		int32 Count = 0;
+		for (int32 X = Cell.X - 1; X <= Cell.X + 1; ++X)
+		{
+			for (int32 Y = Cell.Y - 1; Y <= Cell.Y + 1; ++Y)
+			{
+				if (const TArray<FVector2D>* Points = Cells.Find(FIntPoint(X, Y)))
+				{
+					for (const FVector2D& P : *Points)
+					{ if (FVector2D::DistSquared(P, Listener) <= RadiusSq && ++Count >= Limit) { return Count; } }
+				}
+			}
+		}
+		return Count;
+	};
+	Industry += NearbyCount(IndustrialCells, 1);
+	Commercial += NearbyCount(CommercialCells, 3);
+	const EWbAudioZone Zone = WiesbadenAudioZones::ClassifyZone(Trees, Industry, Commercial);
+	if (Zone != LastReportedZone)
+	{
+		UE_LOG(LogWbZones, Log, TEXT("Audio-Zone: %s bei %s (Baeume %d, Industrie %d, Gewerbe %d)."),
+			*WiesbadenAudioZones::ZoneName(Zone), *Location.ToString(), Trees, Industry, Commercial);
+		LastReportedZone = Zone;
+	}
+	return Zone;
 }
 
 void UWiesbadenAudioZonesSubsystem::EnsureRig()

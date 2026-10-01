@@ -17,6 +17,9 @@ UBuildingCollisionSpawnerComponent::UBuildingCollisionSpawnerComponent()
 void UBuildingCollisionSpawnerComponent::SetBuildings(const TArray<FGeneratedBuilding>& InBuildings)
 {
 	Buildings = InBuildings;
+#if UE_BUILD_DEVELOPMENT
+	ProbeBuildingIndices.Init(INDEX_NONE, Bodies.Num());
+#endif
 }
 
 UBuildingCollisionSpawnerComponent::EBoxClip UBuildingCollisionSpawnerComponent::ClipBoxAgainstPoints(
@@ -247,6 +250,10 @@ void UBuildingCollisionSpawnerComponent::EnsurePool()
 		Bodies.Add(Body);
 	}
 
+#if UE_BUILD_DEVELOPMENT
+	ProbeBuildingIndices.Init(INDEX_NONE, Bodies.Num());
+#endif
+
 	UE_LOG(LogWbCore, Log,
 		TEXT("Gebaeude-Kollision: Pool mit %d Koerpern angelegt (Radius %.0f m)."),
 		Bodies.Num(), CollisionRadiusMeters);
@@ -269,6 +276,12 @@ void UBuildingCollisionSpawnerComponent::UpdateAround(const FVector& Observer)
 	for (int32 Slot = 0; Slot < Bodies.Num(); ++Slot)
 	{
 		UBoxComponent* Body = Bodies[Slot];
+	#if UE_BUILD_DEVELOPMENT
+		if (ProbeBuildingIndices.IsValidIndex(Slot))
+		{
+			ProbeBuildingIndices[Slot] = INDEX_NONE;
+		}
+	#endif
 		if (!Body)
 		{
 			continue;
@@ -284,6 +297,12 @@ void UBuildingCollisionSpawnerComponent::UpdateAround(const FVector& Observer)
 
 		const FGeneratedBuilding& Building = Buildings[Selected[Slot]];
 		const FBox& BuildingBox = Building.Bounds;
+	#if UE_BUILD_DEVELOPMENT
+		if (ProbeBuildingIndices.IsValidIndex(Slot))
+		{
+			ProbeBuildingIndices[Slot] = Selected[Slot];
+		}
+	#endif
 
 		Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 
@@ -313,3 +332,79 @@ void UBuildingCollisionSpawnerComponent::UpdateAround(const FVector& Observer)
 		++ActiveBodyCount;
 	}
 }
+
+#if UE_BUILD_DEVELOPMENT
+FString UBuildingCollisionSpawnerComponent::DescribeProbeTrace(
+	const FVector& Start, const FVector& End, const UPrimitiveComponent* HitComponent,
+	const UPrimitiveComponent* PreviousContactComponent) const
+{
+	TArray<FString> BoxDescriptions;
+	for (int32 Slot = 0; Slot < Bodies.Num(); ++Slot)
+	{
+		const UBoxComponent* Body = Bodies[Slot];
+		if (!Body)
+		{
+			continue;
+		}
+
+		const FTransform Transform = Body->GetComponentTransform();
+		const FVector LocalStart = Transform.InverseTransformPosition(Start);
+		const FVector LocalEnd = Transform.InverseTransformPosition(End);
+		const FVector LocalExtent = Body->GetUnscaledBoxExtent();
+		const FBox LocalBounds(-LocalExtent, LocalExtent);
+		const bool bIntersectsBox = FMath::LineBoxIntersection(
+			LocalBounds, LocalStart, LocalEnd, LocalEnd - LocalStart);
+		const bool bIsHitComponent = Body == HitComponent;
+		const bool bIsPreviousContact = Body == PreviousContactComponent;
+		if (!bIntersectsBox && !bIsHitComponent && !bIsPreviousContact)
+		{
+			continue;
+		}
+
+		const int32 BuildingIndex = ProbeBuildingIndices.IsValidIndex(Slot)
+			? ProbeBuildingIndices[Slot] : INDEX_NONE;
+		const FGeneratedBuilding* Building = Buildings.IsValidIndex(BuildingIndex)
+			? &Buildings[BuildingIndex] : nullptr;
+		const FBoxSphereBounds& WorldBounds = Body->Bounds;
+		const FVector WorldMin = WorldBounds.Origin - WorldBounds.BoxExtent;
+		const FVector WorldMax = WorldBounds.Origin + WorldBounds.BoxExtent;
+		const FVector BoxLocation = Transform.GetLocation();
+		const FRotator BoxRotation = Transform.Rotator();
+
+		const TCHAR* CollisionMode = TEXT("Unknown");
+		switch (Body->GetCollisionEnabled())
+		{
+		case ECollisionEnabled::NoCollision: CollisionMode = TEXT("NoCollision"); break;
+		case ECollisionEnabled::QueryOnly: CollisionMode = TEXT("QueryOnly"); break;
+		case ECollisionEnabled::PhysicsOnly: CollisionMode = TEXT("PhysicsOnly"); break;
+		case ECollisionEnabled::QueryAndPhysics: CollisionMode = TEXT("QueryAndPhysics"); break;
+		default: break;
+		}
+
+		const ECollisionResponse VisibilityResponse = Body->GetCollisionResponseToChannel(ECC_Visibility);
+		const TCHAR* VisibilityMode = VisibilityResponse == ECR_Block ? TEXT("Block")
+			: VisibilityResponse == ECR_Overlap ? TEXT("Overlap") : TEXT("Ignore");
+		BoxDescriptions.Add(FString::Printf(
+			TEXT("slot=%d intersects=%d hit_component=%d previous_contact_component=%d building_index=%d source_id=%lld name=\"%s\" address=\"%s\" enabled=%s visibility=%s box_center=(%.1f,%.1f,%.1f) box_rotation=(%.1f,%.1f,%.1f) half_extent_local=(%.1f,%.1f,%.1f) bounds_min=(%.1f,%.1f,%.1f) bounds_max=(%.1f,%.1f,%.1f) bounds_sphere_radius=%.1f building_bounds_min=(%.1f,%.1f,%.1f) building_bounds_max=(%.1f,%.1f,%.1f)"),
+			Slot, bIntersectsBox ? 1 : 0, bIsHitComponent ? 1 : 0,
+			bIsPreviousContact ? 1 : 0, BuildingIndex,
+			Building ? static_cast<long long>(Building->SourceId) : 0LL,
+			Building ? *Building->BuildingName : TEXT(""),
+			Building ? *Building->Address : TEXT(""), CollisionMode, VisibilityMode,
+			BoxLocation.X, BoxLocation.Y, BoxLocation.Z,
+			BoxRotation.Pitch, BoxRotation.Yaw, BoxRotation.Roll,
+			LocalExtent.X, LocalExtent.Y, LocalExtent.Z,
+			WorldMin.X, WorldMin.Y, WorldMin.Z, WorldMax.X, WorldMax.Y, WorldMax.Z,
+			WorldBounds.SphereRadius,
+			Building ? Building->Bounds.Min.X : 0.0, Building ? Building->Bounds.Min.Y : 0.0,
+			Building ? Building->Bounds.Min.Z : 0.0, Building ? Building->Bounds.Max.X : 0.0,
+			Building ? Building->Bounds.Max.Y : 0.0, Building ? Building->Bounds.Max.Z : 0.0));
+	}
+
+	const FString Entries = BoxDescriptions.IsEmpty()
+		? TEXT("none") : FString::Join(BoxDescriptions, TEXT(" | "));
+	const AActor* PoolOwner = GetOwner();
+	return FString::Printf(TEXT("owner=%s boxes=[%s]"),
+		PoolOwner ? *PoolOwner->GetPathName() : TEXT("None"), *Entries);
+}
+#endif

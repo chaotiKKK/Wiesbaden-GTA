@@ -183,6 +183,7 @@ void UWiesbadenVehicleCameraComponent::RemoveCockpitHiddenMesh(UPrimitiveCompone
 
 void UWiesbadenVehicleCameraComponent::HandleInput(float DeltaTime)
 {
+	LastLookInputMagnitude = 0.0f;
 #if !UE_BUILD_SHIPPING
 	// Dev-Sichtprobe: -WbCamMode=0/1/2 erzwingt Follow/Orbit/Cockpit EINMAL, damit
 	// sich die Innen-/Aussenansicht headless per Screenshot belegen laesst.
@@ -209,7 +210,8 @@ void UWiesbadenVehicleCameraComponent::HandleInput(float DeltaTime)
 	APlayerController* PC = GetPlayerController();
 
 	// Umschaltung (Flanke auf die konfigurierte Taste).
-	const bool bPressed = PC && PC->IsInputKeyDown(ToggleKey);
+	const bool bPressed = PC && (PC->IsInputKeyDown(ToggleKey)
+		|| (PadToggleKey.IsValid() && PC->IsInputKeyDown(PadToggleKey)));
 	if (bPressed && !bCameraToggleHeld)
 	{
 		CycleCameraMode();
@@ -242,6 +244,8 @@ void UWiesbadenVehicleCameraComponent::HandleInput(float DeltaTime)
 	{
 		LookYaw += MouseX * MouseSensitivity;
 		LookPitch += MouseY * MouseSensitivity;
+		LastLookInputMagnitude = FMath::Max(LastLookInputMagnitude,
+			FMath::Max(FMath::Abs(MouseX), FMath::Abs(MouseY)));
 		bLooked = true;
 	}
 
@@ -259,6 +263,8 @@ void UWiesbadenVehicleCameraComponent::HandleInput(float DeltaTime)
 	{
 		LookYaw += StickX * GamepadLookRate * DeltaTime;
 		LookPitch += StickY * GamepadLookRate * DeltaTime;
+		LastLookInputMagnitude = FMath::Max(LastLookInputMagnitude,
+			FMath::Max(FMath::Abs(StickX), FMath::Abs(StickY)));
 		bLooked = true;
 	}
 
@@ -307,11 +313,20 @@ void UWiesbadenVehicleCameraComponent::UpdateBoom(float DeltaTime)
 
 	const FRotator Current = SpringArm->GetRelativeRotation();
 	const float Response = FMath::Clamp(CameraResponse, 0.01f, 100.0f);
+	// Nur der Yaw braucht den kuerzesten Weg: Pitch ist auf +-80 begrenzt und
+	// Roll ist hier immer 0 - dort gibt es keinen Vorzeichenbruch.
 	const FRotator Next(
 		FMath::FInterpTo(Current.Pitch, Desired.Pitch, DeltaTime, Response),
-		FMath::FInterpTo(Current.Yaw, Desired.Yaw, DeltaTime, Response),
+		SmoothYaw(Current.Yaw, Desired.Yaw, DeltaTime, Response),
 		FMath::FInterpTo(Current.Roll, Desired.Roll, DeltaTime, Response));
 	SpringArm->SetRelativeRotation(Next);
+}
+
+float UWiesbadenVehicleCameraComponent::SmoothYaw(float CurrentYaw, float DesiredYaw, float DeltaTime, float Response)
+{
+	const float Delta = FMath::FindDeltaAngleDegrees(CurrentYaw, DesiredYaw);
+	const float Schritt = FMath::FInterpTo(0.0f, Delta, DeltaTime, Response);
+	return FRotator::NormalizeAxis(CurrentYaw + Schritt);
 }
 
 void UWiesbadenVehicleCameraComponent::SetCameraAnchor(USceneComponent* Anchor)

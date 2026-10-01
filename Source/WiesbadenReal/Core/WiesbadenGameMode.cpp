@@ -14,6 +14,7 @@
 #include "GIS/WiesbadenWorldBuilder.h"
 #include "GameFramework/PlayerController.h"
 #include "Vehicles/WiesbadenCar.h"
+#include "Vehicles/WiesbadenBugTankPawn.h"
 #include "Vehicles/WiesbadenChaosCar.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -717,6 +718,42 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 		return;
 	}
 
+	// T schaltet den Video-Käferpanzer ein und zurück zum zuvor gesteuerten Pawn.
+	const bool bBugTankDown = PC->IsInputKeyDown(EKeys::T);
+	if (PC->WasInputKeyJustPressed(EKeys::T) && !bBugTankKeyHeld)
+	{
+		ToggleBugTank();
+	}
+	bBugTankKeyHeld = bBugTankDown;
+
+	// Für eigenständige Dev-Läufe: -WbBugTank startet direkt im Käferpanzer.
+	if (!bBugTankCommandLineHandled && PlayerVehicle
+		&& FParse::Param(FCommandLine::Get(), TEXT("WbBugTank")))
+	{
+		bBugTankCommandLineHandled = true;
+		ToggleBugTank();
+	}
+
+	// -WbHeliStart: direkt im Ka-52 beginnen (Dev-Lauf "Heli spielen").
+	// Die Maschine erscheint erst mit der Stadt (HandleCityStatus) - darum
+	// hier warten, bis sie da ist, statt beim ersten Bild aufzugeben.
+	if (!bHeliStartCommandLineHandled && PlayerHelicopter
+		&& FParse::Param(FCommandLine::Get(), TEXT("WbHeliStart")))
+	{
+		bHeliStartCommandLineHandled = true;
+		if (PC->GetPawn() != PlayerHelicopter)
+		{
+			PC->UnPossess();
+			PC->Possess(PlayerHelicopter);
+			UE_LOG(LogWbVehicles, Log,
+				TEXT("WbHeliStart: Spieler sitzt im Helikopter (%s)."),
+				*PlayerHelicopter->GetName());
+		}
+	}
+#if UE_BUILD_DEVELOPMENT
+	TickBugTankProbe(PC, DeltaSeconds);
+#endif
+
 	// Die Interaktionstaste wird genau EINMAL je Bild ausgewertet.
 	//
 	// Zuvor lief dieselbe Abfrage zweimal: einmal am Bildanfang mit verworfenem
@@ -808,6 +845,215 @@ void AWiesbadenGameMode::Tick(float DeltaSeconds)
 		TickCutShots(DeltaSeconds);
 	}
 }
+
+#if UE_BUILD_DEVELOPMENT
+void AWiesbadenGameMode::TickBugTankProbe(APlayerController* PC, float DeltaSeconds)
+{
+	if (BugTankProbeCaptureRestoreFrames > 0 && PC)
+	{
+		if (--BugTankProbeCaptureRestoreFrames == 0)
+		{
+			if (APawn* ViewPawn = PC->GetPawn())
+			{
+				PC->SetViewTarget(ViewPawn);
+			}
+			if (ACameraActor* CaptureCamera = BugTankProbeCaptureCamera.Get())
+			{
+				CaptureCamera->Destroy();
+			}
+			BugTankProbeCaptureCamera.Reset();
+		}
+	}
+	if (bBugTankProbeFinished || !PC || !FParse::Param(FCommandLine::Get(), TEXT("WbBugTankProbe")))
+	{
+		return;
+	}
+	const auto Hold = [PC](const FKey& Key, bool bDown)
+	{
+		if (PC->IsInputKeyDown(Key) != bDown)
+		{
+			PC->InputKey(FInputKeyEventArgs::CreateSimulated(Key,
+				bDown ? IE_Pressed : IE_Released, bDown ? 1.0f : 0.0f));
+		}
+	};
+	const auto ReleaseInputs = [&Hold]()
+	{
+		Hold(EKeys::W, false);
+		Hold(EKeys::A, false);
+		Hold(EKeys::S, false);
+		Hold(EKeys::D, false);
+		Hold(EKeys::LeftShift, false);
+	};
+	if (!IsValid(BugTankPawn) || PC->GetPawn() != BugTankPawn)
+	{
+		if (BugTankProbeTime > 0.0f)
+		{
+			ReleaseInputs();
+			bBugTankProbeFinished = true;
+			UE_LOG(LogWbVehicles, Warning,
+				TEXT("WbBugTankProbe ABORT: possession changed; simulated inputs released at t=%.1f ceiling_contact_seconds=%.2f ceiling_active_w_seconds=%.2f current_contact=%d last_selected_actor=%s last_selected_component=%s last_selected_distance_cm=%.1f."),
+				BugTankProbeTime, BugTankProbeCeilingContactTime, BugTankProbeCeilingInputTime,
+				BugTankPawn->HasSurfaceContact() ? 1 : 0,
+				*BugTankProbeLastSelectedActor, *BugTankProbeLastSelectedComponent,
+				BugTankProbeLastSelectedDistance);
+		}
+		return;
+	}
+
+	BugTankProbeTime += DeltaSeconds;
+	const FVector Location = BugTankPawn->GetActorLocation();
+	const FVector Up = BugTankPawn->GetActorUpVector();
+	if (!BugTankPawn->HasSurfaceContact())
+	{
+		ReleaseInputs();
+		bBugTankProbeFinished = true;
+		UE_LOG(LogWbVehicles, Warning,
+			TEXT("WbBugTankProbe ABORT: no surface contact at loc=(%.0f,%.0f,%.0f) t=%.1f ceiling_contact_seconds=%.2f ceiling_active_w_seconds=%.2f current_contact=0 current_actor=None current_component=None current_hit_distance_cm=-1 last_selected_actor=%s last_selected_component=%s last_selected_distance_cm=%.1f; no surface capture."),
+			Location.X, Location.Y, Location.Z, BugTankProbeTime, BugTankProbeCeilingContactTime,
+			BugTankProbeCeilingInputTime, *BugTankProbeLastSelectedActor,
+			*BugTankProbeLastSelectedComponent, BugTankProbeLastSelectedDistance);
+		return;
+	}
+	if (UPrimitiveComponent* HitComponent = BugTankPawn->GetSurfaceHitComponent())
+	{
+		const AActor* HitActor = HitComponent->GetOwner();
+		BugTankProbeLastSelectedActor = HitActor ? HitActor->GetPathName() : TEXT("None");
+		BugTankProbeLastSelectedComponent = HitComponent->GetPathName();
+		BugTankProbeLastSelectedDistance = BugTankPawn->GetSurfaceHitDistance();
+	}
+	const int32 Surface = Up.Z < -0.65f ? 2 : FMath::Abs(Up.Z) < 0.55f ? 1 : 0;
+	const TCHAR* SurfaceName[] = { TEXT("BODEN"), TEXT("WAND"), TEXT("DECKE") };
+
+	if (Surface != BugTankProbeSurface)
+	{
+		BugTankProbeSurface = Surface;
+		BugTankProbeSurfaceTime = 0.0f;
+		BugTankProbeCeilingSurfaceInputTime = 0.0f;
+		BugTankProbeSurfaceStart = Location;
+		UPrimitiveComponent* HitComponent = BugTankPawn->GetSurfaceHitComponent();
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbBugTankProbe SURFACE=%s loc=(%.0f,%.0f,%.0f) up=(%.2f,%.2f,%.2f) trace_component=%s trace_distance_cm=%.1f t=%.1f"),
+			SurfaceName[Surface], Location.X, Location.Y, Location.Z, Up.X, Up.Y, Up.Z,
+			HitComponent ? *HitComponent->GetName() : TEXT("None"), BugTankPawn->GetSurfaceHitDistance(), BugTankProbeTime);
+	}
+	else
+	{
+		BugTankProbeSurfaceTime += DeltaSeconds;
+	}
+
+	if (!BugTankProbeCapturedSurfaces.Contains(Surface) && BugTankProbeSurfaceTime >= 0.6f)
+	{
+		bool bFramedCeiling = false;
+		if (Surface == 2)
+		{
+			UWorld* World = GetWorld();
+			const FVector Target = (Location + BugTankPawn->GetSurfaceHitPoint()) * 0.5f;
+			const FVector CameraLocation = Target + Up * 220.0f + BugTankPawn->GetActorRightVector() * 450.0f;
+			if (World)
+			{
+				FActorSpawnParameters CameraParams;
+				CameraParams.Owner = this;
+				CameraParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+				BugTankProbeCaptureCamera = World->SpawnActor<ACameraActor>(
+					ACameraActor::StaticClass(), CameraLocation,
+					( Target - CameraLocation ).Rotation(), CameraParams);
+				if (ACameraActor* CaptureCamera = BugTankProbeCaptureCamera.Get())
+				{
+					CaptureCamera->GetCameraComponent()->SetFieldOfView(70.0f);
+					PC->SetViewTarget(CaptureCamera);
+					BugTankProbeCaptureRestoreFrames = 3;
+					bFramedCeiling = true;
+				}
+			}
+		}
+		if (Surface != 2 || bFramedCeiling)
+		{
+			BugTankProbeCapturedSurfaces.Add(Surface);
+			const FString ShotPath = FPaths::ProjectSavedDir() / TEXT("Diagnose") /
+				FString::Printf(TEXT("BugTankProbe_%s_%s.png"), SurfaceName[Surface],
+					*FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
+			FScreenshotRequest::RequestScreenshot(ShotPath, false, false);
+			UE_LOG(LogWbVehicles, Log,
+				TEXT("WbBugTankProbe CAPTURE=%s path=%s loc=(%.0f,%.0f,%.0f) up=(%.2f,%.2f,%.2f) trace_component=%s trace_distance_cm=%.1f framed=%d"),
+				SurfaceName[Surface], *ShotPath, Location.X, Location.Y, Location.Z, Up.X, Up.Y, Up.Z,
+				BugTankPawn->GetSurfaceHitComponent() ? *BugTankPawn->GetSurfaceHitComponent()->GetName() : TEXT("None"),
+				BugTankPawn->GetSurfaceHitDistance(), bFramedCeiling ? 1 : 0);
+		}
+	}
+
+	// Give the streamed start area two seconds to settle, then move via the
+	// same simulated PlayerController key states that the BugTank reads.
+	if (BugTankProbeTime < 2.0f)
+	{
+		ReleaseInputs();
+	}
+	else if (BugTankProbeTime < 42.0f)
+	{
+		const float RouteTime = BugTankProbeTime - 2.0f;
+		const float Phase = FMath::Fmod(RouteTime, 4.9f);
+		Hold(EKeys::W, Phase < 4.0f);
+		Hold(EKeys::D, Phase >= 4.0f && Phase < 4.8f);
+		Hold(EKeys::A, false);
+		Hold(EKeys::S, false);
+		Hold(EKeys::LeftShift, false);
+	}
+	else
+	{
+		ReleaseInputs();
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbBugTankProbe END elapsed=%.1f ceiling_contact_seconds=%.2f ceiling_active_w_seconds=%.2f loc=(%.0f,%.0f,%.0f) up=(%.2f,%.2f,%.2f) floor=%d wall=%d ceiling=%d; no forced surface placement."),
+			BugTankProbeTime, BugTankProbeCeilingContactTime, BugTankProbeCeilingInputTime,
+			Location.X, Location.Y, Location.Z, Up.X, Up.Y, Up.Z,
+			BugTankProbeCapturedSurfaces.Contains(0) ? 1 : 0,
+			BugTankProbeCapturedSurfaces.Contains(1) ? 1 : 0,
+			BugTankProbeCapturedSurfaces.Contains(2) ? 1 : 0);
+		bBugTankProbeFinished = true;
+		return;
+	}
+	if (Surface == 2 && PC->IsInputKeyDown(EKeys::W))
+	{
+		BugTankProbeCeilingInputTime += DeltaSeconds;
+		BugTankProbeCeilingSurfaceInputTime += DeltaSeconds;
+	}
+	if (Surface == 2)
+	{
+		BugTankProbeCeilingContactTime += DeltaSeconds;
+	}
+	if (Surface == 2 && BugTankProbeSurfaceTime >= 2.0f
+		&& BugTankProbeCeilingSurfaceInputTime >= 1.0f
+		&& FVector::Dist2D(Location, BugTankProbeSurfaceStart) >= 100.0f)
+	{
+		UPrimitiveComponent* HitComponent = BugTankPawn->GetSurfaceHitComponent();
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbBugTankProbe CEILING_TRAVEL contact_seconds=%.2f continuous_contact_seconds=%.2f active_w_seconds=%.2f continuous_active_w_seconds=%.2f delta_cm=%.0f trace_component=%s trace_distance_cm=%.1f start=(%.0f,%.0f,%.0f) now=(%.0f,%.0f,%.0f)"),
+			BugTankProbeCeilingContactTime, BugTankProbeSurfaceTime, BugTankProbeCeilingInputTime,
+			BugTankProbeCeilingSurfaceInputTime,
+			FVector::Dist2D(Location, BugTankProbeSurfaceStart),
+			HitComponent ? *HitComponent->GetName() : TEXT("None"), BugTankPawn->GetSurfaceHitDistance(),
+			BugTankProbeSurfaceStart.X, BugTankProbeSurfaceStart.Y, BugTankProbeSurfaceStart.Z,
+			Location.X, Location.Y, Location.Z);
+		bBugTankProbeFinished = true;
+		ReleaseInputs();
+		return;
+	}
+
+	if (FMath::Fmod(BugTankProbeTime, 1.0f) < DeltaSeconds)
+	{
+		const float RoutePhase = BugTankProbeTime >= 2.0f
+			? FMath::Fmod(BugTankProbeTime - 2.0f, 4.9f) : -1.0f;
+		UE_LOG(LogWbVehicles, Log,
+			TEXT("WbBugTankProbe SAMPLE t=%.1f surface=%s ceiling_contact_seconds=%.2f ceiling_active_w_seconds=%.2f continuous_contact_seconds=%.2f continuous_active_w_seconds=%.2f keys=W%d D%d phase=%.1f from_surface_cm=%.0f trace_component=%s trace_distance_cm=%.1f loc=(%.0f,%.0f,%.0f) up=(%.2f,%.2f,%.2f)"),
+			BugTankProbeTime, SurfaceName[Surface], BugTankProbeCeilingContactTime, BugTankProbeCeilingInputTime,
+			BugTankProbeSurfaceTime, BugTankProbeCeilingSurfaceInputTime,
+			PC->IsInputKeyDown(EKeys::W) ? 1 : 0,
+			PC->IsInputKeyDown(EKeys::D) ? 1 : 0, RoutePhase,
+			FVector::Dist(Location, BugTankProbeSurfaceStart),
+			BugTankPawn->GetSurfaceHitComponent() ? *BugTankPawn->GetSurfaceHitComponent()->GetName() : TEXT("None"),
+			BugTankPawn->GetSurfaceHitDistance(),
+			Location.X, Location.Y, Location.Z, Up.X, Up.Y, Up.Z);
+	}
+}
+#endif
 
 void AWiesbadenGameMode::TickFigurProbe(float DeltaSeconds)
 {
@@ -2484,6 +2730,70 @@ void AWiesbadenGameMode::TogglePlayerVehicle()
 	PC->Possess(FootPawn);
 
 	UE_LOG(LogWbVehicles, Log, TEXT("Ausgestiegen aus %s."), *Current->GetName());
+}
+
+void AWiesbadenGameMode::ToggleBugTank()
+{
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+	if (!World || !PC)
+	{
+		return;
+	}
+
+	if (BugTankPawn && PC->GetPawn() == BugTankPawn)
+	{
+		APawn* ReturnPawn = PawnBeforeBugTank.Get();
+		if (!IsValid(ReturnPawn))
+		{
+			ReturnPawn = PlayerVehicle.Get();
+		}
+		if (IsValid(ReturnPawn))
+		{
+			ReturnPawn->SetActorHiddenInGame(false);
+			ReturnPawn->SetActorEnableCollision(true);
+			BugTankPawn->SetActorHiddenInGame(true);
+			BugTankPawn->SetActorEnableCollision(false);
+			PC->Possess(ReturnPawn);
+			UE_LOG(LogWbVehicles, Log, TEXT("BugTank: zurück zu %s."), *ReturnPawn->GetName());
+		}
+		return;
+	}
+
+	APawn* CurrentPawn = PC->GetPawn();
+	if (!BugTankPawn)
+	{
+		const bool bHasPlayerVehicle = IsValid(PlayerVehicle.Get());
+		const FVector SpawnLocation = CurrentPawn ? CurrentPawn->GetActorLocation()
+			: bHasPlayerVehicle ? PlayerVehicle->GetActorLocation() : FVector::ZeroVector;
+		const FRotator SpawnRotation = CurrentPawn ? CurrentPawn->GetActorRotation()
+			: bHasPlayerVehicle ? PlayerVehicle->GetActorRotation() : FRotator::ZeroRotator;
+		FActorSpawnParameters Params;
+		Params.Owner = this;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+		BugTankPawn = World->SpawnActor<AWiesbadenBugTankPawn>(
+			AWiesbadenBugTankPawn::StaticClass(), SpawnLocation, SpawnRotation, Params);
+	}
+	if (!BugTankPawn)
+	{
+		UE_LOG(LogWbVehicles, Warning, TEXT("BugTank: Pawn konnte nicht gespawnt werden."));
+		return;
+	}
+
+	if (CurrentPawn)
+	{
+		PawnBeforeBugTank = CurrentPawn;
+		// Der BugTank startet genau auf dem bisherigen Pawn. Verstecken und
+		// Kollision abschalten verhindert Doppelgeometrie und hält den Wechsel
+		// durch T vollständig umkehrbar.
+		CurrentPawn->SetActorHiddenInGame(true);
+		CurrentPawn->SetActorEnableCollision(false);
+	}
+	BugTankPawn->SetActorHiddenInGame(false);
+	BugTankPawn->SetActorEnableCollision(true);
+	PC->Possess(BugTankPawn);
+	UE_LOG(LogWbVehicles, Log,
+		TEXT("BugTank aktiv: WASD bewegen, Shift beschleunigen, T zurückwechseln; Oberflächenhaftung auf Boden/Wand/Decke."));
 }
 
 bool AWiesbadenGameMode::SpawnHelicopterNearStart()

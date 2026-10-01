@@ -106,6 +106,47 @@ bool FInputBelegungTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Ohne Controller nichts gedrueckt"),
 		WiesbadenInputMap::IsActionDown(nullptr, EWiesbadenInputAction::Feuern));
 
+	// Helicopter table must have one canonical row per action, no duplicate
+	// physical controls, and none of the previous trigger/stick conflicts.
+	const TArray<FWiesbadenHeliBinding>& Heli = WiesbadenInputMap::HelicopterBindings();
+	TSet<EWiesbadenHeliAction> Actions;
+	for (const FWiesbadenHeliBinding& Binding : Heli)
+	{
+		if (Binding.RelatedAction == EWiesbadenHeliAction::MAX)
+		{
+			TestFalse(TEXT("Heli action row is unique"), Actions.Contains(Binding.Action));
+			Actions.Add(Binding.Action);
+		}
+		TestTrue(TEXT("Heli row has description"), FCString::Strlen(Binding.Beschreibung) > 0);
+		TestTrue(TEXT("Heli row has keyboard and pad"),
+			FCString::Strlen(Binding.Tastatur) > 0 && FCString::Strlen(Binding.Gamepad) > 0);
+	}
+	for (EWiesbadenHeliAction Action : {
+		EWiesbadenHeliAction::Pitch, EWiesbadenHeliAction::Roll, EWiesbadenHeliAction::Yaw,
+		EWiesbadenHeliAction::CollectiveUp, EWiesbadenHeliAction::CollectiveDown,
+		EWiesbadenHeliAction::Engine, EWiesbadenHeliAction::Fire, EWiesbadenHeliAction::CameraMode,
+		EWiesbadenHeliAction::Look, EWiesbadenHeliAction::Searchlight,
+		EWiesbadenHeliAction::LandingLight, EWiesbadenHeliAction::Exit })
+	{
+		TestTrue(FString::Printf(TEXT("Heli action %d present"), static_cast<int32>(Action)), Actions.Contains(Action));
+	}
+	TestTrue(TEXT("RT only appears in collective-up binding"),
+		Heli.ContainsByPredicate([](const FWiesbadenHeliBinding& Binding)
+		{
+			return Binding.Action == EWiesbadenHeliAction::CollectiveUp
+				&& FCString::Strcmp(Binding.Gamepad, TEXT("RT")) == 0;
+		}));
+	TestTrue(TEXT("fire is A, not RT"),
+		Heli.ContainsByPredicate([](const FWiesbadenHeliBinding& Binding)
+		{
+			return Binding.Action == EWiesbadenHeliAction::Fire
+				&& FCString::Strcmp(Binding.Gamepad, TEXT("A")) == 0;
+		}));
+	TestFalse(TEXT("No controller -> no heli actions"),
+		WiesbadenInputMap::IsHelicopterActionDown(nullptr, EWiesbadenHeliAction::Fire));
+	TestEqual(TEXT("Ten practice steps and one final acknowledgement"),
+		WiesbadenHelicopterLesson::Steps().Num(), WiesbadenHelicopterLesson::StepCount);
+
 	return true;
 }
 

@@ -62,12 +62,17 @@ bool FWantedSystemTest::RunTest(const FString& Parameters)
 		S = FWiesbadenWanted::Step(S, P, P.DecayGraceSeconds - 1.0);
 		TestEqual(TEXT("In der Grace kein Abbau"), S.Points, VorGrace);
 
-		// Ein Tick knapp ueber der Grace: genau ein Delta Abbau.
-		const double Knapp = P.DecayGraceSeconds + 0.1;
+		// Ein Tick ueber die Grace-Grenze: nur Zeit nach der Grenze abbauen.
+		const double Knapp = 1.1;
 		S = FWiesbadenWanted::Step(S, P, Knapp);
 		TestTrue(FString::Printf(TEXT("Nach Grace abgebaut (%.2f -> %.2f)"), VorGrace, S.Points),
 			S.Points < VorGrace);
-		TestEqual(TEXT("Ein Delta Abbaubetrag"), S.Points, VorGrace - P.DecayPointsPerSecond * Knapp);
+		TestTrue(TEXT("Nur 0.1 s nach Grace abgebaut"), FMath::IsNearlyEqual(S.Points, VorGrace - P.DecayPointsPerSecond * .1, .0001));
+		FWiesbadenWantedState Whole = FWiesbadenWanted::AddEvent({}, P, EWiesbadenCrimeEvent::VehicleDestroyed);
+		FWiesbadenWantedState Split = Whole;
+		Whole = FWiesbadenWanted::Step(Whole, P, 35.0);
+		for (int32 i = 0; i < 350; ++i) { Split = FWiesbadenWanted::Step(Split, P, .1); }
+		TestTrue(TEXT("Abbau unabhaengig von Frameaufteilung"), FMath::IsNearlyEqual(Whole.Points, Split.Points, .0001));
 
 		// Lange ohne Tat: Konto leer, Stufe 0.
 		for (int32 i = 0; i < 400; ++i)

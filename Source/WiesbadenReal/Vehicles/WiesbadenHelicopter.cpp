@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "Vehicles/WiesbadenHelicopter.h"
+#include "Core/WiesbadenInputMap.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInterface.h"
@@ -391,6 +392,7 @@ AWiesbadenHelicopter::AWiesbadenHelicopter()
 	VehicleCamera->SetupAttachment(SceneRoot);
 	VehicleCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 130.0f));
 	VehicleCamera->bLockFollowMode = false;
+	VehicleCamera->PadToggleKey = EKeys::Gamepad_RightThumbstick;
 
 	// Ruhiger Horizont und Positions-Nachlauf: der Rumpf neigt sich IM Bild,
 	// nicht das Bild mit ihm, und die Kamera federt Beschleunigungen weich
@@ -528,6 +530,16 @@ void AWiesbadenHelicopter::Tick(float DeltaSeconds)
 	// Flugpfad neu. Bleibt er ungueltig (geparkt), tracen die Leser selbst.
 	bGroundCacheValid = false;
 
+	if (bDestroyed)
+	{
+		UpdateCrash(DeltaSeconds);
+		if (Gun) { Gun->SetTriggerHeld(false); }
+		UpdateRotors(DeltaSeconds);
+		UpdateVisualEffects(DeltaSeconds);
+		UpdateAudio(DeltaSeconds);
+		return;
+	}
+
 	// Ohne Pilot wird nicht geflogen.
 	//
 	// Der abgestellte Helikopter durchlief bisher dieselbe Flugsimulation wie
@@ -537,6 +549,7 @@ void AWiesbadenHelicopter::Tick(float DeltaSeconds)
 	// finden war er trotzdem nie.
 	if (!Controller)
 	{
+		if (Gun) { Gun->SetTriggerHeld(false); }
 		ParkOnGround();
 		UpdateRotors(DeltaSeconds);
 		UpdateVisualEffects(DeltaSeconds);
@@ -652,8 +665,26 @@ void AWiesbadenHelicopter::UnPossessed()
 
 	bEngineRunning = false;
 	CachedPlayerController = nullptr;
+	SetLessonDryFireActive(false);
+	ReleaseFireForRespawn();
 
 	UE_LOG(LogWbVehicles, Log, TEXT("Helikopter %s wurde freigegeben."), *GetName());
+}
+
+void AWiesbadenHelicopter::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// Nur beim Actor-Ende wird die lokale Sperre geloescht; bei Respawn
+	// und Aussteigen muss weiterhin eine physische Loslass-Eingabe folgen.
+	if (Gun) { Gun->SetTriggerHeld(false); }
+	bLessonDryFireActive = false;
+	bDryFireReleasePending = false;
+	bTriggerHeld = false;
+
+	UE_LOG(LogWbVehicles, Log,
+		TEXT("Helikopter %s EndPlay (Grund %d) - Abzug und Flugstunden-Feuersperre zurueckgesetzt."),
+		*GetName(), static_cast<int32>(EndPlayReason));
+
+	Super::EndPlay(EndPlayReason);
 }
 
 void AWiesbadenHelicopter::CycleCameraMode()
@@ -972,64 +1003,19 @@ void AWiesbadenHelicopter::ReadInput(float DeltaSeconds)
 	// liefert eine echte Analogachse, die Tastatur wird als Vollausschlag
 	// behandelt und ueber die Anstiegsrate weich gemacht.
 	//
-	// Belegung (uebliche Hubschrauber-Belegung):
-	//
-	//   Tastatur                    Gamepad
-	//   W / S    Nicken             Linker Stick hoch/runter
-	//   A / D    Rollen             Linker Stick links/rechts
-	//   Q / E    Gieren             Rechter Stick links/rechts
-	//   Leer     Kollektiv hoch     Rechter Trigger
-	//   Strg     Kollektiv runter   Linker Trigger
-	//   G        Triebwerk          Y
-
-	// -- Kollektiv --------------------------------------------------------
-	float TargetCollective = 0.0f;
-	if (IsKeyDown(EKeys::SpaceBar) || IsKeyDown(EKeys::LeftShift))
-	{
-		TargetCollective += 1.0f;
-	}
-	if (IsKeyDown(EKeys::LeftControl))
-	{
-		TargetCollective -= 1.0f;
-	}
-
-	// Trigger sind einseitige Achsen von 0 bis 1; die Differenz ergibt eine
-	// beidseitige Achse mit feiner Aufloesung in beide Richtungen.
-	const float TriggerUp = GetAnalogAxis(EKeys::Gamepad_RightTriggerAxis);
-	const float TriggerDown = GetAnalogAxis(EKeys::Gamepad_LeftTriggerAxis);
-	const float TriggerCollective = ApplyStickShaping(TriggerUp - TriggerDown, StickDeadzone, StickExpo);
-	if (FMath::Abs(TriggerCollective) > FMath::Abs(TargetCollective))
-	{
-		TargetCollective = TriggerCollective;
-	}
-
-	// -- Zyklisch (Nicken/Rollen) ------------------------------------------
-	float TargetPitch = 0.0f;
-	if (IsKeyDown(EKeys::W)) { TargetPitch += 1.0f; }
-	if (IsKeyDown(EKeys::S)) { TargetPitch -= 1.0f; }
-
-	float TargetRoll = 0.0f;
-	if (IsKeyDown(EKeys::D)) { TargetRoll += 1.0f; }
-	if (IsKeyDown(EKeys::A)) { TargetRoll -= 1.0f; }
-
-	const float StickPitch = ApplyStickShaping(
-		GetAnalogAxis(EKeys::Gamepad_LeftY), StickDeadzone, StickExpo);
-	const float StickRoll = ApplyStickShaping(
-		GetAnalogAxis(EKeys::Gamepad_LeftX), StickDeadzone, StickExpo);
-
-	// Der groessere Betrag gewinnt - so stoert eine ruhende Eingabequelle die
-	// andere nicht, und beide bleiben jederzeit benutzbar.
-	if (FMath::Abs(StickPitch) > FMath::Abs(TargetPitch)) { TargetPitch = StickPitch; }
-	if (FMath::Abs(StickRoll) > FMath::Abs(TargetRoll)) { TargetRoll = StickRoll; }
-
-	// -- Gieren ------------------------------------------------------------
-	float TargetYaw = 0.0f;
-	if (IsKeyDown(EKeys::E)) { TargetYaw += 1.0f; }
-	if (IsKeyDown(EKeys::Q)) { TargetYaw -= 1.0f; }
-
-	const float StickYaw = ApplyStickShaping(
-		GetAnalogAxis(EKeys::Gamepad_RightX), StickDeadzone, StickExpo);
-	if (FMath::Abs(StickYaw) > FMath::Abs(TargetYaw)) { TargetYaw = StickYaw; }
+	const APlayerController* PC = GetHeliController();
+	const float TargetCollective = ApplyStickShaping(
+		WiesbadenInputMap::HelicopterAxis(PC, EWiesbadenHeliAction::Collective),
+		StickDeadzone, StickExpo);
+	float TargetPitch = ApplyStickShaping(
+		WiesbadenInputMap::HelicopterAxis(PC, EWiesbadenHeliAction::Pitch),
+		StickDeadzone, StickExpo);
+	float TargetRoll = ApplyStickShaping(
+		WiesbadenInputMap::HelicopterAxis(PC, EWiesbadenHeliAction::Roll),
+		StickDeadzone, StickExpo);
+	const float TargetYaw = ApplyStickShaping(
+		WiesbadenInputMap::HelicopterAxis(PC, EWiesbadenHeliAction::Yaw),
+		StickDeadzone, StickExpo);
 
 	// -- Selbststabilisierung ----------------------------------------------
 	//
@@ -1058,16 +1044,10 @@ void AWiesbadenHelicopter::ReadInput(float DeltaSeconds)
 	YawInput = AdvanceControlAxis(
 		YawInput, TargetYaw, YawRiseRate, YawReturnRate, DeltaSeconds);
 
-	// Triebwerk an/aus (Flanke auf G oder RB am Gamepad) - erlaubt
-	// Autorotationstests.
-	//
-	// RB, nicht Y: das Ein- und Aussteigen liegt projektweit auf F bzw. Y
-	// (WiesbadenGameMode), und am Hubschrauber war Y damit doppelt belegt -
-	// ein Druck auf Y haette das Triebwerk geschaltet UND den Ausstieg
-	// eingeleitet. RB ist hier frei (die Schultertasten werden am
-	// Hubschrauber sonst nicht gelesen) und folgt demselben Muster wie im
-	// Menue, wo LB/RB Werte verstellen.
-	const bool bEnginePressed = IsKeyDown(EKeys::G) || IsKeyDown(EKeys::Gamepad_RightShoulder);
+	// Triebwerk an/aus (G oder X am Gamepad). Y bleibt ausschliesslich
+	// dem Aussteigen vorbehalten; LB/RB steuern jetzt die Gierachse.
+	const bool bEnginePressed = WiesbadenInputMap::IsHelicopterActionDown(
+		GetHeliController(), EWiesbadenHeliAction::Engine);
 	if (bEnginePressed && !bEngineToggleHeld)
 	{
 		bEngineRunning = !bEngineRunning;
@@ -1530,23 +1510,18 @@ void AWiesbadenHelicopter::ReadDeviceInput(float DeltaSeconds)
 {
 	(void)DeltaSeconds;
 
-	if (!LightRig || !Gun)
+	if (bDestroyed || !LightRig || !Gun)
 	{
 		return;
 	}
 
 	// -- Bordgeschuetz -------------------------------------------------------
-	// Linke Maustaste, Gamepad RT oder Taste V. Halten feuert in Salven, was
-	// zu einer Kanone passt: 500 Schuss je Minute sind 8,3 Schuss je Sekunde.
-	// V kam dazu, weil sich die Kanone sonst ohne Maus nicht ausloesen
-	// laesst - am 26.09.2026 hat das den Bildbeleg verhindert: in vier
-	// Sitzungen kam ueber synthetische Mausklicks keine Abzugsflanke im
-	// Spiel an, waehrend Tasten ankommen (Logzeile "Ka52-Abzug").
-	const bool bFeuern = IsKeyDown(EKeys::LeftMouseButton)
-		|| IsKeyDown(EKeys::V)
-		|| GetAnalogAxis(EKeys::Gamepad_RightTriggerAxis) > 0.35f
-		|| IsFireSwitchHeld();
+	// Linke Maustaste oder A am Gamepad; RT bleibt ausschliesslich dem Kollektiv.
+	// Im gefuehrten Unterricht verhindert der Trockenmodus jeden Schuss.
+	const bool bFeuern = WiesbadenInputMap::IsHelicopterActionDown(
+		GetHeliController(), EWiesbadenHeliAction::Fire) || IsFireSwitchHeld();
 	MeldeKabine();
+
 	if (bFeuern != bTriggerHeld)
 	{
 		// Flanke loggen. Das Geschuetz selbst schweigt im Normalfall
@@ -1556,13 +1531,25 @@ void AWiesbadenHelicopter::ReadDeviceInput(float DeltaSeconds)
 		UE_LOG(LogWbVehicles, Log, TEXT("Ka52-Abzug: %s"),
 			bFeuern ? TEXT("gedrueckt") : TEXT("losgelassen"));
 	}
-	Gun->SetTriggerHeld(bFeuern);
+	// Bleibt der Abzug beim Unterrichtsende gehalten, muss er erst losgelassen
+	// werden, bevor scharfe Schuesse wieder moeglich sind.
+	if (!bFeuern)
+	{
+		bDryFireReleasePending = false;
+	}
+	else if (bLessonDryFireActive)
+	{
+		bDryFireReleasePending = true;
+	}
+	const bool bAllowLiveFire = AllowsLiveFire(bLessonDryFireActive, bDryFireReleasePending);
+	Gun->SetTriggerHeld(bFeuern && bAllowLiveFire);
 	bTriggerHeld = bFeuern;
 
 	// -- Suchscheinwerfer ----------------------------------------------------
 	// L oder Gamepad D-Pad hoch. Flanke, nicht Pegel: ein gehaltener Schalter
 	// wuerde im Frame mehrfach umschalten.
-	const bool bLicht = IsKeyDown(EKeys::L) || IsKeyDown(EKeys::Gamepad_DPad_Up);
+	const bool bLicht = WiesbadenInputMap::IsHelicopterActionDown(
+		GetHeliController(), EWiesbadenHeliAction::Searchlight);
 	if (bLicht && !bSearchlightToggleHeld)
 	{
 		SetSearchlights(!LightRig->AreSearchlightsOn());
@@ -1570,7 +1557,8 @@ void AWiesbadenHelicopter::ReadDeviceInput(float DeltaSeconds)
 	bSearchlightToggleHeld = bLicht;
 
 	// -- Landlicht -----------------------------------------------------------
-	const bool bLande = IsKeyDown(EKeys::B) || IsKeyDown(EKeys::Gamepad_DPad_Down);
+	const bool bLande = WiesbadenInputMap::IsHelicopterActionDown(
+		GetHeliController(), EWiesbadenHeliAction::LandingLight);
 	if (bLande && !bLandingLightToggleHeld)
 	{
 		SetLandingLight(!LightRig->IsLandingLightOn());
@@ -1648,7 +1636,7 @@ float AWiesbadenHelicopter::TakeDamage(float DamageAmount, const FDamageEvent& D
 	{
 		bDestroyed = true;
 		bEngineRunning = false;
-		RespawnCountdown = RespawnDelay;
+		RespawnCountdown = FMath::Max(RespawnDelay, KINDA_SMALL_NUMBER);
 		// Der Rumpf faellt zur getroffenen Seite, nicht in eine Zufalls-
 		// richtung: der Taumel ist die Story des Absturzes.
 		CrashYawRate = FMath::DegreesToRadians(CrashTumbleDegPerSec);
@@ -1657,10 +1645,7 @@ float AWiesbadenHelicopter::TakeDamage(float DamageAmount, const FDamageEvent& D
 		{
 			LightRig->SetAllLightsEnabled(false);
 		}
-		if (Gun)
-		{
-			Gun->SetTriggerHeld(false);
-		}
+		ReleaseFireForRespawn();
 		UE_LOG(LogWbVehicles, Warning,
 			TEXT("Ka52 zerstoert - Wiederaufsetzen auf dem Landeplatz in %.0f s."),
 			RespawnDelay);
@@ -1745,6 +1730,9 @@ bool AWiesbadenHelicopter::RespawnOnTowerHelipad()
 	{
 		Gun->Reload();
 	}
+	// Nach Wiederaufsetzen erst eine echte Loslass-Eingabe abwarten.
+	// Ein bestehender Lektions-Trockenmodus bleibt erhalten.
+	ReleaseFireForRespawn();
 
 	UE_LOG(LogWbVehicles, Log,
 		TEXT("Ka52 wiederaufgesetzt auf dem Landeplatz (%.0f, %.0f, %.0f)."),

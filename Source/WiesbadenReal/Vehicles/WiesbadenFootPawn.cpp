@@ -22,12 +22,31 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
 #include "World/WiesbadenCitySubsystem.h"
+#include "Audio/WiesbadenAudioZonesSubsystem.h"
 #include "Materials/MaterialInterface.h"
 
 namespace
 {
 	constexpr float KmhToCmPerS = 100000.0f / 3600.0f;
+
+	/**
+	 * Schrittlaenge je Tempo (cm): Gehen 75, Rennen 125. Der Fussabstand einer
+	 * 1,75-m-Figur liegt bei rund 75 cm im Gehen und wird im Rennen gedehnt.
+	 * Das Tempo ist die GEMESSENE Ortsaenderung, nicht die Eingabe.
+	 */
+	inline float StrideCmForSpeed(float SpeedMps)
+	{
+		return FMath::Lerp(75.0f, 125.0f, FMath::Clamp(SpeedMps / 6.0f, 0.0f, 1.0f));
+	}
+
+	/** Unter diesem Tempo (m/s) laeuft kein Schrittzyklus. */
+	constexpr float FootstepMinSpeedMps = 0.1f;
+
+	/** Hoehe des Fusspunkts unter dem Actor-Ursprung (cm, Figur 1,75 m). */
+	constexpr float FootHeightCm = 88.0f;
 }
+
+DEFINE_LOG_CATEGORY_STATIC(LogWbFootPawn, Log, All);
 
 AWiesbadenFootPawn::AWiesbadenFootPawn()
 {
@@ -372,6 +391,7 @@ void AWiesbadenFootPawn::Tick(float DeltaSeconds)
 	PreviousLocation = Location;
 
 	UpdateFigure(DeltaSeconds, SpeedMps);
+	UpdateFootsteps(DeltaSeconds, SpeedMps);
 }
 
 void AWiesbadenFootPawn::BuildBody()
@@ -1085,6 +1105,55 @@ void AWiesbadenFootPawn::DoMeleeHit()
 	{
 		UE_LOG(LogWbVehicles, Log, TEXT("Saegehieb: %d getroffen."), Struck);
 	}
+}
+
+void AWiesbadenFootPawn::UpdateFootsteps(float DeltaSeconds, float SpeedMps)
+{
+	// Steht die Figur, laeuft kein Schrittzyklus. Ohne diese Klammer bliebe
+	// der Akkumulator im Leerlauf stehen und beim ersten Gehen sofort
+	// ueberschiessen - die Figur stuende mit einem Nachhall auf der Stelle.
+	if (SpeedMps < FootstepMinSpeedMps)
+	{
+		StepDistanceAccumulatedCm = 0.0f;
+		return;
+	}
+
+	// Gemessenes Tempo, nicht die Eingabe: wer gegen eine Hauswand laeuft,
+	// bewegt sich nicht und soll keine Schritte hoeren.
+	StepDistanceAccumulatedCm += SpeedMps * DeltaSeconds * 100.0f;
+
+	const float StrideCm = StrideCmForSpeed(SpeedMps);
+	if (StepDistanceAccumulatedCm < StrideCm)
+	{
+		return;
+	}
+	StepDistanceAccumulatedCm -= StrideCm;
+
+	UWorld* World = GetWorld();
+	UWiesbadenAudioZonesSubsystem* Zones = World
+		? World->GetSubsystem<UWiesbadenAudioZonesSubsystem>() : nullptr;
+	if (!Zones)
+	{
+		return;
+	}
+
+	// Am Fuss abtasten, nicht in der Mitte: die Figur ist 1,75 m hoch und der
+	// Schritt soll dort klingen, wo der Boden ist.
+	const FVector FootLocation = GetActorLocation() - FVector(0.0, 0.0, FootHeightCm);
+	LastFootstepSurface = Zones->SurfaceUnderFoot(FootLocation);
+	Zones->PlayFootstepAt(FootLocation, LastFootstepSurface);
+
+	// Der Beleg nennt Tempo, Schrittweite und Untergrund. Bewusst KEIN
+	// globaler Schrittzaehler: der zaehlt Spieler UND Passanten, und eine
+	// Zahl, die je Bild um Dutzende springt, laesst sich keinem Schritt zuordnen.
+	// Log, nicht Verbose: das ist die Beweiszeile des Laufbelegs, und
+	// Verbose erscheint im Standardlog nicht. Ein Spielerschritt faellt
+	// rund ein- bis zweimal je Sekunde an - das Log bleibt lesbar.
+	UE_LOG(LogWbFootPawn, Log,
+		TEXT("WbSchritt: Tempo %.2f m/s, Schrittweite %.0f cm, Untergrund %s, Ort %s."),
+		SpeedMps, StrideCm,
+		*WiesbadenAudioZones::SurfaceName(LastFootstepSurface),
+		*FootLocation.ToCompactString());
 }
 
 void AWiesbadenFootPawn::UpdateFigure(float DeltaSeconds, float SpeedMps)

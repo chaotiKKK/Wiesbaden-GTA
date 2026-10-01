@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 using UnrealBuildTool;
+using EpicGames.Core;
+using System.Collections.Generic;
+using System.IO;
 
 public class WiesbadenReal : ModuleRules
 {
@@ -28,6 +31,48 @@ public class WiesbadenReal : ModuleRules
 		// includiert konsistent mit Unterordner-Praefix ("GIS/...", "World/..."),
 		// daher den Modul-Root explizit als Include-Pfad registrieren.
 		PublicIncludePaths.Add(ModuleDirectory);
+
+		// Dateilader bleiben unveraendert: nur die explizite Liste in DefaultGame.ini
+		// wird als UFS unter dem Projektpfad gestaged, nicht der ganze Data-Baum.
+		DirectoryReference ProjectRoot = DirectoryReference.Combine(
+			new DirectoryReference(ModuleDirectory), "..", "..");
+		ConfigHierarchy GameConfig = ConfigCache.ReadHierarchy(
+			ConfigHierarchyType.Game, ProjectRoot, Target.Platform, Target.CustomConfig);
+		// Alle Orte der Game-Hierarchie im Projekt als ExternalDependency,
+		// auch die noch nicht existierenden. GEMESSEN am 30.09.2026: mit nur
+		// DefaultGame.ini blieb eine nachtraeglich angelegte
+		// Config/Windows/WindowsGame.ini unentdeckt - UBT meldete
+		// "Result: Succeeded" und schrieb die alte Dateiliste in den Receipt.
+		foreach (FileReference ConfigFile in ConfigHierarchy.EnumerateConfigFileLocations(
+			ConfigHierarchyType.Game, ProjectRoot, Target.Platform, Target.CustomConfig, null))
+		{
+			if (ConfigFile.FullName.StartsWith(ProjectRoot.FullName, System.StringComparison.OrdinalIgnoreCase))
+			{
+				ExternalDependencies.Add(ConfigFile.FullName);
+			}
+		}
+		List<string> RuntimeFiles;
+		if (!GameConfig.GetArray("WiesbadenReal.RuntimeStaging", "RuntimeFile", out RuntimeFiles)
+			|| RuntimeFiles.Count == 0)
+		{
+			throw new BuildException("RuntimeStaging: explizite RuntimeFile-Liste fehlt in DefaultGame.ini.");
+		}
+		foreach (string RelativePath in RuntimeFiles)
+		{
+			// Keine absoluten, aus dem Projekt fuehrenden oder Nicht-JSON-Pfade.
+			if (Path.IsPathRooted(RelativePath) || RelativePath.Contains("\\")
+				|| RelativePath.Contains("..") || !RelativePath.EndsWith(".json")
+				|| !(RelativePath.StartsWith("Data/") || RelativePath.StartsWith("Content/Config/")))
+			{
+				throw new BuildException("RuntimeStaging: kein expliziter Projekt-JSON-Pfad: {0}", RelativePath);
+			}
+			FileReference RuntimeFile = FileReference.Combine(ProjectRoot, RelativePath);
+			if (!FileReference.Exists(RuntimeFile))
+			{
+				throw new BuildException("RuntimeStaging: benoetigte Laufzeitdatei fehlt: {0}", RuntimeFile);
+			}
+			RuntimeDependencies.Add("$(ProjectDir)/" + RelativePath, StagedFileType.UFS);
+		}
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{

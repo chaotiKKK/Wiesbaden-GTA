@@ -86,6 +86,10 @@ namespace
 			 "Greift, wenn der Befehl ohne Argument aufgerufen wurde - "
 			 "die Engine kann ueber -ExecCmds keins uebergeben."));
 
+	TAutoConsoleVariable<int32> CVarWbWanted(
+		TEXT("wb.Wanted"), 0,
+		TEXT("Fahndungsstufe 0..6 fuer WbWanted, wenn kein Exec-Argument ankommt."));
+
 	/** Angeforderte Dauer, sonst die aus wb.Sekunden. */
 	int32 WbSekundenOderVorgabe(int32 Angefordert)
 	{
@@ -316,15 +320,37 @@ void AWiesbadenPlayerController::WbHeli(int32 Index)
 			TEXT("WbDev: WbHeli %d - es gibt %d Helikopter in der Welt."),
 			Index, Helis.Num());
 		return;
-	}
-
-	Possess(Helis[Index]);
+	}	Possess(Helis[Index]);
 	UE_LOG(LogWbCore, Log,
 		TEXT("WbDev: WbHeli %d von %d - %s (%s) uebernommen, steht bei (%.0f, %.0f, %.0f)."),
 		Index, Helis.Num(), *Helis[Index]->GetName(),
-		*Helis[Index]->GetClass()->GetName(),
-		Helis[Index]->GetActorLocation().X, Helis[Index]->GetActorLocation().Y,
+		*Helis[Index]->GetClass()->GetName(), Helis[Index]->GetActorLocation().X, Helis[Index]->GetActorLocation().Y,
 		Helis[Index]->GetActorLocation().Z);
+}
+
+void AWiesbadenPlayerController::WbWanted(int32 Stufe)
+{
+	UWiesbadenCitySubsystem* City = GetWorld()
+		? GetWorld()->GetSubsystem<UWiesbadenCitySubsystem>() : nullptr;
+	if (!City)
+	{
+		UE_LOG(LogWbCore, Warning, TEXT("WbDev: WbWanted erkannt, aber keine Stadt da."));
+		return;
+	}
+	int32 Ziel = Stufe >= 0 ? Stufe : CVarWbWanted.GetValueOnGameThread();
+	Ziel = FMath::Clamp(Ziel, 0, 6);
+	FWiesbadenWantedState Neu;
+	if (Ziel > 0)
+	{
+		// So viele Punkte wie die Stufe mindestens verlangt; LevelOf zieht
+		// die Stufe daraus nach - eine zweite Wahrheit gibt es nicht.
+		Neu.Points = City->WantedParams.LevelThresholds[Ziel - 1];
+		Neu.Level = FWiesbadenWanted::LevelOf(City->WantedParams, Neu.Points);
+	}
+	City->WantedState = Neu;
+	UE_LOG(LogWbCore, Log,
+		TEXT("WbDev: WbWanted %d - Konto auf Stufe %d (%.0f Punkte)."),
+		Ziel, City->WantedState.Level, City->WantedState.Points);
 }
 
 void AWiesbadenPlayerController::WbNudge(int32 NickGrad, int32 RollGrad)

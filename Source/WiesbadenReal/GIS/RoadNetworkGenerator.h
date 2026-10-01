@@ -35,6 +35,7 @@ enum class ERoadMeshChannel : uint8
 	 * Form nie gab.
 	 */
 	Embankment		UMETA(DisplayName = "Boeschung"),
+	BikeLaneSurface UMETA(DisplayName = "Radstreifenflaeche"),
 	MAX				UMETA(Hidden)
 };
 
@@ -280,6 +281,17 @@ struct WIESBADENREAL_API FRoadGenerationSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
 	bool bGenerateEdgeLines = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Markings")
+	bool bGenerateCrossings = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Markings")
+	bool bGenerateTurnArrows = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Markings")
+	bool bGenerateGiveWayTeeth = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Markings")
+	bool bGenerateBusLanes = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads|Markings")
+	bool bGenerateBikeLanes = true;
+
 	/** Wenn true, werden Gehwege mit Bordstein erzeugt. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Roads")
 	bool bGenerateSidewalks = true;
@@ -468,6 +480,11 @@ public:
 		const FRoadGenerationSettings& Settings,
 		FRoadNetwork& OutNetwork,
 		FRoadMeshData* OutMeshData);
+
+	/** Zusaetzliche OSM-Markierungen, direkt fuer Bake und datenreine Tests. */
+	static void BuildSupplementaryMarkings(const FRoadNetwork& Network,
+		const FOSMDataSet& DataSet, const UGeoCoordinateConverter& Converter,
+		const FRoadGenerationSettings& Settings, FRoadMeshData& OutMeshData);
 
 	/** Klassifiziert eine Abbiegebeziehung anhand des Richtungswinkels. */
 	static ETurnType ClassifyTurn(const FVector& IncomingDirection, const FVector& OutgoingDirection);

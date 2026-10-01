@@ -42,15 +42,11 @@ FWiesbadenWantedState FWiesbadenWanted::Step(const FWiesbadenWantedState& Curren
 	Next.SecondsSinceEvent = Current.SecondsSinceEvent
 		+ FMath::Max(DeltaSeconds, 0.0);
 
-	// Abbau erst nach der Grace: Wer fertig ist, hat kurz noch das Konto am
-	// Hals; ohne Grace wuerde der Abbau zwischen zwei Schuessen desselben
-	// Feuerstosses schon angreifen. Danach pro Tick das volle Delta -
-	// deterministisch und ohne Rueckblick auf die bisherige Laufzeit.
-	if (Next.SecondsSinceEvent > Params.DecayGraceSeconds && Next.Points > 0.0)
-	{
-		Next.Points = FMath::Max(0.0,
-			Next.Points - Params.DecayPointsPerSecond * FMath::Max(DeltaSeconds, 0.0));
-		Next.Level = LevelOf(Params, Next.Points);
-	}
+	// Nur den Teil des Ticks NACH der Grace abbauen. Sonst entkommt man bei
+	// einem langen Frame schneller als bei vielen kurzen Frames.
+	const double DecaySeconds = FMath::Max(0.0, Next.SecondsSinceEvent - Params.DecayGraceSeconds)
+		- FMath::Max(0.0, Current.SecondsSinceEvent - Params.DecayGraceSeconds);
+	Next.Points = FMath::Max(0.0, Next.Points - FMath::Max(0.0, Params.DecayPointsPerSecond) * DecaySeconds);
+	Next.Level = LevelOf(Params, Next.Points);
 	return Next;
 }

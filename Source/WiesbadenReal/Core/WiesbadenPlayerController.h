@@ -109,6 +109,15 @@ public:
 	UFUNCTION(Exec)
 	void WbNudge(int32 NickGrad = 0, int32 RollGrad = 0);
 
+	// Setzt das Fahndungskonto auf eine Stufe 0..6 (Dev-Hilfe fuer die Polizei).
+	//
+	// Die Stufe kommt aus dem Argument, wenn eines ankam (-1 = keins), sonst
+	// aus der CVar wb.Wanted - ein Exec-Argument ist nicht zuverlaessig
+	// (siehe WbSekundenOderVorgabe). 0 loescht das Konto, ab 1 stehen die
+	// Streifenwagen sofort bereit.
+	UFUNCTION(Exec)
+	void WbWanted(int32 Stufe = -1);
+
 	// Startet die Skript-Gierprobe am besessenen Helikopter fuer <Sekunden>.
 	UFUNCTION(Exec)
 	void WbHeliYaw(int32 Sekunden = 0);

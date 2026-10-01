@@ -7,6 +7,78 @@
 #include "GIS/PolygonUtils.h"
 #include "GIS/OSMTypes.h"
 #include "GIS/GeoCoordinateConverter.h"
+#include "GIS/WiesbadenBuildingClearance.h"
+#include "GIS/BuildingGenerator.h"
+#include "GIS/TerrainGenerator.h"
+#include "GIS/RoadFurnitureGenerator.h"
+
+int32 UWiesbadenRegionAssetGenerator::ClearObstacles(
+	const TArray<FGeneratedBuilding>& Buildings, const FOSMDataSet& OSMData,
+	const UGeoCoordinateConverter& Converter, const TArray<FTerrainSitePad>& SitePads,
+	FRegionAssetLayout& Layout, FRoadFurnitureLayout* Furniture)
+{
+	// Einmal stadtweit indexieren; nicht 100.000 Grundrisse je Baum scannen.
+	FWiesbadenBuildingClearance BuildingsIndex;
+	BuildingsIndex.BuildAround(Buildings, FVector2D::ZeroVector, TNumericLimits<double>::Max(), 30.0);
+	FRoadNetwork RailNetwork;
+	for (const auto& Pair : OSMData.Ways)
+	{
+		const FOSMWay& Way = Pair.Value;
+		if (!Way.HasTagValue(TEXT("railway"), TEXT("funicular"))) { continue; }
+		FRoadSegment Track;
+		Track.CarriagewayWidthCm = 600.0; // beide Wagen und die Ausweiche freihalten
+		Track.SidewalkWidthCm = 0.0;
+		Track.SidewalkType = EOSMSidewalkType::None;
+		for (int64 NodeId : Way.NodeIds)
+		{
+			if (const FOSMNode* Node = OSMData.Nodes.Find(NodeId))
+			{ Track.Centerline.Add(Converter.GeoToUnrealGround(Node->Location)); }
+			else
+			{
+				// Fehlende Knoten nicht durch einen erfundenen langen Abschnitt verbinden.
+				if (Track.Centerline.Num() >= 2) { RailNetwork.Segments.Add(Track); }
+				Track.Centerline.Reset();
+			}
+		}
+		if (Track.Centerline.Num() >= 2) { RailNetwork.Segments.Add(MoveTemp(Track)); }
+	}
+	FWiesbadenRoadClearance RailIndex;
+	RailIndex.Build(RailNetwork, 150.0, false);
+	auto SiteBlocked = [&](const FVector2D& P, double Radius)
+	{
+		for (const FTerrainSitePad& Pad : SitePads)
+		{
+			if (Pad.BuildingHalfCm > 0.0 && FWiesbadenBuildingClearance::DistanceToRotatedBox2D(
+				P, Pad.CenterCm, FVector2D(Pad.BuildingHalfCm, Pad.BuildingHalfCm), Pad.BuildingYawDeg) <= Radius)
+			{ return true; }
+		}
+		return false;
+	};
+	const int32 Removed = Layout.Assets.RemoveAll([&](const FPlacedRegionAsset& Asset)
+	{
+		const FVector2D P(Asset.Location);
+		const double Radius = Asset.Category == ERegionAssetCategory::Tree
+			? 150.0 * FMath::Max(0.1f, Asset.Scale) : 100.0;
+		return BuildingsIndex.IsBlocked(P, Radius) || RailIndex.IsBlocked(P) || SiteBlocked(P, Radius);
+	});
+	int32 RemovedFurniture = 0;
+	if (Furniture)
+	{
+		// Die Halle/Trasse und private Neubauten kennen Strassenmoebel bislang
+		// nicht. Bestehende Gebaeude-Freihaltung der Moebel bleibt unveraendert.
+		auto Blocked = [&](const auto& Item) {
+			const FVector2D P(Item.Location);
+			return RailIndex.IsBlocked(P) || SiteBlocked(P, 60.0);
+		};
+		RemovedFurniture += Furniture->Signs.RemoveAll(Blocked);
+		RemovedFurniture += Furniture->Delineators.RemoveAll(Blocked);
+		RemovedFurniture += Furniture->StreetLamps.RemoveAll(Blocked);
+		RemovedFurniture += Furniture->Furniture.RemoveAll(Blocked);
+	}
+	UE_LOG(LogWbCore, Log, TEXT("Objekt-Freihaltung: %d Streuobjekte, %d Strassenmoebel entfernt; %d Gebaeude, %d Bahnabschnitte."),
+		Removed, RemovedFurniture, BuildingsIndex.GetFootprintCount(), RailIndex.GetSpanCount());
+	return Removed;
+}
 
 namespace
 {

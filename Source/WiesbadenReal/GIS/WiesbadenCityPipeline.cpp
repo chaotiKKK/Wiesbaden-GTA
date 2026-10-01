@@ -290,6 +290,25 @@ namespace WiesbadenCityPipeline
 
 		if (Cancelled()) { return EBuildResult::Cancelled; }
 
+		// Erst jetzt liegen die endgueltigen Grundrisse vor. Die fruehere
+		// Streuung kann Strassen meiden, aber noch keine Haeuser oder Bahnhallen.
+		UWiesbadenRegionAssetGenerator::ClearObstacles(OutData.Buildings, OutData.OSMData,
+			*Tools.Converter, Input.TerrainSettings.SitePads, OutData.RegionAssetLayout, &OutData.FurnitureLayout);
+		OutData.RegionAssetReport.TreeCount = 0;
+		OutData.RegionAssetReport.WaterfrontCount = 0;
+		OutData.RegionAssetReport.IndustrialCount = 0;
+		for (const FPlacedRegionAsset& Asset : OutData.RegionAssetLayout.Assets)
+		{
+			switch (Asset.Category)
+			{
+			case ERegionAssetCategory::Tree: ++OutData.RegionAssetReport.TreeCount; break;
+			case ERegionAssetCategory::Waterfront: ++OutData.RegionAssetReport.WaterfrontCount; break;
+			case ERegionAssetCategory::Industrial: ++OutData.RegionAssetReport.IndustrialCount; break;
+			default: break;
+			}
+		}
+		OutData.RegionAssetReport.AssetCount = OutData.RegionAssetLayout.Assets.Num();
+
 		if (Input.bGenerateTerrain && OutData.DemRaster.IsValid())
 		{
 			Report(85, EBuildStage::Terrain);

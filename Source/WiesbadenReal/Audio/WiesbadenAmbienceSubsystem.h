@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Audio/WiesbadenAudioPropagation.h"
+#include "Audio/WiesbadenAudioZones.h"
 #include "WiesbadenAmbienceSubsystem.generated.h"
 
 class AActor;
@@ -49,8 +50,10 @@ private:
 	UPROPERTY(Transient) TArray<TObjectPtr<UAudioComponent>> LocalNightBeds;
 	UPROPERTY(Transient) TObjectPtr<AActor> RigActor = nullptr;
 
+	FWbAmbienceMix CurrentZoneMix;
+	FWbAmbienceMix TargetZoneMix;
 	float ProbeAccumulator = 0.0f;
-	float LastAppliedHour = -1.0f;
+	EWbReverbSpace CurrentSpace = EWbReverbSpace::Outdoor;
 	FVector LastSeedLocation = FVector::ZeroVector;
 	bool bWarnedMissingBeds = false;
 };

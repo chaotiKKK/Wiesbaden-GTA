@@ -5,6 +5,7 @@
 #include "UI/WiesbadenOptions.h"
 #include "GameFramework/GameUserSettings.h"
 #include "Vehicles/WiesbadenFootPawn.h"
+#include "Vehicles/WiesbadenHeliGunComponent.h"
 #include "Vehicles/WiesbadenVehicleCameraComponent.h"
 #include "Misc/ConfigCacheIni.h"
 
@@ -15,6 +16,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Core/WiesbadenDevActions.h"
+#include "Core/WiesbadenInputMap.h"
 #include "Core/WiesbadenPlayerController.h"
 #include "Engine/Canvas.h"
 #include "TextureResource.h"
@@ -24,6 +26,7 @@
 #include "NPC/WiesbadenStoreMerchant.h"
 #include "World/WiesbadenDennoShop.h"
 #include "Vehicles/WiesbadenCar.h"
+#include "Vehicles/WiesbadenBugTankPawn.h"
 #include "Vehicles/WiesbadenVehicleControl.h"
 #include "Vehicles/WiesbadenCarLightsComponent.h"
 #include "Vehicles/WiesbadenHelicopter.h"
@@ -31,6 +34,7 @@
 #include "EngineUtils.h"
 #include "GIS/WiesbadenWorldBuilder.h"
 #include "World/WiesbadenCitySubsystem.h"
+#include "NPC/WiesbadenPoliceSubsystem.h"
 #include "UI/WiesbadenMinimap.h"
 #include "UI/WiesbadenProfilOverlay.h"
 #include "Missions/WiesbadenMissionSubsystem.h"
@@ -101,7 +105,21 @@ FString AWiesbadenVehicleHUD::FormatMapDistance(double DistanceCm)
 
 AWiesbadenVehicleHUD::AWiesbadenVehicleHUD()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bTickEvenWhenPaused = true;
+}
+
+void AWiesbadenVehicleHUD::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	if (bHelicopterLessonActive || bHelicopterLessonOverlayVisible)
+	{
+		AWiesbadenHelicopter* Heli = LastHelicopterPawn.Get();
+		if (!Heli || Heli != GetPlayerHelicopter() || Heli->IsDestroyed())
+		{
+			EndHelicopterLesson(FString());
+		}
+	}
 }
 
 float AWiesbadenVehicleHUD::ComputeRpmFill(float Rpm, float IdleRpm, float MaxRpm)
@@ -613,6 +631,25 @@ void AWiesbadenVehicleHUD::DrawHeliInstruments(const AWiesbadenHelicopter& Heli,
 	DrawRect(RpmFrac < 0.5f ? RpmRed : RpmSafe, BarX, PanelY + 108.0f, BarW * RpmFrac, BarH);
 	DrawText(FString::Printf(TEXT("%.0f U/min"), Rpm), DialScale,
 		BarX, PanelY + 124.0f, GEngine->GetSmallFont(), 0.8f);
+
+	// -- Bordgeschaeftzustand -------------------------------------------------
+	// GEMESSEN am 01.10.2026: die Tafel zeigte Vario, Fahrt, Fluglage, Hoehe,
+	// Kurs, MOT, Kollektiv und Rotor - aber kein einziges Feld zum Geschaeft.
+	// In der Flugstunde hielt der Spieler den Abzug, es passierte sichtbar
+	// nichts, und die Tafel sagte nichts dazu. Der Text kommt aus
+	// GetHelicopterGunStatus, damit er ohne Canvas pruefbar ist
+	// (Vehicles.LessonSafety, Abschnitt 5).
+	if (const UWiesbadenHeliGunComponent* Gun = Heli.GetGunComponent())
+	{
+		const FString Status = GetHelicopterGunStatus(
+			Heli.IsLessonDryFireActive(), Heli.IsDryFireReleasePending(),
+			Gun->IsOverheated(), Gun->GetRemainingRounds());
+		const bool bSperrt = Heli.IsLessonDryFireActive() || Heli.IsDryFireReleasePending();
+		DrawText(TEXT("GESCHUETZ"), DialScale, BarX, PanelY + 142.0f,
+			GEngine->GetSmallFont(), 0.8f);
+		DrawText(Status, bSperrt ? IndicatorOn : (Gun->IsOverheated() ? RpmRed : DialText),
+			BarX, PanelY + 154.0f, GEngine->GetSmallFont(), 0.9f);
+	}
 }
 
 void AWiesbadenVehicleHUD::DrawCarCockpitDash(float Width, float Height)
@@ -680,17 +717,20 @@ void AWiesbadenVehicleHUD::DrawHUD()
 
 	// Intro, Titelbildschirm und Hauptmenue liegen ueber allem - auch ueber
 	// dem Pausemenue. Sie nehmen die Eingabe an sich und geben sie erst frei,
-	// wenn der Spieler "Spiel starten" gewaehlt hat. VOR dem Pausemenue, weil
-	// waehrend des Titels nichts zu pausieren gibt.
+	// wenn der Spieler "Spiel starten" gewaehlt hat. VOR der Flugstunde, weil
+	// waehrend des Titels keine Flug-Einladung ueber dem Menue liegen darf.
 	if (UpdateTitleMenu())
 	{
 		DrawTitleScreen(Width, Height);
 		return;
 	}
 
-	// WAS GEZEICHNET WIRD, ENTSCHEIDET DIESELBE GROESSE WIE DIE EINGABE
-	// (UpdatePauseMenu unten). Vorher waren es zwei Schalter, und ein
-	// gezeichnetes Optionsfenster konnte taub sein.
+	UpdateHelicopterLesson();
+	if (bHelicopterLessonOverlayVisible && PauseView == EWbPauseView::Aus)
+	{
+		DrawHelicopterLessonOffer(Width, Height);
+		return;
+	}
 	if (PauseView == EWbPauseView::Optionen)
 	{
 		DrawOptions(Width, Height);
@@ -793,6 +833,24 @@ void AWiesbadenVehicleHUD::DrawHUD()
 		bLegendKeyHeld = bKeyDown;
 	}
 
+	if (const UWiesbadenCitySubsystem* City = GetWorld()->GetSubsystem<UWiesbadenCitySubsystem>())
+	{
+		const UWiesbadenPoliceSubsystem* Police = GetWorld()->GetSubsystem<UWiesbadenPoliceSubsystem>();
+		if (City->GetWantedLevel() > 0)
+		{
+			FString Stars;
+			for (int32 i = 0; i < 6; ++i) { Stars += i < City->GetWantedLevel() ? TEXT("* ") : TEXT(". "); }
+			DrawText(TEXT("FAHNDUNG  ") + Stars, GaugeWarn, Width - 290, 90, GEngine->GetMediumFont(), 1.0f);
+			const FString State = Police && Police->IsPlayerSeen() ? TEXT("POLIZEI HAT SICHTKONTAKT") : TEXT("ENTKOMMEN: AUS DER SICHT BLEIBEN");
+			DrawText(State, DialText, Width - 290, 118, GEngine->GetSmallFont(), .85f);
+			if (Police && Police->GetArrestProgress() > 0)
+			{ DrawText(FString::Printf(TEXT("FESTNAHME %.0f%% - ENTKOMMEN!"), Police->GetArrestProgress() * 100), RpmRed,
+				Width - 290, 140, GEngine->GetSmallFont(), 1.0f); }
+		}
+		else if (Police && Police->WasRecentlyArrested())
+		{ DrawText(TEXT("FESTGENOMMEN - FAHNDUNG BEENDET"), GaugeWarn, Width - 340, 95, GEngine->GetMediumFont(), 1.0f); }
+	}
+
 	// Fahrzeug ueber die Steuernaht-Familie (Kaefer wie ChaosCar); der Heli hat
 	// seine eigene Instrumententafel.
 	IWiesbadenVehicleControl* Vehicle = GetPlayerVehicleControl();
@@ -802,9 +860,18 @@ void AWiesbadenVehicleHUD::DrawHUD()
 	// Legende zeichnen, solange sie eingeschaltet ist. Nach
 	// ControlLegendSeconds blendet sie von selbst aus; F1 holt sie zurueck.
 	// Sie erscheint AUCH zu Fuss - dort gab es bisher gar keine Anzeige.
-	if (bShowControlLegend && ElapsedSeconds <= ControlLegendSeconds)
+	// Die Lektionstafel NICHT bei offenem Pausenmenue: DrawPauseMenu laeuft
+	// weiter oben (Zeile ~706), diese Tafel hier - ohne die Sperre lag sie
+	// sichtbar ueber dem Menue, das selbst "Unterricht pausiert - bestaetigen
+	// beendet die Flugstunde" verspricht. Die Einladung war schon richtig
+	// behandelt (nur bei PauseView == Aus).
+	if (bHelicopterLessonActive && PauseView == EWbPauseView::Aus)
 	{
-		DrawControlLegend(bInVehicle, 40.0f, Height - 210.0f);
+		DrawHelicopterLesson(Width, Height);
+	}
+	else if (bShowControlLegend && ElapsedSeconds <= ControlLegendSeconds)
+	{
+		DrawControlLegend(bInVehicle, 40.0f, Height - (bInVehicle ? 370.0f : 210.0f));
 	}
 	else
 	{
@@ -1102,15 +1169,14 @@ void AWiesbadenVehicleHUD::GetControlLegendLines(bool bInVehicle, TArray<FString
 		OutLines.Add(TEXT("C                   Kamera       M  Karte zeigen/verbergen"));
 		OutLines.Add(TEXT("Gamepad   A Hupe  B Handbremse  X Rueckwaerts  Y Aussteigen"));
 		OutLines.Add(TEXT("          LB RB Blinker   Kreuz hoch Licht   runter Warnblinker"));
-		// Helikopter-Belegung (AWiesbadenHelicopter::ReadInput). Hier standen nur
-		// die Gamepad-Tasten - wer mit Tastatur spielte, sass im Cockpit und kam
-		// nicht hoch, weil das Kollektiv nirgends genannt war. Im Wagen ist die
-		// Leertaste die Handbremse; im Heli hebt sie ab. Genau diese Verwechslung
-		// liess den Ka-52 "nicht fliegbar" wirken.
-		OutLines.Add(TEXT("Helikopter   Leertaste  Kollektiv hoch    Strg  Kollektiv runter"));
-		OutLines.Add(TEXT("             W S  Nicken   A D  Rollen     Q E  Gieren"));
-		OutLines.Add(TEXT("             G   Triebwerk an/aus          F  Aussteigen"));
-		OutLines.Add(TEXT("  Gamepad    RT hoch  LT runter  Sticks Nick/Roll/Gier  Y Triebwerk"));
+		// Die Belegung bleibt hier kompakt; die vollstaendige Tabelle mit
+		// Tastatur- und Gamepad-Spalten steht auf der Steuerungsseite und in
+		// jeder Flugstunden-Uebung.
+		OutLines.Add(TEXT("Heli  W/S Nick, A/D Roll, Q/E Gier  (Pad: LB/RB Gier)"));
+		OutLines.Add(TEXT("      Leertaste/Strg Kollektiv, G/X Motor  (Pad: RT/LT Kollektiv)"));
+		OutLines.Add(TEXT("      Linke Maustaste/A Feuer, L/B Lichter"));
+		OutLines.Add(TEXT("      C/R3 Kamera, Maus/rechter Stick Umsehen"));
+		OutLines.Add(TEXT("      Steuerkreuz hoch/runter Lichter, F/Y Aussteigen"));
 		return;
 	}
 
@@ -1165,6 +1231,407 @@ void AWiesbadenVehicleHUD::DrawControlLegend(bool bInVehicle, float X, float Y)
 	}
 }
 
+FString AWiesbadenVehicleHUD::GetHelicopterLessonStepTitle(int32 Step)
+{
+	const TArray<FWbHelicopterLessonStep>& Steps = WiesbadenHelicopterLesson::Steps();
+	const int32 SafeStep = FMath::Clamp(Step, 0, Steps.Num() - 1);
+	return Steps[SafeStep].Titel;
+}
+
+FString AWiesbadenVehicleHUD::GetHelicopterLessonInstructions(int32 Step)
+{
+	const TArray<FWbHelicopterLessonStep>& Steps = WiesbadenHelicopterLesson::Steps();
+	const int32 SafeStep = FMath::Clamp(Step, 0, Steps.Num() - 1);
+	return Steps[SafeStep].Anleitung;
+}
+
+int32 AWiesbadenVehicleHUD::AdvanceHelicopterLessonStep(int32 Step, bool bSatisfied, bool bSkip)
+{
+	return WiesbadenHelicopterLesson::AdvanceStep(Step, bSatisfied, bSkip);
+}
+
+FString AWiesbadenVehicleHUD::GetHelicopterLessonConfirmKeys(int32 Step)
+{
+	const TArray<FWbHelicopterLessonStep>& Steps = WiesbadenHelicopterLesson::Steps();
+	return (Steps.IsValidIndex(Step) && Steps[Step].bManualConfirm)
+		? FString(TEXT("Enter / A")) : FString();
+}
+
+FString AWiesbadenVehicleHUD::GetHelicopterLessonSkipHint(int32 Step)
+{
+	// Der Abschlussschritt nimmt kein Skip an (bSkip gilt nur fuer die
+	// Uebungen) - die Fusszeile darf es dort also nicht bewerben.
+	return Step < WiesbadenHelicopterLesson::PracticeStepCount
+		? FString(TEXT("Tab / B ueberspringen")) : FString();
+}
+
+bool AWiesbadenVehicleHUD::IsLessonLookStepSatisfied(float LookMagnitude, EWiesbadenVehicleCameraMode CameraMode)
+{
+	return CameraMode != EWiesbadenVehicleCameraMode::Cockpit && LookMagnitude > 0.01f;
+}
+
+void AWiesbadenVehicleHUD::EndHelicopterLesson(const FString& Hinweis,
+	AWiesbadenHelicopter* ZusaetzlichHeli)
+{
+	// Nur der von dieser Lektion gespeicherte Pawn traegt unsere Sperre.
+	// Ein inzwischen uebernommener anderer Heli bleibt unangetastet.
+	AWiesbadenHelicopter* Traeger = LastHelicopterPawn.Get();
+	if (Traeger)
+	{
+		Traeger->SetLessonDryFireActive(false);
+	}
+	if (ZusaetzlichHeli && ZusaetzlichHeli != Traeger)
+	{
+		ZusaetzlichHeli->SetLessonDryFireActive(false);
+	}
+
+	bHelicopterLessonActive = false;
+	bHelicopterLessonOverlayVisible = false;
+	bHelicopterLessonDeferredThisSession = true;
+	HelicopterLessonStep = 0;
+	HelicopterLessonStableTime = 0.0f;
+	if (!Hinweis.IsEmpty())
+	{
+		ShowTransientHint(Hinweis);
+	}
+}
+
+void AWiesbadenVehicleHUD::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// Letzte Gelegenheit, die Feuersperre zu loesen. EndHelicopterLesson
+	// nutzt LastHelicopterPawn bewusst fuer den Fall, dass der Spieler den
+	// Hubschrauber schon verlassen hat und der HUD trotzdem abgeschaltet wird.
+	EndHelicopterLesson(FString(), LastHelicopterPawn.Get());
+	Super::EndPlay(EndPlayReason);
+}
+
+void AWiesbadenVehicleHUD::RespondToHelicopterLessonOffer(bool bStart)
+{
+	bHelicopterLessonOverlayVisible = false;
+	if (!bStart)
+	{
+		EndHelicopterLesson(FString());
+	}
+	if (bStart)
+	{
+		StartHelicopterLesson();
+	}
+	else
+	{
+		bHelicopterLessonDeferredThisSession = true;
+		ShowTransientHint(TEXT("Flugstunde spaeter im Pausenmenue unter Steuerung starten."));
+	}
+}
+
+void AWiesbadenVehicleHUD::StartHelicopterLesson()
+{
+	AWiesbadenHelicopter* Heli = GetPlayerHelicopter();
+	if (!Heli || Heli->IsDestroyed())
+	{
+		ShowTransientHint(TEXT("Zum Starten der Flugstunde zuerst einen flugfaehigen Helikopter besteigen."));
+		return;
+	}
+
+	LastHelicopterPawn = Heli;
+	bHelicopterLessonOffered = true;
+	bHelicopterLessonDeferredThisSession = false;
+	bHelicopterLessonOverlayVisible = false;
+	bHelicopterLessonActive = true;
+	HelicopterLessonStep = 0;
+	HelicopterLessonStableTime = 0.0f;
+	bHelicopterLessonCollectiveUp = false;
+	bHelicopterLessonCollectiveDown = false;
+	bHelicopterLessonEngineChanged = false;
+	bHelicopterLessonFireObserved = false;
+	bHelicopterLessonStartEngineState = Heli->IsEngineRunning();
+	bHelicopterLessonStartSearchlightState =
+		Heli->GetLightRig() && Heli->GetLightRig()->AreSearchlightsOn();
+	bHelicopterLessonStartLandingLightState =
+		Heli->GetLightRig() && Heli->GetLightRig()->IsLandingLightOn();
+	HelicopterLessonStartCamera = Heli->GetCameraMode();
+	HelicopterLessonInitialShots = Heli->GetGunComponent()
+		? Heli->GetGunComponent()->GetShotsFired() : 0;
+	Heli->SetLessonDryFireActive(true);
+	ShowTransientHint(TEXT("Flugstunde gestartet - mit Tab/B ueberspringen, Esc pausieren."));
+}
+
+bool AWiesbadenVehicleHUD::IsHelicopterLessonStepSatisfied(const AWiesbadenHelicopter& Heli) const
+{
+	const TArray<FWbHelicopterLessonStep>& Steps = WiesbadenHelicopterLesson::Steps();
+	if (!Steps.IsValidIndex(HelicopterLessonStep))
+	{
+		return false;
+	}
+	const FWbHelicopterLessonStep& Step = Steps[HelicopterLessonStep];
+	const APlayerController* PC = GetOwningPlayerController();
+	switch (HelicopterLessonStep)
+	{
+	case 0:
+		return bHelicopterLessonCollectiveUp && bHelicopterLessonCollectiveDown;
+	case 1:
+		return HelicopterLessonStableTime >= 0.12f;
+	case 2:
+		return HelicopterLessonStableTime >= 0.12f;
+	case 3:
+		return PC && WiesbadenInputMap::IsHelicopterActionDown(PC, EWiesbadenHeliAction::Yaw);
+	case 4:
+		return Heli.GetCameraMode() != HelicopterLessonStartCamera;
+	case 5:
+		return Heli.GetVehicleCamera()
+			&& IsLessonLookStepSatisfied(
+				Heli.GetVehicleCamera()->GetLastLookInputMagnitude(), Heli.GetCameraMode());
+	case 6:
+		return Heli.GetLightRig()
+			&& Heli.GetLightRig()->AreSearchlightsOn() != bHelicopterLessonStartSearchlightState;
+	case 7:
+		return Heli.GetLightRig()
+			&& Heli.GetLightRig()->IsLandingLightOn() != bHelicopterLessonStartLandingLightState;
+	case 8:
+		return bHelicopterLessonEngineChanged
+			&& Heli.IsEngineRunning() == bHelicopterLessonStartEngineState;
+	case 9:
+		return bHelicopterLessonFireObserved && Heli.GetGunComponent()
+			&& Heli.GetGunComponent()->GetShotsFired() == HelicopterLessonInitialShots;
+	case WiesbadenHelicopterLesson::PracticeStepCount:
+		return PC && (PC->WasInputKeyJustPressed(EKeys::Enter)
+			|| PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Bottom));
+	default:
+		return Step.bManualConfirm;
+	}
+}
+
+void AWiesbadenVehicleHUD::UpdateHelicopterLesson()
+{
+	APlayerController* PC = GetOwningPlayerController();
+	if (!PC || !GetWorld())
+	{
+		return;
+	}
+	if (!bHelicopterLessonPreferenceLoaded)
+	{
+		bHelicopterLessonCompleted = false;
+		if (GConfig)
+		{
+			GConfig->GetBool(TEXT("WiesbadenReal.Optionen"),
+				TEXT("HelikopterFlugstundeAbgeschlossen"), bHelicopterLessonCompleted,
+				GGameUserSettingsIni);
+		}
+		bHelicopterLessonPreferenceLoaded = true;
+	}
+
+	AWiesbadenHelicopter* Heli = GetPlayerHelicopter();
+	if (LastHelicopterPawn.Get() != Heli)
+	{
+		if (ShouldLessonBreakOnPawnChange(bHelicopterLessonActive, bHelicopterLessonOverlayVisible))
+		{
+			// Der Abzug kann am alten Hubschrauber haengen, den der Spieler
+			// gerade verlassen hat - deshalb wird er ausdruecklich mitgegeben.
+			EndHelicopterLesson(FString(), LastHelicopterPawn.Get());
+		}
+		LastHelicopterPawn = Heli;
+		if (Heli && !bHelicopterLessonCompleted
+			&& !bHelicopterLessonDeferredThisSession && !bHelicopterLessonOffered)
+		{
+			bHelicopterLessonOffered = true;
+			bHelicopterLessonOverlayVisible = true;
+			// Feuerfreiheit von der Einladung an, nicht erst ab Annahme: die
+			// Pad-Taste zum Annehmen ist zugleich der Abzug (Gamepad_FaceButton_Bottom).
+			Heli->SetLessonDryFireActive(true);
+		}
+	}
+
+	// Absturz beendet die Flugstunde. Der Pawnwechsel greift hier nicht: der
+	// Spieler sitzt im selben Actor weiter, und bDestroyed setzt TakeDamage -
+	// nicht UnPossessed. Ohne diesen Zweig wartete die Lektion auf Schritte,
+	// die nicht mehr erfuellbar sind, und die Feuersperre blieb bis zum
+	// Aussteigen stehen (Beweis: Vehicles.LessonSafety, Abschnitt 6).
+	if (ShouldLessonBreakOnHeliLoss(bHelicopterLessonActive, bHelicopterLessonOverlayVisible,
+		Heli != nullptr && !Heli->IsDestroyed()))
+	{
+		EndHelicopterLesson(TEXT("Flugstunde beendet - der Hubschrauber ging verloren."),
+			LastHelicopterPawn.Get());
+	}
+
+	if (bHelicopterLessonOverlayVisible)
+	{
+		if (PauseView != EWbPauseView::Aus)
+		{
+			return;
+		}
+		const bool bAccept = PC->WasInputKeyJustPressed(EKeys::Enter)
+			|| PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Bottom);
+		const bool bDecline = PC->WasInputKeyJustPressed(EKeys::N)
+			|| PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Right);
+		if (bAccept)
+		{
+			RespondToHelicopterLessonOffer(true);
+		}
+		else if (bDecline)
+		{
+			RespondToHelicopterLessonOffer(false);
+		}
+		return;
+	}
+
+	if (!bHelicopterLessonActive || PauseView != EWbPauseView::Aus)
+	{
+		return;
+	}
+	if (!Heli)
+	{
+		return;
+	}
+	if (WiesbadenInputMap::IsHelicopterActionDown(PC, EWiesbadenHeliAction::Exit))
+	{
+		EndHelicopterLesson(TEXT("Flugstunde abgebrochen (Aussteigen)."), Heli);
+		return;
+	}
+
+	const bool bSkip = HelicopterLessonStep < WiesbadenHelicopterLesson::PracticeStepCount
+		&& (PC->WasInputKeyJustPressed(EKeys::Tab)
+			|| PC->WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Right));
+	const TArray<FWbHelicopterLessonStep>& Steps = WiesbadenHelicopterLesson::Steps();
+	if (!Steps.IsValidIndex(HelicopterLessonStep))
+	{
+		return;
+	}
+
+	const FWbHelicopterLessonStep& Step = Steps[HelicopterLessonStep];
+	const bool bActionDown = Step.Action != EWiesbadenHeliAction::MAX
+		&& WiesbadenInputMap::IsHelicopterActionDown(PC, Step.Action);
+	const bool bRelatedDown = Step.RelatedAction != EWiesbadenHeliAction::MAX
+		&& WiesbadenInputMap::IsHelicopterActionDown(PC, Step.RelatedAction);
+	if (HelicopterLessonStep == 0)
+	{
+		bHelicopterLessonCollectiveUp |= bActionDown;
+		bHelicopterLessonCollectiveDown |= bRelatedDown;
+	}
+	if (HelicopterLessonStep == 8 && bActionDown)
+	{
+		bHelicopterLessonEngineChanged |=
+			Heli->IsEngineRunning() != bHelicopterLessonStartEngineState;
+	}
+	if (HelicopterLessonStep == 9 && bActionDown)
+	{
+		bHelicopterLessonFireObserved = true;
+	}
+	if (HelicopterLessonStep == 1 || HelicopterLessonStep == 2)
+	{
+		HelicopterLessonStableTime = bActionDown
+			? HelicopterLessonStableTime + GetWorld()->GetDeltaSeconds() : 0.0f;
+	}
+
+	const bool bSatisfied = IsHelicopterLessonStepSatisfied(*Heli);
+	const bool bFinishConfirmed = HelicopterLessonStep == WiesbadenHelicopterLesson::PracticeStepCount
+		&& bSatisfied;
+	const int32 PreviousStep = HelicopterLessonStep;
+	HelicopterLessonStep = WiesbadenHelicopterLesson::AdvanceStep(
+		HelicopterLessonStep, bSatisfied, bSkip);
+	if (HelicopterLessonStep != PreviousStep)
+	{
+		HelicopterLessonStableTime = 0.0f;
+		if (HelicopterLessonStep == 8)
+		{
+			bHelicopterLessonEngineChanged = false;
+			bHelicopterLessonStartEngineState = Heli->IsEngineRunning();
+		}
+		HelicopterLessonStartCamera = Heli->GetCameraMode();
+		bHelicopterLessonStartSearchlightState = Heli->GetLightRig()
+			&& Heli->GetLightRig()->AreSearchlightsOn();
+		bHelicopterLessonStartLandingLightState = Heli->GetLightRig()
+			&& Heli->GetLightRig()->IsLandingLightOn();
+		if (bFinishConfirmed)
+		{
+			EndHelicopterLesson(FString());
+			bHelicopterLessonCompleted = true;
+			SaveHelicopterLessonCompletion();
+			ShowTransientHint(TEXT("Flugstunde abgeschlossen. Im Pausenmenue jederzeit wiederholbar."));
+		}
+	}
+}
+
+void AWiesbadenVehicleHUD::DrawHelicopterLesson(float Width, float Height)
+{
+	const TArray<FWbHelicopterLessonStep>& Steps = WiesbadenHelicopterLesson::Steps();
+	if (!Steps.IsValidIndex(HelicopterLessonStep))
+	{
+		return;
+	}
+	const FWbHelicopterLessonStep& Step = Steps[HelicopterLessonStep];
+	constexpr float BoxW = 700.0f;
+	constexpr float BoxH = 164.0f;
+	const float X = FMath::Max(20.0f, (Width - BoxW) * 0.5f);
+	const float Y = 36.0f;
+	DrawRect(FLinearColor(0.02f, 0.025f, 0.035f, 0.88f), X, Y, BoxW, BoxH);
+	DrawLine(X, Y, X + BoxW, Y, PanelEdge, 3.0f);
+	DrawText(FString::Printf(TEXT("FLUGSTUNDE  %02d / %02d    %s"),
+		FMath::Min(HelicopterLessonStep + 1, WiesbadenHelicopterLesson::StepCount),
+		WiesbadenHelicopterLesson::StepCount, Step.Titel),
+		DialText, X + 18.0f, Y + 14.0f, GEngine->GetMediumFont(), 1.0f);
+	DrawText(Step.Anleitung, DialScale, X + 18.0f, Y + 50.0f,
+		GEngine->GetSmallFont(), 0.95f);
+
+	const FString Bestaetigung = GetHelicopterLessonConfirmKeys(HelicopterLessonStep);
+	const FWiesbadenHeliBinding* Primary = nullptr;
+	const FWiesbadenHeliBinding* Related = nullptr;
+	for (const FWiesbadenHeliBinding& Binding : WiesbadenInputMap::HelicopterBindings())
+	{
+		if (Binding.Action == Step.Action) { Primary = &Binding; }
+		if (Binding.Action == Step.RelatedAction) { Related = &Binding; }
+	}
+	// Im Abschlussschritt wird mit Enter/A bestaetigt - dort waere eine
+	// Bindingspalte "F / Y" (Exit) eine falsche Zusage.
+	const FString Keyboard = !Bestaetigung.IsEmpty()
+		? Bestaetigung
+		: (Primary
+			? FString::Printf(TEXT("%s  %s"), Primary->Tastatur, Related ? Related->Tastatur : TEXT(""))
+			: FString(TEXT("Enter bestaetigt")));
+	const FString Gamepad = !Bestaetigung.IsEmpty()
+		? Bestaetigung
+		: (Primary
+			? FString::Printf(TEXT("%s  %s"), Primary->Gamepad, Related ? Related->Gamepad : TEXT(""))
+			: FString(TEXT("A bestaetigt")));
+	DrawText(TEXT("TASTATUR"), DialScale, X + 18.0f, Y + 88.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(Keyboard, IndicatorOn, X + 18.0f, Y + 108.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(TEXT("GAMEPAD"), DialScale, X + 360.0f, Y + 88.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(Gamepad, IndicatorOn, X + 360.0f, Y + 108.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(FString::Printf(TEXT("%s    Esc pausiert - Flugstunde im Pausemenue abbrechen"),
+		*GetHelicopterLessonSkipHint(HelicopterLessonStep)),
+		TellTaleOff, X + 18.0f, Y + 140.0f, GEngine->GetSmallFont(), 0.9f);
+}
+
+void AWiesbadenVehicleHUD::DrawHelicopterLessonOffer(float Width, float Height)
+{
+	constexpr float BoxW = 520.0f;
+	constexpr float BoxH = 170.0f;
+	const float X = (Width - BoxW) * 0.5f;
+	const float Y = (Height - BoxH) * 0.5f;
+	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.62f), 0.0f, 0.0f, Width, Height);
+	DrawRect(DialBackground, X, Y, BoxW, BoxH);
+	DrawLine(X, Y, X + BoxW, Y, PanelEdge, 3.0f);
+	DrawText(TEXT("HELIKOPTER-FLUGSTUNDE"), IndicatorOn,
+		X + 22.0f, Y + 20.0f, GEngine->GetLargeFont(), 1.0f);
+	DrawText(TEXT("Gefuehrte Uebungen im freien Flug; Tastatur und Gamepad nebeneinander."),
+		DialText, X + 22.0f, Y + 66.0f, GEngine->GetSmallFont(), 1.0f);
+	DrawText(TEXT("Feuer wird nur trocken geuebt: keine Schuesse, kein Schaden, keine Munition."),
+		DialScale, X + 22.0f, Y + 92.0f, GEngine->GetSmallFont(), 0.95f);
+	DrawText(TEXT("Enter / A: starten     N / B: spaeter"), IndicatorOn,
+		X + 22.0f, Y + 128.0f, GEngine->GetMediumFont(), 0.95f);
+}
+
+void AWiesbadenVehicleHUD::SaveHelicopterLessonCompletion()
+{
+	if (!GConfig)
+	{
+		return;
+	}
+	GConfig->SetBool(TEXT("WiesbadenReal.Optionen"),
+		TEXT("HelikopterFlugstundeAbgeschlossen"), bHelicopterLessonCompleted,
+		GGameUserSettingsIni);
+	GConfig->Flush(false, GGameUserSettingsIni);
+	bHelicopterLessonPreferenceLoaded = true;
+}
+
 void AWiesbadenVehicleHUD::GetPauseMenuEntries(TArray<FString>& OutEntries)
 {
 	OutEntries.Reset();
@@ -1179,6 +1646,7 @@ void AWiesbadenVehicleHUD::GetPauseMenuEntries(TArray<FString>& OutEntries)
 	OutEntries.Add(TEXT("Entwickler: zum Garten Nerotal 48"));
 	OutEntries.Add(TEXT("Entwickler: Fahrzeug aufrichten"));
 	OutEntries.Add(TEXT("Entwickler: Verkehr an/aus"));
+	OutEntries.Add(TEXT("Helikopter-Flugstunde starten / wiederholen"));
 	OutEntries.Add(TEXT("Spiel beenden"));
 }
 
@@ -1340,9 +1808,7 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 		}
 		Unpause();
 		break;
-	}
-
-	case 8:
+	}	case 8:
 		if (UWiesbadenCitySubsystem* City = HudWorld->GetSubsystem<UWiesbadenCitySubsystem>())
 		{
 			// Verkehr aus: die schnellste Art zu pruefen, ob ein Ruckler vom
@@ -1354,8 +1820,27 @@ void AWiesbadenVehicleHUD::ActivatePauseEntry(int32 Index)
 		break;
 
 	case 9:
+		if (bHelicopterLessonActive)
+		{
+			EndHelicopterLesson(TEXT("Flugstunde beendet."), LastHelicopterPawn.Get());
+			Unpause();
+		}
+		else if (GetPlayerHelicopter())
+		{
+			Unpause();
+			StartHelicopterLesson();
+		}
+		else
+		{
+			ShowTransientHint(TEXT("Zum Starten der Flugstunde zuerst den Helikopter besteigen."));
+			Unpause();
+		}
+		break;
+
+	case 10:
 		FPlatformMisc::RequestExit(false);
 		break;
+
 
 	default:
 		break;
@@ -1831,7 +2316,7 @@ void AWiesbadenVehicleHUD::DrawPauseMenu(float Width, float Height)
 
 	constexpr float LineHeight = 26.0f;
 	constexpr float BoxWidth = 520.0f;
-	const float BoxHeight = Entries.Num() * LineHeight + 96.0f;
+	const float BoxHeight = Entries.Num() * LineHeight + 112.0f;
 
 	const float X = (Width - BoxWidth) * 0.5f;
 	const float Y = (Height - BoxHeight) * 0.5f;
@@ -1842,10 +2327,15 @@ void AWiesbadenVehicleHUD::DrawPauseMenu(float Width, float Height)
 
 	DrawText(TEXT("PAUSE"), DialText, X + 24.0f, Y + 20.0f, GEngine->GetLargeFont(), 1.0f);
 
+	HelicopterLessonMenuIndex = Entries.Num() - 2;
 	for (int32 Index = 0; Index < Entries.Num(); ++Index)
 	{
-		const bool bSelected = (Index == PauseSelection);
-		const FString Line = (bSelected ? TEXT("> ") : TEXT("  ")) + Entries[Index];
+		const bool bSelected = (Index == PauseSelection);		FString Label = Entries[Index];
+		if (bHelicopterLessonActive && Index == HelicopterLessonMenuIndex)
+		{
+			Label = TEXT("Flugstunde abbrechen");
+		}
+		const FString Line = (bSelected ? TEXT("> ") : TEXT("  ")) + Label;
 		DrawText(Line, bSelected ? IndicatorOn : DialScale,
 			X + 24.0f, Y + 60.0f + Index * LineHeight,
 			GEngine->GetMediumFont(), 1.0f);
@@ -1854,6 +2344,13 @@ void AWiesbadenVehicleHUD::DrawPauseMenu(float Width, float Height)
 	DrawText(TEXT("Pfeile waehlen   Eingabe bestaetigen   Esc schliesst"),
 		TellTaleOff, X + 24.0f, Y + BoxHeight - 24.0f, GEngine->GetSmallFont(), 1.0f);
 
+	if (bHelicopterLessonActive && HelicopterLessonMenuIndex >= 0
+		&& PauseSelection == HelicopterLessonMenuIndex)
+	{
+		DrawText(TEXT("Unterricht pausiert - bestaetigen beendet die Flugstunde"),
+			GaugeWarn, X + 24.0f, Y + BoxHeight - 42.0f,
+			GEngine->GetSmallFont(), 1.0f);
+	}
 	if (PauseSelection == 3)
 	{
 		DrawText(TEXT("Karte im Spiel: M (Tastatur) / Gamepad-Start"),
@@ -2436,6 +2933,12 @@ void AWiesbadenVehicleHUD::LoadPersistentOptions()
 	{
 		bShowControlLegend = bLegende;
 	}
+	bHelicopterLessonCompleted = false;
+	GConfig->GetBool(TEXT("WiesbadenReal.Optionen"),
+		TEXT("HelikopterFlugstundeAbgeschlossen"), bHelicopterLessonCompleted,
+		GGameUserSettingsIni);
+	bHelicopterLessonPreferenceLoaded = true;
+
 
 	// Die Debug-Schalter stehen VOR dem Stadt-Block: sie gehoeren nicht zur
 	// Stadt, und wer sie gesetzt hat, will sie auch ohne geladene Stadt
@@ -3749,19 +4252,7 @@ void AWiesbadenVehicleHUD::DrawVehicleBanner(float CenterX, float Y)
 		LastBannerPawn = Cur;
 		if (Prev != nullptr && Cur != nullptr)
 		{
-			if (Cast<AWiesbadenHelicopter>(Cur))
-			{
-				VehicleBannerText = TEXT("Eingestiegen: Helikopter");
-			}
-			else if (Cast<IWiesbadenVehicleControl>(Cur))
-			{
-				// Ueber die Steuernaht - erfasst Kaefer UND ChaosCar.
-				VehicleBannerText = TEXT("Eingestiegen: Fahrzeug");
-			}
-			else
-			{
-				VehicleBannerText = TEXT("Ausgestiegen - zu Fuss");
-			}
+			VehicleBannerText = ResolveVehicleTransitionBanner(Cur);
 			VehicleBannerAge = 0.0f;
 		}
 	}
@@ -3799,6 +4290,28 @@ void AWiesbadenVehicleHUD::DrawVehicleBanner(float CenterX, float Y)
 	DrawRect(Bg, CenterX - TextWidth * 0.5f - PadX, Y - PadY,
 		TextWidth + PadX * 2.0f, TextHeight + PadY * 2.0f);
 	DrawText(VehicleBannerText, Fg, CenterX - TextWidth * 0.5f, Y, Font, 1.0f);
+}
+
+FString AWiesbadenVehicleHUD::ResolveVehicleTransitionBanner(const APawn* CurrentPawn)
+{
+	if (!CurrentPawn)
+	{
+		return FString();
+	}
+	if (Cast<AWiesbadenHelicopter>(CurrentPawn))
+	{
+		return TEXT("Eingestiegen: Helikopter");
+	}
+	if (Cast<AWiesbadenBugTankPawn>(CurrentPawn))
+	{
+		return TEXT("Eingestiegen: BugTank");
+	}
+	if (Cast<IWiesbadenVehicleControl>(CurrentPawn))
+	{
+		// Ueber die Steuernaht - erfasst Kaefer UND ChaosCar.
+		return TEXT("Eingestiegen: Fahrzeug");
+	}
+	return TEXT("Ausgestiegen - zu Fuss");
 }
 
 namespace
@@ -3996,4 +4509,3 @@ bool AWiesbadenVehicleHUD::ShouldWithdrawFirstRunPrompt(
 	}
 	return WbPlanarDistanceCm(PlayerPos, FirstRun.ArmWorldPos) > 20000.0;
 }
-

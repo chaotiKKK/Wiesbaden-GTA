@@ -8,6 +8,7 @@
 #include "BuildingCollisionSpawnerComponent.generated.h"
 
 class UBoxComponent;
+class UPrimitiveComponent;
 struct FRoadNetwork;
 
 /**
@@ -76,6 +77,13 @@ public:
 	/** Setzt die Koerper auf die Gebaeude um den Beobachter um. */
 	void UpdateAround(const FVector& Observer);
 
+#if UE_BUILD_DEVELOPMENT
+	/** Beschreibt geometrisch getroffene Pool-Boxen und den vorigen Kontaktkoerper. */
+	FString DescribeProbeTrace(const FVector& Start, const FVector& End,
+		const UPrimitiveComponent* HitComponent,
+		const UPrimitiveComponent* PreviousContactComponent) const;
+#endif
+
 	/** Anzahl aktuell belegter Koerper - Kennzahl fuer die Bilanz. */
 	int32 GetActiveBodyCount() const { return ActiveBodyCount; }
 
@@ -110,6 +118,11 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<FGeneratedBuilding> Buildings;
+
+#if UE_BUILD_DEVELOPMENT
+	/** Gebaeudeindex pro Pool-Slot aus dem letzten UpdateAround-Aufruf. */
+	TArray<int32> ProbeBuildingIndices;
+#endif
 
 	int32 ActiveBodyCount = 0;
 	int32 ClippedCount = 0;

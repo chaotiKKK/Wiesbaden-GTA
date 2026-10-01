@@ -11,6 +11,7 @@
 #include "World/RegionAssetSpawnerComponent.h"
 #include "World/RoadFurnitureSpawnerComponent.h"
 #include "World/PedestrianSpawnerComponent.h"
+#include "Audio/WiesbadenFootstepPool.h"
 #include "World/TrafficVehicleSpawnerComponent.h"
 
 AWiesbadenCityActor::AWiesbadenCityActor()
@@ -42,6 +43,8 @@ AWiesbadenCityActor::AWiesbadenCityActor()
 
 	PedestrianSpawner = CreateDefaultSubobject<UPedestrianSpawnerComponent>(TEXT("PedestrianSpawner"));
 	PedestrianSpawner->SetupAttachment(Root);
+
+	PedestrianSteps = MakeUnique<FWiesbadenFootstepPool>();
 }
 
 void AWiesbadenCityActor::UpdateTrafficVehicles(
@@ -68,6 +71,15 @@ void AWiesbadenCityActor::UpdatePedestrians(const TArray<FPlacedPedestrian>& Pla
 	if (PedestrianSpawner)
 	{
 		PedestrianSpawner->UpdateInstances(Placed);
+	}
+
+	// Schritte aus der StridePhase. Der Spawner ZEICHNET die Figuren, der
+	// Pool HOERT sie - die Aufteilung ist die ISM-Realitaet: eine
+	// AudioComponent je Figur gibt es nicht, und die Figuren werden gepoolt.
+	// Kein Zeitargument: die StridePhase ist die Uhr (siehe Pool-Header).
+	if (PedestrianSteps.IsValid())
+	{
+		PedestrianSteps->NotePedestrians(GetWorld(), Placed);
 	}
 }
 
@@ -265,13 +277,26 @@ UMaterialInterface* AWiesbadenCityActor::ResolveRoadMaterial(ERoadMeshChannel Ch
 	switch (Channel)
 	{
 	case ERoadMeshChannel::Sidewalk:
-	case ERoadMeshChannel::Crossing:
 		return SidewalkMaterial ? SidewalkMaterial : RoadMaterial;
-	case ERoadMeshChannel::Carriageway:
-	case ERoadMeshChannel::Kerb:
-	case ERoadMeshChannel::Intersection:
 	case ERoadMeshChannel::LaneMarking:
+	case ERoadMeshChannel::Crossing:
+	{
+		UMaterialInterface* Paint = LoadObject<UMaterialInterface>(nullptr,
+			TEXT("/Game/Materials/City/M_WbLaneMarking.M_WbLaneMarking"));
+		return Paint ? Paint : RoadMaterial;
+	}
+	case ERoadMeshChannel::BikeLaneSurface:
+	{
+		UMaterialInterface* Paint = LoadObject<UMaterialInterface>(nullptr,
+			TEXT("/Game/Materials/City/M_WbBikeLaneSurface.M_WbBikeLaneSurface"));
+		return Paint ? Paint : RoadMaterial;
+	}
 	case ERoadMeshChannel::Cycleway:
+	{
+		UMaterialInterface* Surface = LoadObject<UMaterialInterface>(nullptr,
+			TEXT("/Game/Materials/City/M_WbCycleway.M_WbCycleway"));
+		return Surface ? Surface : RoadMaterial;
+	}
 	default:
 		return RoadMaterial;
 	}

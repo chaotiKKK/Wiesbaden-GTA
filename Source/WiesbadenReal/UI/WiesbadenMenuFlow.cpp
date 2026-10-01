@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 
 #include "UI/WiesbadenMenuFlow.h"
+#include "Core/WiesbadenInputMap.h"
 
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
@@ -287,10 +288,11 @@ bool WiesbadenMenu::ShouldShowIntro(bool bEinstellungAn, const FString& Kommando
 	{
 		return false;
 	}
-	// In einem Automationslauf waere ein wartender Titelbildschirm ein
-	// haengender Rauchtest: der wartet auf Belege aus dem laufenden Spiel.
+	// In einem Automationslauf oder einem expliziten BugTank-Start waere ein
+	// wartender Titelbildschirm ein Hindernis fuer den angeforderten Lauf.
 	static const TCHAR* Verbote[] = {
-		TEXT("-unattended"), TEXT("-nullrhi"), TEXT("-ExecCmds"), TEXT("-WbKeinIntro") };
+		TEXT("-unattended"), TEXT("-nullrhi"), TEXT("-ExecCmds"),
+		TEXT("-WbKeinIntro"), TEXT("-WbBugTank") };
 	for (const TCHAR* Verbot : Verbote)
 	{
 		if (Kommandozeile.Contains(Verbot, ESearchCase::IgnoreCase))
@@ -365,14 +367,10 @@ void WiesbadenMenu::ControlBindings(
 		break;
 
 	case EWbControlContext::Helikopter:
-		Add(TEXT("Kollektiv rauf"),     TEXT("Leertaste / Linke Umschalt"), TEXT("Rechter Ausloeser"));
-		Add(TEXT("Kollektiv runter"),   TEXT("Linke Strg"),       TEXT("Linker Ausloeser"));
-		Add(TEXT("Nick vorn"),          TEXT("W / S"),            TEXT("Linker Stick oben/runter"));
-		Add(TEXT("Rollen"),             TEXT("A / D"),            TEXT("Linker Stick links/rechts"));
-		Add(TEXT("Gieren"),             TEXT("E / Q"),            TEXT("Rechter Stick links/rechts"));
-		// RB, weil Y hier das Ein- und Aussteigen ist (siehe GameMode).
-		Add(TEXT("Motor an/aus"),       TEXT("G"),                TEXT("RB"));
-		Add(TEXT("Ein-/Aussteigen"),    TEXT("F"),                TEXT("Y"));
+		for (const FWiesbadenHeliBinding& Binding : WiesbadenInputMap::HelicopterBindings())
+		{
+			Add(Binding.Beschreibung, Binding.Tastatur, Binding.Gamepad);
+		}
 		break;
 
 	case EWbControlContext::Karte:

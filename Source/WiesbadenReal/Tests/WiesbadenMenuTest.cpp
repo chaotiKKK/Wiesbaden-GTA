@@ -4,6 +4,7 @@
 
 #include "UI/WiesbadenMenuFlow.h"
 #include "UI/WiesbadenMinimap.h"
+#include "Core/WiesbadenInputMap.h"
 
 namespace
 {
@@ -374,6 +375,8 @@ bool FWiesbadenMenuIntroTest::RunTest(const FString& Parameters)
 		WiesbadenMenu::ShouldShowIntro(true, TEXT("-ExecCmds=\"WbHealth\"")));
 	TestFalse(TEXT("-WbKeinIntro unterdrueckt das Intro"),
 		WiesbadenMenu::ShouldShowIntro(true, TEXT("-WbKeinIntro")));
+	TestFalse(TEXT("-WbBugTank startet ohne Titelmenue im BugTank"),
+		WiesbadenMenu::ShouldShowIntro(true, TEXT("-WbBugTank")));
 	// Auch mitten im Text, nicht nur am Anfang.
 	TestFalse(TEXT("auch als Teil eines anderen Schalters"),
 		WiesbadenMenu::ShouldShowIntro(true, TEXT("-Game -nullrhi -nosplash")));
@@ -433,8 +436,7 @@ bool FWiesbadenMenuBelegungTest::RunTest(const FString& Parameters)
 			// Frage lautet also erst "stand er schon da?".
 			const bool bTasteFrei = !GeseheneTasten.Contains(Zeile.Taste);
 			TestTrue(TEXT("keine Tastaturtaste doppelt im selben Kontext"), bTasteFrei);
-			GeseheneTasten.Add(Zeile.Taste);
-			if (!bTasteFrei)
+			GeseheneTasten.Add(Zeile.Taste);			if (!bTasteFrei)
 			{
 				AddError(FString::Printf(TEXT("Taste '%s' steht zweimal da (Kontext %d, Aktion '%s')."),
 					*Zeile.Taste, Index, *Zeile.Aktion));
@@ -478,6 +480,35 @@ bool FWiesbadenMenuBelegungTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// Die Helikopterseite ist direkt aus der InputMap abgeleitet und muss
+	// dieselben eindeutigen Controllerbelegungen zeigen wie die Flugstunde.
+	TArray<FWbControlBinding> HeliRows;
+	WiesbadenMenu::ControlBindings(EWbControlContext::Helikopter, HeliRows);
+	TestEqual(TEXT("eine sichtbare Zeile pro Heli-Steuerung"),
+		HeliRows.Num(), WiesbadenInputMap::HelicopterBindings().Num());
+	TestTrue(TEXT("Gamepad-Y ist Aussteigen"),
+		HeliRows.Last().Pad == TEXT("Y"));
+	TestTrue(TEXT("RT bleibt Kollektiv statt Feuer"),
+		HeliRows.ContainsByPredicate([](const FWbControlBinding& Row)
+		{
+			return Row.Aktion == TEXT("Kollektiv rauf") && Row.Pad == TEXT("RT");
+		}));
+	TestTrue(TEXT("Feuer ist linke Maustaste/A"),
+		HeliRows.ContainsByPredicate([](const FWbControlBinding& Row)
+		{
+			return Row.Aktion.Contains(TEXT("Bordgeschuetz"))
+				&& Row.Taste == TEXT("Linke Maustaste") && Row.Pad == TEXT("A");
+		}));
+	TestTrue(TEXT("rechter Stick ist Umsehen, nicht Gieren"),
+		HeliRows.ContainsByPredicate([](const FWbControlBinding& Row)
+		{
+			return Row.Aktion == TEXT("Kamera umsehen") && Row.Pad == TEXT("Rechter Stick");
+		}));
+	TestTrue(TEXT("Triebwerk ist G/X"),
+		HeliRows.ContainsByPredicate([](const FWbControlBinding& Row)
+		{
+			return Row.Aktion == TEXT("Triebwerk") && Row.Taste == TEXT("G") && Row.Pad == TEXT("X");
+		}));
 	return true;
 }
 

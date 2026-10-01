@@ -99,3 +99,24 @@ bool FAudioZonesSurfaceTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAudioAmbienceZoneTest,
+	"WiesbadenReal.Audio.Ambience.Zones",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+bool FAudioAmbienceZoneTest::RunTest(const FString& Parameters)
+{
+	using namespace WiesbadenAudioZones;
+	TestEqual(TEXT("leere Daten fallen auf Wohngebiet"), ClassifyZone(0, 0, 0), EWbAudioZone::Residential);
+	TestEqual(TEXT("viele Baeume ergeben ruhige Zone"), ClassifyZone(12, 0, 4), EWbAudioZone::Quiet);
+	TestEqual(TEXT("einzelner Strassenbaum ergibt keinen Wald"), ClassifyZone(1, 0, 0), EWbAudioZone::Residential);
+	TestEqual(TEXT("Gewerbe ergibt Innenstadt"), ClassifyZone(0, 0, 3), EWbAudioZone::Commercial);
+	TestEqual(TEXT("Industrie hat Vorrang"), ClassifyZone(30, 1, 5), EWbAudioZone::Industrial);
+	TestTrue(TEXT("Wald hat weniger Stadtsummen als Innenstadt"),
+		AmbienceMix(EWbAudioZone::Quiet).City < AmbienceMix(EWbAudioZone::Commercial).City);
+	TestTrue(TEXT("Wald hat mehr Vogelanteil als Industrie"),
+		AmbienceMix(EWbAudioZone::Quiet).Birds > AmbienceMix(EWbAudioZone::Industrial).Birds);
+	TestEqual(TEXT("ungueltige Zone faellt auf Wohnpegel"),
+		AmbienceMix(EWbAudioZone::MAX).City, AmbienceMix(EWbAudioZone::Residential).City);
+	return true;
+}

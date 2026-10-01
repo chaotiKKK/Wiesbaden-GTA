@@ -34,6 +34,9 @@ Vier Sorten Dokument, nach dem, was du gerade brauchst:
 - [Das Fahrverhalten per WbDrive testen](how-to/fahrverhalten-testen.md)
   - Fahrprofil ausloesen, Log auswerten (Tempo/Laengsdynamik, Kursaenderung/
     Lenkung, Gangwechsel), Schwellen, Fehlersuche.
+- [Die Flugstunde nachweisen: Feuersperre, Anzeige, Abbau](how-to/helikopter-flugstunde-sicherheit.md)
+  - Die zwei Freigaben fuer scharfes Feuern, die fuenf Abbaustellen der
+    Lektion, das GESCHUETZ-Feld der Instrumententafel, Absturz und Wiederaufsetzen.
 
 ## Reference
 

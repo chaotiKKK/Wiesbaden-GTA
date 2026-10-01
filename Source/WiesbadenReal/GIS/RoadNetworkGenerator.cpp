@@ -1276,6 +1276,8 @@ FRoadGenerationReport URoadNetworkGenerator::Generate(
 			BuildIntersectionMesh(Plate.AsJunction(), Settings, *OutMeshData);
 		}
 
+		BuildSupplementaryMarkings(OutNetwork, DataSet, *Converter, Settings, *OutMeshData);
+
 		// Hoehenlage je Kanal.
 		//
 		// Die Kreuzungsplatten sind im Spiel nicht zu sehen, obwohl sie erzeugt
@@ -3370,6 +3372,278 @@ void URoadNetworkGenerator::BuildLaneMarkings(
 			Section.Triangles.Add(Index + BaseIndex);
 		}
 	}
+}
+
+void URoadNetworkGenerator::BuildSupplementaryMarkings(
+	const FRoadNetwork& Network, const FOSMDataSet& DataSet,
+	const UGeoCoordinateConverter& Converter, const FRoadGenerationSettings& Settings,
+	FRoadMeshData& OutMeshData)
+{
+	if (!Settings.bGenerateLaneMarkings) { return; }
+
+	// Alle Symbole sind echte Paint-Geometrie im vorhandenen Bake-Pfad.
+	// Keine kollidierenden Planes, keine Laufzeit-Decals, keine Atlas-Abhaengigkeit.
+	auto Project = [](const TArray<FVector>& Line, const FVector2D& P,
+		FVector& Point, FVector& Direction) -> double
+	{
+		double Best = TNumericLimits<double>::Max();
+		for (int32 i = 1; i < Line.Num(); ++i)
+		{
+			const FVector2D A(Line[i - 1]), AB = FVector2D(Line[i]) - A;
+			if (AB.SizeSquared() < 1.0) { continue; }
+			const double T = FMath::Clamp(FVector2D::DotProduct(P - A, AB) / AB.SizeSquared(), 0.0, 1.0);
+			const double D = FVector2D::DistSquared(P, A + AB * T);
+			if (D < Best)
+			{
+				Best = D;
+				Point = FMath::Lerp(Line[i - 1], Line[i], T);
+				Direction = FVector(AB.X, AB.Y, 0.0).GetSafeNormal();
+			}
+		}
+		return Best;
+	};
+	auto Paint = [&](ERoadMeshChannel Channel, const TArray<FVector>& Road,
+		const TArray<FVector>& Polygon, double Lift)
+	{
+		if (Polygon.Num() < 3 || Road.Num() < 2) { return; }
+		FRoadMeshSection& Section = FindOrAddSection(OutMeshData, Channel, EOSMSurfaceType::Asphalt);
+		const int32 Base = Section.Vertices.Num();
+		for (const FVector& P : Polygon)
+		{
+			FVector Ground, Tangent;
+			Project(Road, FVector2D(P), Ground, Tangent);
+			Section.Vertices.Add(FVector(P.X, P.Y, Ground.Z + Lift));
+			Section.Normals.Add(FVector::UpVector);
+			Section.UVs.Add(FVector2D(P.X / 100.0, P.Y / 100.0));
+			Section.VertexColors.Add(FColor::White); // R=255: kein Strich-Shader auf Symbolen
+			Section.Tangents.Add(FProcMeshTangent(Tangent, false));
+		}
+		// Konvexe Teilpolygone; UE-Frontseite ist in XY im Uhrzeigersinn.
+		for (int32 i = 1; i + 1 < Polygon.Num(); ++i)
+		{
+			const double Cross = FVector::CrossProduct(Polygon[i] - Polygon[0], Polygon[i + 1] - Polygon[0]).Z;
+			if (FMath::Abs(Cross) < 0.01) { continue; }
+			Section.Triangles.Append({ Base, Base + (Cross > 0.0 ? i + 1 : i), Base + (Cross > 0.0 ? i : i + 1) });
+		}
+	};
+	auto Quad = [&](ERoadMeshChannel Channel, const TArray<FVector>& Road,
+		const FVector& C, const FVector& F, double Length, double Width, double Lift)
+	{
+		const FVector R(-F.Y, F.X, 0.0);
+		Paint(Channel, Road, { C - F * (Length * .5) - R * (Width * .5),
+			C + F * (Length * .5) - R * (Width * .5),
+			C + F * (Length * .5) + R * (Width * .5),
+			C - F * (Length * .5) + R * (Width * .5) }, Lift);
+	};
+
+	// Node->Way-Zuordnung statt Kreuzungsknoten x alle Strassensegmente.
+	// Nur explizite Zebra-Tags: crossing=uncontrolled allein ist kein Zebra.
+	TSet<int64> ZebraNodes;
+	if (Settings.bGenerateCrossings)
+	{
+		for (const auto& Pair : DataSet.Nodes)
+		{
+			if (Pair.Value.HasTagValue(TEXT("crossing"), TEXT("zebra"))
+				|| Pair.Value.HasTagValue(TEXT("crossing:markings"), TEXT("zebra")))
+			{ ZebraNodes.Add(Pair.Key); }
+		}
+	}
+	TMap<int64, TArray<int64>> ZebraByWay;
+	for (const auto& Pair : DataSet.Ways)
+	{
+		if (!Pair.Value.IsHighway()) { continue; }
+		for (int64 NodeId : Pair.Value.NodeIds)
+		{
+			if (ZebraNodes.Contains(NodeId)) { ZebraByWay.FindOrAdd(Pair.Key).AddUnique(NodeId); }
+		}
+	}
+	struct FCrossingPlacement { int32 SegmentIndex = INDEX_NONE; FVector Point; FVector Direction; double Distance = TNumericLimits<double>::Max(); };
+	TMap<int64, FCrossingPlacement> Crossings;
+	for (int32 si = 0; si < Network.Segments.Num(); ++si)
+	{
+		const FRoadSegment& Segment = Network.Segments[si];
+		if (!FOSMTagParser::IsDrivable(Segment.HighwayType) || Segment.bIsArea) { continue; }
+		const TArray<int64>* Nodes = ZebraByWay.Find(Segment.SourceWayId);
+		if (!Nodes) { continue; }
+		for (int64 NodeId : *Nodes)
+		{
+			const FVector P = Converter.GeoToUnrealGround(DataSet.Nodes.FindChecked(NodeId).Location);
+			FVector Point, Direction;
+			const double D = Project(Segment.TrimmedCenterline, FVector2D(P), Point, Direction);
+			if (D > FMath::Square(200.0)) { continue; } // nicht in die Kreuzungsmitte verschieben
+			FCrossingPlacement& Best = Crossings.FindOrAdd(NodeId);
+			if (D < Best.Distance)
+			{ Best.SegmentIndex = si; Best.Point = Point; Best.Direction = Direction; Best.Distance = D; }
+		}
+	}
+	for (const auto& Pair : Crossings)
+	{
+		const FCrossingPlacement& C = Pair.Value;
+		const FRoadSegment& Segment = Network.Segments[C.SegmentIndex];
+		const FVector R(-C.Direction.Y, C.Direction.X, 0.0);
+		for (double Across = -Segment.CarriagewayWidthCm * .5 + 50.0;
+			Across + 25.0 <= Segment.CarriagewayWidthCm * .5; Across += 100.0)
+		{
+			Quad(ERoadMeshChannel::Crossing, Segment.TrimmedCenterline,
+				C.Point + R * Across, C.Direction, 300.0, 50.0, Settings.MarkingOffsetCm);
+		}
+	}
+
+	for (const FRoadLane& Lane : Network.Lanes)
+	{
+		if (!Network.Segments.IsValidIndex(Lane.SegmentId)) { continue; }
+		const FRoadSegment& Segment = Network.Segments[Lane.SegmentId];
+		const TArray<FVector>& Road = Segment.TrimmedCenterline;
+		if (Road.Num() < 2 || Segment.GetTotalLaneCount() < 1 || Lane.WidthCm < 80.0) { continue; }
+		TArray<FVector2D> Axis, Offset;
+		for (const FVector& P : Road) { Axis.Add(FVector2D(P)); }
+		const double Side = Segment.CarriagewayWidthCm * .5
+			- (Lane.LaneIndexFromLeft + .5) * Segment.CarriagewayWidthCm / Segment.GetTotalLaneCount();
+		if (!FPolygonUtils::OffsetPolyline(Axis, Side, Offset) || Offset.Num() < 2) { continue; }
+		if (Lane.Direction == ELaneDirection::Backward) { Algo::Reverse(Offset); }
+		TArray<double> Distances; Distances.Add(0.0);
+		for (int32 i = 1; i < Offset.Num(); ++i)
+		{ Distances.Add(Distances.Last() + FVector2D::Distance(Offset[i - 1], Offset[i])); }
+		const double Length = Distances.Last();
+		auto PoseAt = [&](double Distance, FVector& C, FVector& F)
+		{
+			for (int32 i = 1; i < Offset.Num(); ++i)
+			{
+				if (Distance > Distances[i] && i + 1 < Offset.Num()) { continue; }
+				const double Span = Distances[i] - Distances[i - 1];
+				const FVector2D P = FMath::Lerp(Offset[i - 1], Offset[i],
+					Span > .01 ? FMath::Clamp((Distance - Distances[i - 1]) / Span, 0.0, 1.0) : 0.0);
+				C = FVector(P.X, P.Y, 0.0);
+				const FVector2D D = (Offset[i] - Offset[i - 1]).GetSafeNormal();
+				F = FVector(D.X, D.Y, 0.0);
+				return;
+			}
+		};
+		const double Lift = Settings.MarkingOffsetCm;
+		if (Settings.bGenerateBikeLanes && Lane.bIsBikeLane)
+		{
+			for (int32 i = 1; i < Offset.Num(); ++i)
+			{
+				const FVector2D D = (Offset[i] - Offset[i - 1]).GetSafeNormal();
+				Quad(ERoadMeshChannel::BikeLaneSurface, Road,
+					FVector((Offset[i].X + Offset[i - 1].X) * .5, (Offset[i].Y + Offset[i - 1].Y) * .5, 0.0),
+					FVector(D.X, D.Y, 0.0), Distances[i] - Distances[i - 1], Lane.WidthCm - 30.0, Lift * .5);
+			}
+		}
+		// Lokale Symbol-Koordinaten: X quer (positiv = rechts bei Fahrt +X, wie Quad), Y in Fahrtrichtung.
+		auto Stroke = [&](const FVector& C, const FVector& F, FVector2D A, FVector2D B, double Width = 12.0)
+		{
+			const FVector R(-F.Y, F.X, 0.0);
+			const FVector PA = C + R * A.X + F * A.Y, PB = C + R * B.X + F * B.Y;
+			Quad(ERoadMeshChannel::LaneMarking, Road, (PA + PB) * .5, (PB - PA).GetSafeNormal(),
+				FVector::Dist(PA, PB), Width, Lift);
+		};
+		auto ArrowHead = [&](const FVector& C, const FVector& F, FVector2D Tip, FVector2D Back)
+		{
+			const FVector2D D = (Tip - Back).GetSafeNormal(), R(-D.Y, D.X);
+			const FVector Right(-F.Y, F.X, 0.0);
+			auto At = [&](FVector2D P) { return C + Right * P.X + F * P.Y; };
+			Paint(ERoadMeshChannel::LaneMarking, Road, { At(Tip), At(Back + R * 40.0), At(Back - R * 40.0) }, Lift);
+		};
+		if (Settings.bGenerateTurnArrows && Length >= 1000.0)
+		{
+			// Default TurnFlags=Through ist kein OSM-Fakt. Token exakt pruefen.
+			const FOSMWay* Way = DataSet.Ways.Find(Segment.SourceWayId);
+			FString Tag;
+			int32 TokenIndex = Lane.LaneIndexFromLeft, TokenCount = Segment.GetTotalLaneCount();
+			if (Way)
+			{
+				if (Segment.ForwardLaneCount > 0 && Segment.BackwardLaneCount > 0)
+				{
+					const bool Forward = Lane.Direction == ELaneDirection::Forward;
+					Tag = Way->GetTag(Forward ? TEXT("turn:lanes:forward") : TEXT("turn:lanes:backward"));
+					TokenCount = Forward ? Segment.ForwardLaneCount : Segment.BackwardLaneCount;
+					TokenIndex = Forward ? Lane.LaneIndexFromLeft - Segment.BackwardLaneCount
+						: Segment.BackwardLaneCount - 1 - Lane.LaneIndexFromLeft;
+				}
+				else
+				{
+					Tag = Way->GetTag(TEXT("turn:lanes"));
+					if (Tag.IsEmpty()) { Tag = Way->GetTag(Lane.Direction == ELaneDirection::Forward
+						? TEXT("turn:lanes:forward") : TEXT("turn:lanes:backward")); }
+					if (Lane.Direction == ELaneDirection::Backward) { TokenIndex = TokenCount - 1 - TokenIndex; }
+				}
+			}
+			const TArray<FString> Tokens = FOSMTagParser::SplitLaneValues(Tag);
+			uint8 Flags = 0;
+			if (Tokens.Num() == TokenCount && Tokens.IsValidIndex(TokenIndex))
+			{
+				TArray<FString> Parts;
+				Tokens[TokenIndex].ParseIntoArray(Parts, TEXT(";"), true);
+				const TSet<FString> Known = { TEXT("through"), TEXT("left"), TEXT("right"),
+					TEXT("slight_left"), TEXT("slight_right"), TEXT("sharp_left"), TEXT("sharp_right"), TEXT("reverse") };
+				for (const FString& Part : Parts)
+				{
+					const FString Token = Part.TrimStartAndEnd().ToLower();
+					if (Known.Contains(Token)) { Flags |= ParseTurnIndication(Token); }
+				}
+			}
+			FVector C, F; PoseAt(Length - 500.0, C, F);
+			if (Flags != 0)
+			{
+				Stroke(C, F, { 0, -150 }, { 0, 30 }, 18.0);
+				if (Flags & static_cast<uint8>(ETurnIndication::Through))
+				{ Stroke(C, F, { 0, 30 }, { 0, 110 }, 18.0); ArrowHead(C, F, { 0, 150 }, { 0, 90 }); }
+				if (Flags & (static_cast<uint8>(ETurnIndication::Left) | static_cast<uint8>(ETurnIndication::SlightLeft) | static_cast<uint8>(ETurnIndication::SharpLeft)))
+				{ Stroke(C, F, { 0, 30 }, { -70, 30 }, 18.0); ArrowHead(C, F, { -110, 30 }, { -50, 30 }); }
+				if (Flags & (static_cast<uint8>(ETurnIndication::Right) | static_cast<uint8>(ETurnIndication::SlightRight) | static_cast<uint8>(ETurnIndication::SharpRight)))
+				{ Stroke(C, F, { 0, 30 }, { 70, 30 }, 18.0); ArrowHead(C, F, { 110, 30 }, { 50, 30 }); }
+				if (Flags & static_cast<uint8>(ETurnIndication::UTurn))
+				{ Stroke(C, F, { 0, 30 }, { -65, 70 }, 18.0); Stroke(C, F, { -65, 70 }, { -100, 10 }, 18.0); ArrowHead(C, F, { -100, -60 }, { -100, 0 }); }
+			}
+		}
+		for (double Distance = 600.0; Distance + 200.0 < Length; Distance += 4000.0)
+		{
+			FVector C, F; PoseAt(Distance, C, F);
+			if (Settings.bGenerateBusLanes && Lane.bIsBusLane)
+			{
+				// Schmale Vektor-Buchstaben, lesbar in Fahrtrichtung.
+				Stroke(C, F, { -100, -90 }, { -100, 90 });
+				Stroke(C, F, { -100, 90 }, { -55, 90 }); Stroke(C, F, { -55, 90 }, { -45, 40 });
+				Stroke(C, F, { -45, 40 }, { -100, 0 }); Stroke(C, F, { -100, 0 }, { -45, -30 });
+				Stroke(C, F, { -45, -30 }, { -45, -75 }); Stroke(C, F, { -45, -75 }, { -100, -90 });
+				Stroke(C, F, { -20, 90 }, { -20, -90 }); Stroke(C, F, { -20, -90 }, { 20, -90 });
+				Stroke(C, F, { 20, -90 }, { 20, 90 });
+				Stroke(C, F, { 100, 90 }, { 55, 90 }); Stroke(C, F, { 55, 90 }, { 55, 0 });
+				Stroke(C, F, { 55, 0 }, { 100, 0 }); Stroke(C, F, { 100, 0 }, { 100, -90 });
+				Stroke(C, F, { 100, -90 }, { 55, -90 });
+			}
+			if (Settings.bGenerateBikeLanes && Lane.bIsBikeLane)
+			{
+				for (double WheelY : { -60.0, 60.0 })
+				{
+					for (int32 i = 0; i < 12; ++i)
+					{
+						const double A = i * 2.0 * PI / 12.0, B = (i + 1) * 2.0 * PI / 12.0;
+						Stroke(C, F, { 32.0 * FMath::Cos(A), WheelY + 32.0 * FMath::Sin(A) },
+							{ 32.0 * FMath::Cos(B), WheelY + 32.0 * FMath::Sin(B) }, 8.0);
+					}
+				}
+				Stroke(C, F, { 0, -60 }, { 55, -20 }, 8); Stroke(C, F, { 55, -20 }, { 0, 20 }, 8);
+				Stroke(C, F, { 0, 20 }, { 0, -60 }, 8); Stroke(C, F, { 55, -20 }, { 55, 40 }, 8);
+				Stroke(C, F, { 55, 40 }, { 0, 60 }, 8); Stroke(C, F, { 55, 40 }, { 70, 60 }, 8);
+			}
+		}
+		if (Settings.bGenerateGiveWayTeeth && Length >= 400.0)
+		{
+			const int64 ExitNode = Lane.Direction == ELaneDirection::Forward ? Segment.EndNodeId : Segment.StartNodeId;
+			const FOSMNode* Node = DataSet.Nodes.Find(ExitNode);
+			if (Node && Node->IsGiveWay())
+			{
+				FVector C, F; PoseAt(Length - 100.0, C, F);
+				const FVector R(-F.Y, F.X, 0.0);
+				for (double Across = -Lane.WidthCm * .5 + 40.0; Across + 25.0 <= Lane.WidthCm * .5; Across += 75.0)
+				{ Paint(ERoadMeshChannel::LaneMarking, Road, { C + R * Across + F * 30.0,
+					C + R * (Across - 25.0) - F * 30.0, C + R * (Across + 25.0) - F * 30.0 }, Lift); }
+			}
+		}
+	}
+	UE_LOG(LogWbRoads, Log, TEXT("OSM-Zusatzmarkierungen: %d Zebra-Knoten, %d platzierte Ueberwege."), ZebraNodes.Num(), Crossings.Num());
 }
 
 void URoadNetworkGenerator::BuildIntersectionMesh(

@@ -188,8 +188,10 @@ void AWiesbadenSebboHq::UpdateInteriorLights()
 	// Beweiszeile fuer Messlaeufe: welche Etage leuchtet und warum. Laeuft
 	// beim ERSTEN Aufruf immer (Startwert INDEX_NONE) und danach bei jedem
 	// Etagenwechsel - eine stille Sperre versteckte Fehler zu lange.
-	UE_LOG(LogWbSebboHq, Log, TEXT("Innenlicht auf Etage %d (%s, %.0f m ueber dem Turmfuss)."),
-		Floor, bBlickGefunden ? TEXT("Blickpunkt") : TEXT("ohne Blick, Vorgabe"), FussZ);
+	// FussZ steckt in UE-Zentimetern (Blick.Z - BuiltBase.Z) - als "m"
+	// beschriftet standen 5645 m ueber einem 60 m hohen Turm im Log (27.09.).
+	UE_LOG(LogWbSebboHq, Log, TEXT("Innenlicht auf Etage %d (%s, %.1f m ueber dem Turmfuss)."),
+		Floor, bBlickGefunden ? TEXT("Blickpunkt") : TEXT("ohne Blick, Vorgabe"), FussZ / 100.0);
 
 	// Drei Zonen der Etage wie in BuildInnenausbau: Lobby, Buerowinkel,
 	// Sitzungswinkel - unmittelbar unter der Geschossdecke.
@@ -229,7 +231,14 @@ void AWiesbadenSebboHq::Tick(float DeltaSeconds)
 				{
 					ProbeArrival();
 				}
-				SetActorTickEnabled(false);
+				// Nach den Sonden bleibt noch das Innenlicht am Takt: es folgt dem
+				// Blickpunkt in die naechste Etage (UpdateInteriorLights). Bedingungslos
+				// abgeschaltet (wie frueher) starben die Lichterfolge und die
+				// Beweiszeile "Innenlicht auf Etage" nach dem Bau - ohne jede Meldung.
+				if (InteriorLights.IsEmpty())
+				{
+					SetActorTickEnabled(false);
+				}
 			}
 		}
 		return;
@@ -266,8 +275,13 @@ void AWiesbadenSebboHq::Tick(float DeltaSeconds)
 	bBuilt = true;
 
 	// -WbTreppenProbe steigt einmal die Treppe hoch, -WbAnkunftProbe tastet die
-	// drei Ankunftswege ab. Beides sind Messwerkzeuge - ohne einen der beiden
-	// Schalter tickt der Actor gar nicht weiter.
+	// drei Ankunftswege ab. Beides sind Messwerkzeuge - der Actor braucht danach
+	// keinen Takt mehr, AUSSER fuer UpdateInteriorLights: die Innenlichter
+	// folgen dem Blickpunkt und muessen dafuer ticken. Frueher stoppte der Takt
+	// hier bedingungslos ("ohne einen der beiden Schalter tickt der Actor gar
+	// nicht weiter") - damit folgten die Lichter nie einer Etage und die
+	// Beweiszeile "Innenlicht auf Etage" erschien in keinem Lauf (Baustelle 1
+	// der Uebergabe, 27.09.).
 	const bool bSondeGewuenscht =
 		FParse::Param(FCommandLine::Get(), TEXT("WbTreppenProbe"))
 		|| FParse::Param(FCommandLine::Get(), TEXT("WbAnkunftProbe"));
@@ -275,7 +289,7 @@ void AWiesbadenSebboHq::Tick(float DeltaSeconds)
 	{
 		SecondsSinceBuild = 0.0f;
 	}
-	else
+	else if (InteriorLights.IsEmpty())
 	{
 		SetActorTickEnabled(false);
 	}
@@ -441,20 +455,25 @@ void AWiesbadenSebboHq::Build(const FVector& BaseWorld, const FRotator& BaseYaw)
 	// in die naechste Etage (UpdateInteriorLights), warmweiss wie Bueros.
 	InteriorLights.SetNum(3);
 	const FLinearColor Innenlicht(1.0f, 0.93f, 0.80f);
-	// DEZENTER als die Leuchturme der Anfahrt: 6000 cd mit der vollen
-	// Volumetric-Streuung der Leitlichter fuehrten in Innenraeumen zu einem
-	// weissen Nebelball (Ego-Bild der Figurprobe, 27.09.).
+	// DEZENTER als die Leuchturme der Anfahrt und OHNE Volumetrie: die Lichter
+	// folgen dem Blickpunkt, die Kamera steht also immer in ihrem Nahbereich.
+	// Mit Streulicht huellte sie ein warmer Nebelball ein (Bild der Figurprobe,
+	// 27.09. - erst 6000 cd/volle Streuung, dann 1500 cd/0.25, beides zu viel:
+	// das Bild war eine gleichfoermige Waesche). 700 cd / 600 cm ohne Streuung
+	// beleuchten die drei Zonen der Etage, ohne Flaechen auszubrennen -
+	// nachgemessen am Probe-Bild, nicht geschaetzt.
 	CreateGuidanceLight(InteriorLights[0], TEXT("InnenlichtLobby"),
-		FVector(-1000.0, 56.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 1500.0f, 900.0f);
+		FVector(-1000.0, 56.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 700.0f, 600.0f);
 	CreateGuidanceLight(InteriorLights[1], TEXT("InnenlichtBuero"),
-		FVector(1000.0, 0.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 1500.0f, 900.0f);
+		FVector(1000.0, 0.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 700.0f, 600.0f);
 	CreateGuidanceLight(InteriorLights[2], TEXT("InnenlichtSitzung"),
-		FVector(0.0, 1000.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 1500.0f, 900.0f);
+		FVector(0.0, 1000.0, Dimensions.FloorHeightCm - 60.0), BaseWorld, BaseYaw, Innenlicht, 700.0f, 600.0f);
 	for (UPointLightComponent* Licht : InteriorLights)
 	{
 		if (Licht)
 		{
-			Licht->SetVolumetricScatteringIntensity(0.25f);
+			// Volumetrie AUS: die Kamera sitzt im Kegel des folgenden Lichts.
+			Licht->SetVolumetricScatteringIntensity(0.0f);
 		}
 	}
 

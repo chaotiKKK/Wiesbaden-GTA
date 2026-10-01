@@ -15,6 +15,8 @@ class UWiesbadenCitySubsystem;
 class AWiesbadenStoreMerchant;
 class AWiesbadenPlatterParking;
 class AWiesbadenCuttable;
+class AWiesbadenBugTankPawn;
+class ACameraActor;
 struct FWiesbadenRoadClearance;
 struct FWiesbadenBuildingClearance;
 
@@ -249,6 +251,9 @@ protected:
 	 */
 	void TogglePlayerVehicle();
 
+	/** Schaltet mit T zum BugTank und mit erneutem T zum vorherigen Pawn. */
+	void ToggleBugTank();
+
 	/**
 	 * Prueft NPC-Haendler-Interaktion fuer einen fuß-Pawn.
 	 *
@@ -347,6 +352,13 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<APawn> PlayerVehicle = nullptr;
 
+	/** Editorfreier Käferpanzer-Pawn aus dem Video. */
+	UPROPERTY(Transient)
+	TObjectPtr<AWiesbadenBugTankPawn> BugTankPawn = nullptr;
+
+	/** Pawn, der vor dem Wechsel zum BugTank gesteuert wurde. */
+	TWeakObjectPtr<APawn> PawnBeforeBugTank;
+
 	/** Die runtime gebaute Anlage an der Standard-Startadresse. Der Actor ist
 	 * waehrend GameMode::BeginPlay noch nicht per ActorIterator sichtbar. */
 	UPROPERTY(Transient)
@@ -366,6 +378,29 @@ private:
 
 	/** Flankenerkennung der Ein/Aussteigen-Taste. */
 	bool bEntryKeyHeld = false;
+	bool bBugTankKeyHeld = false;
+	bool bBugTankCommandLineHandled = false;
+
+	/** Einmal-Uebernahme des Start-Helikopters bei -WbHeliStart. */
+	bool bHeliStartCommandLineHandled = false;
+#if UE_BUILD_DEVELOPMENT
+	/** Opt-in surface drive using simulated PlayerController input. */
+	bool bBugTankProbeFinished = false;
+	float BugTankProbeTime = 0.0f;
+	float BugTankProbeSurfaceTime = 0.0f;
+	float BugTankProbeCeilingContactTime = 0.0f;
+	float BugTankProbeCeilingInputTime = 0.0f;
+	float BugTankProbeCeilingSurfaceInputTime = 0.0f;
+	FString BugTankProbeLastSelectedActor = TEXT("None");
+	FString BugTankProbeLastSelectedComponent = TEXT("None");
+	float BugTankProbeLastSelectedDistance = 0.0f;
+	FVector BugTankProbeSurfaceStart = FVector::ZeroVector;
+	int32 BugTankProbeSurface = -1;
+	TWeakObjectPtr<ACameraActor> BugTankProbeCaptureCamera;
+	int32 BugTankProbeCaptureRestoreFrames = 0;
+	TSet<int32> BugTankProbeCapturedSurfaces;
+	void TickBugTankProbe(APlayerController* PC, float DeltaSeconds);
+#endif
 
 	/**
 	 * Sekunden bis zum selbsttaetigen Aussteigen (-WbZuFuss=<Sekunden>).
