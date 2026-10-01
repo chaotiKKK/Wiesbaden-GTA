@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wiesbaden Real. All Rights Reserved.
 #include "NPC/WiesbadenPoliceSubsystem.h"
 #include "NPC/WiesbadenPoliceCar.h"
+#include "NPC/WiesbadenPoliceHelicopter.h"
 #include "World/WiesbadenCitySubsystem.h"
 #include "GIS/WiesbadenWorldBuilder.h"
 #include "EngineUtils.h"
@@ -14,6 +15,49 @@
 namespace WiesbadenPolice
 {
 	int32 PatrolCount(int32 Level) { return FMath::Clamp(Level, 0, 6); }
+
+	FWiesbadenPoliceForce EscalationFor(int32 Level)
+	{
+		// SPEC §8: Polizei -> SEK -> Heli -> BFE+ -> GSG9/Erbenheim.
+		// BFE+/GSG9 (Stufe 6) bleibt weiterhin unbelegt; die Einheiten-Solls
+		// wachsen, die Festnahme wird mit Spezialkraeften schneller.
+		FWiesbadenPoliceForce Force;
+		Force.Streifen = PatrolCount(Level);
+		if (Level >= 4) { Force.Sek = 2; Force.ArrestSecondsNeeded = 4.0f; }
+		if (Level >= 5) { Force.Heli = 1; Force.ArrestSecondsNeeded = 3.5f; }
+		if (Level >= 6) { Force.Sek = 3; Force.ArrestSecondsNeeded = 3.0f; }
+		return Force;
+	}
+
+	bool CanSee(UWorld* World, AActor* Observer, AActor* Target, float RangeCm)
+	{
+		if (!World || !Observer || !Target) { return false; }
+		if (FVector::DistSquared(Observer->GetActorLocation(), Target->GetActorLocation())
+			> FMath::Square(RangeCm))
+		{
+			return false;
+		}
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(PoliceSight), true, Observer);
+		FHitResult Hit;
+		const FVector A = Observer->GetActorLocation() + FVector(0, 0, 120);
+		const FVector B = Target->GetActorLocation() + FVector(0, 0, 70);
+		return !World->LineTraceSingleByChannel(Hit, A, B, ECC_Visibility, Params) || Hit.GetActor() == Target;
+	}
+
+	FVector PursuitTarget(const FVector& CarLocation, const FVector& RouteTarget,
+		const FVector& PlayerLocation, bool bPlayerSeen,
+		float MaxDirectCm, float MaxHeightDeltaCm)
+	{
+		// Keine Beeline durch Haeuser: nur bei freier Sicht, in Reichweite und
+		// auf gleicher Hoehe; sonst bleibt das Routen-Ziel (Netz-Fahrt).
+		if (bPlayerSeen
+			&& FVector::Dist2D(CarLocation, PlayerLocation) < MaxDirectCm
+			&& FMath::Abs(PlayerLocation.Z - CarLocation.Z) < MaxHeightDeltaCm)
+		{
+			return PlayerLocation;
+		}
+		return RouteTarget;
+	}
 	FWiesbadenCarControl DriveControl(const FVector& Car, const FVector& Forward,
 		const FVector& Target, float SpeedKmh, float LimitKmh)
 	{
@@ -61,14 +105,9 @@ void UWiesbadenPoliceSubsystem::PrepareNetwork(AWiesbadenWorldBuilder* Builder)
 }
 bool UWiesbadenPoliceSubsystem::HasSight(AActor* Observer, APawn* Player) const
 {
-	if (!Observer || !Player || FVector::DistSquared(Observer->GetActorLocation(), Player->GetActorLocation()) > FMath::Square(14000.0)) { return false; }
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(PoliceSight), true, Observer);
-	FHitResult Hit;
-	const FVector A = Observer->GetActorLocation() + FVector(0, 0, 120);
-	const FVector B = Player->GetActorLocation() + FVector(0, 0, 70);
-	return !GetWorld()->LineTraceSingleByChannel(Hit, A, B, ECC_Visibility, Params) || Hit.GetActor() == Player;
+	return WiesbadenPolice::CanSee(GetWorld(), Observer, Player, 14000.0f);
 }
-bool UWiesbadenPoliceSubsystem::SpawnPatrol(const FVector& PlayerLocation, const FVector& ViewForward)
+bool UWiesbadenPoliceSubsystem::SpawnPatrol(const FVector& PlayerLocation, const FVector& ViewForward, bool bSek)
 {
 	AWiesbadenWorldBuilder* Builder = NetworkOwner.Get();
 	if (!Builder) { return false; }
@@ -85,8 +124,12 @@ bool UWiesbadenPoliceSubsystem::SpawnPatrol(const FVector& PlayerLocation, const
 				const FRoadLane& Lane = Network.Lanes[Id];
 				FVector P = Lane.GetStartPoint() + FVector(0, 0, 38);
 				const FVector Offset = P - PlayerLocation;
-				if (Offset.SizeSquared2D() < FMath::Square(18000.0) || Offset.SizeSquared2D() > FMath::Square(45000.0)) { continue; }
-				if (FVector::DotProduct(Offset.GetSafeNormal2D(), ViewForward.GetSafeNormal2D()) > .25) { continue; }
+				// SEK raeckt naeher an den Spieler heran (100-300 m) und wird nicht
+				// auf die Rueckseite des Blickfelds beschränkt - es soll auffallen.
+				const double MinD = bSek ? 10000.0 : 18000.0;
+				const double MaxD = bSek ? 30000.0 : 45000.0;
+				if (Offset.SizeSquared2D() < FMath::Square(MinD) || Offset.SizeSquared2D() > FMath::Square(MaxD)) { continue; }
+				if (!bSek && FVector::DotProduct(Offset.GetSafeNormal2D(), ViewForward.GetSafeNormal2D()) > .25) { continue; }
 				bool Occupied = false;
 				for (const FPatrol& Patrol : Patrols)
 				{ if (Patrol.Car.IsValid() && FVector::DistSquared2D(P, Patrol.Car->GetActorLocation()) < FMath::Square(1200.0)) { Occupied = true; break; } }
@@ -99,9 +142,11 @@ bool UWiesbadenPoliceSubsystem::SpawnPatrol(const FVector& PlayerLocation, const
 				Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::DontSpawnIfColliding;
 				AWiesbadenPoliceCar* Car = GetWorld()->SpawnActor<AWiesbadenPoliceCar>(P, Lane.GetEntryDirection().Rotation(), Params);
 				if (!Car) { continue; }
-				FPatrol Patrol; Patrol.Car = Car; Patrol.LaneId = Id; Patrol.Route = Lane.Centerline; Patrol.Waypoint = 1;
+				Car->SetSek(bSek);
+				FPatrol Patrol; Patrol.Car = Car; Patrol.LaneId = Id; Patrol.Route = Lane.Centerline; Patrol.Waypoint = 1; Patrol.bSek = bSek;
 				Patrols.Add(MoveTemp(Patrol));
-				UE_LOG(LogTemp, Log, TEXT("Polizei: Streife %d auf Spur %d, Abstand %.0f m."), Patrols.Num(), Id, Offset.Size2D() / 100.0);
+				UE_LOG(LogTemp, Log, TEXT("Polizei: %s %d auf Spur %d, Abstand %.0f m."),
+					bSek ? TEXT("SEK") : TEXT("Streife"), Patrols.Num(), Id, Offset.Size2D() / 100.0);
 				return true;
 			}
 		}
@@ -124,16 +169,57 @@ void UWiesbadenPoliceSubsystem::Tick(float DeltaSeconds)
 	PrepareNetwork(Builder);
 	Patrols.RemoveAll([](const FPatrol& P) { return !P.Car.IsValid(); });
 	const FVector PlayerLocation = Player->GetActorLocation();
-	const int32 Wanted = WiesbadenPolice::PatrolCount(City->GetWantedLevel());
-	while (Patrols.Num() > Wanted)
+
+	// Eskalation je Stufe (SPEC §8): Streifen + ab Stufe 4 SEK + ab Stufe 5
+	// Luft-Verfolger. Der Rueckbau nimmt zuerst das SEK, dann die Streifen.
+	const WiesbadenPolice::FWiesbadenPoliceForce Force =
+		WiesbadenPolice::EscalationFor(City->GetWantedLevel());
+	ArrestNeededSeconds = Force.ArrestSecondsNeeded;
+	int32 SekIst = 0, StreifenIst = 0;
+	for (const FPatrol& P : Patrols) { (P.bSek ? SekIst : StreifenIst) += 1; }
+	auto RemoveOne = [&](bool bSekUnit)
 	{
-		if (Patrols.Last().Car.IsValid()) { Patrols.Last().Car->Destroy(); }
-		Patrols.Pop();
-	}
-	if (Patrols.Num() < Wanted && SpawnCooldown <= 0)
+		for (int32 i = Patrols.Num() - 1; i >= 0; --i)
+		{
+			if (Patrols[i].bSek != bSekUnit) { continue; }
+			if (Patrols[i].Car.IsValid()) { Patrols[i].Car->Destroy(); }
+			Patrols.RemoveAt(i);
+			return;
+		}
+	};
+	while (SekIst > Force.Sek) { RemoveOne(true); --SekIst; }
+	while (StreifenIst > Force.Streifen) { RemoveOne(false); --StreifenIst; }
+	if ((SekIst < Force.Sek || StreifenIst < Force.Streifen) && SpawnCooldown <= 0)
 	{
 		const FVector Forward = PC->PlayerCameraManager ? PC->PlayerCameraManager->GetCameraRotation().Vector() : Player->GetActorForwardVector();
-		SpawnPatrol(PlayerLocation, Forward); SpawnCooldown = 4.0f;
+		// SEK wachst zuerst nach - die Eskalation soll sofort sichtbar werden.
+		const bool bWantSek = SekIst < Force.Sek;
+		if (SpawnPatrol(PlayerLocation, Forward, bWantSek))
+		{
+			SpawnCooldown = 4.0f;
+			(bWantSek ? SekIst : StreifenIst) += 1;
+		}
+	}
+
+	// Luft-Verfolger: ab Stufe 5 im Einsatz, darunter abgezogen.
+	if (Force.Heli > 0 && !PoliceHeli.IsValid())
+	{
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		AWiesbadenPoliceHelicopter* Heli = World->SpawnActor<AWiesbadenPoliceHelicopter>(
+			PlayerLocation + FVector(12000, 8000, 12000), FRotator(0, -135, 0), SpawnParams);
+		if (Heli)
+		{
+			PoliceHeli = Heli;
+			UE_LOG(LogTemp, Log, TEXT("Polizei: Luft-Verfolger ab Fahndungsstufe %d im Einsatz."),
+				City->GetWantedLevel());
+		}
+	}
+	else if (Force.Heli == 0 && PoliceHeli.IsValid())
+	{
+		PoliceHeli->Destroy();
+		PoliceHeli.Reset();
+		UE_LOG(LogTemp, Log, TEXT("Polizei: Luft-Verfolger abgezogen."));
 	}
 	bPlayerSeen = false;
 	int32 Nearby = 0;
@@ -145,7 +231,8 @@ void UWiesbadenPoliceSubsystem::Tick(float DeltaSeconds)
 		if (Distance > 100000.0) { Car->Destroy(); continue; }
 		const bool Seen = HasSight(Car, Player);
 		bPlayerSeen |= Seen;
-		if (Seen && Distance < 700.0) { ++Nearby; }
+		// SEK zaehlt bei der Festnahme doppelt (zwei Beamte je Fahrzeug).
+		if (Seen && Distance < 700.0) { Nearby += Patrol.bSek ? 2 : 1; }
 		if (RamCooldown <= 0 && Distance < 350.0)
 		{
 			const IWiesbadenVehicleControl* V = Cast<IWiesbadenVehicleControl>(Player);
@@ -175,30 +262,44 @@ void UWiesbadenPoliceSubsystem::Tick(float DeltaSeconds)
 				Patrol.Route.Append(Builder->RoadNetwork.Lanes[Patrol.LaneId].Centerline); Patrol.Waypoint = 0;
 			}
 		}
-		FVector Target = Patrol.Route.IsValidIndex(Patrol.Waypoint) ? Patrol.Route[Patrol.Waypoint] : Car->GetActorLocation();
-		// Keine Beeline durch Haeuser. Nahziel nur bei freier Sicht und gleicher Hoehe.
-		if (Seen && Distance < 1000.0 && FMath::Abs(PlayerLocation.Z - Car->GetActorLocation().Z) < 150)
-		{ Target = PlayerLocation; }
+		const FVector RouteTarget = Patrol.Route.IsValidIndex(Patrol.Waypoint) ? Patrol.Route[Patrol.Waypoint] : Car->GetActorLocation();
+		// Keine Beeline durch Haeuser - die Regel sitzt in PursuitTarget
+		// (Sicht + Reichweite + gleiche Hoehe) und ist dort testbar.
+		const FVector Target = WiesbadenPolice::PursuitTarget(
+			Car->GetActorLocation(), RouteTarget, PlayerLocation, Seen);
+		// SEK faehrt schneller auf (60-90 km/h), Streifen 35-65 km/h.
+		const float Limit = Patrol.bSek
+			? FMath::Min(90.0f, 60.0f + City->GetWantedLevel() * 5.0f)
+			: FMath::Min(65.0f, 35.0f + City->GetWantedLevel() * 5.0f);
 		Car->SetExternalControl(WiesbadenPolice::DriveControl(Car->GetActorLocation(), Car->GetActorForwardVector(),
-			Target, Car->GetSpeedKmh(), FMath::Min(65.0f, 35.0f + City->GetWantedLevel() * 5.0f)));
+			Target, Car->GetSpeedKmh(), Limit));
 	}
+	// Luft-Verfolger sieht aus der Hoehe weiter: sein Blick haelt das Konto
+	// am Leben, auch wenn die Bodenstreifen die Sicht verlieren.
+	bPlayerSeen |= PoliceHeli.IsValid() && PoliceHeli->IsPlayerSpotted();
 	if (bPlayerSeen) { City->WantedState.SecondsSinceEvent = 0; }
 	const IWiesbadenExternalControl* Vehicle = Cast<IWiesbadenExternalControl>(Player);
 	const float Speed = Vehicle ? Vehicle->GetSpeedKmh() : Player->GetVelocity().Size() * .036f;
 	const int32 Needed = City->GetWantedLevel() == 1 ? 1 : 2;
 	ArrestSeconds = City->GetWantedLevel() > 0 && Nearby >= Needed && Speed < 3.0f
-		? FMath::Min(5.0f, ArrestSeconds + DeltaSeconds) : 0.0f;
-	if (ArrestSeconds >= 5.0f)
+		? FMath::Min(ArrestNeededSeconds, ArrestSeconds + DeltaSeconds) : 0.0f;
+	if (ArrestSeconds >= ArrestNeededSeconds)
 	{
 		City->WantedState = {}; ArrestSeconds = 0; ArrestNoticeSeconds = 6;
 		for (FPatrol& P : Patrols) { if (P.Car.IsValid()) { P.Car->Destroy(); } }
-		Patrols.Reset(); bPlayerSeen = false;
-		UE_LOG(LogTemp, Log, TEXT("Polizei: Festnahme nach 5 s Stillstand; Fahndung beendet."));
+		Patrols.Reset();
+		if (PoliceHeli.IsValid()) { PoliceHeli->Destroy(); PoliceHeli.Reset(); }
+		bPlayerSeen = false;
+		UE_LOG(LogTemp, Log, TEXT("Polizei: Festnahme nach %.0f s Stillstand; Fahndung beendet."),
+			ArrestNeededSeconds);
 	}
 }
 void UWiesbadenPoliceSubsystem::Deinitialize()
 {
 	for (FPatrol& P : Patrols) { if (P.Car.IsValid()) { P.Car->Destroy(); } }
-	Patrols.Reset(); Successors.Reset(); SpawnCells.Reset(); NetworkOwner.Reset();
+	Patrols.Reset();
+	if (PoliceHeli.IsValid()) { PoliceHeli->Destroy(); }
+	PoliceHeli.Reset();
+	Successors.Reset(); SpawnCells.Reset(); NetworkOwner.Reset();
 	Super::Deinitialize();
 }

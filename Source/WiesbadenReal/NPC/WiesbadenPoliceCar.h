@@ -13,6 +13,9 @@ class WIESBADENREAL_API AWiesbadenPoliceCar : public AWiesbadenCar
 	GENERATED_BODY()
 public:
 	AWiesbadenPoliceCar();
+
+	/** SEK-Einheit (Eskalation ab Fahndungsstufe 4): Beschriftung "SEK". */
+	void SetSek(bool bInSek);
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(const EEndPlayReason::Type Reason) override;

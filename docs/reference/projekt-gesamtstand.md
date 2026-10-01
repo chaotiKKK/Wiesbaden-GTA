@@ -30,10 +30,10 @@ Code. Der folgende Abgleich trennt Quellstand, Testergebnis und Spielabnahme.
 | Fussschritte | FootstepPool, Oberflaechen-Aufloesung und Passanten-Anbindung sind integriert (Tests Pedestrians/Pool/Surface gruen am 01.10.2026). | Klaenge aus der gebauten EXE nachweisen - Teil der Paket-Abnahme. |
 | SebboTower | Innenausbau ist vorhanden; Licht-Tick und Intensitaetskorrekturen sind uebernommen (`WiesbadenSebboHq.cpp`), Tower-Aufzug-Probe/Treppe waren am 27.09. gruen. | Etagenwechsel, Innenlicht und Nachtansicht im Spiel belegen; dekorative Tueren sind noch keine Interaktion. |
 | Runtime-Paketinhalt | Datiertes Development-Paket `Saved/Package_2026-10-01` (3,6 GB, alte Pakete unangetastet) mit Alkis31 (1464) + Alkis32 (1463) + BugTank (35) Manifest-Eintraegen; Vertragstest gruen (13 Checks). Gemessen: ohne `-map=` kocht UAT nur die Default-Karte, die `MapsToCook`-Eintraege allein reichen nicht (`Tools/package_game_dated.cmd` setzt darum `-map=`). Paket-Smoke ueber die Heli-Verknuepfung gruen (0 leere Chunks, sauberes Ende). | Buslinien/Audio/Missions-/Store-Kataloge einzeln aus der EXE pruefen (im Smoke-Lauf nicht einzeln geprueft). |
-| Fahndung | Konto 0-6 mit frameunabhaengigem Abbau, Polizei-Streifenwagen (Blaaulicht, Sirene, POLIZEI-Beschriftung), Verfolgung, Festnahme mit Respawn, HUD-Anzeige (Sterne/Fortschritt) und Dev-Befehl `WbWanted` sind umgesetzt; Polizei-Tests gruen (01.10.2026). | Sicht-/Verfolgungs-Integrationstests und die optionale Heli-Eskalation ab Stufe 4 sind nicht umgesetzt. |
+| Fahndung | Konto 0-6 mit frameunabhaengigem Abbau, Polizei-Streifenwagen (Blaaulicht, Sirene, POLIZEI-Beschriftung), Verfolgung, Festnahme mit Respawn, HUD-Anzeige (Sterne/Fortschritt) und Dev-Befehl `WbWanted` sind umgesetzt. Eskalation seit 01.10.2026 vollstaendig bis auf Stufe 6 (bewusst unbelegt): ab Stufe 4 SEK-Einheiten (Spur 100-300 m, 60-90 km/h, zaehlen doppelt), ab Stufe 5 zusaetzlich ein Heli-Verfolger (Ka-52, Suchscheinwerfer, echte Sicht + Hysterese 250-320 m, haelt das Konto am Leben), Festnahmezeit sinkt 5 -> 4 -> 3,5 -> 3 s. Polizei-Suite gruen inkl. Sichtverfolgungs-Integrationstest (`WiesbadenReal.Polizei.Sichtverfolgung`: echte Strahlensicht gegen Geometrie steuert die Verfolgerentscheidung, 01.10.2026). | Im laufenden Spiel abnehmen (SEK/Heli sichtbar, kuerzere Festnahmezeiten); Stufe 6 (BFE+/GSG9) bleibt bewusst unbelegt. |
 | Strassenmarkierungen | P3-P7 (Zebra, Abbiegepfeile, Haifischzaehne, BUS-Schriftzug, Radflaechen) sind implementiert; Materialzuordnung korrigiert (M_WbLaneMarking/M_WbBikeLaneSurface); Test `SupplementaryPaint` gruen; in Alkis32 gebacken und dort spielbar (Verknuepfungen). | Sichtabnahme der Markierungen im Bild steht aus. |
 | Bewuchs-Freihaltung | `ClearObstacles` (Gebaeudegrundrisse, Bahnkorridor aus `railway=funicular`, Bauplaetze, Strassenmoebel) ist implementiert; Test `ObstacleClearance` gruen; Alkis32 am 01.10.2026 neu gebacken und in der Bake-Abnahme ANGENOMMEN (externe Actors -1,3 % gegen Alkis31, sonst Netz/Laternen/Schilder identisch). | Sichtabnahme der Freihaltung im Bild steht aus. |
-| Ortsabhaengiges Ambiente | Zonenindex (Industrie/Gewerbe in 12-km-Zellen) und frameaufloesende Bedpegel sind umgesetzt; Test `Zones` gruen. | Die Klanglagen sind weiter ein Pegel-Mix (Noise-Betten) - echte Samples/Speech fehlen. Section-Strassenklassen (3b) sind nicht angefasst. |
+| Ortsabhaengiges Ambiente | Zonenindex (Industrie/Gewerbe in 12-km-Zellen) und frameaufloesende Pegel sind umgesetzt; die Klanglagen sind seit 01.10.2026 ECHTE Field-Recordings (7 Lagen A_Amb*: Wind/Verkehr/Industrie diffus, Voegel/Nacht/Menschenmenge/Strassenleben lokal, Import `Tools/fetch_ambience_samples.py` + `Tools/import_audio_samples.py`, Quellen in `Data/Raw/AudioSamples/A_Amb_quellen.txt`, BigSoundBank CC0-aehnlich). Zonen unterscheiden sich im KlangBILD (welche Lagen spielen), nicht nur im Pegel. Tests `Audio.Ambience.Zones` + Gesamtpaket `WiesbadenReal.Audio` 10/10 gruen; Spielprobe belegt "Ambience-Lage A_Amb* als echte Aufnahme aktiv" (7 Lagen, sauberes Ende). | Section-Strassenklassen (3b) sind nicht angefasst; Sprach-Durchsagen (Ansagen) weiterhin offen. |
 | Wetter, Chaos-Kaefer, Wochenende-Fahrplan | Alte Berichte nennen weitere offene oder optionale Themen. | Nicht als fertig oder erneut fehlend behaupten: vor Umsetzung jeweils aktuellen Code, Assets und Daten pruefen. |
 
 ### Ausbau-Bloecke (am 01.10.2026 freigegeben und umgesetzt)
@@ -64,13 +64,27 @@ bewusst nicht umgesetzten Optionalteile (jeweils in der Tabelle oben).
    weiter aus.
 3. **Polizei-Gameplay:** Streifenwagen (Blaaulicht/Sirene), Verfolger mit
    Sichtpruefung, Festnahme mit Respawn, FAHNDUNG-HUD und der Dev-Befehl
-   `WbWanted` stehen auf dem 0-6-Konto; die Polizei-Tests sind gruen.
-   Nicht umgesetzt: optionale Heli-Eskalation ab Stufe 4, Integrations-
-   tests der Sichtverfolgung.
+   `WbWanted` stehen auf dem 0-6-Konto. Seit 01.10.2026 eskaliert das
+   System ab Stufe 4: SEK-Einheiten (Spur 100-300 m, 60-90 km/h) und ab
+   Stufe 5 ein Heli-Verfolger (Ka-52, Suchscheinwerfer, echte Sicht plus
+   Hysterese 250-320 m), die Festnahmezeit sinkt auf 4/3,5/3 s. Der
+   Sichtverfolgungs-Integrationstest
+   (`WiesbadenReal.Polizei.Sichtverfolgung`) prueft erstmals echte
+   Strahlensicht gegen Geometrie zusammen mit der Verfolgerentscheidung;
+   die gesamte Polizei-Suite ist gruen. Bewusst unbelegt bleibt Stufe 6
+   (BFE+/GSG9).
 4. **Stadtklang:** Zonenindex und hoerbare, frameaufloesend interpolierte
-   Klanglagen sind umgesetzt. Die Klanglagen bleiben ein Pegel-Mix:
-   echte Samples/Speech fehlen. Audio 3b (serialisierte Strassenklassen)
-   ist nicht angefasst.
+   Klanglagen sind umgesetzt. Seit 01.10.2026 sind die Klanglagen echte
+   Field-Recordings statt synthetischer Noise-Betten: 7 Lagen (`A_AmbWind`,
+   `A_AmbTraffic`, `A_AmbIndustry`, `A_AmbBirds`, `A_AmbNight`, `A_AmbCrowd`,
+   `A_AmbChildren`) aus BigSoundBank (CC0-aehnlich, Herkunft dokumentiert in
+   `Data/Raw/AudioSamples/A_Amb_quellen.txt`), als Loop-SoundWaves nach
+   `/Game/Audio/Samples` importiert. Die Zonen (Wohnen/Innenstadt/Gruen/
+   Industrie) waehlen unterschiedliche KlangBILDER (z. B. Maschinenlage nur
+   in Industrie, Strassenleben im Wohngebiet), nicht nur Pegel; synthetische
+   MetaSound-Betten bleiben als Rueckfall, fehlende Lagen bleiben still.
+   Audio 3b (serialisierte Strassenklassen) und Sprach-Durchsagen sind nicht
+   angefasst.
 
 Nicht uebernommen (unzugehoerig, unangetastet im Arbeitsbaum):
 Android-Compilerflags in `WiesbadenReal.Target.cs`, die Worktree-Werkzeuge
@@ -399,19 +413,29 @@ Gehweg-Kennzeichen (`SidewalkType`), dort spawnt nie jemand. Netzweit tragen
 32.274 Segmente einen Gehweg. Das ist mit einer Messung zu entscheiden, nicht
 mit einer Vermutung.
 
-### 3.9 Fahndung / Polizei — **nie umgesetzt**
+### 3.9 Fahndung / Polizei — **umgesetzt**
 
 **Stand:** Die Spezifikation liegt seit dem **2026-09-02** vor
 (`docs/superpowers/specs/2026-09-02-fahndung-polizei-design.md`, Status
 „ENTWURF zur Abnahme"): Sternchen-Level 0–5, Vergehen erhöhen es,
 Polizeifahrzeuge jagen über das Straßennetz, Entkommen durch Sichtverlust.
 
-**Gebaut ist davon nichts.** Im ganzen Quellbaum gibt es kein `WantedLevel`. Der
-vorhandene `WiesbadenPursuer` ist ein einfacher Verfolger (Idle → Chasing →
-Caught) für die Sylvia-Szene, kein Fahndungssystem.
+**Umgesetzt ist das Konto 0–6** mit den Schwellen {20, 60, 120, 220, 340, 500}:
+Vergehen erhöhen es, Streifenwagen jagen über das Straßennetz, Entkommen durch
+Sichtverlust. Die Eskalation ist seit 01.10.2026 vollständig bis auf die
+bewusst unbelegte Stufe 6 (BFE+/GSG9): Stufe 0–3 Streifen (Anzahl = Stufe),
+ab Stufe 4 SEK-Einheiten, ab Stufe 5 zusätzlich ein Heli-Verfolger (Ka-52 mit
+Suchscheinwerfer; seine Sicht hält das Konto am Leben), die Festnahmezeit
+sinkt mit der Stufe (5 → 4 → 3,5 → 3 s).
 
-**Blocker:** Die Abnahme des Entwurfs steht aus. Das ist die größte ungebaute
-Einzelfunktion des Projekts.
+**Tests:** `WiesbadenReal.Polizei` (Eskalation, HeliVerfolger, PursuitControls,
+Sichtverfolgung, Wanted) grün am 01.10.2026. Der Sichtverfolgungs-
+Integrationstest prüft erstmals echte Strahlensicht gegen Geometrie
+(LineTrace gegen eine echte Wand) zusammen mit der Verfolgerentscheidung
+(`PursuitTarget`: Beeline nur bei Sicht, Nahziel <10 m und gleicher Höhe).
+
+**Offen:** Abnahme im laufenden Spiel (SEK/Heli sichtbar, kürzere
+Festnahmezeiten); die formale Abnahme des Entwurfs.
 
 ### 3.10 AAA-Initiative: Teilprojekte 2–4
 

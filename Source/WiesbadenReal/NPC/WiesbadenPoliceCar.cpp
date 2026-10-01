@@ -41,6 +41,14 @@ AWiesbadenPoliceCar::AWiesbadenPoliceCar()
 	Siren = CreateDefaultSubobject<UAudioComponent>(TEXT("PoliceSiren"));
 	Siren->SetupAttachment(VisualRoot); Siren->bAutoActivate = false;
 }
+void AWiesbadenPoliceCar::SetSek(bool bInSek)
+{
+	if (PoliceLabel)
+	{
+		PoliceLabel->SetText(FText::FromString(bInSek ? TEXT("SEK") : TEXT("POLIZEI")));
+	}
+}
+
 void AWiesbadenPoliceCar::BeginPlay()
 {
 	Super::BeginPlay();
