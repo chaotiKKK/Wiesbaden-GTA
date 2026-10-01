@@ -8,7 +8,9 @@ Aenderungen lokal committen und neue Spiel-Verknuepfungen bereitstellen.
 Kein Push und keine Veroeffentlichung sind beauftragt.
 
 **Bestand:** Branch `uebernahme/2026-09-27`, Default-Karte
-`WiesbadenCity_Alkis31`. Bei der Bestandsaufnahme: 46 geaenderte versionierte
+`WiesbadenCity_Alkis32` (seit 01.10.2026 nach der Bake-Abnahme umgestellt;
+Rueckfall `WiesbadenCity_Alkis31`, siehe Live-Karte-Zeile unten). Bei der
+Bestandsaufnahme: 46 geaenderte versionierte
 Dateien und weitere unversionierte Features. Der Index ist leer. Der
 Engine-Lock war frei; auf C: waren rund 165 GB frei. Das sind Momentaufnahmen,
 keine Freigabe fuer einen spaeteren Build.
@@ -20,7 +22,7 @@ Code. Der folgende Abgleich trennt Quellstand, Testergebnis und Spielabnahme.
 
 | Thema | Aktueller Befund | Noch benoetigt |
 | --- | --- | --- |
-| Live-Karte | `Config/DefaultEngine.ini` verwendet Alkis31, nicht Alkis16/17. | Alkis17 nicht erneut live schalten; neues Paket auf aktueller Karte pruefen. |
+| Live-Karte | `Config/DefaultEngine.ini` verwendet seit 01.10.2026 Alkis32 (`GameDefaultMap`/`EditorStartupMap`), nach der Bake-Abnahme ANGENOMMEN umgestellt. RUECKFALL: Alkis31 bleibt als `Content/Maps/WiesbadenCity_Alkis31.umap` und voll gepackt im Paket (1464 Manifest-Eintraege) liegen - zurueck genuegt das Zuruecksetzen der beiden Ini-Zeilen (die drei `Tools/karte.*`-Leser und die Verknuepfungen folgen der Ini automatisch, kein Neubake noetig). | Alkis17 nicht erneut live schalten; neues Paket auf aktueller Karte pruefen. |
 | Verkehrsvielfalt | `WiesbadenTrafficCars::Types()` enthaelt Golf, Peugeot, Transporter, Kaefer und zwei BMW-Varianten. | Verfuegbarkeit und Darstellung im neuen Paket pruefen, keine zweite Implementierung beginnen. |
 | Verkehrsverteilung | Der Spawn gewichtet bereits nach Strassenklasse und Spurlaenge (`NearbySpawnCumulativeWeights`). | Alten Vorschlag zum Round-Robin-Spawn als ueberholt behandeln; `TrafficDensityFactor` ist davon getrennt. |
 | Heli-Fluglektion | Einladung, Uebungen, Abschluss, Geschuetzanzeige, Feuersperre und Lifecycle-Abbau sind integriert; LessonFire/LessonHeldFire/LessonSafety gruen (01.10.2026). Nachweis-Doku: `how-to/helikopter-flugstunde-sicherheit.md`. | HUD-Layout-Abnahme im Bild steht aus. |
@@ -55,9 +57,11 @@ bewusst nicht umgesetzten Optionalteile (jeweils in der Tabelle oben).
    Alkis31 sind unveraendert. Die Bake-Abnahme (`Tools/bake_abnahme.py --neu
    WiesbadenCity_Alkis32`) ist ANGENOMMEN: 0 leere Chunks, Netz/Laternen/
    Schilder/Ampeln identisch, externe Actors -1,3 %, 60 fps, 0 GPU-Timeouts.
-   Die Default-Karte bleibt vorerst Alkis31 - die Umstellung
-   (`WB_LIVE_SCHALTEN=1` bzw. `Config/DefaultEngine.ini`) ist der letzte
-   offene Schritt und wartet auf die Sichtabnahme durch den Nutzer.
+   Die Default-Karte ist am 01.10.2026 auf Alkis32 umgestellt
+   (`GameDefaultMap`/`EditorStartupMap`); Alkis31 bleibt als dokumentierter
+   Rueckfall liegen (umap + voll gepacktes Paket, Ini-Zeilen zuruecksetzen
+   genuegt). Die Sichtabnahme der Markierungen/Freihaltung im Bild steht
+   weiter aus.
 3. **Polizei-Gameplay:** Streifenwagen (Blaaulicht/Sirene), Verfolger mit
    Sichtpruefung, Festnahme mit Respawn, FAHNDUNG-HUD und der Dev-Befehl
    `WbWanted` stehen auf dem 0-6-Konto; die Polizei-Tests sind gruen.
