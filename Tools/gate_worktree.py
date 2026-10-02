@@ -431,7 +431,10 @@ def motor_sperre(name, warte_s=None, lock_pfad=None, platten_grenze=None,
             schlaf(15.0)
             continue
         if fertig.returncode != LOCK_BELEGT or uhr() >= frist:
-            for zeile in text[:3]:
+            # Die BELEGT-Zeile wird GESUCHT, nicht nach Index gedruckt - wie
+            # beim Platten-Abbruch: das Skript darf vor der Zustandszeile
+            # weitere Meldungen drucken (siehe Vorreinigung, 30.09.2026).
+            for zeile in [z for z in text if "BELEGT" in z] or text[:3]:
                 drucke(zeile)
             drucke("Engine-Lock nicht bekommen - dieser Lauf fasst den Gate-Worktree nicht an.")
             return False
