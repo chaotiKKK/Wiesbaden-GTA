@@ -6,8 +6,9 @@ from pathlib import Path
 from unittest import mock
 
 from bugtank_acceptance import (
-    PNG_SIGNATURE, _find_package, _fresh_png, _is_own_lock, analyze_logs, run,
+    MAP, PNG_SIGNATURE, _find_package, _fresh_png, _is_own_lock, analyze_logs, run,
 )
+from karte import standard_karte, standard_karte_pfad
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,6 +25,11 @@ def sample(t, surface, key, component, x, y, z, distance=58.0):
 
 
 class BugTankAcceptanceTest(unittest.TestCase):
+    def test_routes_use_the_configured_default_map(self):
+        expected = f"{standard_karte_pfad()}.{standard_karte()}"
+
+        self.assertEqual(MAP, expected)
+
     def test_lock_status_recognizes_documented_owned_lock_wordings(self):
         self.assertTrue(_is_own_lock("Lock: von diesem Lauf gehalten - PID 42."))
         self.assertTrue(_is_own_lock("Lock: von diesem Lauf bereits gehalten: PID 42."))

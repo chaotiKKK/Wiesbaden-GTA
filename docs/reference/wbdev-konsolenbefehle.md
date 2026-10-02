@@ -41,6 +41,7 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 | --- | --- | --- | --- |
 | `WbTeleport` | `WbTeleport <0-2>` | besessener Pawn | Pawn an festen Spawn 0/1/2 setzen |
 | `WbResetVehicle` | `WbResetVehicle` | besessener Pawn | Nick/Roll auf 0 (aufrichten), Yaw bleibt |
+| `WbWanted` | `WbWanted [Stufe]` | City-Subsystem | Fahndungskonto auf Stufe 0..6 setzen; ohne Argument CVar `wb.Wanted` verwenden |
 | `WbTraffic` | `WbTraffic <0/1>` | City-Subsystem | Verkehrsdichte 0.0 (aus) oder 0.5 (an) |
 | `WbHealth` | `WbHealth` | City-Subsystem | Maschinenlesbaren Gesundheitsbericht (JSON) ausgeben + speichern |
 | `WbCam` | `WbCam <0-2>` | Fahrzeug mit Kamera | Kameramodus Follow/Orbit/Cockpit |
@@ -90,6 +91,19 @@ sind woertlich (Platzhalter wie `%d`/`%.0f` durch die Laufzeitwerte ersetzt).
 - **Log-Nachweis:**
   - Erfolg: `WbDev: WbResetVehicle ausgefuehrt: Nick/Roll vorher (p/r) -> nachher (p/r), Yaw <y> bleibt.`
   - Kein Pawn (Warning): `WbDev: WbResetVehicle erkannt, aber kein besessener Pawn.`
+
+## WbWanted
+
+- **Signatur:** `WbWanted [Stufe:int = -1]`
+- **Wirkung:** Setzt das Fahndungskonto auf die geklemmte Stufe 0..6. Bei
+  `Stufe = 0` wird es geloescht; bei 1..6 werden die zugehoerigen
+  Schwellenpunkte gesetzt. Ohne Exec-Argument liest der Befehl die CVar
+  `wb.Wanted` (Vorgabe 0).
+- **Voraussetzung:** ein `UWiesbadenCitySubsystem` in der Welt.
+- **Log-Nachweis:**
+  - Erfolg: `WbDev: WbWanted <Stufe> - Konto auf Stufe <Stufe> (<Punkte> Punkte).`
+  - Kein Subsystem (Warning): `WbDev: WbWanted erkannt, aber keine Stadt da.`
+- **Beispiel:** `-ExecCmds="WbWanted 3"` setzt die Fahndung auf Stufe 3.
 
 ## WbTraffic
 

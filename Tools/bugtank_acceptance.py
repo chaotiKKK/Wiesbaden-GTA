@@ -14,10 +14,11 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
+from karte import standard_karte, standard_karte_pfad
 
 ROOT = Path(__file__).resolve().parents[1]
 DEV_BUILDS = ROOT / "Saved" / "Package" / "dev-builds"
-MAP = "/Game/Maps/WiesbadenCity_Alkis31.WiesbadenCity_Alkis31"
+MAP = f"{standard_karte_pfad()}.{standard_karte()}"
 NUMBER = r"[-+]?\d+(?:\.\d+)?"
 SAMPLE_RE = re.compile(
     rf"WbBugTankProbe SAMPLE t=({NUMBER}) surface=(BODEN|WAND|DECKE) .*?"
