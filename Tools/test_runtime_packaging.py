@@ -220,7 +220,8 @@ class RuntimePackagingTest(unittest.TestCase):
         for path in sorted(FILES):
             with self.subTest(path=path):
                 listed = subprocess.run(["git", "ls-files", "--error-unmatch", path],
-                                        cwd=ROOT, capture_output=True, text=True, timeout=60)
+                                        cwd=ROOT, capture_output=True, text=True,
+                                        errors="replace", timeout=60)
                 self.assertEqual(listed.returncode, 0, path + " ist nicht versioniert")
 
     def test_receipt_gegenprobe(self):

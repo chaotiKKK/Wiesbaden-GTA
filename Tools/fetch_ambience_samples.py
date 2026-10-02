@@ -64,7 +64,7 @@ def hole(name, sound_id, beschreibung):
     # Peak messen, dann normieren (zwei Durchlaeufe, einfach und nachvollziehbar).
     mess = subprocess.run(
         [FFMPEG, "-i", roh, "-af", "volumedetect", "-f", "null", "-"],
-        capture_output=True, text=True)
+        capture_output=True, text=True, errors="replace")
     peak = 0.0
     for zeile in mess.stderr.splitlines():
         if "max_volume" in zeile:
@@ -81,7 +81,7 @@ def hole(name, sound_id, beschreibung):
     groesse = os.path.getsize(ziel) // 1024
     dauer = subprocess.run(
         [FFMPEG, "-i", ziel, "-f", "null", "-"],
-        capture_output=True, text=True)
+        capture_output=True, text=True, errors="replace")
     zeit = ""
     for zeile in dauer.stderr.splitlines():
         if "Duration" in zeile:
