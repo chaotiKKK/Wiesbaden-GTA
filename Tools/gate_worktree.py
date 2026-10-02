@@ -326,6 +326,46 @@ def engine_frei(name, warte_s=None, schlaf=time.sleep, uhr=time.monotonic):
         schlaf(10.0)
 
 
+def zen_frei(name, warte_s=None, schlaf=time.sleep, uhr=time.monotonic):
+    """Warten, bis der zenserver des VORHERIGEN Engine-Laufs sich verabschiedet.
+
+    GEMESSEN am 02.10.2026: alle vier stillen Gate-5-Toede dieses Tages
+    (zweimal beim eigenen Vollgate 16:11, zweimal beim Push-Gate 18:11,
+    je Exit -1 nach 2-4 s ohne Ergebnisdatei, ohne WER-Crash) endeten in
+    der zen-Startphase der Engine - die letzte Logzeile nannte entweder
+    "zen.exe service status" oder "Launching executable ... zenserver.exe".
+    Keine fremde Engine lief dabei (das eigene Diagnose-Netz meldete das
+    je Lauf). Gemeinsamer Nenner: Gate 5 startet Sekunden NACH Gate 4,
+    und der zenserver von Gate 4 lingered noch - er ueberlebt seinen
+    Elternprozess (gemessen: eigener Spawn aus bash lief > 30 s weiter,
+    haelt Lock in ProgramData und den http.sys-Port 8558).
+
+    engine_frei() filtert ihn bewusst heraus, damit ein paar Sekunden
+    Rest-Leben den Lauf nicht hinter einem Editor-Paar festhalten; genau
+    diese Rest-Leben treffen aber den Fruehstart des naechsten Editors.
+    Darum hier EIGEN davor warten. Die Frist ist absichtlich KURZ: der
+    Vorgaenger-zenserver ist nach Sekunden weg, und haelt ein FREMDER
+    Editor seinen eigenen am Leben, wuerde ihn Gate 5 ohnehin neu
+    anwerfen bzw. neben ihm laufen - das ist der bekannte Rest-Risiko-
+    Fall, kein Grund, das Gate eine Stunde anzuhalten.
+    """
+    if warte_s is None:
+        warte_s = float(os.environ.get("WB_GATE_ZEN_WARTEN", "120"))
+    frist = uhr() + warte_s
+    while True:
+        zen = [e for e in fremde_engines()
+               if "zenserver" in (e.get("commandline") or "").lower()]
+        if not zen:
+            return True
+        if uhr() >= frist:
+            drucke("%s: zenserver lingered laenger als %.0f s (PID %s) - "
+                   "Lauf startet trotzdem."
+                   % (name, warte_s, ", ".join(
+                       str(e.get("pid")) for e in zen[:3])))
+            return False
+        schlaf(2.0)
+
+
 def worktree_exklusiv(name, warte_s=None, schlaf=time.sleep, uhr=time.monotonic,
                       filter_path=None):
     """Warten, bis keine fremde Engine im GEMEINSAMEN Gate-Worktree laeuft.

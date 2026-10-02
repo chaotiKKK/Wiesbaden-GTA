@@ -1086,6 +1086,14 @@ def gates_fahren(stufe, dateien, thread=None):
     # Startet einen Editor, also hinter Gate 4 in dieselbe Stufe; den
     # Engine-Lock haelt vor_dem_commit von Gate 0 an.
     if stufe == "voll":
+        # Der zenserver des Gate-4-Laufs lingered noch (er ueberlebt seinen
+        # Elternprozess): Gate 5 startet sonst SEKUNDEN spaeter, und die
+        # vier stillen Gate-5-Toede vom 02.10.2026 (je 2-4 s nach Boot,
+        # zen-Startphase, ohne Fremd-Engine - eigene Diagnose je Lauf)
+        # trafen genau diesen Fruehstart. Kurze Frist: Rest-Leben sind nach
+        # Sekunden weg; ein haengender FREMDER zenserver haelt das Gate
+        # nicht auf (s. zen_frei-Dokumentation).
+        gate_worktree.zen_frei("Gate 5")
         # EINMALIGER sauberer Retry nach stummem Engine-Tod. GEMESSEN am
         # 29.09.2026: die Gate-5-Engine starb zweimal nach ~4 s, ohne
         # Ergebnisdatei, ohne WER-Crash - verify_anchor meldet diese
