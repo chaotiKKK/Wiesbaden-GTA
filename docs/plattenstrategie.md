@@ -96,8 +96,8 @@ StagedBuilds und Gate-Intermediate baut Cook bzw. nächster Gate-Lauf neu.
 
 ## Befund: Stufe 3 (dev-builds) hinter demselben Warnmuster
 
-Geprüft am 30.09.2026, bewusst NICHT implementiert — sie startet erst
-mit der Zustimmung des fremden Threads (s. o.). Der Befund:
+Geprüft am 30.09.2026, zunächst bewusst NICHT implementiert; nach
+Eingang der Zustimmung am 02.10.2026 umgesetzt (s. u.). Der Befund:
 
 - **Sinn:** Die Hebel-Reihenfolge misst die Platte selbst (30.09.2026,
   14,5 % frei, 0,5 Punkte über der Schwelle): Stufe 1 (cache) holt
@@ -126,4 +126,15 @@ mit der Zustimmung des fremden Threads (s. o.). Der Befund:
   Datum und Scope (Keep-N 2, 12 h). Der Auto-Lauf prüft die Datei;
   fehlt sie, gibt es Stufe 3 nicht (Meldung „uebersprungen — keine
   Zustimmung“, nie still). Datei gelöscht = widerrufen. Bis zum
-  Zustimmungsdatum gehört kein Stufe-3-Code in den Arbeitsstand.
+  Zustimmungsdatum gehörte kein Stufe-3-Code in den Arbeitsstand.
+- **Umgesetzt am 02.10.2026** — `platten_auto_reinigen` fährt jetzt drei
+  Stufen: Stufe 3 startet hinter cache/ausgabe, nur wenn beide nicht
+  reichten und die Platte weiter unter 14 % liegt — hinter der
+  ABMACHUNG-Zeile im Gate-Log (Keep-N 2, älter als 12 h, „Zustimmung
+  vom 30.09.2026 11:29“), nie unter Engine-Lock, fail-open,
+  Löschprotokoll wie jede Klasse. Die Aktivierung liest das Artefakt
+  (`stufe3_zustimmung()` in `Tools/platten_waechter.py`); fehlt es,
+  meldet der Lauf „uebersprungen — keine Zustimmung“ mit Dateinamen.
+  Der Stufe-2-Endpunkt nennt nur noch „Nutzerdaten“ — das
+  „dev-builds?“ hat Stufe 3 übernommen. Manuell bleibt
+  `--auch-devbuilds` unverändert; Widerruf bleibt: Datei löschen.

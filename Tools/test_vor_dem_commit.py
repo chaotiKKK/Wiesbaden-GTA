@@ -187,7 +187,10 @@ class PlattenAutoReinigungTest(unittest.TestCase):
     def test_stufe_2_endpunkt_nichts_mehr_zu_raeumen(self):
         """Leert auch Stufe 2 nichts, benennt der Text die Grenze: die
         Platte ist mit nicht-regenerierbaren Daten voll - und verweist
-        auf die Strategie, statt allein zu entscheiden."""
+        auf die Strategie, statt allein zu entscheiden. Sein
+        "dev-builds?" hat der Endpunkt an Stufe 3 abgegeben: die
+        naechste Zeile nennt entweder die Raeumung oder die fehlende
+        Zustimmung beim Namen (nie still)."""
         import platten_waechter
         with mock.patch.object(platten_waechter, "messen", return_value=[]), \
              mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
@@ -196,10 +199,154 @@ class PlattenAutoReinigungTest(unittest.TestCase):
              mock.patch.object(platten_waechter, "platz",
                                return_value=(100, 1000, 13.0)), \
              mock.patch.object(platten_waechter, "engine_lock_aktiv",
-                               return_value=False):
+                               return_value=False), \
+             mock.patch.object(platten_waechter, "stufe3_zustimmung",
+                               return_value=None):
             text = vdc.platten_auto_reinigen(11.0)
         self.assertIn("nichts mehr zu raeumen", text)
         self.assertIn("docs/plattenstrategie.md", text)
+        self.assertIn("kein Gate", text)
+        self.assertNotIn("dev-builds?", text,
+                         "der Endpunkt nennt nur noch Nutzerdaten - "
+                         "dev-builds sind Sache der Stufe-3-Zeile")
+        self.assertIn("keine Zustimmung", text)
+
+    def test_stufe_3_ohne_zustimmung_wird_benannt_uebersprungen(self):
+        """Ohne die Zustimmungs-Datei gibt es Stufe 3 nicht - aber nie
+        still: die Meldung nennt die fehlende Datei beim Namen, und die
+        dev-builds-Klasse wird in keinem einzigen Aufruf freigegeben
+        (Datei geloescht = widerrufen)."""
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "messen", return_value=[]), \
+             mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
+             mock.patch.object(platten_waechter, "reinigen",
+                               return_value=([], [])) as reinig, \
+             mock.patch.object(platten_waechter, "platz",
+                               return_value=(100, 1000, 13.0)), \
+             mock.patch.object(platten_waechter, "engine_lock_aktiv",
+                               return_value=False), \
+             mock.patch.object(platten_waechter, "stufe3_zustimmung",
+                               return_value=None):
+            text = vdc.platten_auto_reinigen(11.0)
+        self.assertEqual(reinig.call_count, 2,
+                         "Stufe 3 startet keinen Loeschlauf ohne Zustimmung")
+        self.assertIn("STUFE 3", text)
+        self.assertIn("uebersprungen", text)
+        self.assertIn("keine Zustimmung", text)
+        self.assertIn("devbuilds_stufe3_zustimmung.txt", text,
+                      "der Widerruf ist das Loeschen der Datei - sie "
+                      "wird beim Namen genannt")
+
+    def test_stufe_3_feuert_nur_mit_zustimmung_und_warnung_davor(self):
+        """Mit Zustimmungs-Datei raeumt Stufe 3 GENAU die dev-builds-
+        Klasse, hinter der ABMACHUNG-Zeile (Zustimmung vom ...) und mit
+        den Keep-N-Grenzen, die auch die Datei dokumentiert."""
+        import platten_waechter
+        altlast = {"pfad": "C:/p/Saved/Package/dev-builds/2026-09-24-alt",
+                   "klasse": "dev-builds", "grund": "Diagnose-Build",
+                   "bytes": 1234, "dateien": 3, "vollstaendig": True}
+        with mock.patch.object(platten_waechter, "messen", return_value=[]), \
+             mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
+             mock.patch.object(
+                 platten_waechter, "reinigen",
+                 side_effect=[([], []), ([], []),
+                              (["C:/p/Saved/Package/dev-builds/2026-09-24-alt"],
+                               [])]) as reinig, \
+             mock.patch.object(platten_waechter, "platz",
+                               side_effect=[(100, 1000, 13.0),
+                                            (100, 1000, 13.0),
+                                            (100, 1000, 16.0)]), \
+             mock.patch.object(platten_waechter, "engine_lock_aktiv",
+                               return_value=False), \
+             mock.patch.object(
+                 platten_waechter, "stufe3_zustimmung",
+                 return_value=("C:/p/Saved/Diagnose/"
+                               "devbuilds_stufe3_zustimmung.txt",
+                               "30.09.2026 11:29")), \
+             mock.patch.object(platten_waechter, "dev_builds_altlasten",
+                               return_value=([altlast], ["frisch", "zweit"])):
+            text = vdc.platten_auto_reinigen(11.0)
+        self.assertEqual(reinig.call_count, 3)
+        dritter = reinig.call_args_list[2]
+        self.assertEqual(dritter.kwargs.get("klassen"),
+                         (platten_waechter.DEV_BUILDS,),
+                         "Stufe 3 gibt GENAU die dev-builds-Klasse frei - "
+                         "nie cache nochmal, nie die Ausgabe")
+        self.assertIn(altlast, dritter.args[0],
+                      "die Altlasten gehen als Messung mit rein - reinigen "
+                      "filtert sie nochmals gegen Keep-N und Pfad")
+        self.assertIn("ABMACHUNG", text)
+        self.assertIn("aelter als 12 h", text)
+        self.assertIn("ausserhalb der letzten 2", text)
+        self.assertIn("Zustimmung vom 30.09.2026 11:29", text)
+        self.assertIn("1 Altlasten geraeumt", text)
+        self.assertIn("16 % frei", text)
+        self.assertLess(text.index("ABMACHUNG"),
+                        text.index("1 Altlasten geraeumt"),
+                        "die Abmachung steht VOR dem Ergebnis")
+
+    def test_stufe_3_wird_durch_engine_lock_gestoppt(self):
+        """Ein Lock, der zwischen Stufe 2 und Stufe 3 auftaucht, stoppt
+        Stufe 3: die Zustimmung gilt nie unter laufendem Build/Editor -
+        sie wird dann nicht einmal gelesen."""
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "messen", return_value=[]), \
+             mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
+             mock.patch.object(platten_waechter, "reinigen",
+                               side_effect=[([], []), ([], [])]) as reinig, \
+             mock.patch.object(platten_waechter, "platz",
+                               return_value=(100, 1000, 13.0)), \
+             mock.patch.object(platten_waechter, "engine_lock_aktiv",
+                               side_effect=[False, True]), \
+             mock.patch.object(platten_waechter, "stufe3_zustimmung") as zust:
+            text = vdc.platten_auto_reinigen(11.0)
+        zust.assert_not_called()
+        self.assertEqual(reinig.call_count, 2,
+                         "Stufe 3 startet keinen Loeschlauf unter Lock")
+        self.assertIn("STUFE 3 uebersprungen", text)
+        self.assertIn("Engine-Lock", text)
+
+    def test_stufe_3_ohne_altlasten_meldet_den_keep_n(self):
+        """Sind alle dev-builds frisch oder unter Keep-N, sagt Stufe 3
+        das - ein stiller Lauf waere von einem Fehler nicht zu
+        unterscheiden."""
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "messen", return_value=[]), \
+             mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
+             mock.patch.object(platten_waechter, "reinigen",
+                               side_effect=[([], []), ([], []), ([], [])]), \
+             mock.patch.object(platten_waechter, "platz",
+                               return_value=(100, 1000, 13.0)), \
+             mock.patch.object(platten_waechter, "engine_lock_aktiv",
+                               return_value=False), \
+             mock.patch.object(
+                 platten_waechter, "stufe3_zustimmung",
+                 return_value=("C:/p/Saved/Diagnose/"
+                               "devbuilds_stufe3_zustimmung.txt",
+                               "30.09.2026 11:29")), \
+             mock.patch.object(platten_waechter, "dev_builds_altlasten",
+                               return_value=([], ["frisch", "zweit"])):
+            text = vdc.platten_auto_reinigen(11.0)
+        self.assertIn("keine Altlasten", text)
+        self.assertIn("letzten 2", text)
+        self.assertIn("Keep-N", text)
+
+    def test_stufe_3_fehler_bleibt_fail_open(self):
+        """Ein Waechter-Ausfall auf Stufe 3 druckt eine Zeile und
+        verbietet nichts - wie auf Stufe 1 und 2."""
+        import platten_waechter
+        with mock.patch.object(platten_waechter, "messen", return_value=[]), \
+             mock.patch.object(platten_waechter, "kandidaten", return_value=[]), \
+             mock.patch.object(platten_waechter, "reinigen",
+                               side_effect=[([], []), ([], [])]), \
+             mock.patch.object(platten_waechter, "platz",
+                               return_value=(100, 1000, 13.0)), \
+             mock.patch.object(platten_waechter, "engine_lock_aktiv",
+                               return_value=False), \
+             mock.patch.object(platten_waechter, "stufe3_zustimmung",
+                               side_effect=OSError("pfad weg")):
+            text = vdc.platten_auto_reinigen(11.0)
+        self.assertIn("STUFE 3 nicht ausgefuehrt", text)
         self.assertIn("kein Gate", text)
 
 

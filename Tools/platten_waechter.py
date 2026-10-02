@@ -92,6 +92,14 @@ DEV_BUILDS_MINDESTALTER_TAGE = 0.5   # 12 h - Burst-Schutz: ein dritter
 # das Mindestalter ist nur die Race-Kante.
 DEV_BUILDS_ORIGINALKLASSE = GESCHUETZT   # die Klasse, die es bleibt
 
+# Die Aktivierung von Stufe 3 ist ein DING, kein Code-Schalter: der fremde
+# Thread schreibt diese Datei selbst (Datum + Scope), und Widerruf ist ihr
+# Loeschen. Fehlt sie, gibt es Stufe 3 nicht - aber NIE STILL: der Auto-Lauf
+# nennt die fehlende Datei beim Namen (docs/plattenstrategie.md, Befund
+# a295824; Zustimmung vom 30.09.2026 11:29).
+STUFE3_ZUSTIMMUNG_RELPFAD = os.path.join("Saved", "Diagnose",
+                                         "devbuilds_stufe3_zustimmung.txt")
+
 
 def _alter_text(tage):
     """"0.5 -> "12 h", 3.0 -> "3 Tage" - fuer Meldung und Protokoll."""
@@ -344,6 +352,45 @@ def dev_builds_altlasten(basis=None, jetzt=None, behalten=None,
             "vollstaendig": vollstaendig,
         })
     return altlasten, behaltene
+
+
+def stufe3_zustimmung(wurzel=None):
+    """Die Stufe-3-Zustimmung als ARTEFAKT lesen - `None`, wenn es sie nicht gibt.
+
+    Die Zustimmung zu den dev-builds-Altlasten ist kein Schalter im Code
+    (docs/plattenstrategie.md, Befund a295824): der fremde Thread schreibt
+    `Saved/Diagnose/devbuilds_stufe3_zustimmung.txt` mit Datum und Scope
+    selbst; diese Datei zu loeschen ist der Widerruf. Fehlt sie, gibt es
+    Stufe 3 nicht - der Auto-Lauf meldet das ausdruecklich mit Dateinamen,
+    statt still zu ueberspringen.
+
+    Rueckgabe `(pfad, zustimmung_vom)`: der Datumstext fuer die
+    ABMACHUNG-Zeile im Gate-Log. Er kommt aus der Zeile
+    "Datum der Zustimmung:" der Datei; fehlt sie, zaehlt die mtime der
+    Datei - auch sie ist ein Datum der Zustimmung. Beides sind nur
+    Anzeigewerte: die Datei selbst bleibt der Beweis, und die Grenzen
+    (Keep-N, Mindestalter) setzt der Code aus seinen Konstanten durch -
+    die Datei dokumentiert denselben Scope.
+    """
+    pfad = os.path.join(wurzel or WURZEL, STUFE3_ZUSTIMMUNG_RELPFAD)
+    if not os.path.isfile(pfad):
+        return None
+    datum = ""
+    try:
+        with open(pfad, "r", encoding="utf-8", errors="replace") as f:
+            for zeile in f:
+                if zeile.strip().startswith("Datum der Zustimmung:"):
+                    datum = zeile.split(":", 1)[1].strip()
+                    break
+    except OSError:
+        pass
+    if not datum:
+        try:
+            datum = datetime.datetime.fromtimestamp(
+                os.path.getmtime(pfad)).strftime("%d.%m.%Y %H:%M")
+        except OSError:
+            datum = ""
+    return pfad, datum
 
 
 def cache_pfad(wurzel=None):

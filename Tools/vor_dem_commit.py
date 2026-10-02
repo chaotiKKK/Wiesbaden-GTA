@@ -702,29 +702,38 @@ def _gate_verweis():
         pass
 
 
-# Autoreinigung unter dieser Schwelle (Prozent frei), in ZWEI STUFEN:
+# Autoreinigung unter dieser Schwelle (Prozent frei), in DREI STUFEN:
 # Stufe 1 raeumt die CACHE-Klasse (regeneriert sich, kostet nur
 # Rechenzeit beim naechsten Cook/Editorstart). Reicht das nicht, raeumt
 # Stufe 2 die AUSGABE-Klasse - hinter einer Zeitkosten-Warnung im
 # Gate-Log, die die Erwartung festhaelt: der naechste Build wird ein
 # VOLLBUILD (am 27.09.2026 gemessen: Gate 1 im Gate-Worktree 104 s ->
-# 181 s; im Hauptbaum ein Full Build). GEMESSEN am 29.09.2026: 10.2 %
-# frei - 0 % Luft bis zur Abbruchgrenze; der manuelle cache-only Lauf
-# holte 11 GB zurueck. Ein Engine-Lock (laufender Build/Editor) stoppt
-# Stufe 2 - Objektdateien unter einem laufenden Compiler zu loeschen
-# erzeugt halbe Builds. Schalter: WB_PLATTEN_AUTO_REINIGUNG=0 (die
-# Testsuite setzt ihn).
+# 181 s; im Hauptbaum ein Full Build). Reicht AUCH DAS nicht, kommt
+# Stufe 3: die dev-builds-Altlasten (Keep-N 2, aelter als 12 h) - aber
+# nur, wenn die Zustimmungs-Datei des fremden Threads liegt
+# (Saved\Diagnose\devbuilds_stufe3_zustimmung.txt; fehlt sie, meldet
+# der Lauf "uebersprungen - keine Zustimmung", nie still). GEMESSEN am
+# 29.09.2026: 10.2 % frei - 0 % Luft bis zur Abbruchgrenze; der
+# manuelle cache-only Lauf holte 11 GB zurueck. Ein Engine-Lock
+# (laufender Build/Editor) stoppt Stufe 2 UND Stufe 3 - Objektdateien
+# unter einem laufenden Compiler zu loeschen erzeugt halbe Builds.
+# Schalter: WB_PLATTEN_AUTO_REINIGUNG=0 (die Testsuite setzt ihn).
 AUTO_REINIGUNG_PROZENT = 14.0
 
 
 def platten_auto_reinigen(prozent):
-    """Unter AUTO_REINIGUNG_PROZENT in zwei Stufen raeumen - oder None.
+    """Unter AUTO_REINIGUNG_PROZENT in drei Stufen raeumen - oder None.
 
     Stufe 1: die Cache-Klasse (wie bisher). Stufe 2 - nur wenn die
     Platte AUCH DANACH unter der Schwelle liegt - die Ausgabe-Klasse.
-    Der Rueckgabewert ist ein mehrzeiliger Meldungstext (oder None);
-    diese Funktion druckt nichts selbst, damit der Test sie stellen
-    kann.
+    Stufe 3 - nur wenn auch das nichts brachte - die dev-builds-
+    Altlasten des fremden Threads, und zwar NUR mit seiner
+    Zustimmungs-Datei (Aktivierung per Artefakt, nicht per Code:
+    fehlt Saved\Diagnose\devbuilds_stufe3_zustimmung.txt, meldet der
+    Lauf "uebersprungen - keine Zustimmung"; Datei geloescht =
+    widerrufen). Der Rueckgabewert ist ein mehrzeiliger Meldungstext
+    (oder None); diese Funktion druckt nichts selbst, damit der Test
+    sie stellen kann.
 
     Die Zeitkosten-Warnung von Stufe 2 steht als eigene Zeile im
     Gate-Log und haelt die Erwartung fest, BEVOR das Ergebnis kommt:
@@ -790,14 +799,87 @@ def platten_auto_reinigen(prozent):
                     "geraeumt, jetzt %.0f %% frei."
                     % (len(geloescht2), fertig_prozent))
             else:
+                # Der Endpunkt hat sein "dev-builds?" an Stufe 3 abgegeben:
+                # entweder raeumt sie die Altlasten gleich hier, oder ihre
+                # Meldung unten nennt die fehlende Zustimmung beim Namen.
                 zeilen.append(
                     "      AUTO-REINIGUNG STUFE 2: nichts mehr zu raeumen - "
                     "die Platte ist mit nicht-regenerierbaren Daten voll "
-                    "(dev-builds? Nutzerdaten?). Das entscheidet kein Gate "
-                    "allein: docs/plattenstrategie.md.")
+                    "(Nutzerdaten?). Das entscheidet kein Gate allein: "
+                    "docs/plattenstrategie.md.")
+            if fertig_prozent >= AUTO_REINIGUNG_PROZENT:
+                return "\n".join(zeilen)
         except Exception as e:
             zeilen.append(
                 "      AUTO-REINIGUNG STUFE 2 nicht ausgefuehrt (%s) - "
+                "der Hinweis ist und bleibt kein Gate." % e)
+            return "\n".join(zeilen)
+
+        # STUFE 3: auch die Ausgabe-Klasse hat nicht gereicht. Dev-builds
+        # sind Belege des fremden Threads - eine Automatik fasst sie nur
+        # mit seinem DING an: der Zustimmungs-Datei (Aktivierung per
+        # Artefakt, nicht per Code). Warnung vor dem Eingriff,
+        # Loeschprotokoll, Keep-N und Mindestalter bleiben wie in der
+        # Abstimmung; die Datei zu loeschen ist der Widerruf.
+        if platten_waechter.engine_lock_aktiv(platten_waechter.WURZEL):
+            zeilen.append(
+                "      AUTO-REINIGUNG STUFE 3 uebersprungen: weiterhin "
+                "%.0f %% frei, aber ein Engine-Lock liegt - die Zustimmung "
+                "gilt nie unter laufendem Build/Editor. Der naechste Lauf "
+                "versucht es erneut." % fertig_prozent)
+            return "\n".join(zeilen)
+        try:
+            zustimmung = platten_waechter.stufe3_zustimmung(
+                platten_waechter.WURZEL)
+            if not zustimmung:
+                # Nie still: der Widerruf ist das Loeschen der Datei, und
+                # genau das steht hier.
+                zeilen.append(
+                    "      AUTO-REINIGUNG STUFE 3 uebersprungen - keine "
+                    "Zustimmung: %s fehlt (Datei geloescht = widerrufen; "
+                    "docs/plattenstrategie.md)."
+                    % platten_waechter.STUFE3_ZUSTIMMUNG_RELPFAD)
+                return "\n".join(zeilen)
+            _zpfad, zustimmung_vom = zustimmung
+            altlasten, _behaltene3 = platten_waechter.dev_builds_altlasten()
+        except Exception as e:
+            zeilen.append(
+                "      AUTO-REINIGUNG STUFE 3 nicht ausgefuehrt (%s) - "
+                "der Hinweis ist und bleibt kein Gate." % e)
+            return "\n".join(zeilen)
+        zeilen.append(
+            "      AUTO-REINIGUNG STUFE 3: weiterhin %.0f %% frei - die "
+            "dev-builds-Altlasten werden geraeumt. ABMACHUNG: die Altlasten "
+            "des fremden Threads (aelter als %s, ausserhalb der letzten %d) "
+            "werden geraeumt; die letzten %d und alles Juengere bleiben "
+            "(Zustimmung vom %s - %s)."
+            % (fertig_prozent,
+               platten_waechter._alter_text(
+                   platten_waechter.DEV_BUILDS_MINDESTALTER_TAGE),
+               platten_waechter.DEV_BUILDS_BEHALTEN,
+               platten_waechter.DEV_BUILDS_BEHALTEN,
+               zustimmung_vom or "(Datum in der Datei)",
+               platten_waechter.STUFE3_ZUSTIMMUNG_RELPFAD))
+        try:
+            geloescht3, _abgewiesen3 = platten_waechter.reinigen(
+                messungen + altlasten,
+                klassen=(platten_waechter.DEV_BUILDS,))
+            _frei, _gesamt, schluss_prozent = platten_waechter.platz(
+                platten_waechter.WURZEL)
+            if geloescht3:
+                zeilen.append(
+                    "      AUTO-REINIGUNG STUFE 3: %d Altlasten geraeumt, "
+                    "jetzt %.0f %% frei (Protokoll: "
+                    "Saved\\Diagnose\\loeschprotokoll.jsonl)."
+                    % (len(geloescht3), schluss_prozent))
+            else:
+                zeilen.append(
+                    "      AUTO-REINIGUNG STUFE 3: keine Altlasten - alles "
+                    "frisch oder unter den letzten %d (Keep-N-Kompromiss)."
+                    % platten_waechter.DEV_BUILDS_BEHALTEN)
+        except Exception as e:
+            zeilen.append(
+                "      AUTO-REINIGUNG STUFE 3 nicht ausgefuehrt (%s) - "
                 "der Hinweis ist und bleibt kein Gate." % e)
         return "\n".join(zeilen)
     except Exception as e:

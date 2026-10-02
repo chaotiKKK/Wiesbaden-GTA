@@ -1108,6 +1108,60 @@ class DevBuildsAltlastenTest(unittest.TestCase):
                          "eine lose Datei ist kein Build-Baum")
 
 
+class Stufe3ZustimmungTest(unittest.TestCase):
+    """Die Stufe-3-Aktivierung ist ein ARTEFAKT, kein Code-Schalter:
+    stufe3_zustimmung() liest die Datei, die der fremde Thread selbst
+    schreibt - und ihr Fehlen ist der Widerruf (docs/plattenstrategie.md,
+    Befund a295824). Alle Tests bauen im eigenen Tempverzeichnis; die
+    echte Zustimmungs-Datei des Projekts wird nie angefasst.
+    """
+
+    def test_fehlende_datei_ist_der_widerruf(self):
+        """Keine Datei -> None. Der Auto-Lauf meldet das ausdruecklich
+        (nie still) - hier ist nur der Lesefall dran."""
+        with tempfile_tmp() as t:
+            self.assertIsNone(pw.stufe3_zustimmung(t))
+
+    def test_datum_kommt_aus_der_datei(self):
+        with tempfile_tmp() as t:
+            os.makedirs(os.path.join(t, "Saved", "Diagnose"))
+            pfad = os.path.join(t, "Saved", "Diagnose",
+                                "devbuilds_stufe3_zustimmung.txt")
+            with open(pfad, "w", encoding="utf-8") as f:
+                f.write("Zustimmung zum Keep-N-Kompromiss\n\n"
+                        "Datum der Zustimmung: 30.09.2026 11:29\n"
+                        "Widerruf: Diese Datei loeschen genuegt.\n")
+            gefunden = pw.stufe3_zustimmung(t)
+        self.assertIsNotNone(gefunden)
+        gelesener_pfad, datum = gefunden
+        self.assertEqual(gelesener_pfad, pfad)
+        self.assertEqual(datum, "30.09.2026 11:29")
+
+    def test_ohne_datumzeile_zaehlt_die_mtime(self):
+        """Auch eine Datei ohne "Datum der Zustimmung:" ist eine
+        Zustimmung - ihr Schreibzeitpunkt tritt als Anzeige ein."""
+        with tempfile_tmp() as t:
+            os.makedirs(os.path.join(t, "Saved", "Diagnose"))
+            pfad = os.path.join(t, "Saved", "Diagnose",
+                                "devbuilds_stufe3_zustimmung.txt")
+            with open(pfad, "w", encoding="utf-8") as f:
+                f.write("Zustimmung ohne Datumszeile\n")
+            stempel = 1_780_000_000.0
+            os.utime(pfad, (stempel, stempel))
+            _pfad, datum = pw.stufe3_zustimmung(t)
+        import datetime as dt
+        self.assertEqual(datum,
+                         dt.datetime.fromtimestamp(stempel).strftime(
+                             "%d.%m.%Y %H:%M"))
+
+    def test_relpfad_zeigt_auf_das_diagnose_artefakt(self):
+        """Der Pfad steht neben den Belegen in Saved/Diagnose - genau
+        dort, wo auch Unterlage und Protokoll liegen."""
+        self.assertEqual(pw.STUFE3_ZUSTIMMUNG_RELPFAD,
+                         os.path.join("Saved", "Diagnose",
+                                      "devbuilds_stufe3_zustimmung.txt"))
+
+
 class DevBuildsReinigenTest(unittest.TestCase):
     """reinigen(): dev-builds nur ALT, nur mit der Klasse, protokolliert.
 
