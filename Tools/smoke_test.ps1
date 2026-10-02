@@ -210,15 +210,28 @@ function Pruefe-Helilog([string]$heli) {
         Add-Check "ResetVehicle" $ok ("vorher {0}/{1} -> nachher {2}/{3}" -f $vp,$vr,$np,$nr)
     } else { Add-Check "ResetVehicle" $false "keine WbResetVehicle-Zeile im Log" }
 
-    # HeliFly: Steigflug - Hoehe > 8 m zu UND Vario zeitweise > +1
+    # HeliFly: Steigflug ueber das GANZE Flugfenster - Hoehe gewinnt deutlich
+    # UND Vario zeitweise > +1. GEMESSEN (Nachtlaeufe 01.10. + Kalibrierlauf
+    # 02.10., beides KALT hinter der Cache-Vorreinigung): die alte Schranke
+    # ("8 m in den ersten ~5 Punkten") traf verspaetete Anlaesse - Mesh-Bau-
+    # Aussetzer fraessen 1-2 s Anlauf, der Heli stand bei t=4 bei 6-7 m, und
+    # die Pruefung fiel zweimal mit EXAKT denselben Werten (6 m, Vario 3,5)
+    # durch, waehrend alle anderen 9 Pruefungen gruen blieben. Das Flugprofil
+    # plateaut aber bei ~14 m Schwebehoehe (Kalibrierlauf: 13 m Gewinn ueber
+    # 17 Punkte) - der Anlaufverzug geht auf HOVER-Zeit, nicht auf die
+    # Gewinnhoehe. Darum: das volle Fenster sammeln (Warten auf
+    # "WbDev HeliFly fertig.") und die Schwelle auf 11 m setzen - unter dem
+    # gemessenen Gesunden (13 m), ueber dem, was Hover ohne Steigflug
+    # schafft, und zusammen mit der Vario-Schranke (> +1 m/s) weiter scharf
+    # gegen Trickler (+0,6 m/s: ~9 m Gewinn, bleibt rot).
     $flug = [regex]::Matches($heli, 'WbDev Flug t=\d+: Hoehe (\d+) m, Vario ([+-][\d.]+) m/s, Fahrt (\d+) km/h')
     if ($flug.Count -ge 3) {
         $hoehen = @(); $varios = @()
         foreach ($f in $flug) { $hoehen += [double]$f.Groups[1].Value; $varios += [double]$f.Groups[2].Value }
         $stieg = ($hoehen | Measure-Object -Maximum).Maximum - $hoehen[0]
         $maxVario = ($varios | Measure-Object -Maximum).Maximum
-        $ok = ($stieg -gt 8) -and ($maxVario -gt 1.0)
-        Add-Check "HeliFly" $ok ("Hoehengewinn {0:N0} m, max Vario {1:N1} m/s ({2} Messpunkte)" -f $stieg,$maxVario,$flug.Count)
+        $ok = ($stieg -gt 11) -and ($maxVario -gt 1.0)
+        Add-Check "HeliFly" $ok ("Hoehengewinn {0:N0} m (>11), max Vario {1:N1} m/s (>1.0), {2} Messpunkte (volles Flugfenster)" -f $stieg,$maxVario,$flug.Count)
     } else { Add-Check "HeliFly" $false ("nur {0} Flug-Messpunkte im Log (die Sitzung starb vorher?)" -f $flug.Count) }
 
     # HeliYaw: Gierrate zeitweise > 10 Grad/s
@@ -367,8 +380,15 @@ Write-Host "Sitzung 1/2: Fahrzeug (Fahrprofil WbDrive + Materialien) ..."
 Invoke-Session @("-WbGoto=-180086,899031") "WbDrive 7" $CarLog "Material-Bilanz:" 1 240
 
 Write-Host "Sitzung 2/3: Teleport + Aufrichten (Fahrzeug), dann Helikopter ..."
+# Auf das ENDE des 16-s-Flugs warten ("WbDev HeliFly fertig."), nicht auf die
+# ersten 5 Messpunkte: bei Kaltstart fraessen Mesh-Bau-Aussetzer die Anlauf-
+# sekunden, die alte Schranke sah nur 6 m von 8 m und fiel deterministisch
+# durch (Nacht 01.10.2026). Das Flugfenster ist so lang wie der Flug - die
+# 240-s-Grenze deckt auch einen haengenden Start ab; stirbt die Sitzung
+# frueher, bricht die Schleife beim Prozess-Ende ab und die Auswertung
+# entscheidet ueber das, was da ist.
 Invoke-Session @() "WbTeleport 2,WbNudge 15 55,WbResetVehicle,WbHeli,WbHeliYaw 8,WbHeliFly 16" `
-    $HeliLog "WbDev Flug t=" 5 240
+    $HeliLog "WbDev HeliFly fertig." 1 240
 
 # Sitzung 3: Gesundheits-Gate. STATIONAER (kein Teleport/Flug, damit das
 # WP-Streaming einmal sauber einrastet), WbHealth im Gate-Modus (wartet bis zu

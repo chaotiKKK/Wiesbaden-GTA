@@ -317,14 +317,33 @@ class AbbruchErkennungTest(unittest.TestCase):
         "WbDev Fahrt t=2: Tempo 34 km/h, Drehzahl 2600 U/min, Kursaenderung +42 Grad, Gang 2\n"
         "WbDev Fahrt t=3: Tempo 41 km/h, Drehzahl 3200 U/min, Kursaenderung +38 Grad, Gang 3\n"
         "Log file closed, 09/27/26 10:00:20\n")
+    # KOPIEN aus dem echten Kalibrierlauf vom 02.10.2026 (11:38, KALT hinter
+    # der Cache-Vorreinigung): Steigflug ~7 s auf ein Plateau bei 14 m, dann
+    # Hover, am Ende Landung. Das Fenster ist seit der HeliFly-Haertung das
+    # GANZE Flugfenster (17 Punkte), der Abschluss-Marker gehoert dazu.
     HELI_VOLL = (
         "WbTeleport 2 ausgefuehrt: Distanz 125000 cm\n"
         "WbResetVehicle ausgefuehrt: Nick/Roll vorher (12.0/-45.0) -> nachher (0.2/0.3)\n"
         "WbDev Gierprobe t=1: Kurs 12 Grad (Gierrate 24.5 Grad/s)\n"
         "WbDev Gierprobe t=2: Kurs 40 Grad (Gierrate 18.0 Grad/s)\n"
-        "WbDev Flug t=1: Hoehe 100 m, Vario +2.0 m/s, Fahrt 40 km/h\n"
-        "WbDev Flug t=2: Hoehe 130 m, Vario +3.5 m/s, Fahrt 42 km/h\n"
-        "WbDev Flug t=3: Hoehe 160 m, Vario +1.5 m/s, Fahrt 40 km/h\n"
+        "WbDev Flug t=0: Hoehe 1 m, Vario -1.2 m/s, Fahrt 0 km/h\n"
+        "WbDev Flug t=1: Hoehe 2 m, Vario +1.2 m/s, Fahrt 0 km/h\n"
+        "WbDev Flug t=2: Hoehe 3 m, Vario +2.3 m/s, Fahrt 0 km/h\n"
+        "WbDev Flug t=3: Hoehe 6 m, Vario +3.2 m/s, Fahrt 0 km/h\n"
+        "WbDev Flug t=4: Hoehe 10 m, Vario +3.7 m/s, Fahrt 0 km/h\n"
+        "WbDev Flug t=5: Hoehe 13 m, Vario +1.9 m/s, Fahrt 0 km/h\n"
+        "WbDev Flug t=6: Hoehe 14 m, Vario +0.4 m/s, Fahrt 0 km/h\n"
+        "WbDev Flug t=7: Hoehe 14 m, Vario +0.1 m/s, Fahrt 0 km/h\n"
+        "WbDev Flug t=8: Hoehe 14 m, Vario +0.0 m/s, Fahrt 0 km/h\n"
+        "WbDev Flug t=9: Hoehe 14 m, Vario -0.0 m/s, Fahrt 3 km/h\n"
+        "WbDev Flug t=10: Hoehe 14 m, Vario -0.0 m/s, Fahrt 6 km/h\n"
+        "WbDev Flug t=11: Hoehe 14 m, Vario -0.1 m/s, Fahrt 9 km/h\n"
+        "WbDev Flug t=12: Hoehe 14 m, Vario -0.1 m/s, Fahrt 12 km/h\n"
+        "WbDev Flug t=13: Hoehe 13 m, Vario -1.7 m/s, Fahrt 10 km/h\n"
+        "WbDev Flug t=14: Hoehe 11 m, Vario -2.8 m/s, Fahrt 10 km/h\n"
+        "WbDev Flug t=15: Hoehe 0 m, Vario +0.0 m/s, Fahrt 9 km/h\n"
+        "WbDev Flug t=16: Hoehe 0 m, Vario +0.0 m/s, Fahrt 9 km/h\n"
+        "WbDev HeliFly fertig.\n"
         "Log file closed, 09/27/26 10:00:31\n")
     HEALTH_VOLL = ('{"healthy": true, "warnings": [], "perf": '
                    '{"meshSectionsWithoutMaterial": 0, "meshSectionsTotal": 1200}}')
@@ -411,6 +430,26 @@ class AbbruchErkennungTest(unittest.TestCase):
         self.assertFalse(pruefungen["Perf-Regression"],
                          "der 8-s-Block fehlt, die Pruefung meldet trotzdem Erfolg")
 
+    def test_kaltstart_verspaeteter_start_steigt_ueber_das_ganze_fenster(self):
+        """Die Nacht-Falle vom 01.10.2026, als Beleg nachgebaut: bei
+        Kaltstart fraessen Mesh-Bau-Aussetzer ~2 s Anlauf - nach 5
+        Punkten stand der Heli bei 6 m, die alte Schranke (>8) fiel
+        zweimal mit exakt denselben Werten durch. Das Plateau (~15 m)
+        erreicht derselbe Flug ueber das volle Fenster trotzdem."""
+        pruefungen = self.fahre("heli_kaltstart_verspaetet")
+        self.assertTrue(pruefungen["HeliFly"],
+                        "ein verspaeteter, aber gesunder Steigflug muss "
+                        "ueber das volle Fenster bestehen")
+
+    def test_ein_trickelnder_heli_bleibt_rot(self):
+        """Die negative Kontrolle: das volle Fenster darf die Pruefung
+        nicht stumpf machen. Ein Heli, der mit +0,6 m/s trickelt, gewinnt
+        in 16 s nur ~9 m und hat nie Vario > 1 - die alte Schranke haette
+        ihn ebenfalls fallen lassen."""
+        pruefungen = self.fahre("heli_trickelt")
+        self.assertFalse(pruefungen["HeliFly"],
+                         "Trickeln (Gewinn < 11 m, Vario < 1) bleibt rot")
+
     def test_sitzung2_stirbt_trotz_erfuellter_warteschranke(self):
         """Der Kernfall: MinCount 5 ist erreicht, der Lauf stirbt normal.
 
@@ -488,10 +527,67 @@ switch ($Modus) {
     Set-Content -Path $heliLog -Value $HELI_VOLL -Encoding UTF8
     Set-Content -Path $healthLog -Value $HEALTH_VOLL -Encoding UTF8
   }
+  "heli_kaltstart_verspaetet" {
+    # Die Nacht-Falle vom 01.10.2026 als Beleg, in der am 02.10. gemessenen
+    # Profilform: Kaltstart, Mesh-Bau-Aussetzer fressen ~2 s Anlauf - nach
+    # 5 Punkten steht der Heli bei 6 m (die ALTE Schranke verlangte >8 und
+    # fiel zweimal mit exakt denselben Werten durch). Das Plateau (~15 m)
+    # erreicht derselbe Flug trotzdem: der Verzug geht auf Hover-Zeit.
+    Set-Content -Path $carLog  -Value $CAR_VOLL  -Encoding UTF8
+    Set-Content -Path $heliLog -Encoding UTF8 -Value @(
+      "WbTeleport 2 ausgefuehrt: Distanz 125000 cm"
+      "WbResetVehicle ausgefuehrt: Nick/Roll vorher (12.0/-45.0) -> nachher (0.2/0.3)"
+      "WbDev Flug t=0: Hoehe 1 m, Vario -1.0 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=1: Hoehe 1 m, Vario +0.8 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=2: Hoehe 2 m, Vario +1.9 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=3: Hoehe 4 m, Vario +2.9 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=4: Hoehe 6 m, Vario +3.5 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=5: Hoehe 9 m, Vario +3.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=6: Hoehe 12 m, Vario +3.4 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=7: Hoehe 14 m, Vario +2.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=8: Hoehe 15 m, Vario +1.4 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=9: Hoehe 15 m, Vario +0.3 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=10: Hoehe 15 m, Vario +0.0 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=11: Hoehe 15 m, Vario -0.0 m/s, Fahrt 2 km/h"
+      "WbDev Flug t=12: Hoehe 15 m, Vario -0.1 m/s, Fahrt 5 km/h"
+      "WbDev Flug t=13: Hoehe 15 m, Vario -0.1 m/s, Fahrt 8 km/h"
+      "WbDev Flug t=14: Hoehe 14 m, Vario -1.4 m/s, Fahrt 8 km/h"
+      "WbDev Flug t=15: Hoehe 12 m, Vario -2.6 m/s, Fahrt 7 km/h"
+      "WbDev HeliFly fertig.")
+    Set-Content -Path $healthLog -Value $HEALTH_VOLL -Encoding UTF8
+  }
+  "heli_trickelt" {
+    # Die negative Kontrolle: das volle Fenster darf die Pruefung nicht
+    # stumpf machen. Ein Heli, der mit +0,6 m/s trickelt, gewinnt in 16 s
+    # nur ~9 m - die alte Schranke haette ihn ebenfalls fallen lassen.
+    Set-Content -Path $carLog  -Value $CAR_VOLL  -Encoding UTF8
+    Set-Content -Path $heliLog -Encoding UTF8 -Value @(
+      "WbTeleport 2 ausgefuehrt: Distanz 125000 cm"
+      "WbResetVehicle ausgefuehrt: Nick/Roll vorher (12.0/-45.0) -> nachher (0.2/0.3)"
+      "WbDev Flug t=0: Hoehe 1 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=1: Hoehe 2 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=2: Hoehe 2 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=3: Hoehe 3 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=4: Hoehe 3 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=5: Hoehe 4 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=6: Hoehe 5 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=7: Hoehe 5 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=8: Hoehe 6 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=9: Hoehe 6 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=10: Hoehe 7 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=11: Hoehe 8 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=12: Hoehe 8 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=13: Hoehe 9 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=14: Hoehe 9 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev Flug t=15: Hoehe 10 m, Vario +0.6 m/s, Fahrt 0 km/h"
+      "WbDev HeliFly fertig.")
+    Set-Content -Path $healthLog -Value $HEALTH_VOLL -Encoding UTF8
+  }
   "sitzung2_gestorben" {
     Set-Content -Path $carLog  -Value $CAR_VOLL  -Encoding UTF8
-    # Fuenf "WbDev Flug t=" - die Warteschranke MinCount 5 ist ERFUELLT, die
-    # Abbruchschleife greift ganz normal. Die Gierproben fehlen.
+    # Fuenf "WbDev Flug t=", kein "WbDev HeliFly fertig." - eine Sitzung,
+    # die mitten im Flug starb. Die Auswertung entscheidet ueber das, was
+    # da ist (HeliFly bleibt gruen: 85 m Gewinn); die Gierproben fehlen.
     Set-Content -Path $heliLog -Encoding UTF8 -Value @(
       "WbTeleport 2 ausgefuehrt: Distanz 125000 cm"
       "WbResetVehicle ausgefuehrt: Nick/Roll vorher (12.0/-45.0) -> nachher (0.2/0.3)"
